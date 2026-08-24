@@ -1,4 +1,4 @@
-import type { IslandInstance } from "hypergraft/browser/islands";
+import type { IslandInstance } from "hypergraft/browser";
 
 const RETRY_MS = 1000;
 

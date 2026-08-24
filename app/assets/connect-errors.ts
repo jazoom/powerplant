@@ -1,4 +1,4 @@
-import type { IslandInstance } from "hypergraft/browser/islands";
+import type { IslandInstance } from "hypergraft/browser";
 
 export function initConnectErrors(root: HTMLElement): IslandInstance {
     const focusSummary = () => {

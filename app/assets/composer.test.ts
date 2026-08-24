@@ -8,6 +8,12 @@ function composerForm(): HTMLFormElement {
     return form;
 }
 
+function mountComposer(form: HTMLFormElement): () => void {
+    const controller = new AbortController();
+    initComposer(form, { signal: controller.signal });
+    return () => controller.abort();
+}
+
 function trackSubmit(form: HTMLFormElement): () => boolean {
     let submitted = false;
     form.requestSubmit = () => {
@@ -28,7 +34,7 @@ function enter(
 test("control-enter submits the composer form", () => {
     const form = composerForm();
     const submitted = trackSubmit(form);
-    const destroy = initComposer(form);
+    const destroy = mountComposer(form);
     enter(form.querySelector("textarea")!, { ctrlKey: true });
     expect(submitted()).toBe(true);
     destroy();
@@ -37,7 +43,7 @@ test("control-enter submits the composer form", () => {
 test("command-enter submits the composer form", () => {
     const form = composerForm();
     const submitted = trackSubmit(form);
-    initComposer(form);
+    mountComposer(form);
     enter(form.querySelector("textarea")!, { metaKey: true });
     expect(submitted()).toBe(true);
 });
@@ -45,7 +51,7 @@ test("command-enter submits the composer form", () => {
 test("plain enter does not submit", () => {
     const form = composerForm();
     const submitted = trackSubmit(form);
-    initComposer(form);
+    mountComposer(form);
     enter(form.querySelector("textarea")!);
     expect(submitted()).toBe(false);
 });
@@ -53,7 +59,7 @@ test("plain enter does not submit", () => {
 test("composition enter does not submit", () => {
     const form = composerForm();
     const submitted = trackSubmit(form);
-    initComposer(form);
+    mountComposer(form);
     enter(form.querySelector("textarea")!, {
         ctrlKey: true,
         isComposing: true,
@@ -64,7 +70,7 @@ test("composition enter does not submit", () => {
 test("a replaced textarea keeps the shortcut", () => {
     const form = composerForm();
     const submitted = trackSubmit(form);
-    initComposer(form);
+    mountComposer(form);
     const next = document.createElement("textarea");
     form.querySelector("textarea")!.replaceWith(next);
     enter(next, { ctrlKey: true });
