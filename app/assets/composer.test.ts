@@ -2,31 +2,71 @@
 import { expect, test } from "vitest";
 import { initComposer } from "./composer";
 
-test("control-enter submits the composer form", () => {
+function composerForm(): HTMLFormElement {
     const form = document.createElement("form");
     form.innerHTML = `<textarea></textarea><button type="submit">Send</button>`;
+    return form;
+}
+
+function trackSubmit(form: HTMLFormElement): () => boolean {
     let submitted = false;
     form.requestSubmit = () => {
         submitted = true;
     };
-    const destroy = initComposer(form);
-    form.querySelector("textarea")!.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true }),
+    return () => submitted;
+}
+
+function enter(
+    target: EventTarget,
+    init: Omit<KeyboardEventInit, "key" | "bubbles"> = {},
+): void {
+    target.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...init }),
     );
-    expect(submitted).toBe(true);
+}
+
+test("control-enter submits the composer form", () => {
+    const form = composerForm();
+    const submitted = trackSubmit(form);
+    const destroy = initComposer(form);
+    enter(form.querySelector("textarea")!, { ctrlKey: true });
+    expect(submitted()).toBe(true);
     destroy();
 });
 
-test("plain enter does not submit", () => {
-    const form = document.createElement("form");
-    form.innerHTML = `<textarea></textarea>`;
-    let submitted = false;
-    form.requestSubmit = () => {
-        submitted = true;
-    };
+test("command-enter submits the composer form", () => {
+    const form = composerForm();
+    const submitted = trackSubmit(form);
     initComposer(form);
-    form.querySelector("textarea")!.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter" }),
-    );
-    expect(submitted).toBe(false);
+    enter(form.querySelector("textarea")!, { metaKey: true });
+    expect(submitted()).toBe(true);
+});
+
+test("plain enter does not submit", () => {
+    const form = composerForm();
+    const submitted = trackSubmit(form);
+    initComposer(form);
+    enter(form.querySelector("textarea")!);
+    expect(submitted()).toBe(false);
+});
+
+test("composition enter does not submit", () => {
+    const form = composerForm();
+    const submitted = trackSubmit(form);
+    initComposer(form);
+    enter(form.querySelector("textarea")!, {
+        ctrlKey: true,
+        isComposing: true,
+    });
+    expect(submitted()).toBe(false);
+});
+
+test("a replaced textarea keeps the shortcut", () => {
+    const form = composerForm();
+    const submitted = trackSubmit(form);
+    initComposer(form);
+    const next = document.createElement("textarea");
+    form.querySelector("textarea")!.replaceWith(next);
+    enter(next, { ctrlKey: true });
+    expect(submitted()).toBe(true);
 });

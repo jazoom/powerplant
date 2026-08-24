@@ -1,8 +1,8 @@
 use askama::Template;
 
-use crate::providers::ProviderKind;
+use crate::providers::{ProviderError, ProviderKind};
 
-use super::forms::ConnectForm;
+use super::forms::{ConnectField, ConnectForm, FieldError};
 
 pub(super) const DOCUMENT_TITLE: &str = "Connect | Circus";
 
@@ -17,32 +17,38 @@ pub(super) struct ProviderOption {
 pub(super) struct ConnectViewModel {
     pub(super) providers: Vec<ProviderOption>,
     pub(super) model: String,
-    pub(super) error: &'static str,
+    pub(super) error: Option<FieldError>,
+    pub(super) lifetime_hours: u64,
 }
 
 impl ConnectViewModel {
     pub(super) fn initial() -> Self {
-        Self {
-            providers: options(None),
-            model: String::new(),
-            error: "",
-        }
+        Self::new(options(None), String::new(), None)
     }
 
-    pub(super) fn invalid(form: ConnectForm, error: &'static str) -> Self {
-        Self {
-            providers: options(form.provider_kind()),
-            model: form.model,
-            error,
-        }
+    pub(super) fn invalid(form: ConnectForm, error: FieldError) -> Self {
+        let selected = form.provider_kind();
+        let model = if form.model_is_bounded() {
+            form.model
+        } else {
+            String::new()
+        };
+        Self::new(options(selected), model, Some(error))
     }
 
-    pub(super) fn rejected(kind: ProviderKind, model: String) -> Self {
-        Self {
-            providers: options(Some(kind)),
+    pub(super) fn failed(kind: ProviderKind, model: String, error: ProviderError) -> Self {
+        let field = match error {
+            ProviderError::Rejected => ConnectField::ApiKey,
+            _ => ConnectField::Provider,
+        };
+        Self::new(
+            options(Some(kind)),
             model,
-            error: "That key was rejected. Check the provider and try again.",
-        }
+            Some(FieldError {
+                field,
+                message: error.message(),
+            }),
+        )
     }
 
     pub(super) fn card_contents(&self) -> ConnectCardContents<'_> {
@@ -50,6 +56,16 @@ impl ConnectViewModel {
             providers: &self.providers,
             model: &self.model,
             error: self.error,
+            lifetime_hours: self.lifetime_hours,
+        }
+    }
+
+    fn new(providers: Vec<ProviderOption>, model: String, error: Option<FieldError>) -> Self {
+        Self {
+            providers,
+            model,
+            error,
+            lifetime_hours: crate::sessions::SESSION_LIFETIME_HOURS,
         }
     }
 }
@@ -59,7 +75,8 @@ impl ConnectViewModel {
 pub(super) struct ConnectCardContents<'a> {
     providers: &'a [ProviderOption],
     model: &'a str,
-    error: &'static str,
+    error: Option<FieldError>,
+    lifetime_hours: u64,
 }
 
 fn options(selected: Option<ProviderKind>) -> Vec<ProviderOption> {

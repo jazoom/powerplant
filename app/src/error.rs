@@ -6,90 +6,6 @@ use axum::response::{IntoResponse, Response};
 
 use crate::responses;
 
-#[cfg(test)]
-static TRACING_TEST_ACTIVE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-#[cfg(test)]
-static TRACING_TEST_INITIALISED: std::sync::Once = std::sync::Once::new();
-#[cfg(test)]
-static TRACING_TEST_OUTPUT: std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>> =
-    std::sync::Mutex::new(None);
-
-#[cfg(test)]
-#[derive(Clone, Copy)]
-struct TracingTestWriter;
-
-#[cfg(test)]
-impl std::io::Write for TracingTestWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let output = TRACING_TEST_OUTPUT.lock().unwrap().clone();
-        if let Some(output) = output
-            && let Ok(mut bytes_out) = output.lock()
-        {
-            bytes_out.extend_from_slice(bytes);
-        }
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct TracingTestGuard {
-    output: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-}
-
-#[cfg(test)]
-impl TracingTestGuard {
-    pub(crate) fn output(&self) -> String {
-        let bytes = self
-            .output
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        String::from_utf8(bytes).unwrap_or_default()
-    }
-}
-
-#[cfg(test)]
-impl Drop for TracingTestGuard {
-    fn drop(&mut self) {
-        if let Ok(mut output) = TRACING_TEST_OUTPUT.lock() {
-            *output = None;
-        }
-        TRACING_TEST_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn tracing_test_guard() -> TracingTestGuard {
-    while TRACING_TEST_ACTIVE
-        .compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::Acquire,
-            std::sync::atomic::Ordering::Relaxed,
-        )
-        .is_err()
-    {
-        std::thread::yield_now();
-    }
-    TRACING_TEST_INITIALISED.call_once(|| {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .without_time()
-            .with_ansi(false)
-            .with_writer(|| TracingTestWriter)
-            .try_init()
-            .expect("test tracing subscriber should initialise once");
-    });
-    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    *TRACING_TEST_OUTPUT.lock().unwrap() = Some(output.clone());
-    TracingTestGuard { output }
-}
-
 pub(crate) type AppResult<T> = Result<T, AppError>;
 
 pub(crate) trait AppResultExt<T> {
@@ -171,6 +87,18 @@ where
     E: Error + 'static,
 {
     record_operation_failure(operation, type_name::<E>());
+}
+
+pub(crate) fn trace_patch_build_failure(
+    operation: &'static str,
+    error: &hypergraft::PatchBuildError,
+) {
+    tracing::error!(
+        operation,
+        source = type_name::<hypergraft::PatchBuildError>(),
+        kind = ?error.kind(),
+        "operational request failure"
+    );
 }
 
 fn record_operation_failure(operation: &'static str, source_type: &'static str) {

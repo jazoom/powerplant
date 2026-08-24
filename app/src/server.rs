@@ -45,6 +45,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let assets = AssetPaths::load(&static_dir)
         .map_err(|error| format!("asset configuration error: {error}"))?;
     let state = state::build(config, assets);
+    tokio::spawn(sessions::purge_expired_sessions(state.clone()));
     tracing::info!(
         environment = ?state.config.environment(),
         public_origin = %state.config.public_origin(),

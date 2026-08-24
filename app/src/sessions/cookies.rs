@@ -6,7 +6,6 @@ use cookie::{Cookie, SameSite, time::Duration};
 use crate::{config::RuntimeConfig, sessions::tokens::ValidatedToken};
 
 pub(crate) const SESSION_COOKIE_NAME: &str = "circus_session";
-const SESSION_LIFETIME_HOURS: i64 = 12;
 
 #[derive(Debug)]
 pub(crate) enum CookieRead {
@@ -76,7 +75,10 @@ pub(crate) fn session_set_header(
     token: &ValidatedToken,
 ) -> Result<HeaderValue, CookieError> {
     let cookie = build_cookie(config, token.as_str().to_owned())
-        .max_age(Duration::hours(SESSION_LIFETIME_HOURS))
+        .max_age(Duration::hours(
+            i64::try_from(crate::sessions::SESSION_LIFETIME_HOURS)
+                .expect("session lifetime hours fit cookie max-age"),
+        ))
         .build();
     render_header(cookie)
 }

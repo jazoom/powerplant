@@ -1,10 +1,14 @@
 mod cookies;
+mod job;
 mod store;
 mod tokens;
 
 pub(crate) use cookies::CookieRead;
-pub(crate) use store::{SessionSnapshot, SessionStore};
+pub(crate) use job::{Job, JobEventKind, JobId, JobIdError, JobSnapshot, JobStatus};
+pub(crate) use store::{BeginTurnError, SessionSnapshot, SessionStore};
 pub(crate) use tokens::{SessionId, ValidatedToken, generate as generate_session_token};
+
+use std::time::Duration;
 
 use axum::{
     extract::{FromRequestParts, Request, State},
@@ -17,6 +21,12 @@ use crate::{
     error::{AppResult, AppResultExt, trace_operation_failure},
     state::AppState,
 };
+
+// Cookie max-age and server expiry share this bound.
+pub(crate) const SESSION_LIFETIME_HOURS: u64 = 12;
+pub(crate) const SESSION_LIFETIME: Duration = Duration::from_secs(SESSION_LIFETIME_HOURS * 60 * 60);
+
+const SESSION_PURGE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Resolve the provider session before handlers. Invalid cookies are expired.
 pub(crate) async fn resolve_session(
@@ -91,6 +101,16 @@ pub(crate) fn set_session_cookie(
 
 pub(crate) fn clear_session_cookie(response: &mut Response, state: &AppState) {
     expire_unless_replaced(response, state);
+}
+
+/// Drop expired sessions so API keys leave memory without a later request.
+pub(crate) async fn purge_expired_sessions(state: AppState) {
+    let mut interval = tokio::time::interval(SESSION_PURGE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        state.sessions.purge_expired();
+    }
 }
 
 fn expire_unless_replaced(response: &mut Response, state: &AppState) {

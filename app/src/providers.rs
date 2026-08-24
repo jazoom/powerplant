@@ -59,7 +59,7 @@ pub(crate) struct SecretString(String);
 
 impl SecretString {
     pub(crate) fn new(value: String) -> Self {
-        Self(value)
+        Self(value.trim().to_owned())
     }
 
     pub(crate) fn expose(&self) -> &str {
@@ -96,7 +96,11 @@ pub(crate) struct ChatTurn {
 pub(crate) enum ProviderError {
     Rejected,
     Unreachable,
+    RateLimited {
+        retry_after: Option<hypergraft::RetryAfter>,
+    },
     EmptyReply,
+    ReplyTooLong,
 }
 
 impl fmt::Display for ProviderError {
@@ -112,9 +116,57 @@ impl ProviderError {
         match self {
             Self::Rejected => "That key was rejected. Check the provider and try again.",
             Self::Unreachable => "The provider could not be reached. Try again.",
+            Self::RateLimited { .. } => {
+                "The provider rate-limited this request. Try again shortly."
+            }
             Self::EmptyReply => "The model returned an empty reply. Try again.",
+            Self::ReplyTooLong => {
+                "Circus truncated the model reply because it was too long. Try again."
+            }
         }
     }
+
+    pub(crate) fn patch_status(self) -> hypergraft::PatchStatus {
+        match self {
+            Self::Rejected => hypergraft::PatchStatus::Unauthorized,
+            Self::RateLimited { retry_after } => hypergraft::PatchStatus::TooManyRequests(
+                retry_after.unwrap_or_else(default_retry_after),
+            ),
+            Self::Unreachable | Self::EmptyReply | Self::ReplyTooLong => {
+                hypergraft::PatchStatus::UnprocessableEntity
+            }
+        }
+    }
+}
+
+fn default_retry_after() -> hypergraft::RetryAfter {
+    hypergraft::RetryAfter::seconds(1).expect("one second is a valid retry interval")
+}
+
+// 400 and 422 mean the empty probe was authenticated. Never treat them as a rejected key.
+pub(crate) fn classify_verify_status(
+    status: u16,
+    retry_after: Option<&str>,
+) -> Result<(), ProviderError> {
+    match status {
+        200..=299 | 400 | 422 => Ok(()),
+        other => Err(classify_failure_status(other, retry_after)),
+    }
+}
+
+pub(crate) fn classify_failure_status(status: u16, retry_after: Option<&str>) -> ProviderError {
+    match status {
+        401 | 403 => ProviderError::Rejected,
+        429 => ProviderError::RateLimited {
+            retry_after: parse_retry_after(retry_after),
+        },
+        _ => ProviderError::Unreachable,
+    }
+}
+
+fn parse_retry_after(value: Option<&str>) -> Option<hypergraft::RetryAfter> {
+    let seconds = value?.trim().parse().ok()?;
+    hypergraft::RetryAfter::seconds(seconds)
 }
 
 pub(crate) type TokenStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;
@@ -134,24 +186,6 @@ impl ChatBackend {
             Self::Rig => rig::verify(connection).await,
             #[cfg(test)]
             Self::Scripted(backend) => backend.verify(connection),
-        }
-    }
-
-    pub(crate) async fn complete(
-        &self,
-        connection: &ProviderConnection,
-        history: &[ChatTurn],
-    ) -> Result<String, ProviderError> {
-        use futures_util::StreamExt;
-        let mut stream = self.stream(connection, history).await?;
-        let mut text = String::new();
-        while let Some(chunk) = stream.next().await {
-            text.push_str(&chunk?);
-        }
-        if text.trim().is_empty() {
-            Err(ProviderError::EmptyReply)
-        } else {
-            Ok(text)
         }
     }
 

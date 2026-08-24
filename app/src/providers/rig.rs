@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use futures_util::StreamExt;
 use rig_core::{
     client::CompletionClient,
@@ -8,7 +10,7 @@ use rig_core::{
 
 use super::{
     ChatTurn, ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
-    TokenStream,
+    TokenStream, classify_failure_status, classify_verify_status,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -16,36 +18,39 @@ const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 const PREAMBLE: &str = "You are Circus, a local coding agent. Help the user write, explain and review code. Be direct.";
 
+pub(super) const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(super) async fn verify(connection: &ProviderConnection) -> Result<(), ProviderError> {
     let base = match connection.kind {
         ProviderKind::Xai => XAI_BASE_URL,
         ProviderKind::OpenaiCodex => OPENAI_BASE_URL,
         ProviderKind::Synthetic => SYNTHETIC_BASE_URL,
     };
-    verify_key(base, connection.api_key.expose()).await
+    verify_at(base, connection.api_key.expose(), VERIFY_TIMEOUT).await
 }
 
-async fn verify_key(base_url: &str, api_key: &str) -> Result<(), ProviderError> {
-    // Synthetic lists models without a key. An empty chat request still
-    // authenticates and does not spend tokens.
+// An empty `{}` probe still authenticates and does not spend tokens.
+// Read only the status and Retry-After. Never read the provider body.
+pub(super) async fn verify_at(
+    base_url: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> Result<(), ProviderError> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let request = reqwest::Client::new()
         .post(url)
         .bearer_auth(api_key)
         .header("content-type", "application/json")
         .body("{}")
-        .send()
-        .await
-        .map_err(|_| ProviderError::Unreachable)?;
-    classify_verify_status(response.status().as_u16())
-}
-
-pub(super) fn classify_verify_status(status: u16) -> Result<(), ProviderError> {
-    match status {
-        401 | 403 => Err(ProviderError::Rejected),
-        200..=299 | 400 | 422 => Ok(()),
-        _ => Err(ProviderError::Rejected),
-    }
+        .send();
+    let response = match tokio::time::timeout(timeout, request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) | Err(_) => return Err(ProviderError::Unreachable),
+    };
+    classify_verify_status(
+        response.status().as_u16(),
+        retry_after_value(response.headers()),
+    )
 }
 
 pub(super) async fn stream(
@@ -55,13 +60,13 @@ pub(super) async fn stream(
     match connection.kind {
         ProviderKind::Xai => {
             let client = xai::Client::new(connection.api_key.expose())
-                .map_err(|_| ProviderError::Rejected)?;
+                .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
         ProviderKind::OpenaiCodex => {
             let client = openai::Client::new(connection.api_key.expose())
-                .map_err(|_| ProviderError::Rejected)?;
+                .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
@@ -70,7 +75,7 @@ pub(super) async fn stream(
                 .api_key(connection.api_key.expose())
                 .base_url(SYNTHETIC_BASE_URL)
                 .build()
-                .map_err(|_| ProviderError::Rejected)?
+                .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
@@ -83,9 +88,19 @@ fn classify_completion(error: CompletionError) -> ProviderError {
         .provider_response_status()
         .map(|status| status.as_u16())
     {
-        Some(401 | 403) => ProviderError::Rejected,
-        _ => ProviderError::Unreachable,
+        Some(code) => classify_failure_status(code, retry_after_value_from_error(&error)),
+        None => ProviderError::Unreachable,
     }
+}
+
+fn retry_after_value(headers: &reqwest::header::HeaderMap) -> Option<&str> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+}
+
+fn retry_after_value_from_error(error: &CompletionError) -> Option<&str> {
+    retry_after_value(error.provider_response_headers()?)
 }
 
 async fn stream_with<M>(model: M, history: &[ChatTurn]) -> Result<TokenStream, ProviderError>

@@ -1,19 +1,24 @@
 export function initComposer(root: HTMLElement): () => void {
     const form =
         root instanceof HTMLFormElement ? root : root.querySelector("form");
-    const textarea = root.querySelector("textarea");
-    if (!form || !textarea) {
+    if (!form) {
         return () => {};
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+        if (event.isComposing) {
+            return;
+        }
         if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) {
+            return;
+        }
+        if (!(event.target instanceof HTMLTextAreaElement)) {
             return;
         }
         event.preventDefault();
         form.requestSubmit();
     };
 
-    textarea.addEventListener("keydown", onKeyDown);
-    return () => textarea.removeEventListener("keydown", onKeyDown);
+    form.addEventListener("keydown", onKeyDown);
+    return () => form.removeEventListener("keydown", onKeyDown);
 }

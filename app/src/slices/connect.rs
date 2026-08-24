@@ -1,17 +1,22 @@
 mod forms;
 mod page;
 
+#[cfg(test)]
+mod tests;
+
 use axum::{
     Form, Router,
     extract::State,
+    http::StatusCode,
     response::Response,
     routing::{get, post},
 };
+use hypergraft::{CommandGraft, GraftRequest, PageGraft, PatchStatus};
 
 use crate::{
     error::AppResult,
-    providers::{ProviderConnection, ProviderError, SecretString},
-    responses::{self, CommandGraft, GraftRequest, PageGraft, PatchStatus},
+    providers::{ProviderConnection, SecretString},
+    responses,
     sessions::{self, OptionalSession},
     state::AppState,
 };
@@ -50,30 +55,17 @@ async fn submit(
         return Ok(responses::graft_redirect(graft, "/"));
     }
 
-    let Some(kind) = form.provider_kind() else {
-        return render(
-            &state,
-            graft.into(),
-            PatchStatus::UnprocessableEntity,
-            ConnectViewModel::invalid(form, "Choose a provider."),
-        );
+    let kind = match form.validate() {
+        Ok(kind) => kind,
+        Err(error) => {
+            return render(
+                &state,
+                graft.into(),
+                PatchStatus::UnprocessableEntity,
+                ConnectViewModel::invalid(form, error),
+            );
+        }
     };
-    if !form.api_key_is_bounded() {
-        return render(
-            &state,
-            graft.into(),
-            PatchStatus::UnprocessableEntity,
-            ConnectViewModel::invalid(form, "Enter an API key."),
-        );
-    }
-    if !form.model_is_bounded() {
-        return render(
-            &state,
-            graft.into(),
-            PatchStatus::UnprocessableEntity,
-            ConnectViewModel::invalid(form, "That model name is too long."),
-        );
-    }
 
     let model = form.resolved_model(kind);
     let connection = ProviderConnection {
@@ -81,24 +73,13 @@ async fn submit(
         api_key: SecretString::new(form.api_key),
         model,
     };
-    match state.chat.verify(&connection).await {
-        Ok(()) => {}
-        Err(ProviderError::Rejected) | Err(ProviderError::Unreachable) => {
-            return render(
-                &state,
-                graft.into(),
-                PatchStatus::Unauthorized,
-                ConnectViewModel::rejected(kind, connection.model),
-            );
-        }
-        Err(ProviderError::EmptyReply) => {
-            return render(
-                &state,
-                graft.into(),
-                PatchStatus::UnprocessableEntity,
-                ConnectViewModel::rejected(kind, connection.model),
-            );
-        }
+    if let Err(error) = state.chat.verify(&connection).await {
+        return render(
+            &state,
+            graft.into(),
+            error.patch_status(),
+            ConnectViewModel::failed(kind, connection.model, error),
+        );
     }
 
     let token = sessions::generate_session_token()
@@ -128,12 +109,24 @@ fn render(
     status: PatchStatus,
     view: ConnectViewModel,
 ) -> AppResult<Response> {
-    responses::connect_graft_page(
-        graft,
-        status,
-        page::DOCUMENT_TITLE,
-        &state.assets,
-        &view,
-        &view.card_contents(),
-    )
+    match graft {
+        GraftRequest::Document => {
+            let mut response =
+                responses::connect_page_response(page::DOCUMENT_TITLE, &state.assets, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        GraftRequest::Navigation if status == PatchStatus::Ok => Ok(
+            hypergraft::outcome::page_patch(page::DOCUMENT_TITLE, "connect-main", &view)?,
+        ),
+        GraftRequest::Patch => Ok(hypergraft::outcome::children_patch(
+            status,
+            "connect-card",
+            &view.card_contents(),
+        )?),
+        _ => Ok(responses::no_store_status_response(
+            StatusCode::BAD_REQUEST,
+            "Bad request",
+        )),
+    }
 }
