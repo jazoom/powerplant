@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    ProviderError, ProviderKind, SecretString, classify_failure_status, classify_verify_status,
-    rig::{VERIFY_TIMEOUT, verify_at},
+    MAXIMUM_LISTED_MODELS, MAXIMUM_MODEL_BYTES, ProviderError, ProviderKind, SecretString,
+    classify_failure_status, classify_verify_status,
+    rig::{VERIFY_TIMEOUT, models_at, parse_model_list, verify_at},
 };
 
 #[test]
@@ -168,6 +169,38 @@ fn recovery_copy_does_not_blame_a_valid_key_for_an_outage() {
     );
 }
 
+#[test]
+fn the_model_list_parser_bounds_and_dedupes() {
+    let body = serde_json::json!({
+        "data": [
+            {"id": "grok-4.6"},
+            {"id": "grok-4.6"},
+            {"id": "  grok-4-mini  "},
+            {"id": ""},
+            {"id": "bad\u{0000}id"},
+            {"not-id": 3},
+            {"id": "a".repeat(MAXIMUM_MODEL_BYTES + 1)}
+        ]
+    })
+    .to_string();
+    assert_eq!(
+        parse_model_list(body.as_bytes()),
+        vec!["grok-4-mini".to_owned(), "grok-4.6".to_owned()]
+    );
+    assert_eq!(parse_model_list(b"{not-json"), Vec::<String>::new());
+
+    let many = serde_json::json!({
+        "data": (0..(MAXIMUM_LISTED_MODELS + 10))
+            .map(|index| serde_json::json!({"id": format!("model-{index}")}))
+            .collect::<Vec<_>>()
+    })
+    .to_string();
+    assert_eq!(
+        parse_model_list(many.as_bytes()).len(),
+        MAXIMUM_LISTED_MODELS
+    );
+}
+
 #[tokio::test]
 async fn stalled_verification_ends_within_the_configured_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -190,6 +223,78 @@ async fn stalled_verification_ends_within_the_configured_timeout() {
     assert!(elapsed >= timeout, "{elapsed:?}");
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
     assert_eq!(VERIFY_TIMEOUT, Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn a_stalled_model_body_ends_within_the_configured_timeout() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        if stream.writable().await.is_err() {
+            return;
+        }
+        let _ = stream.try_write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{",
+        );
+        std::future::pending::<()>().await;
+    });
+
+    let timeout = Duration::from_millis(80);
+    let started = Instant::now();
+    let result = models_at(&format!("http://{addr}"), "sk-test", timeout).await;
+    let elapsed = started.elapsed();
+
+    assert_eq!(result, Err(ProviderError::Unreachable));
+    assert!(elapsed >= timeout, "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+}
+
+#[tokio::test]
+async fn a_successful_models_response_returns_synthetic_model_ids() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let body = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "syn:large:text", "object": "model"},
+                {"id": "hf:moonshotai/Kimi-K3", "object": "model"}
+            ]
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut written = 0;
+        while written < response.len() {
+            if stream.writable().await.is_err() {
+                return;
+            }
+            match stream.try_write(&response.as_bytes()[written..]) {
+                Ok(0) => return,
+                Ok(count) => written += count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => return,
+            }
+        }
+    });
+
+    let models = models_at(&format!("http://{addr}"), "sk-test", Duration::from_secs(2))
+        .await
+        .expect("models");
+
+    assert_eq!(models, ["hf:moonshotai/Kimi-K3", "syn:large:text"]);
 }
 
 #[tokio::test]

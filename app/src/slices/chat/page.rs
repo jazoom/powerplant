@@ -2,6 +2,7 @@ use askama::Template;
 
 use crate::{
     markdown,
+    models::ModelCatalogue,
     providers::{ChatTurn, Role},
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
@@ -18,6 +19,13 @@ pub(super) struct TurnView {
 pub(super) struct DeskProviderOption {
     pub(super) value: &'static str,
     pub(super) label: &'static str,
+    pub(super) model: String,
+    pub(super) favourite: bool,
+    pub(super) selected: bool,
+}
+
+pub(super) struct ModelOption {
+    pub(super) id: String,
     pub(super) selected: bool,
 }
 
@@ -26,6 +34,10 @@ pub(super) struct DeskProviderOption {
 pub(super) struct ChatViewModel {
     pub(super) providers: Vec<DeskProviderOption>,
     pub(super) model: String,
+    pub(super) favourite_models: Vec<ModelOption>,
+    pub(super) catalogue_models: Vec<ModelOption>,
+    pub(super) catalogue_pending: bool,
+    pub(super) current_favourite: bool,
     pub(super) desk_error: &'static str,
     pub(super) turns: Vec<TurnView>,
     pub(super) error: &'static str,
@@ -39,11 +51,13 @@ impl ChatViewModel {
     pub(super) fn from_session(
         session: &SessionSnapshot,
         vault: &ProviderVault,
+        catalogue: &ModelCatalogue,
         error: &'static str,
         desk_error: &'static str,
     ) -> Self {
         Self::from_parts(
             &vault.desk_providers(),
+            catalogue,
             &session.turns,
             session.job.as_ref(),
             error,
@@ -53,6 +67,7 @@ impl ChatViewModel {
 
     pub(super) fn from_parts(
         providers: &[DeskProvider],
+        catalogue: &ModelCatalogue,
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
         error: &'static str,
@@ -87,21 +102,39 @@ impl ChatViewModel {
                 error = message;
             }
         }
-        let model = providers
-            .iter()
-            .find(|provider| provider.selected)
+        let selected = providers.iter().find(|provider| provider.selected);
+        let model = selected
             .map(|provider| provider.model.clone())
             .unwrap_or_default();
+        let (favourite_models, catalogue_models, current_favourite) = selected
+            .map(|provider| {
+                model_options(
+                    &provider.model,
+                    &provider.favourites,
+                    &catalogue.list(provider.kind),
+                )
+            })
+            .unwrap_or_default();
+        let catalogue_pending = selected.is_some_and(|provider| catalogue.pending(provider.kind));
         Self {
             providers: providers
                 .iter()
                 .map(|provider| DeskProviderOption {
                     value: provider.kind.as_str(),
                     label: provider.kind.label(),
+                    model: provider.model.clone(),
+                    favourite: provider
+                        .favourites
+                        .iter()
+                        .any(|item| item == &provider.model),
                     selected: provider.selected,
                 })
                 .collect(),
             model,
+            favourite_models,
+            catalogue_models,
+            catalogue_pending,
+            current_favourite,
             desk_error,
             turns: views,
             error,
@@ -116,8 +149,20 @@ impl ChatViewModel {
         DeskSettingsContents {
             providers: &self.providers,
             model: &self.model,
+            favourite_models: &self.favourite_models,
+            catalogue_models: &self.catalogue_models,
+            catalogue_pending: self.catalogue_pending,
+            current_favourite: self.current_favourite,
             desk_error: self.desk_error,
             job_active: self.job_active,
+        }
+    }
+
+    pub(super) fn desk_model_catalogue(&self) -> DeskModelCatalogueContents<'_> {
+        DeskModelCatalogueContents {
+            favourite_models: &self.favourite_models,
+            catalogue_models: &self.catalogue_models,
+            catalogue_pending: self.catalogue_pending,
         }
     }
 
@@ -157,8 +202,20 @@ pub(super) fn turn_id(index: usize) -> String {
 pub(super) struct DeskSettingsContents<'a> {
     pub(super) providers: &'a [DeskProviderOption],
     pub(super) model: &'a str,
+    pub(super) favourite_models: &'a [ModelOption],
+    pub(super) catalogue_models: &'a [ModelOption],
+    pub(super) catalogue_pending: bool,
+    pub(super) current_favourite: bool,
     pub(super) desk_error: &'a str,
     pub(super) job_active: bool,
+}
+
+#[derive(Template)]
+#[template(path = "chat/templates/chat.html", block = "desk_model_catalogue")]
+pub(super) struct DeskModelCatalogueContents<'a> {
+    pub(super) favourite_models: &'a [ModelOption],
+    pub(super) catalogue_models: &'a [ModelOption],
+    pub(super) catalogue_pending: bool,
 }
 
 #[derive(Template)]
@@ -225,9 +282,45 @@ pub(super) struct TurnBody<'a> {
     pub(super) turn: &'a TurnView,
 }
 
+fn model_options(
+    current: &str,
+    favourites: &[String],
+    listed: &[String],
+) -> (Vec<ModelOption>, Vec<ModelOption>, bool) {
+    let current_favourite = favourites.iter().any(|item| item == current);
+    let favourite_models = favourites
+        .iter()
+        .map(|id| ModelOption {
+            id: id.clone(),
+            selected: id == current,
+        })
+        .collect();
+    let mut catalogue_models: Vec<ModelOption> = listed
+        .iter()
+        .filter(|id| !favourites.contains(id))
+        .map(|id| ModelOption {
+            id: id.clone(),
+            selected: id == current,
+        })
+        .collect();
+    if !current.is_empty() && !current_favourite && !listed.iter().any(|id| id == current) {
+        catalogue_models.insert(
+            0,
+            ModelOption {
+                id: current.to_owned(),
+                selected: true,
+            },
+        );
+    }
+    (favourite_models, catalogue_models, current_favourite)
+}
+
 fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
     match turn.role {
         Role::User => user_turn(index, &turn.text),
         Role::Assistant => assistant_turn(index, &turn.text),
     }
 }
+
+#[cfg(test)]
+mod tests;

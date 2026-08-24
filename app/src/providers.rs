@@ -12,6 +12,8 @@ pub(crate) const SYNTHETIC_BASE_URL: &str = "https://api.synthetic.new/openai/v1
 
 pub(crate) const MAXIMUM_API_KEY_BYTES: usize = 4_096;
 pub(crate) const MAXIMUM_MODEL_BYTES: usize = 256;
+pub(crate) const MAXIMUM_FAVOURITES: usize = 50;
+pub(crate) const MAXIMUM_LISTED_MODELS: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ProviderKind {
@@ -222,6 +224,17 @@ impl ChatBackend {
             Self::Rig => rig::stream(connection, history).await,
             #[cfg(test)]
             Self::Scripted(backend) => backend.stream(connection, history),
+        }
+    }
+
+    pub(crate) async fn models(
+        &self,
+        connection: &ProviderConnection,
+    ) -> Result<Vec<String>, ProviderError> {
+        match self {
+            Self::Rig => rig::models(connection).await,
+            #[cfg(test)]
+            Self::Scripted(backend) => backend.models(connection),
         }
     }
 }

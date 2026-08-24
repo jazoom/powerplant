@@ -30,7 +30,7 @@ use self::{
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(show).post(send))
-        .route("/model", post(update_model))
+        .route("/model", get(refresh_model_options).post(update_model))
         .route("/jobs/{job_id}/cancel", post(cancel))
 }
 
@@ -115,6 +115,32 @@ async fn send(
     }
 }
 
+async fn refresh_model_options(
+    State(state): State<AppState>,
+    OptionalSession(session): OptionalSession,
+    graft: GraftRequest,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    if !state.vault.has_providers() {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    }
+    let Some(current) = state.sessions.snapshot(&session.id) else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    match graft {
+        GraftRequest::Patch => Ok(hypergraft::outcome::children_patch(
+            PatchStatus::Ok,
+            "desk-model-options",
+            &view(&state, &current, "", "").desk_model_catalogue(),
+        )?),
+        GraftRequest::Document | GraftRequest::Navigation => {
+            Ok(responses::graft_redirect(graft, "/"))
+        }
+    }
+}
+
 async fn update_model(
     State(state): State<AppState>,
     OptionalSession(session): OptionalSession,
@@ -138,9 +164,13 @@ async fn update_model(
     {
         return reject_model(&state, graft, &current, "Wait until this reply finishes.");
     }
+    if form.wants_favourite_toggle() {
+        return toggle_favourite(&state, graft, &current, &form);
+    }
 
     match form.validate(|kind| state.vault.contains(kind)) {
         Ok((kind, model)) => {
+            let model = submitted_model(&state, &form, kind, model);
             state
                 .vault
                 .select(kind, model)
@@ -196,6 +226,70 @@ async fn cancel(
             &view(&state, &latest, "", "").composer(),
         )?),
     }
+}
+
+fn toggle_favourite(
+    state: &AppState,
+    graft: CommandGraft,
+    session: &SessionSnapshot,
+    form: &ModelForm,
+) -> AppResult<Response> {
+    match form.validate_favourite(|kind| state.vault.contains(kind)) {
+        Ok((kind, model)) => {
+            let model = submitted_model(state, form, kind, model);
+            match state.vault.select_and_toggle_favourite(kind, &model) {
+                Ok(_) => {}
+                Err(crate::vault::FavouriteError::Provider) => {
+                    return reject_model(state, graft, session, "Choose a stored provider.");
+                }
+                Err(crate::vault::FavouriteError::Full) => {
+                    return reject_model(state, graft, session, "The favourites list is full.");
+                }
+                Err(crate::vault::FavouriteError::Persist(error)) => {
+                    return Err(crate::error::AppError::new("store favourite", error));
+                }
+            }
+        }
+        Err(forms::ModelError::Provider) => {
+            return reject_model(state, graft, session, "Choose a stored provider.");
+        }
+        Err(forms::ModelError::Model) => {
+            return reject_model(state, graft, session, "Choose a model.");
+        }
+    }
+    match graft {
+        CommandGraft::Document => {
+            render_document(state, PatchStatus::Ok, view(state, session, "", ""))
+        }
+        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+            PatchStatus::Ok,
+            "desk-settings",
+            &view(state, session, "", "").desk_settings(),
+        )?),
+    }
+}
+
+fn submitted_model(
+    state: &AppState,
+    form: &ModelForm,
+    kind: crate::providers::ProviderKind,
+    model: String,
+) -> String {
+    if form.provider_model_synced {
+        return model;
+    }
+    let providers = state.vault.desk_providers();
+    let Some(selected) = providers.iter().find(|provider| provider.selected) else {
+        return model;
+    };
+    if selected.kind == kind {
+        return model;
+    }
+    providers
+        .iter()
+        .find(|provider| provider.kind == kind)
+        .map(|provider| provider.model.clone())
+        .unwrap_or(model)
 }
 
 fn observe(
@@ -307,7 +401,7 @@ fn view(
     error: &'static str,
     desk_error: &'static str,
 ) -> ChatViewModel {
-    ChatViewModel::from_session(session, &state.vault, error, desk_error)
+    ChatViewModel::from_session(session, &state.vault, &state.models, error, desk_error)
 }
 
 fn navigate_page(state: &AppState, view: &ChatViewModel) -> AppResult<Response> {

@@ -25,6 +25,10 @@ pub(super) struct ModelForm {
     pub(super) provider: String,
     #[serde(default)]
     pub(super) model: String,
+    #[serde(default)]
+    pub(super) favourite: Option<String>,
+    #[serde(default)]
+    pub(super) provider_model_synced: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,20 +38,44 @@ pub(super) enum ModelError {
 }
 
 impl ModelForm {
+    pub(super) fn wants_favourite_toggle(&self) -> bool {
+        self.favourite.is_some()
+    }
+
     pub(super) fn validate(
         &self,
         stored: impl Fn(ProviderKind) -> bool,
     ) -> Result<(ProviderKind, String), ModelError> {
+        let kind = self.stored_provider(stored)?;
+        if !model_is_bounded(&self.model) {
+            return Err(ModelError::Model);
+        }
+        Ok((kind, resolve_model(kind, &self.model)))
+    }
+
+    pub(super) fn validate_favourite(
+        &self,
+        stored: impl Fn(ProviderKind) -> bool,
+    ) -> Result<(ProviderKind, String), ModelError> {
+        let kind = self.stored_provider(stored)?;
+        let model = self.model.trim();
+        if model.is_empty() || !model_is_bounded(model) {
+            return Err(ModelError::Model);
+        }
+        Ok((kind, model.to_owned()))
+    }
+
+    fn stored_provider(
+        &self,
+        stored: impl Fn(ProviderKind) -> bool,
+    ) -> Result<ProviderKind, ModelError> {
         let Some(kind) = ProviderKind::parse(self.provider.trim()) else {
             return Err(ModelError::Provider);
         };
         if !stored(kind) {
             return Err(ModelError::Provider);
         }
-        if !model_is_bounded(&self.model) {
-            return Err(ModelError::Model);
-        }
-        Ok((kind, resolve_model(kind, &self.model)))
+        Ok(kind)
     }
 }
 

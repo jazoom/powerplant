@@ -29,10 +29,18 @@
         {% endif %}
         <form
           data-graft
+          data-island="desk-settings"
           method="post"
           action="/model"
           class="flex min-w-0 flex-wrap items-center justify-end gap-2"
         >
+          <input type="hidden" name="provider_model_synced" value="false" />
+          <button
+            type="submit"
+            hidden
+            aria-hidden="true"
+            tabindex="-1"
+          ></button>
           <label class="sr-only" for="desk-provider">Provider</label>
           <select
             id="desk-provider"
@@ -43,30 +51,174 @@
             {% for provider in providers %}
               <option
                 value="{{ provider.value }}"
+                data-model="{{ provider.model }}"
+                data-current-favourite="{% if provider.favourite %}true{% else %}false{% endif %}"
                 {% if provider.selected %}selected{% endif %}
               >
                 {{ provider.label }}
               </option>
             {% endfor %}
           </select>
-          <label class="sr-only" for="desk-model">Model</label>
-          <input
-            id="desk-model"
-            class="input input-bordered input-sm max-w-56 min-w-0 flex-1 font-mono"
-            name="model"
-            type="text"
-            value="{{ model }}"
-            maxlength="256"
-            {% if job_active %}disabled{% endif %}
-          />
+          <div
+            class="dropdown dropdown-end w-56 max-w-full min-w-0"
+            data-model-combobox
+          >
+            <label class="sr-only" for="desk-model">Model</label>
+            <div class="join flex w-full">
+              <input
+                id="desk-model"
+                class="input input-bordered input-sm join-item min-w-0 flex-1 font-mono"
+                name="model"
+                type="text"
+                value="{{ model }}"
+                maxlength="256"
+                autocomplete="off"
+                role="combobox"
+                aria-autocomplete="none"
+                aria-controls="desk-model-options"
+                aria-expanded="false"
+                {% if job_active %}disabled{% endif %}
+              />
+              <button
+                class="btn btn-outline btn-sm join-item px-2"
+                type="button"
+                data-model-toggle
+                aria-label="Show models"
+                aria-controls="desk-model-options"
+                aria-expanded="false"
+                {% if job_active %}disabled{% endif %}
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="m5 7.5 5 5 5-5" />
+                </svg>
+              </button>
+            </div>
+            <div
+              id="desk-model-options"
+              class="dropdown-content border-base-300 bg-base-100 z-50 mt-2 max-h-80 w-96 max-w-[calc(100vw-2rem)] overflow-y-auto border p-1 shadow-lg"
+              data-model-options
+              role="listbox"
+              aria-label="Models"
+              hidden
+            >
+              {% block desk_model_catalogue %}
+                <div
+                  data-catalogue-pending="{% if catalogue_pending %}true{% else %}false{% endif %}"
+                >
+                  {% if !favourite_models.is_empty() %}
+                    <div
+                      role="group"
+                      aria-labelledby="desk-model-favourites-label"
+                    >
+                      <p
+                        id="desk-model-favourites-label"
+                        class="text-quiet px-3 pt-2 pb-1 text-xs"
+                      >
+                        Favourites
+                      </p>
+                      {% for option in favourite_models %}
+                        <button
+                          class="text-base-content hover:bg-base-200 focus:bg-base-200 {% if option.selected %}bg-base-300{% endif %} flex min-h-10 w-full min-w-0 items-center px-3 py-2 text-left font-mono"
+                          type="button"
+                          role="option"
+                          data-model-value="{{ option.id }}"
+                          data-favourite="true"
+                          aria-selected="{% if option.selected %}true{% else %}false{% endif %}"
+                        >
+                          <span class="truncate">{{ option.id }}</span>
+                        </button>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                  {% if !catalogue_models.is_empty() %}
+                    <div
+                      role="group"
+                      aria-labelledby="desk-model-catalogue-label"
+                    >
+                      <p
+                        id="desk-model-catalogue-label"
+                        class="text-quiet px-3 pt-2 pb-1 text-xs"
+                      >
+                        Models
+                      </p>
+                      {% for option in catalogue_models %}
+                        <button
+                          class="text-base-content hover:bg-base-200 focus:bg-base-200 {% if option.selected %}bg-base-300{% endif %} flex min-h-10 w-full min-w-0 items-center px-3 py-2 text-left font-mono"
+                          type="button"
+                          role="option"
+                          data-model-value="{{ option.id }}"
+                          data-favourite="false"
+                          aria-selected="{% if option.selected %}true{% else %}false{% endif %}"
+                        >
+                          <span class="truncate">{{ option.id }}</span>
+                        </button>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                </div>
+              {% endblock %}
+            </div>
+          </div>
           <button
-            class="btn btn-outline btn-sm"
+            class="btn btn-ghost btn-sm px-2"
             type="submit"
+            name="favourite"
+            value="true"
+            aria-label="{% if current_favourite %}Unfavourite{% else %}Favourite{% endif %} model"
+            aria-pressed="{% if current_favourite %}true{% else %}false{% endif %}"
             {% if job_active %}disabled{% endif %}
           >
-            Use
+            <span
+              data-favourite-icon="on"
+              {% if !current_favourite %}hidden{% endif %}
+              aria-hidden="true"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="currentColor"
+              >
+                <path
+                  d="M12 2.75l2.83 5.73 6.32.92-4.57 4.45 1.08 6.29L12 17.16l-5.66 2.98 1.08-6.29L2.85 9.4l6.32-.92L12 2.75z"
+                />
+              </svg>
+            </span>
+            <span
+              data-favourite-icon="off"
+              {% if current_favourite %}hidden{% endif %}
+              aria-hidden="true"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+              >
+                <path
+                  d="M12 2.75l2.83 5.73 6.32.92-4.57 4.45 1.08 6.29L12 17.16l-5.66 2.98 1.08-6.29L2.85 9.4l6.32-.92L12 2.75z"
+                />
+              </svg>
+            </span>
           </button>
         </form>
+        <form
+          id="desk-model-refresh"
+          data-graft
+          method="get"
+          action="/model"
+          hidden
+        ></form>
         <a href="/connect" class="btn btn-ghost btn-sm">Providers</a>
       {% endblock %}
     </div>

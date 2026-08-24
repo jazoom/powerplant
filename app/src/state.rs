@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{
     assets::AssetPaths,
     config::{RuntimeConfig, StartupConfig},
+    models::ModelCatalogue,
     providers::ChatBackend,
     sessions::SessionStore,
     vault::ProviderVault,
@@ -15,6 +16,7 @@ pub(crate) struct AppState {
     pub(crate) sessions: Arc<SessionStore>,
     pub(crate) vault: Arc<ProviderVault>,
     pub(crate) chat: Arc<ChatBackend>,
+    pub(crate) models: Arc<ModelCatalogue>,
 }
 
 pub(crate) fn build(config: StartupConfig, assets: AssetPaths) -> AppState {
@@ -24,6 +26,7 @@ pub(crate) fn build(config: StartupConfig, assets: AssetPaths) -> AppState {
         sessions: Arc::new(SessionStore::new()),
         vault: Arc::new(ProviderVault::open(config.data_dir.join("providers.json"))),
         chat: Arc::new(ChatBackend::Rig),
+        models: Arc::new(ModelCatalogue::default()),
     }
 }
 
@@ -40,5 +43,6 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         chat: Arc::new(ChatBackend::Scripted(
             crate::providers::scripted::ScriptedBackend::accept(),
         )),
+        models: Arc::new(ModelCatalogue::default()),
     }
 }

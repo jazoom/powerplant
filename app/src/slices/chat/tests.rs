@@ -132,6 +132,28 @@ fn observe_patch(token: &str, job: &str, cursor: u64) -> Request<Body> {
         .unwrap()
 }
 
+fn model_refresh_patch(token: &str) -> Request<Body> {
+    Request::builder()
+        .uri("/model")
+        .header(header::COOKIE, cookie(token))
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn model_update_patch(token: &str, body: &'static str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/model")
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from(body))
+        .unwrap()
+}
+
 fn job_id_from_body(body: &axum::body::Bytes) -> String {
     job_id_from(std::str::from_utf8(body).expect("utf8"))
 }
@@ -782,6 +804,215 @@ async fn an_oversized_model_name_is_rejected() {
     assert!(text.contains("That model name is too long."));
     assert!(text.contains("target=\"desk-settings\""));
     assert!(!text.contains(&long_model));
+    assert_eq!(
+        state.vault.selected_connection().map(|item| item.model),
+        Some("grok-4.6".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    state
+        .vault
+        .put(ProviderConnection {
+            kind: ProviderKind::Synthetic,
+            api_key: SecretString::new("test-synthetic-key".to_owned()),
+            model: "hf:moonshotai/Kimi-K3".to_owned(),
+        })
+        .unwrap();
+    state
+        .models
+        .set_for_test(ProviderKind::Synthetic, Vec::new(), true);
+
+    let pending = app(state.clone())
+        .oneshot(model_refresh_patch(&token))
+        .await
+        .expect("pending model refresh");
+    let pending_body = to_bytes(pending.into_body(), usize::MAX).await.unwrap();
+    let pending_text = String::from_utf8(pending_body.to_vec()).unwrap();
+    assert!(pending_text.contains("target=\"desk-model-options\""));
+    assert!(!pending_text.contains("id=\"desk-provider\""));
+    assert!(pending_text.contains("data-catalogue-pending=\"true\""));
+    assert!(!pending_text.contains("data-model-value=\"syn:large:text\""));
+
+    state.models.set_for_test(
+        ProviderKind::Synthetic,
+        vec![
+            "hf:moonshotai/Kimi-K3".to_owned(),
+            "syn:large:text".to_owned(),
+            "syn:small:text".to_owned(),
+        ],
+        false,
+    );
+    let refreshed = app(state)
+        .oneshot(model_refresh_patch(&token))
+        .await
+        .expect("completed model refresh");
+    let refreshed_body = to_bytes(refreshed.into_body(), usize::MAX).await.unwrap();
+    let refreshed_text = String::from_utf8(refreshed_body.to_vec()).unwrap();
+
+    assert!(refreshed_text.contains("data-catalogue-pending=\"false\""));
+    assert!(refreshed_text.contains("data-model-value=\"syn:large:text\""));
+    assert!(refreshed_text.contains("data-model-value=\"syn:small:text\""));
+}
+
+#[tokio::test]
+async fn multiple_synthetic_models_are_rendered_and_selectable() {
+    let state = test_state();
+    let token = connected(&state);
+    state
+        .vault
+        .put(ProviderConnection {
+            kind: ProviderKind::Synthetic,
+            api_key: SecretString::new("test-synthetic-key".to_owned()),
+            model: "hf:moonshotai/Kimi-K3".to_owned(),
+        })
+        .unwrap();
+    state.models.set_for_test(
+        ProviderKind::Synthetic,
+        vec![
+            "hf:moonshotai/Kimi-K3".to_owned(),
+            "syn:large:text".to_owned(),
+            "syn:small:text".to_owned(),
+        ],
+        false,
+    );
+
+    let document = app(state.clone())
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let document_body = to_bytes(document.into_body(), usize::MAX).await.unwrap();
+    let document_text = String::from_utf8(document_body.to_vec()).unwrap();
+    assert!(document_text.contains("data-model-value=\"hf:moonshotai/Kimi-K3\""));
+    assert!(document_text.contains("data-model-value=\"syn:large:text\""));
+    assert!(document_text.contains("data-model-value=\"syn:small:text\""));
+
+    let response = app(state.clone())
+        .oneshot(model_update_patch(
+            &token,
+            "provider=synthetic&model=syn%3Alarge%3Atext",
+        ))
+        .await
+        .expect("model update");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let response_text = String::from_utf8(response_body.to_vec()).unwrap();
+    assert!(response_text.contains("value=\"syn:large:text\""));
+    assert_eq!(
+        state.vault.selected_connection().map(|item| item.model),
+        Some("syn:large:text".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn a_native_provider_change_keeps_that_providers_saved_model() {
+    let state = test_state();
+    let token = connected(&state);
+    state
+        .vault
+        .put(ProviderConnection {
+            kind: ProviderKind::OpenaiCodex,
+            api_key: SecretString::new("test-openai-key".to_owned()),
+            model: "gpt-5.1-codex".to_owned(),
+        })
+        .unwrap();
+    state
+        .vault
+        .select(ProviderKind::Xai, "grok-4.6".to_owned())
+        .unwrap();
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/model")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("provider=openai-codex&model=grok-4.6"))
+                .unwrap(),
+        )
+        .await
+        .expect("provider change");
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let selected = state.vault.selected_connection().unwrap();
+    assert_eq!(selected.kind, ProviderKind::OpenaiCodex);
+    assert_eq!(selected.model, "gpt-5.1-codex");
+}
+
+#[tokio::test]
+async fn the_desk_can_toggle_a_model_favourite() {
+    let state = test_state();
+    let token = connected(&state);
+    for expected in [true, false] {
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/model")
+                    .header(header::COOKIE, cookie(&token))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(hypergraft::GRAFT_REQUEST, "patch")
+                    .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                    .body(Body::from("provider=xai&model=grok-4-mini&favourite=true"))
+                    .unwrap(),
+            )
+            .await
+            .expect("favourite toggle");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("target=\"desk-settings\""));
+        assert!(text.contains(if expected {
+            "aria-pressed=\"true\""
+        } else {
+            "aria-pressed=\"false\""
+        }));
+
+        let desk = state.vault.desk_providers();
+        let favourites = &desk
+            .iter()
+            .find(|provider| provider.kind == ProviderKind::Xai)
+            .expect("xai stored")
+            .favourites;
+        assert_eq!(favourites.contains(&"grok-4-mini".to_owned()), expected);
+        assert_eq!(
+            state.vault.selected_connection().map(|item| item.model),
+            Some("grok-4-mini".to_owned())
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_favourite_toggle_without_a_model_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/model")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("provider=xai&model=&favourite=true"))
+                .unwrap(),
+        )
+        .await
+        .expect("favourite toggle");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose a model."));
     assert_eq!(
         state.vault.selected_connection().map(|item| item.model),
         Some("grok-4.6".to_owned())

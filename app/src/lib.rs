@@ -4,6 +4,7 @@ mod assets;
 mod config;
 mod error;
 mod markdown;
+mod models;
 mod providers;
 mod responses;
 mod security;

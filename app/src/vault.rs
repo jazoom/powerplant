@@ -7,7 +7,8 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::providers::{
-    ProviderConnection, ProviderKind, SecretString, api_key_is_bounded, model_is_bounded,
+    MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString, api_key_is_bounded,
+    model_is_bounded,
 };
 
 #[cfg(test)]
@@ -25,6 +26,7 @@ struct VaultState {
 struct StoredProvider {
     api_key: SecretString,
     model: String,
+    favourites: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -39,6 +41,8 @@ struct VaultFileProvider {
     kind: String,
     api_key: String,
     model: String,
+    #[serde(default)]
+    favourites: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -52,10 +56,30 @@ impl std::fmt::Display for VaultError {
 
 impl std::error::Error for VaultError {}
 
+#[derive(Debug)]
+pub(crate) enum FavouriteError {
+    Provider,
+    Full,
+    Persist(VaultError),
+}
+
+impl std::fmt::Display for FavouriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Provider => "provider is not stored",
+            Self::Full => "favourite list is full",
+            Self::Persist(_) => "provider vault persist failed",
+        })
+    }
+}
+
+impl std::error::Error for FavouriteError {}
+
 pub(crate) struct DeskProvider {
     pub(crate) kind: ProviderKind,
     pub(crate) model: String,
     pub(crate) selected: bool,
+    pub(crate) favourites: Vec<String>,
 }
 
 pub(crate) struct ProviderVault {
@@ -93,6 +117,14 @@ impl ProviderVault {
         connection_from(&state, state.selected?)
     }
 
+    pub(crate) fn connections(&self) -> Vec<ProviderConnection> {
+        let state = self.lock();
+        ProviderKind::ALL
+            .into_iter()
+            .filter_map(|kind| connection_from(&state, kind))
+            .collect()
+    }
+
     pub(crate) fn desk_providers(&self) -> Vec<DeskProvider> {
         let state = self.lock();
         ProviderKind::ALL
@@ -102,6 +134,7 @@ impl ProviderVault {
                     kind,
                     model: stored.model.clone(),
                     selected: state.selected == Some(kind),
+                    favourites: stored.favourites.clone(),
                 })
             })
             .collect()
@@ -109,16 +142,17 @@ impl ProviderVault {
 
     pub(crate) fn put(&self, connection: ProviderConnection) -> Result<(), VaultError> {
         self.mutate(|state| {
-            let model = state
+            let (model, favourites) = state
                 .providers
                 .get(&connection.kind)
-                .map(|stored| stored.model.clone())
-                .unwrap_or(connection.model);
+                .map(|stored| (stored.model.clone(), stored.favourites.clone()))
+                .unwrap_or((connection.model, Vec::new()));
             state.providers.insert(
                 connection.kind,
                 StoredProvider {
                     api_key: connection.api_key,
                     model,
+                    favourites,
                 },
             );
             state.selected = Some(connection.kind);
@@ -145,15 +179,45 @@ impl ProviderVault {
         })
     }
 
-    fn mutate(&self, edit: impl FnOnce(&mut VaultState)) -> Result<(), VaultError> {
+    pub(crate) fn select_and_toggle_favourite(
+        &self,
+        kind: ProviderKind,
+        model: &str,
+    ) -> Result<bool, FavouriteError> {
+        match self.mutate(|state| {
+            let Some(stored) = state.providers.get_mut(&kind) else {
+                return Err(FavouriteError::Provider);
+            };
+            let position = stored.favourites.iter().position(|item| item == model);
+            if position.is_none() && stored.favourites.len() >= MAXIMUM_FAVOURITES {
+                return Err(FavouriteError::Full);
+            }
+            let favourite = if let Some(position) = position {
+                stored.favourites.remove(position);
+                false
+            } else {
+                stored.favourites.push(model.to_owned());
+                true
+            };
+            stored.model = model.to_owned();
+            state.selected = Some(kind);
+            Ok(favourite)
+        }) {
+            Ok(Ok(favourite)) => Ok(favourite),
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(FavouriteError::Persist(error)),
+        }
+    }
+
+    fn mutate<R>(&self, edit: impl FnOnce(&mut VaultState) -> R) -> Result<R, VaultError> {
         let mut state = self.lock();
         let previous = state.clone();
-        edit(&mut state);
+        let value = edit(&mut state);
         if let Err(error) = persist(self.path.as_deref(), &state) {
             *state = previous;
             return Err(error);
         }
-        Ok(())
+        Ok(value)
     }
 
     fn lock(&self) -> MutexGuard<'_, VaultState> {
@@ -161,6 +225,22 @@ impl ProviderVault {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+fn sanitise_favourites(raw: &[String]) -> Vec<String> {
+    let mut favourites: Vec<String> = Vec::new();
+    for item in raw {
+        let item = item.trim();
+        if item.is_empty() || !model_is_bounded(item) || favourites.iter().any(|seen| seen == item)
+        {
+            continue;
+        }
+        if favourites.len() >= MAXIMUM_FAVOURITES {
+            break;
+        }
+        favourites.push(item.to_owned());
+    }
+    favourites
 }
 
 fn connection_from(state: &VaultState, kind: ProviderKind) -> Option<ProviderConnection> {
@@ -195,6 +275,7 @@ fn load(path: &Path) -> Option<VaultState> {
             StoredProvider {
                 api_key: SecretString::new(entry.api_key),
                 model,
+                favourites: sanitise_favourites(&entry.favourites),
             },
         );
     }
@@ -232,6 +313,7 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
                     kind: kind.as_str().to_owned(),
                     api_key: stored.api_key.expose().to_owned(),
                     model: stored.model.clone(),
+                    favourites: stored.favourites.clone(),
                 })
             })
             .collect(),

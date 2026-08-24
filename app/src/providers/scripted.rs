@@ -19,6 +19,7 @@ enum Script {
 #[derive(Clone)]
 pub(crate) struct ScriptedBackend {
     pub(crate) verify_result: Result<(), ProviderError>,
+    models_result: Result<Vec<String>, ProviderError>,
     script: Result<Script, ProviderError>,
 }
 
@@ -26,6 +27,7 @@ impl ScriptedBackend {
     pub(crate) fn accept() -> Self {
         Self {
             verify_result: Ok(()),
+            models_result: Ok(Vec::new()),
             script: Ok(Script::Chunks(
                 chunk_reply("Hello from Circus.")
                     .into_iter()
@@ -35,12 +37,18 @@ impl ScriptedBackend {
         }
     }
 
+    pub(crate) fn with_models(mut self, models: Vec<String>) -> Self {
+        self.models_result = Ok(models);
+        self
+    }
+
     pub(crate) fn chunks<I>(chunks: I) -> Self
     where
         I: IntoIterator<Item = Result<String, ProviderError>>,
     {
         Self {
             verify_result: Ok(()),
+            models_result: Ok(Vec::new()),
             script: Ok(Script::Chunks(chunks.into_iter().collect())),
         }
     }
@@ -48,6 +56,7 @@ impl ScriptedBackend {
     pub(crate) fn hang() -> Self {
         Self {
             verify_result: Ok(()),
+            models_result: Ok(Vec::new()),
             script: Ok(Script::Hang {
                 started: None,
                 dropped: None,
@@ -58,6 +67,7 @@ impl ScriptedBackend {
     pub(crate) fn hang_watched(started: Arc<AtomicBool>, dropped: Arc<AtomicBool>) -> Self {
         Self {
             verify_result: Ok(()),
+            models_result: Ok(Vec::new()),
             script: Ok(Script::Hang {
                 started: Some(started),
                 dropped: Some(dropped),
@@ -67,6 +77,13 @@ impl ScriptedBackend {
 
     pub(crate) fn verify(&self, _connection: &ProviderConnection) -> Result<(), ProviderError> {
         self.verify_result
+    }
+
+    pub(crate) fn models(
+        &self,
+        _connection: &ProviderConnection,
+    ) -> Result<Vec<String>, ProviderError> {
+        self.models_result.clone()
     }
 
     pub(crate) fn stream(

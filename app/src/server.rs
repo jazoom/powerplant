@@ -19,7 +19,7 @@ use tracing_subscriber::prelude::*;
 use crate::{
     assets::AssetPaths,
     config::{RuntimeEnvironment, StartupConfig},
-    security, sessions, slices,
+    models, security, sessions, slices,
     state::{self, AppState},
 };
 
@@ -46,6 +46,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|error| format!("asset configuration error: {error}"))?;
     let state = state::build(config, assets);
     tokio::spawn(sessions::purge_expired_sessions(state.clone()));
+    models::refresh_all(&state);
     tracing::info!(
         environment = ?state.config.environment(),
         public_origin = %state.config.public_origin(),

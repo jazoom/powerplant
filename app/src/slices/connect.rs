@@ -15,6 +15,7 @@ use hypergraft::{CommandGraft, GraftRequest, PageGraft, PatchStatus};
 
 use crate::{
     error::AppResult,
+    models,
     providers::{ProviderConnection, SecretString},
     responses,
     sessions::{self, OptionalSession},
@@ -75,8 +76,9 @@ async fn submit(
 
     state
         .vault
-        .put(connection)
+        .put(connection.clone())
         .map_err(|error| crate::error::AppError::new("store provider", error))?;
+    models::refresh(state.clone(), connection);
 
     let mut response = responses::graft_redirect(graft, "/");
     if session.is_none() {
@@ -99,6 +101,7 @@ async fn forget(
             .vault
             .forget(kind)
             .map_err(|error| crate::error::AppError::new("forget provider", error))?;
+        state.models.remove(kind);
     }
 
     if !state.vault.has_providers() {
