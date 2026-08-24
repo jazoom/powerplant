@@ -17,16 +17,59 @@
         >circus</span
       >
     </a>
-    <p
-      class="text-quiet min-w-0 flex-1 truncate text-right text-sm"
-      title="{{ provider_label }} · {{ model }}"
+    <div
+      id="desk-settings"
+      class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2"
     >
-      <span class="hidden sm:inline">{{ provider_label }} · </span
-      ><span class="font-mono">{{ model }}</span>
-    </p>
-    <form data-graft action="/disconnect" method="post">
-      <button type="submit" class="btn btn-outline btn-sm">Disconnect</button>
-    </form>
+      {% block desk_settings %}
+        {% if desk_error != "" %}
+          <div class="alert alert-error w-full" role="alert" tabindex="-1">
+            <p>{{ desk_error }}</p>
+          </div>
+        {% endif %}
+        <form
+          data-graft
+          method="post"
+          action="/model"
+          class="flex min-w-0 flex-wrap items-center justify-end gap-2"
+        >
+          <label class="sr-only" for="desk-provider">Provider</label>
+          <select
+            id="desk-provider"
+            class="select select-bordered select-sm max-w-40"
+            name="provider"
+            {% if job_active %}disabled{% endif %}
+          >
+            {% for provider in providers %}
+              <option
+                value="{{ provider.value }}"
+                {% if provider.selected %}selected{% endif %}
+              >
+                {{ provider.label }}
+              </option>
+            {% endfor %}
+          </select>
+          <label class="sr-only" for="desk-model">Model</label>
+          <input
+            id="desk-model"
+            class="input input-bordered input-sm max-w-56 min-w-0 flex-1 font-mono"
+            name="model"
+            type="text"
+            value="{{ model }}"
+            maxlength="256"
+            {% if job_active %}disabled{% endif %}
+          />
+          <button
+            class="btn btn-outline btn-sm"
+            type="submit"
+            {% if job_active %}disabled{% endif %}
+          >
+            Use
+          </button>
+        </form>
+        <a href="/connect" class="btn btn-ghost btn-sm">Providers</a>
+      {% endblock %}
+    </div>
   </div>
 </header>
 

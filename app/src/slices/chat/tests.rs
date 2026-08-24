@@ -41,14 +41,15 @@ fn state_with_backend(backend: ScriptedBackend) -> AppState {
 
 fn connected(state: &AppState) -> String {
     let token = sessions::generate_session_token().expect("session token");
-    state.sessions.insert(
-        token.id(),
-        ProviderConnection {
+    state
+        .vault
+        .put(ProviderConnection {
             kind: ProviderKind::Xai,
             api_key: SecretString::new("test-key".to_owned()),
             model: "grok-4.6".to_owned(),
-        },
-    );
+        })
+        .expect("vault");
+    state.sessions.insert(token.id());
     token.raw().as_str().to_owned()
 }
 
@@ -733,4 +734,56 @@ async fn an_oversized_navigation_falls_back_to_a_document() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("<!doctype html>"));
     assert_eq!(text.matches("id=\"chat-main\"").count(), 1);
+}
+
+#[tokio::test]
+async fn a_document_show_includes_the_desk_model_controls() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("id=\"desk-settings\""));
+    assert!(text.contains("id=\"desk-model\""));
+    assert!(text.contains("href=\"/connect\""));
+    assert!(!text.contains("/disconnect"));
+    assert!(!text.contains("test-key"));
+}
+
+#[tokio::test]
+async fn an_oversized_model_name_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let long_model = "a".repeat(crate::providers::MAXIMUM_MODEL_BYTES + 1);
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/model")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!("provider=xai&model={long_model}")))
+                .unwrap(),
+        )
+        .await
+        .expect("model");
+
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("That model name is too long."));
+    assert!(text.contains("target=\"desk-settings\""));
+    assert!(!text.contains(&long_model));
+    assert_eq!(
+        state.vault.selected_connection().map(|item| item.model),
+        Some("grok-4.6".to_owned())
+    );
 }

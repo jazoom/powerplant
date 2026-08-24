@@ -30,11 +30,13 @@ The user brings the provider key. Circus does not sell model access and does not
 
 The user starts the Circus process on their machine. The default origin is `http://localhost:4000`.
 
-They open that origin in a browser. They choose xAI, OpenAI Codex or Synthetic. They paste an API key. They can set a model name or keep the provider default.
+They open that origin in a browser. They add a key for xAI, OpenAI Codex or Synthetic. Circus can store a key for each provider at the same time.
+
+They choose the provider and model in chat. They can keep the provider default.
 
 They send chat turns. Rig streams the reply. The transcript shows the reply as HTML.
 
-Disconnect ends the session and drops the key from memory.
+Forget removes one provider key. The connect page stays available so they can add another provider.
 
 Hypergraft updates page fragments. Ordinary links still work without it.
 
@@ -43,20 +45,21 @@ Hypergraft updates page fragments. Ordinary links still work without it.
 Current capabilities:
 
 - Accept an API key for xAI, OpenAI Codex or Synthetic.
-- Hold the key in process memory for the browser session.
+- Store more than one provider key on the local machine.
+- Choose the provider and model in chat.
 - Send chat turns through Rig.
 - Stream the reply into the transcript as HTML.
 
 Current constraints:
 
 - Do not create user accounts.
-- Do not write API keys to disk.
 - Do not call tools or edit files.
+- Do not persist the transcript across process restarts.
 
 Later work:
 
 - Tools are intended soon. The first tools are undecided.
-- Circus will offer reuse of tokens and keys across sessions. The mechanism is undecided.
+- A later agent can call any stored provider. The desk still has one transcript.
 
 ## Brand Commitments
 
@@ -75,5 +78,5 @@ The running product has a connect surface and a chat surface. The logo file exis
 1. The user runs Circus. There is no product account.
 2. A hosted model is a connection the user brings, not a Circus service.
 3. The desk stays thin. Circus is not an IDE and not a cloud workspace.
-4. Secrets stay in process memory until a reuse mechanism exists.
+4. Circus stores provider keys on this machine until the user forgets that provider.
 5. Do not claim work the product cannot do. Chat is current. Tools come later.

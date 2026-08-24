@@ -2,8 +2,9 @@ use askama::Template;
 
 use crate::{
     markdown,
-    providers::{ChatTurn, ProviderConnection, Role},
+    providers::{ChatTurn, Role},
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
+    vault::{DeskProvider, ProviderVault},
 };
 
 pub(super) const DOCUMENT_TITLE: &str = "Chat | Circus";
@@ -14,11 +15,18 @@ pub(super) struct TurnView {
     pub(super) html: String,
 }
 
+pub(super) struct DeskProviderOption {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+    pub(super) selected: bool,
+}
+
 #[derive(Template)]
 #[template(path = "chat/templates/chat.html")]
 pub(super) struct ChatViewModel {
-    pub(super) provider_label: &'static str,
+    pub(super) providers: Vec<DeskProviderOption>,
     pub(super) model: String,
+    pub(super) desk_error: &'static str,
     pub(super) turns: Vec<TurnView>,
     pub(super) error: &'static str,
     pub(super) job_id: String,
@@ -28,20 +36,27 @@ pub(super) struct ChatViewModel {
 }
 
 impl ChatViewModel {
-    pub(super) fn from_session(session: &SessionSnapshot, error: &'static str) -> Self {
+    pub(super) fn from_session(
+        session: &SessionSnapshot,
+        vault: &ProviderVault,
+        error: &'static str,
+        desk_error: &'static str,
+    ) -> Self {
         Self::from_parts(
-            &session.connection,
+            &vault.desk_providers(),
             &session.turns,
             session.job.as_ref(),
             error,
+            desk_error,
         )
     }
 
     pub(super) fn from_parts(
-        connection: &ProviderConnection,
+        providers: &[DeskProvider],
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
         error: &'static str,
+        desk_error: &'static str,
     ) -> Self {
         let mut views: Vec<TurnView> = turns
             .iter()
@@ -72,15 +87,37 @@ impl ChatViewModel {
                 error = message;
             }
         }
+        let model = providers
+            .iter()
+            .find(|provider| provider.selected)
+            .map(|provider| provider.model.clone())
+            .unwrap_or_default();
         Self {
-            provider_label: connection.kind.label(),
-            model: connection.model.clone(),
+            providers: providers
+                .iter()
+                .map(|provider| DeskProviderOption {
+                    value: provider.kind.as_str(),
+                    label: provider.kind.label(),
+                    selected: provider.selected,
+                })
+                .collect(),
+            model,
+            desk_error,
             turns: views,
             error,
             job_id,
             cursor,
             job_active,
             job_status,
+        }
+    }
+
+    pub(super) fn desk_settings(&self) -> DeskSettingsContents<'_> {
+        DeskSettingsContents {
+            providers: &self.providers,
+            model: &self.model,
+            desk_error: self.desk_error,
+            job_active: self.job_active,
         }
     }
 
@@ -113,6 +150,15 @@ pub(super) fn assistant_turn(index: usize, text: &str) -> TurnView {
 
 pub(super) fn turn_id(index: usize) -> String {
     format!("turn-{}", index + 1)
+}
+
+#[derive(Template)]
+#[template(path = "chat/templates/chat.html", block = "desk_settings")]
+pub(super) struct DeskSettingsContents<'a> {
+    pub(super) providers: &'a [DeskProviderOption],
+    pub(super) model: &'a str,
+    pub(super) desk_error: &'a str,
+    pub(super) job_active: bool,
 }
 
 #[derive(Template)]

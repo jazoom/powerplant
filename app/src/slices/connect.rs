@@ -21,27 +21,23 @@ use crate::{
     state::AppState,
 };
 
-use self::{forms::ConnectForm, page::ConnectViewModel};
+use self::{
+    forms::{ConnectForm, ForgetForm},
+    page::ConnectViewModel,
+};
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/connect", get(show).post(submit))
-        .route("/disconnect", post(disconnect))
+        .route("/connect/forget", post(forget))
 }
 
-async fn show(
-    State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
-    graft: PageGraft,
-) -> AppResult<Response> {
-    if session.is_some() {
-        return Ok(responses::graft_redirect(graft, "/"));
-    }
+async fn show(State(state): State<AppState>, graft: PageGraft) -> AppResult<Response> {
     render(
         &state,
         graft.into(),
         PatchStatus::Ok,
-        ConnectViewModel::initial(),
+        ConnectViewModel::initial(&state.vault),
     )
 }
 
@@ -51,10 +47,6 @@ async fn submit(
     graft: CommandGraft,
     Form(form): Form<ConnectForm>,
 ) -> AppResult<Response> {
-    if session.is_some() {
-        return Ok(responses::graft_redirect(graft, "/"));
-    }
-
     let kind = match form.validate() {
         Ok(kind) => kind,
         Err(error) => {
@@ -62,45 +54,68 @@ async fn submit(
                 &state,
                 graft.into(),
                 PatchStatus::UnprocessableEntity,
-                ConnectViewModel::invalid(form, error),
+                ConnectViewModel::invalid(&state.vault, form, error),
             );
         }
     };
 
-    let model = form.resolved_model(kind);
     let connection = ProviderConnection {
         kind,
         api_key: SecretString::new(form.api_key),
-        model,
+        model: kind.default_model().to_owned(),
     };
     if let Err(error) = state.chat.verify(&connection).await {
         return render(
             &state,
             graft.into(),
             error.patch_status(),
-            ConnectViewModel::failed(kind, connection.model, error),
+            ConnectViewModel::failed(&state.vault, kind, error),
         );
     }
 
-    let token = sessions::generate_session_token()
-        .map_err(|error| crate::error::AppError::new("create session token", error))?;
-    state.sessions.insert(token.id(), connection);
+    state
+        .vault
+        .put(connection)
+        .map_err(|error| crate::error::AppError::new("store provider", error))?;
+
     let mut response = responses::graft_redirect(graft, "/");
-    sessions::set_session_cookie(&mut response, &state, token.raw())?;
+    if session.is_none() {
+        let token = sessions::generate_session_token()
+            .map_err(|error| crate::error::AppError::new("create session token", error))?;
+        state.sessions.insert(token.id());
+        sessions::set_session_cookie(&mut response, &state, token.raw())?;
+    }
     Ok(response)
 }
 
-async fn disconnect(
+async fn forget(
     State(state): State<AppState>,
     OptionalSession(session): OptionalSession,
     graft: CommandGraft,
+    Form(form): Form<ForgetForm>,
 ) -> AppResult<Response> {
-    if let Some(session) = session {
-        state.sessions.remove(&session.id);
+    if let Some(kind) = form.provider_kind() {
+        state
+            .vault
+            .forget(kind)
+            .map_err(|error| crate::error::AppError::new("forget provider", error))?;
     }
-    let mut response = responses::graft_redirect(graft, "/connect");
-    sessions::clear_session_cookie(&mut response, &state);
-    Ok(response)
+
+    if !state.vault.has_providers() {
+        if let Some(session) = session {
+            state.sessions.remove(&session.id);
+        }
+        let mut response = responses::graft_redirect(graft, "/connect");
+        sessions::clear_session_cookie(&mut response, &state);
+        return Ok(response);
+    }
+
+    render(
+        &state,
+        graft.into(),
+        PatchStatus::Ok,
+        ConnectViewModel::initial(&state.vault),
+    )
 }
 
 fn render(

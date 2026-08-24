@@ -8,9 +8,35 @@
       Connect a provider
     </h1>
     <p class="text-quiet mt-2 max-w-[65ch]">
-      The session expires after {{ lifetime_hours }} hours. Circus keeps the key
-      only in memory.
+      Circus stores each key on this machine until you forget that provider.
     </p>
+
+    {% if open_chat %}
+      <p class="mt-4">
+        <a href="/" class="link link-hover">Back to chat</a>
+      </p>
+    {% endif %}
+
+    {% if !stored.is_empty() %}
+      <h2 class="mt-6 text-base font-semibold">Stored providers</h2>
+      <ul class="mt-3 space-y-2">
+        {% for provider in stored %}
+          <li
+            class="border-base-300 flex min-h-12 items-center justify-between gap-3 rounded-sm border px-3"
+          >
+            <span>{{ provider.label }}</span>
+            <form data-graft method="post" action="/connect/forget">
+              <input
+                type="hidden"
+                name="provider"
+                value="{{ provider.value }}"
+              />
+              <button class="btn btn-ghost btn-sm" type="submit">Forget</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
 
     {% if let Some(error) = error %}
       <div
@@ -74,24 +100,9 @@
           {% endif %}
         />
       </div>
-      <div>
-        <label for="connect-model" class="label">Model</label>
-        <input
-          id="connect-model"
-          class="input input-bordered w-full font-mono"
-          name="model"
-          type="text"
-          value="{{ model }}"
-          maxlength="256"
-          placeholder="Leave blank for the provider default"
-          {% if let Some(error) = error %}
-            {% if error.is_model() %}
-              aria-invalid="true" aria-describedby="connect-errors"
-            {% endif %}
-          {% endif %}
-        />
-      </div>
-      <button class="btn btn-primary w-full" type="submit">Connect</button>
+      <button class="btn btn-primary w-full" type="submit">
+        Save provider
+      </button>
     </form>
   {% endblock %}
 </section>

@@ -9,6 +9,7 @@ const TOKEN_BYTES: usize = 64;
 const TOKEN_LENGTH: usize = 86;
 const HASH_BYTES: usize = 32;
 
+#[derive(Clone)]
 pub(crate) struct ValidatedToken {
     value: String,
 }

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::{
-    providers::{ChatTurn, ProviderConnection, Role},
+    providers::{ChatTurn, Role},
     sessions::{
         SESSION_LIFETIME,
         job::{Job, JobId, JobSnapshot},
@@ -43,7 +43,6 @@ impl Clock {
 }
 
 struct StoredSession {
-    connection: ProviderConnection,
     turns: Vec<ChatTurn>,
     job: Option<Arc<Job>>,
     // One in-flight command per session. finish_turn and fail_turn clear it.
@@ -54,7 +53,6 @@ struct StoredSession {
 #[derive(Clone)]
 pub(crate) struct SessionSnapshot {
     pub(crate) id: SessionId,
-    pub(crate) connection: ProviderConnection,
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Option<JobSnapshot>,
 }
@@ -62,7 +60,6 @@ pub(crate) struct SessionSnapshot {
 pub(crate) struct BegunTurn {
     pub(crate) job: Arc<Job>,
     pub(crate) turns: Vec<ChatTurn>,
-    pub(crate) connection: ProviderConnection,
 }
 
 #[derive(Debug)]
@@ -80,12 +77,11 @@ impl SessionStore {
         }
     }
 
-    pub(crate) fn insert(&self, id: SessionId, connection: ProviderConnection) {
+    pub(crate) fn insert(&self, id: SessionId) {
         let expires_at = self.clock.now() + SESSION_LIFETIME;
         self.lock().insert(
             id,
             StoredSession {
-                connection,
                 turns: Vec::new(),
                 job: None,
                 active: None,
@@ -121,7 +117,6 @@ impl SessionStore {
         Ok(BegunTurn {
             job,
             turns: session.turns.clone(),
-            connection: session.connection.clone(),
         })
     }
 
@@ -200,7 +195,6 @@ impl SessionStore {
 fn snapshot_session(id: SessionId, session: &StoredSession) -> SessionSnapshot {
     SessionSnapshot {
         id,
-        connection: session.connection.clone(),
         turns: session.turns.clone(),
         job: session.job.as_ref().map(|job| job.snapshot()),
     }

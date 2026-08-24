@@ -10,7 +10,10 @@ use futures_util::Stream;
 
 pub(crate) const SYNTHETIC_BASE_URL: &str = "https://api.synthetic.new/openai/v1";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) const MAXIMUM_API_KEY_BYTES: usize = 4_096;
+pub(crate) const MAXIMUM_MODEL_BYTES: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ProviderKind {
     Xai,
     OpenaiCodex,
@@ -51,6 +54,27 @@ impl ProviderKind {
             Self::OpenaiCodex => "gpt-5.1-codex",
             Self::Synthetic => "hf:moonshotai/Kimi-K3",
         }
+    }
+}
+
+pub(crate) fn api_key_is_bounded(key: &str) -> bool {
+    let key = key.trim();
+    !key.is_empty()
+        && key.len() <= MAXIMUM_API_KEY_BYTES
+        && !key.chars().any(|character| character.is_control())
+}
+
+pub(crate) fn model_is_bounded(model: &str) -> bool {
+    model.trim().len() <= MAXIMUM_MODEL_BYTES
+        && !model.chars().any(|character| character.is_control())
+}
+
+pub(crate) fn resolve_model(kind: ProviderKind, model: &str) -> String {
+    let model = model.trim();
+    if model.is_empty() {
+        kind.default_model().to_owned()
+    } else {
+        model.to_owned()
     }
 }
 

@@ -35,23 +35,62 @@ pub(crate) async fn resolve_session(
     next: Next,
 ) -> Response {
     let read = cookies::read_session(request.headers());
+    let mut issued = None;
     let resolved = match read {
-        CookieRead::Missing => ResolvedSession::Anonymous,
-        CookieRead::Invalid => ResolvedSession::Invalid,
-        CookieRead::Valid(token) => {
-            match state.sessions.snapshot(&SessionId::from_validated(&token)) {
-                Some(snapshot) => ResolvedSession::Present(snapshot),
-                None => ResolvedSession::Invalid,
-            }
-        }
+        CookieRead::Missing => restore_or(ResolvedSession::Anonymous, &state, &mut issued),
+        CookieRead::Invalid => restore_or(ResolvedSession::Invalid, &state, &mut issued),
+        CookieRead::Valid(token) => existing_or_restore(&state, &token),
     };
     let invalid = matches!(resolved, ResolvedSession::Invalid);
     request.extensions_mut().insert(resolved);
     let mut response = next.run(request).await;
-    if invalid {
+    if let Some(token) = issued {
+        if let Err(error) = set_session_cookie(&mut response, &state, &token) {
+            trace_operation_failure("restore session cookie", &error);
+        }
+    } else if invalid {
         expire_unless_replaced(&mut response, &state);
     }
     response
+}
+
+fn restore_or(
+    fallback: ResolvedSession,
+    state: &AppState,
+    issued: &mut Option<ValidatedToken>,
+) -> ResolvedSession {
+    match issue_restored_session(state) {
+        Some((snapshot, token)) => {
+            *issued = Some(token);
+            ResolvedSession::Present(snapshot)
+        }
+        None => fallback,
+    }
+}
+
+fn existing_or_restore(state: &AppState, token: &ValidatedToken) -> ResolvedSession {
+    let id = SessionId::from_validated(token);
+    if let Some(snapshot) = state.sessions.snapshot(&id) {
+        return ResolvedSession::Present(snapshot);
+    }
+    if !state.vault.has_providers() {
+        return ResolvedSession::Invalid;
+    }
+    state.sessions.insert(id);
+    match state.sessions.snapshot(&id) {
+        Some(snapshot) => ResolvedSession::Present(snapshot),
+        None => ResolvedSession::Invalid,
+    }
+}
+
+fn issue_restored_session(state: &AppState) -> Option<(SessionSnapshot, ValidatedToken)> {
+    if !state.vault.has_providers() {
+        return None;
+    }
+    let token = generate_session_token().ok()?;
+    state.sessions.insert(token.id());
+    let snapshot = state.sessions.snapshot(&token.id())?;
+    Some((snapshot, token.raw().clone()))
 }
 
 #[derive(Clone)]

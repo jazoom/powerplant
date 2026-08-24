@@ -32,4 +32,5 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] 
 futures-util = "0.3.34"
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }

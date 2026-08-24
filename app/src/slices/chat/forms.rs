@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::providers::{ProviderKind, model_is_bounded, resolve_model};
 use crate::sessions::JobId;
 
 pub(super) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
@@ -15,6 +16,38 @@ impl ChatForm {
     pub(super) fn is_bounded(&self) -> bool {
         let message = self.message.trim();
         !message.is_empty() && message.len() <= MAXIMUM_MESSAGE_BYTES
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct ModelForm {
+    #[serde(default)]
+    pub(super) provider: String,
+    #[serde(default)]
+    pub(super) model: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ModelError {
+    Provider,
+    Model,
+}
+
+impl ModelForm {
+    pub(super) fn validate(
+        &self,
+        stored: impl Fn(ProviderKind) -> bool,
+    ) -> Result<(ProviderKind, String), ModelError> {
+        let Some(kind) = ProviderKind::parse(self.provider.trim()) else {
+            return Err(ModelError::Provider);
+        };
+        if !stored(kind) {
+            return Err(ModelError::Provider);
+        }
+        if !model_is_bounded(&self.model) {
+            return Err(ModelError::Model);
+        }
+        Ok((kind, resolve_model(kind, &self.model)))
     }
 }
 

@@ -1,22 +1,14 @@
 use std::time::Duration;
 
-use crate::providers::{ChatTurn, ProviderConnection, ProviderKind, Role, SecretString};
+use crate::providers::{ChatTurn, Role};
 use crate::sessions::{self, BeginTurnError, SESSION_LIFETIME};
-
-fn connection() -> ProviderConnection {
-    ProviderConnection {
-        kind: ProviderKind::Xai,
-        api_key: SecretString::new("test-key".to_owned()),
-        model: "grok-4.6".to_owned(),
-    }
-}
 
 #[test]
 fn parallel_commands_cannot_overwrite_a_completed_turn() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");
     let id = token.id();
-    store.insert(id, connection());
+    store.insert(id);
 
     let first = store.begin_turn(&id, "First".to_owned()).expect("first");
     assert!(matches!(
@@ -68,7 +60,7 @@ fn expired_sessions_cannot_be_resolved() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");
     let id = token.id();
-    store.insert(id, connection());
+    store.insert(id);
     assert!(store.snapshot(&id).is_some());
 
     store.advance_clock(SESSION_LIFETIME + Duration::from_secs(1));
@@ -81,7 +73,7 @@ fn purge_removes_expired_sessions_without_a_lookup() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");
     let id = token.id();
-    store.insert(id, connection());
+    store.insert(id);
 
     store.advance_clock(SESSION_LIFETIME + Duration::from_secs(1));
     assert!(store.contains(&id));
@@ -95,7 +87,7 @@ fn live_sessions_survive_purge() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");
     let id = token.id();
-    store.insert(id, connection());
+    store.insert(id);
 
     store.advance_clock(SESSION_LIFETIME.saturating_sub(Duration::from_secs(1)));
     store.purge_expired();
@@ -107,7 +99,7 @@ fn remove_cancels_the_active_job() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");
     let id = token.id();
-    store.insert(id, connection());
+    store.insert(id);
     let begun = store.begin_turn(&id, "Hello".to_owned()).expect("begin");
     store.remove(&id);
     assert!(begun.job.cancel_requested());

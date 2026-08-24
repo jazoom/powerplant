@@ -15,8 +15,9 @@ use crate::{
         ChatBackend, ProviderConnection, ProviderError, ProviderKind, SecretString,
         scripted::ScriptedBackend,
     },
-    sessions::{self, SESSION_LIFETIME, SESSION_LIFETIME_HOURS, SessionId, ValidatedToken},
+    sessions::{self, SESSION_LIFETIME, SessionId, ValidatedToken},
     state::AppState,
+    vault::ProviderVault,
 };
 
 const SECRET_KEY: &str = "sk-test-secret-key-do-not-echo";
@@ -41,16 +42,21 @@ fn state_with_backend(backend: ScriptedBackend) -> AppState {
     state
 }
 
-fn connected(state: &AppState) -> String {
-    let token = sessions::generate_session_token().expect("session token");
-    state.sessions.insert(
-        token.id(),
-        ProviderConnection {
+fn store_provider(state: &AppState, key: &str) {
+    state
+        .vault
+        .put(ProviderConnection {
             kind: ProviderKind::Xai,
-            api_key: SecretString::new(SECRET_KEY.to_owned()),
+            api_key: SecretString::new(key.to_owned()),
             model: "grok-4.6".to_owned(),
-        },
-    );
+        })
+        .expect("vault");
+}
+
+fn connected(state: &AppState) -> String {
+    store_provider(state, SECRET_KEY);
+    let token = sessions::generate_session_token().expect("session token");
+    state.sessions.insert(token.id());
     token.raw().as_str().to_owned()
 }
 
@@ -82,7 +88,7 @@ async fn wait_flag(flag: &AtomicBool, message: &str) {
 }
 
 #[tokio::test]
-async fn connect_page_states_the_session_lifetime() {
+async fn connect_page_states_that_keys_are_stored_locally() {
     let response = app(test_state())
         .oneshot(
             Request::builder()
@@ -96,13 +102,16 @@ async fn connect_page_states_the_session_lifetime() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains(&format!("after {SESSION_LIFETIME_HOURS} hours")));
+    assert!(text.contains("stores each key on this machine"));
+    assert!(!text.contains("only in memory"));
 }
 
 #[tokio::test]
-async fn an_expired_cookie_cannot_resolve_a_session() {
+async fn an_expired_cookie_without_a_vault_cannot_resolve_a_session() {
     let state = test_state();
-    let token = connected(&state);
+    let token = sessions::generate_session_token().expect("session token");
+    state.sessions.insert(token.id());
+    let token = token.raw().as_str().to_owned();
     let id = session_id(&token);
     state
         .sessions
@@ -136,7 +145,7 @@ async fn an_expired_cookie_cannot_resolve_a_session() {
 }
 
 #[tokio::test]
-async fn disconnect_stops_an_active_provider_stream() {
+async fn forget_of_the_last_provider_stops_an_active_stream() {
     let started = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicBool::new(false));
     let state = state_with_backend(ScriptedBackend::hang_watched(
@@ -167,13 +176,14 @@ async fn disconnect_stops_an_active_provider_stream() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/disconnect")
+                .uri("/connect/forget")
                 .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("provider=xai"))
                 .unwrap(),
         )
         .await
-        .expect("disconnect");
+        .expect("forget");
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(
@@ -192,11 +202,12 @@ async fn disconnect_stops_an_active_provider_stream() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(!text.contains(SECRET_KEY));
     assert!(!state.sessions.contains(&id));
+    assert!(!state.vault.has_providers());
     wait_flag(&dropped, "provider stream was not dropped").await;
 }
 
 fn connect_form() -> &'static str {
-    "provider=xai&api_key=sk-test-key&model=grok-4.6"
+    "provider=xai&api_key=sk-test-key"
 }
 
 async fn connect_patch(state: AppState) -> axum::http::Response<Body> {
@@ -302,7 +313,7 @@ fn aria_invalid_control(text: &str) -> &str {
     let aria = text.find("aria-invalid").expect("aria-invalid");
     let start = text[..aria].rfind('<').expect("tag open");
     let tag = &text[start..aria];
-    for id in ["connect-provider", "connect-key", "connect-model"] {
+    for id in ["connect-provider", "connect-key"] {
         if tag.contains(id) {
             return id;
         }
@@ -314,7 +325,7 @@ fn aria_invalid_control(text: &str) -> &str {
 async fn a_provider_error_targets_the_provider_fieldset() {
     let response = connect_submit(
         test_state(),
-        "provider=openai&api_key=sk-secret-key&model=custom-model".to_owned(),
+        "provider=openai&api_key=sk-secret-key".to_owned(),
         true,
     )
     .await;
@@ -326,17 +337,11 @@ async fn a_provider_error_targets_the_provider_fieldset() {
     assert!(text.contains("Choose a provider."));
     assert_field_target(&text, "connect-provider", "sk-secret-key");
     assert!(!has_checked_control(&text));
-    assert!(text.contains(r#"value="custom-model""#));
 }
 
 #[tokio::test]
 async fn an_api_key_error_targets_the_key_control() {
-    let response = connect_submit(
-        test_state(),
-        "provider=xai&api_key=&model=custom-model".to_owned(),
-        true,
-    )
-    .await;
+    let response = connect_submit(test_state(), "provider=xai&api_key=".to_owned(), true).await;
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
@@ -345,34 +350,13 @@ async fn an_api_key_error_targets_the_key_control() {
     assert_field_target(&text, "connect-key", "sk-secret-key");
     assert!(text.contains(r#"value="xai""#));
     assert!(has_checked_control(&text));
-    assert!(text.contains(r#"value="custom-model""#));
-}
-
-#[tokio::test]
-async fn a_model_error_targets_the_model_control() {
-    let long_model = "a".repeat(super::forms::MAXIMUM_MODEL_BYTES + 1);
-    let response = connect_submit(
-        test_state(),
-        format!("provider=xai&api_key=sk-secret-key&model={long_model}"),
-        true,
-    )
-    .await;
-    let status = response.status();
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(text.contains("That model name is too long."));
-    assert_field_target(&text, "connect-model", "sk-secret-key");
-    assert!(text.contains(r#"value="xai""#));
-    assert!(has_checked_control(&text));
-    assert!(!text.contains(&long_model));
 }
 
 #[tokio::test]
 async fn a_native_rejection_uses_the_same_field_relation() {
     let response = connect_submit(
         test_state(),
-        "provider=openai&api_key=sk-secret-key&model=custom-model".to_owned(),
+        "provider=openai&api_key=sk-secret-key".to_owned(),
         false,
     )
     .await;
@@ -383,5 +367,91 @@ async fn a_native_rejection_uses_the_same_field_relation() {
     assert!(text.contains("<!doctype html>"));
     assert!(text.contains("Choose a provider."));
     assert_field_target(&text, "connect-provider", "sk-secret-key");
-    assert!(text.contains(r#"value="custom-model""#));
+}
+
+#[tokio::test]
+async fn a_successful_connect_stores_the_provider_without_echoing_the_key() {
+    let state = test_state();
+    let response = connect_submit(
+        state.clone(),
+        "provider=xai&api_key=sk-test-key".to_owned(),
+        false,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!text.contains("sk-test-key"));
+    assert!(state.vault.contains(ProviderKind::Xai));
+}
+
+#[tokio::test]
+async fn connect_stays_available_when_providers_are_stored() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri("/connect")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("connect");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Stored providers"));
+    assert!(text.contains("xAI (Grok)"));
+    assert!(text.contains("Forget"));
+    assert!(text.contains("Back to chat"));
+    assert!(!text.contains(SECRET_KEY));
+}
+
+#[tokio::test]
+async fn a_new_process_restores_a_session_from_the_vault_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    let mut writer = test_state();
+    writer.vault = Arc::new(ProviderVault::open(path.clone()));
+    store_provider(&writer, SECRET_KEY);
+
+    let mut reader = test_state();
+    reader.vault = Arc::new(ProviderVault::open(path));
+    let response = app(reader)
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .expect("chat");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies = set_cookies(&response);
+    assert!(
+        cookies
+            .iter()
+            .any(|value| value.contains("circus_session="))
+    );
+    assert!(cookies.iter().all(|value| !value.contains(SECRET_KEY)));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<!doctype html>"));
+    assert!(text.contains("id=\"chat-main\""));
+    assert!(!text.contains(SECRET_KEY));
+}
+
+#[tokio::test]
+async fn adding_a_second_provider_keeps_the_first() {
+    let state = test_state();
+    store_provider(&state, SECRET_KEY);
+    let response = connect_submit(
+        state.clone(),
+        "provider=synthetic&api_key=sk-second-key".to_owned(),
+        false,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(state.vault.contains(ProviderKind::Xai));
+    assert!(state.vault.contains(ProviderKind::Synthetic));
 }

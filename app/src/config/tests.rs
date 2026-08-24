@@ -2,10 +2,13 @@ use super::StartupConfig;
 use std::collections::HashMap;
 
 fn development_values() -> HashMap<String, String> {
-    [("CIRCUS_ENVIRONMENT", "development")]
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
-        .collect()
+    [
+        ("CIRCUS_ENVIRONMENT", "development"),
+        ("HOME", "/home/circus"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    .collect()
 }
 
 #[test]
@@ -13,6 +16,28 @@ fn parses_development_defaults() {
     let config = StartupConfig::from_values(development_values()).unwrap();
     assert_eq!(config.runtime.public_origin(), "http://localhost:4000");
     assert_eq!(config.bind_address, "localhost:4000");
+    assert_eq!(
+        config.data_dir,
+        std::path::PathBuf::from("/home/circus/.local/share/circus")
+    );
+}
+
+#[test]
+fn prefers_an_absolute_data_dir() {
+    let mut values = development_values();
+    values.insert("CIRCUS_DATA_DIR".into(), "/var/lib/circus".into());
+    let config = StartupConfig::from_values(values).unwrap();
+    assert_eq!(config.data_dir, std::path::PathBuf::from("/var/lib/circus"));
+}
+
+#[test]
+fn rejects_a_relative_data_dir() {
+    let mut values = development_values();
+    values.insert("CIRCUS_DATA_DIR".into(), "data".into());
+    assert_eq!(
+        StartupConfig::from_values(values).err().unwrap(),
+        "CIRCUS_DATA_DIR must be absolute"
+    );
 }
 
 #[test]

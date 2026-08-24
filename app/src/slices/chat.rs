@@ -17,12 +17,12 @@ use hypergraft::{CommandGraft, GraftRequest, PatchSet, PatchStatus};
 use crate::{
     error::AppResult,
     responses,
-    sessions::{self, BeginTurnError, JobIdError, OptionalSession, SessionSnapshot},
+    sessions::{self, BeginTurnError, JobIdError, JobStatus, OptionalSession, SessionSnapshot},
     state::AppState,
 };
 
 use self::{
-    forms::{ChatForm, CursorError, ObserveQuery},
+    forms::{ChatForm, CursorError, ModelForm, ObserveQuery},
     job::{observe_response, run_job, user_transcript_patch},
     page::{ChatViewModel, ComposerContents, TranscriptContents},
 };
@@ -30,6 +30,7 @@ use self::{
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(show).post(send))
+        .route("/model", post(update_model))
         .route("/jobs/{job_id}/cancel", post(cancel))
 }
 
@@ -42,10 +43,15 @@ async fn show(
     let Some(session) = session else {
         return Ok(responses::graft_redirect(graft, "/connect"));
     };
+    if !state.vault.has_providers() {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    }
 
     match graft {
-        GraftRequest::Document => render_document(&state, PatchStatus::Ok, view(&session, "")),
-        GraftRequest::Navigation => navigate_page(&state, &view(&session, "")),
+        GraftRequest::Document => {
+            render_document(&state, PatchStatus::Ok, view(&state, &session, "", ""))
+        }
+        GraftRequest::Navigation => navigate_page(&state, &view(&state, &session, "", "")),
         GraftRequest::Patch => observe(&state, &session, query),
     }
 }
@@ -57,6 +63,9 @@ async fn send(
     Form(form): Form<ChatForm>,
 ) -> AppResult<Response> {
     let Some(session) = session else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    let Some(connection) = state.vault.selected_connection() else {
         return Ok(responses::graft_redirect(graft, "/connect"));
     };
 
@@ -90,7 +99,7 @@ async fn send(
     tokio::spawn(run_job(
         state.clone(),
         session.id,
-        started.connection,
+        connection,
         started.turns.clone(),
         job,
     ));
@@ -100,9 +109,63 @@ async fn send(
             let Some(latest) = state.sessions.snapshot(&session.id) else {
                 return Ok(responses::graft_redirect(graft, "/connect"));
             };
-            render_document(&state, PatchStatus::Ok, view(&latest, ""))
+            render_document(&state, PatchStatus::Ok, view(&state, &latest, "", ""))
         }
         CommandGraft::Patch => accept_job_patch(&started.turns, &started.job.id().as_hex()),
+    }
+}
+
+async fn update_model(
+    State(state): State<AppState>,
+    OptionalSession(session): OptionalSession,
+    graft: CommandGraft,
+    Form(form): Form<ModelForm>,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    if !state.vault.has_providers() {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    }
+
+    let Some(current) = state.sessions.snapshot(&session.id) else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    if current
+        .job
+        .as_ref()
+        .is_some_and(|job| job.status == JobStatus::Running)
+    {
+        return reject_model(&state, graft, &current, "Wait until this reply finishes.");
+    }
+
+    match form.validate(|kind| state.vault.contains(kind)) {
+        Ok((kind, model)) => {
+            state
+                .vault
+                .select(kind, model)
+                .map_err(|error| crate::error::AppError::new("store model", error))?;
+        }
+        Err(forms::ModelError::Provider) => {
+            return reject_model(&state, graft, &current, "Choose a stored provider.");
+        }
+        Err(forms::ModelError::Model) => {
+            return reject_model(&state, graft, &current, "That model name is too long.");
+        }
+    }
+
+    let Some(current) = state.sessions.snapshot(&session.id) else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    match graft {
+        CommandGraft::Document => {
+            render_document(&state, PatchStatus::Ok, view(&state, &current, "", ""))
+        }
+        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+            PatchStatus::Ok,
+            "desk-settings",
+            &view(&state, &current, "", "").desk_settings(),
+        )?),
     }
 }
 
@@ -124,11 +187,13 @@ async fn cancel(
         return Ok(responses::graft_redirect(graft, "/connect"));
     };
     match graft {
-        CommandGraft::Document => render_document(&state, PatchStatus::Ok, view(&latest, "")),
+        CommandGraft::Document => {
+            render_document(&state, PatchStatus::Ok, view(&state, &latest, "", ""))
+        }
         CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
             PatchStatus::Ok,
             "composer",
-            &view(&latest, "").composer(),
+            &view(&state, &latest, "", "").composer(),
         )?),
     }
 }
@@ -144,24 +209,24 @@ fn observe(
             return Ok(hypergraft::outcome::children_patch(
                 PatchStatus::UnprocessableEntity,
                 "composer",
-                &view(session, "That cursor is not valid.").composer(),
+                &view(state, session, "That cursor is not valid.", "").composer(),
             )?);
         }
     };
     let Some(job_id) = query.job_id() else {
-        return refresh_composer(session);
+        return refresh_composer(state, session);
     };
     let Some(job) = state.sessions.job(&session.id, &job_id) else {
-        return refresh_composer(session);
+        return refresh_composer(state, session);
     };
     Ok(observe_response(job, cursor))
 }
 
-fn refresh_composer(session: &SessionSnapshot) -> AppResult<Response> {
+fn refresh_composer(state: &AppState, session: &SessionSnapshot) -> AppResult<Response> {
     Ok(hypergraft::outcome::children_patch(
         PatchStatus::Ok,
         "composer",
-        &view(session, "").composer(),
+        &view(state, session, "", "").composer(),
     )?)
 }
 
@@ -181,11 +246,13 @@ fn reject_parallel_command(
 ) -> AppResult<Response> {
     const MESSAGE: &str = "Wait until this reply finishes.";
     match graft {
-        CommandGraft::Document => {
-            render_document(state, PatchStatus::Conflict, view(session, MESSAGE))
-        }
+        CommandGraft::Document => render_document(
+            state,
+            PatchStatus::Conflict,
+            view(state, session, MESSAGE, ""),
+        ),
         CommandGraft::Patch => {
-            let view = view(session, MESSAGE);
+            let view = view(state, session, MESSAGE, "");
             let mut patches = PatchSet::new();
             patches.children("transcript", &TranscriptContents { turns: &view.turns })?;
             patches.children("composer", &view.composer())?;
@@ -204,18 +271,43 @@ fn reject_chat_input(
         CommandGraft::Document => render_document(
             state,
             PatchStatus::UnprocessableEntity,
-            view(session, message),
+            view(state, session, message, ""),
         ),
         CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
             PatchStatus::UnprocessableEntity,
             "composer",
-            &view(session, message).composer(),
+            &view(state, session, message, "").composer(),
         )?),
     }
 }
 
-fn view(session: &SessionSnapshot, error: &'static str) -> ChatViewModel {
-    ChatViewModel::from_session(session, error)
+fn reject_model(
+    state: &AppState,
+    graft: CommandGraft,
+    session: &SessionSnapshot,
+    message: &'static str,
+) -> AppResult<Response> {
+    match graft {
+        CommandGraft::Document => render_document(
+            state,
+            PatchStatus::UnprocessableEntity,
+            view(state, session, "", message),
+        ),
+        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+            PatchStatus::UnprocessableEntity,
+            "desk-settings",
+            &view(state, session, "", message).desk_settings(),
+        )?),
+    }
+}
+
+fn view(
+    state: &AppState,
+    session: &SessionSnapshot,
+    error: &'static str,
+    desk_error: &'static str,
+) -> ChatViewModel {
+    ChatViewModel::from_session(session, &state.vault, error, desk_error)
 }
 
 fn navigate_page(state: &AppState, view: &ChatViewModel) -> AppResult<Response> {

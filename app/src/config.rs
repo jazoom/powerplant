@@ -51,6 +51,7 @@ pub(crate) struct StartupConfig {
     pub(crate) bind_address: String,
     pub(crate) runtime: RuntimeConfig,
     pub(crate) static_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
 }
 
 impl StartupConfig {
@@ -85,6 +86,7 @@ impl StartupConfig {
             bind_address,
             runtime,
             static_dir,
+            data_dir: parse_data_dir(&values)?,
         })
     }
 }
@@ -95,6 +97,29 @@ fn required(values: &HashMap<String, String>, name: &str) -> Result<String, Stri
         Some(_) => Err(format!("{name} must not be empty")),
         None => Err(format!("{name} must be set")),
     }
+}
+
+fn parse_data_dir(values: &HashMap<String, String>) -> Result<PathBuf, String> {
+    if let Some(path) = values.get("CIRCUS_DATA_DIR") {
+        if path.is_empty() {
+            return Err("CIRCUS_DATA_DIR must not be empty".to_owned());
+        }
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err("CIRCUS_DATA_DIR must be absolute".to_owned());
+        }
+        return Ok(path);
+    }
+    if let Some(xdg) = values
+        .get("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(xdg).join("circus"));
+    }
+    if let Some(home) = values.get("HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home).join(".local/share/circus"));
+    }
+    Err("CIRCUS_DATA_DIR must be set".to_owned())
 }
 
 fn parse_public_origin(value: &str) -> Result<String, String> {

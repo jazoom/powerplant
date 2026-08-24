@@ -1,6 +1,9 @@
 use askama::Template;
 
-use crate::providers::{ProviderError, ProviderKind};
+use crate::{
+    providers::{ProviderError, ProviderKind},
+    vault::ProviderVault,
+};
 
 use super::forms::{ConnectField, ConnectForm, FieldError};
 
@@ -12,38 +15,37 @@ pub(super) struct ProviderOption {
     pub(super) selected: bool,
 }
 
+pub(super) struct StoredProviderView {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+}
+
 #[derive(Template)]
 #[template(path = "connect/templates/connect.html")]
 pub(super) struct ConnectViewModel {
     pub(super) providers: Vec<ProviderOption>,
-    pub(super) model: String,
+    pub(super) stored: Vec<StoredProviderView>,
+    pub(super) open_chat: bool,
     pub(super) error: Option<FieldError>,
-    pub(super) lifetime_hours: u64,
 }
 
 impl ConnectViewModel {
-    pub(super) fn initial() -> Self {
-        Self::new(options(None), String::new(), None)
+    pub(super) fn initial(vault: &ProviderVault) -> Self {
+        Self::new(vault, options(None), None)
     }
 
-    pub(super) fn invalid(form: ConnectForm, error: FieldError) -> Self {
-        let selected = form.provider_kind();
-        let model = if form.model_is_bounded() {
-            form.model
-        } else {
-            String::new()
-        };
-        Self::new(options(selected), model, Some(error))
+    pub(super) fn invalid(vault: &ProviderVault, form: ConnectForm, error: FieldError) -> Self {
+        Self::new(vault, options(form.provider_kind()), Some(error))
     }
 
-    pub(super) fn failed(kind: ProviderKind, model: String, error: ProviderError) -> Self {
+    pub(super) fn failed(vault: &ProviderVault, kind: ProviderKind, error: ProviderError) -> Self {
         let field = match error {
             ProviderError::Rejected => ConnectField::ApiKey,
             _ => ConnectField::Provider,
         };
         Self::new(
+            vault,
             options(Some(kind)),
-            model,
             Some(FieldError {
                 field,
                 message: error.message(),
@@ -54,18 +56,24 @@ impl ConnectViewModel {
     pub(super) fn card_contents(&self) -> ConnectCardContents<'_> {
         ConnectCardContents {
             providers: &self.providers,
-            model: &self.model,
+            stored: &self.stored,
+            open_chat: self.open_chat,
             error: self.error,
-            lifetime_hours: self.lifetime_hours,
         }
     }
 
-    fn new(providers: Vec<ProviderOption>, model: String, error: Option<FieldError>) -> Self {
+    fn new(
+        vault: &ProviderVault,
+        providers: Vec<ProviderOption>,
+        error: Option<FieldError>,
+    ) -> Self {
+        let stored = stored_providers(vault);
+        let open_chat = !stored.is_empty();
         Self {
             providers,
-            model,
+            stored,
+            open_chat,
             error,
-            lifetime_hours: crate::sessions::SESSION_LIFETIME_HOURS,
         }
     }
 }
@@ -74,9 +82,9 @@ impl ConnectViewModel {
 #[template(path = "connect/templates/connect.html", block = "card_contents")]
 pub(super) struct ConnectCardContents<'a> {
     providers: &'a [ProviderOption],
-    model: &'a str,
+    stored: &'a [StoredProviderView],
+    open_chat: bool,
     error: Option<FieldError>,
-    lifetime_hours: u64,
 }
 
 fn options(selected: Option<ProviderKind>) -> Vec<ProviderOption> {
@@ -86,6 +94,17 @@ fn options(selected: Option<ProviderKind>) -> Vec<ProviderOption> {
             value: kind.as_str(),
             label: kind.label(),
             selected: selected == Some(kind),
+        })
+        .collect()
+}
+
+fn stored_providers(vault: &ProviderVault) -> Vec<StoredProviderView> {
+    vault
+        .desk_providers()
+        .into_iter()
+        .map(|provider| StoredProviderView {
+            value: provider.kind.as_str(),
+            label: provider.kind.label(),
         })
         .collect()
 }

@@ -12,6 +12,7 @@ mod sessions;
 mod slices;
 mod state;
 mod template_filters;
+mod vault;
 
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     server::run().await
