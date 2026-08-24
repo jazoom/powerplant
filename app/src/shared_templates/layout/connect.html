@@ -1,0 +1,25 @@
+{% extends "layout/base.html" %}
+{% let csp_nonce = "nonce"|crate::template_filters::csp_nonce -%}
+{% block body %}
+  <main
+    id="connect-main"
+    tabindex="-1"
+    class="flex min-h-screen items-center px-4 py-10 sm:px-6"
+  >
+    <div class="mx-auto w-full max-w-md">
+      <a href="/connect" class="mb-8 inline-flex items-center gap-3 rounded-sm">
+        <img
+          src="/static/images/logo.svg"
+          alt=""
+          width="32"
+          height="32"
+          class="circus-mark"
+        />
+        <span class="font-heading text-2xl font-semibold tracking-[-0.03em]"
+          >circus</span
+        >
+      </a>
+      {{ content|safe }}
+    </div>
+  </main>
+{% endblock %}

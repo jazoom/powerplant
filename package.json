@@ -1,0 +1,25 @@
+{
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "test": "vitest run app/assets --exclude \"**/*.browser.test.ts\""
+    },
+    "dependencies": {
+        "@fontsource/ibm-plex-mono": "^5.2.7",
+        "@fontsource/ibm-plex-sans": "^5.2.8",
+        "hypergraft": "link:../hypergraft"
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "^4.3.1",
+        "@typescript/native-preview": "7.0.0-dev.20260628.1",
+        "daisyui": "^5.6.6",
+        "happy-dom": "^20.11.2",
+        "prettier": "^3.9.1",
+        "prettier-plugin-jinja-template": "^2.2.0",
+        "prettier-plugin-organize-imports": "^4.3.0",
+        "prettier-plugin-tailwindcss": "^0.8.0",
+        "tailwindcss": "^4.3.1",
+        "vite": "^8.1.0",
+        "vitest": "^4.1.10"
+    }
+}

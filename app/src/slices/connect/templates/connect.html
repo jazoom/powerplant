@@ -1,0 +1,74 @@
+<section
+  id="connect-card"
+  class="border-base-300 bg-base-100 w-full rounded-md border p-6 sm:p-8"
+>
+  {% block card_contents %}
+    <h1 class="font-heading text-3xl font-semibold tracking-[-0.03em]">
+      Connect a provider
+    </h1>
+    <p class="text-quiet mt-2 max-w-[65ch]">
+      Circus holds the key in memory for this browser session. The key is not
+      written to disk.
+    </p>
+
+    {% if error != "" %}
+      <div
+        id="connect-errors"
+        class="alert alert-error mt-6"
+        role="alert"
+        tabindex="-1"
+      >
+        <p><a href="#connect-key">{{ error }}</a></p>
+      </div>
+    {% endif %}
+
+    <form data-graft class="mt-6 space-y-5" method="post" action="/connect">
+      <fieldset class="space-y-2">
+        <legend class="label">Provider</legend>
+        {% for provider in providers %}
+          <label
+            class="border-base-300 has-checked:border-primary has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 rounded-sm border px-3"
+          >
+            <input
+              class="radio radio-primary"
+              type="radio"
+              name="provider"
+              value="{{ provider.value }}"
+              {% if provider.selected %}checked{% endif %}
+              required
+            />
+            <span>{{ provider.label }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+      <div>
+        <label for="connect-key" class="label">API key</label>
+        <input
+          id="connect-key"
+          class="input input-bordered w-full font-mono"
+          name="api_key"
+          type="password"
+          autocomplete="off"
+          required
+          maxlength="4096"
+          {% if error != "" %}
+            aria-invalid="true" aria-describedby="connect-errors"
+          {% endif %}
+        />
+      </div>
+      <div>
+        <label for="connect-model" class="label">Model</label>
+        <input
+          id="connect-model"
+          class="input input-bordered w-full font-mono"
+          name="model"
+          type="text"
+          value="{{ model }}"
+          maxlength="256"
+          placeholder="Leave blank for the provider default"
+        />
+      </div>
+      <button class="btn btn-primary w-full" type="submit">Connect</button>
+    </form>
+  {% endblock %}
+</section>

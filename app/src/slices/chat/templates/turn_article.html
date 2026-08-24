@@ -1,0 +1,6 @@
+<article
+  id="{{ turn.id }}"
+  class="{% if turn.is_user %}ml-auto max-w-[min(100%,40rem)]{% else %}w-full{% endif %}"
+>
+  {% include "chat/templates/turn_body.html" %}
+</article>

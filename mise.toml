@@ -1,0 +1,96 @@
+[tools]
+watchexec = "2"
+rust = "1.96.0"
+node = "22"
+pnpm = "11.9.0"
+
+[env]
+_.path = ["{{config_root}}/node_modules/.bin"]
+CIRCUS_ENVIRONMENT = "development"
+CIRCUS_BIND_ADDRESS = "localhost:4000"
+CIRCUS_PUBLIC_ORIGIN = "http://localhost:4000"
+
+[tasks.build]
+description = "Build Circus"
+run = "cargo build -p circus --release"
+
+[tasks.server]
+alias = "s"
+description = "Run Circus"
+run = "cargo run -p circus"
+
+[tasks.dev]
+alias = "d"
+description = "Run the Circus Rust web server with asset and template reloads"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+assets_pid=""
+cleanup() {
+  trap - INT TERM EXIT
+  if [ -n "$assets_pid" ]; then
+    kill "$assets_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup INT TERM EXIT
+
+mkdir -p app/static
+rm -f app/static/.vite/manifest.json
+
+pnpm vite build app --watch --mode development --logLevel warn &
+assets_pid=$!
+
+while [ ! -f app/static/.vite/manifest.json ]; do
+  if ! kill -0 "$assets_pid" 2>/dev/null; then
+    wait "$assets_pid"
+    exit $?
+  fi
+  sleep 0.1
+done
+
+watchexec --restart \
+  --watch app/src \
+  --watch app/askama.toml \
+  --watch app/Cargo.toml \
+  --watch Cargo.lock \
+  -- cargo run -p circus --quiet --features dev
+"""
+
+[tasks.format]
+alias = "f"
+description = "Format Rust and front-end files"
+run = [
+  "pnpm prettier --write --cache --log-level warn .",
+  "cargo fmt --all",
+]
+
+[tasks.check]
+description = "Check the Circus Rust project"
+run = [
+  "pnpm tsgo --noEmit --incremental --tsBuildInfoFile .cache/tsgo.tsbuildinfo --project app/tsconfig.json",
+  "cargo clippy --all-targets --all-features -- --deny warnings",
+]
+
+[tasks.test]
+description = "Run the Circus test suite"
+run = [
+  "pnpm test",
+  "cargo test --workspace --all-features --quiet",
+]
+
+[tasks.clean]
+alias = "c"
+description = "Format and check the Circus Rust project"
+run = [
+  "mise run format",
+  "mise run check",
+]
+
+[tasks."assets:build"]
+description = "Build front-end assets"
+run = "pnpm vite build app"
+
+[tasks."assets:watch"]
+description = "Watch and build front-end assets"
+run = "pnpm vite build app --watch"

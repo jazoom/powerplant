@@ -1,0 +1,8 @@
+node_modules
+/.pi
+/.cache
+/.playwright
+/app/static
+/target
+/.worktrees
+/.scratch.md
