@@ -9,27 +9,40 @@ use std::pin::Pin;
 use futures_util::Stream;
 
 pub(crate) const SYNTHETIC_BASE_URL: &str = "https://api.synthetic.new/openai/v1";
+pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 
 pub(crate) const MAXIMUM_API_KEY_BYTES: usize = 4_096;
 pub(crate) const MAXIMUM_MODEL_BYTES: usize = 256;
 pub(crate) const MAXIMUM_FAVOURITES: usize = 50;
 pub(crate) const MAXIMUM_LISTED_MODELS: usize = 512;
+pub(crate) const MAXIMUM_PROVIDER_DETAIL_BYTES: usize = 400;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ProviderKind {
     Xai,
     OpenaiCodex,
     Synthetic,
+    Openrouter,
+    Deepseek,
 }
 
 impl ProviderKind {
-    pub(crate) const ALL: [Self; 3] = [Self::Xai, Self::OpenaiCodex, Self::Synthetic];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Xai,
+        Self::OpenaiCodex,
+        Self::Synthetic,
+        Self::Openrouter,
+        Self::Deepseek,
+    ];
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "xai" => Some(Self::Xai),
             "openai-codex" => Some(Self::OpenaiCodex),
             "synthetic" => Some(Self::Synthetic),
+            "openrouter" => Some(Self::Openrouter),
+            "deepseek" => Some(Self::Deepseek),
             _ => None,
         }
     }
@@ -39,6 +52,8 @@ impl ProviderKind {
             Self::Xai => "xai",
             Self::OpenaiCodex => "openai-codex",
             Self::Synthetic => "synthetic",
+            Self::Openrouter => "openrouter",
+            Self::Deepseek => "deepseek",
         }
     }
 
@@ -47,6 +62,8 @@ impl ProviderKind {
             Self::Xai => "xAI (Grok)",
             Self::OpenaiCodex => "OpenAI Codex",
             Self::Synthetic => "Synthetic",
+            Self::Openrouter => "OpenRouter",
+            Self::Deepseek => "DeepSeek",
         }
     }
 
@@ -55,6 +72,8 @@ impl ProviderKind {
             Self::Xai => "grok-4.6",
             Self::OpenaiCodex => "gpt-5.1-codex",
             Self::Synthetic => "hf:moonshotai/Kimi-K3",
+            Self::Openrouter => "openai/gpt-4o-mini",
+            Self::Deepseek => "deepseek-v4-flash",
         }
     }
 }
@@ -118,15 +137,18 @@ pub(crate) struct ChatTurn {
     pub(crate) text: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ProviderError {
     Rejected,
+    AccountInactive,
+    Refused,
     Unreachable,
     RateLimited {
         retry_after: Option<hypergraft::RetryAfter>,
     },
     EmptyReply,
     ReplyTooLong,
+    Detail(String),
 }
 
 impl fmt::Display for ProviderError {
@@ -138,29 +160,37 @@ impl fmt::Display for ProviderError {
 impl std::error::Error for ProviderError {}
 
 impl ProviderError {
-    pub(crate) fn message(self) -> &'static str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             Self::Rejected => "That key was rejected. Check the provider and try again.",
+            Self::AccountInactive => {
+                "This provider account is not active. Check the subscription and try again."
+            }
+            Self::Refused => "The provider refused this request. Check the account and try again.",
             Self::Unreachable => "The provider could not be reached. Try again.",
             Self::RateLimited { .. } => {
                 "The provider rate-limited this request. Try again shortly."
             }
             Self::EmptyReply => "The model returned an empty reply. Try again.",
             Self::ReplyTooLong => {
-                "Circus truncated the model reply because it was too long. Try again."
+                "Power Plant truncated the model reply because it was too long. Try again."
             }
+            Self::Detail(text) => text,
         }
     }
 
-    pub(crate) fn patch_status(self) -> hypergraft::PatchStatus {
+    pub(crate) fn patch_status(&self) -> hypergraft::PatchStatus {
         match self {
             Self::Rejected => hypergraft::PatchStatus::Unauthorized,
             Self::RateLimited { retry_after } => hypergraft::PatchStatus::TooManyRequests(
                 retry_after.unwrap_or_else(default_retry_after),
             ),
-            Self::Unreachable | Self::EmptyReply | Self::ReplyTooLong => {
-                hypergraft::PatchStatus::UnprocessableEntity
-            }
+            Self::AccountInactive
+            | Self::Refused
+            | Self::Unreachable
+            | Self::EmptyReply
+            | Self::ReplyTooLong
+            | Self::Detail(_) => hypergraft::PatchStatus::UnprocessableEntity,
         }
     }
 }
@@ -183,9 +213,13 @@ pub(crate) fn classify_verify_status(
 pub(crate) fn classify_failure_status(status: u16, retry_after: Option<&str>) -> ProviderError {
     match status {
         401 | 403 => ProviderError::Rejected,
+        // 402 is an inactive or unpaid account. Do not call it unreachable.
+        402 => ProviderError::AccountInactive,
         429 => ProviderError::RateLimited {
             retry_after: parse_retry_after(retry_after),
         },
+        408 => ProviderError::Unreachable,
+        400..=499 => ProviderError::Refused,
         _ => ProviderError::Unreachable,
     }
 }
@@ -193,6 +227,51 @@ pub(crate) fn classify_failure_status(status: u16, retry_after: Option<&str>) ->
 fn parse_retry_after(value: Option<&str>) -> Option<hypergraft::RetryAfter> {
     let seconds = value?.trim().parse().ok()?;
     hypergraft::RetryAfter::seconds(seconds)
+}
+
+pub(crate) fn with_provider_detail(error: ProviderError, body: Option<&[u8]>) -> ProviderError {
+    with_extracted_detail(error, body.and_then(provider_detail))
+}
+
+pub(crate) fn with_json_detail(
+    error: ProviderError,
+    json: Option<&serde_json::Value>,
+) -> ProviderError {
+    with_extracted_detail(error, json.and_then(detail_from_json))
+}
+
+fn with_extracted_detail(error: ProviderError, detail: Option<String>) -> ProviderError {
+    match error {
+        ProviderError::Rejected | ProviderError::RateLimited { .. } => error,
+        other => detail.map(ProviderError::Detail).unwrap_or(other),
+    }
+}
+
+// Read only a bounded error.message. Never log the provider body.
+pub(crate) fn provider_detail(body: &[u8]) -> Option<String> {
+    detail_from_json(&serde_json::from_slice(body).ok()?)
+}
+
+fn detail_from_json(value: &serde_json::Value) -> Option<String> {
+    let text = value
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str)?;
+    sanitise_detail(text)
+}
+
+fn sanitise_detail(text: &str) -> Option<String> {
+    let mut out = String::new();
+    for character in text.chars() {
+        if character.is_control() {
+            continue;
+        }
+        if out.len().saturating_add(character.len_utf8()) > MAXIMUM_PROVIDER_DETAIL_BYTES {
+            break;
+        }
+        out.push(character);
+    }
+    let out = out.trim().to_owned();
+    if out.is_empty() { None } else { Some(out) }
 }
 
 pub(crate) type TokenStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;

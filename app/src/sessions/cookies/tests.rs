@@ -18,7 +18,7 @@ fn invalid_cookie_value_is_invalid() {
     let mut headers = HeaderMap::new();
     headers.insert(
         header::COOKIE,
-        "circus_session=not-a-token".parse().unwrap(),
+        "powerplant_session=not-a-token".parse().unwrap(),
     );
     assert!(matches!(read_session(&headers), CookieRead::Invalid));
 }
@@ -28,13 +28,13 @@ fn duplicate_session_cookies_are_invalid() {
     let mut headers = HeaderMap::new();
     headers.append(
         header::COOKIE,
-        "circus_session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "powerplant_session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             .parse()
             .unwrap(),
     );
     headers.append(
         header::COOKIE,
-        "circus_session=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "powerplant_session=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             .parse()
             .unwrap(),
     );
@@ -58,6 +58,6 @@ fn session_cookie_uses_the_server_lifetime() {
 fn deletion_header_has_no_token() {
     let header = session_deletion_header(&RuntimeConfig::development_for_test()).unwrap();
     let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
-    assert_eq!(cookie.name(), "circus_session");
+    assert_eq!(cookie.name(), "powerplant_session");
     assert!(cookie.value().is_empty());
 }

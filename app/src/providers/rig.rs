@@ -4,22 +4,23 @@ use futures_util::StreamExt;
 use rig_core::{
     client::CompletionClient,
     completion::{CompletionError, CompletionModel, Message},
-    providers::{openai, xai},
+    providers::{deepseek, openai, openrouter, xai},
     streaming::StreamedAssistantContent,
 };
 
 use super::{
-    ChatTurn, MAXIMUM_LISTED_MODELS, ProviderConnection, ProviderError, ProviderKind, Role,
-    SYNTHETIC_BASE_URL, TokenStream, classify_failure_status, classify_verify_status,
-    model_is_bounded,
+    ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, OPENROUTER_BASE_URL, ProviderConnection,
+    ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL, TokenStream, classify_failure_status,
+    classify_verify_status, model_is_bounded, with_json_detail, with_provider_detail,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 const MAXIMUM_MODEL_LIST_BYTES: usize = 1_048_576;
+const MAXIMUM_PROVIDER_ERROR_BYTES: usize = 4_096;
 
-const PREAMBLE: &str = "You are Circus, a local coding agent. Help the user write, explain and review code. Be direct.";
+const PREAMBLE: &str = "You are Power Plant, a local coding agent. Help the user write, explain and review code. Be direct.";
 
 pub(super) const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -28,6 +29,8 @@ fn base_url(kind: ProviderKind) -> &'static str {
         ProviderKind::Xai => XAI_BASE_URL,
         ProviderKind::OpenaiCodex => OPENAI_BASE_URL,
         ProviderKind::Synthetic => SYNTHETIC_BASE_URL,
+        ProviderKind::Openrouter => OPENROUTER_BASE_URL,
+        ProviderKind::Deepseek => DEEPSEEK_BASE_URL,
     }
 }
 
@@ -41,7 +44,7 @@ pub(super) async fn verify(connection: &ProviderConnection) -> Result<(), Provid
 }
 
 // An empty `{}` probe still authenticates and does not spend tokens.
-// Read only the status and Retry-After. Never read the provider body.
+// Read only status, Retry-After, and a bounded error.message. Never log the body.
 pub(super) async fn verify_at(
     base_url: &str,
     api_key: &str,
@@ -58,10 +61,15 @@ pub(super) async fn verify_at(
         Ok(Ok(response)) => response,
         Ok(Err(_)) | Err(_) => return Err(ProviderError::Unreachable),
     };
-    classify_verify_status(
-        response.status().as_u16(),
-        retry_after_value(response.headers()),
-    )
+    let status = response.status().as_u16();
+    let retry_after = retry_after_value(response.headers());
+    match classify_verify_status(status, retry_after) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let body = bounded_body(response, MAXIMUM_PROVIDER_ERROR_BYTES).await;
+            Err(with_provider_detail(error, body.as_deref()))
+        }
+    }
 }
 
 // Read only ids from the model list. Never log the provider body.
@@ -89,10 +97,9 @@ pub(super) async fn models_at(
             .map_err(|_| ProviderError::Unreachable)?;
         let status = response.status().as_u16();
         if !(200..=299).contains(&status) {
-            return Err(classify_failure_status(
-                status,
-                retry_after_value(response.headers()),
-            ));
+            let classified = classify_failure_status(status, retry_after_value(response.headers()));
+            let body = bounded_body(response, MAXIMUM_PROVIDER_ERROR_BYTES).await;
+            return Err(with_provider_detail(classified, body.as_deref()));
         }
         let Some(body) = bounded_body(response, MAXIMUM_MODEL_LIST_BYTES).await else {
             return Err(ProviderError::Unreachable);
@@ -184,17 +191,31 @@ pub(super) async fn stream(
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
+        ProviderKind::Openrouter => {
+            let client = openrouter::Client::new(connection.api_key.expose())
+                .map_err(|_| ProviderError::Unreachable)?;
+            let model = client.completion_model(&connection.model);
+            stream_with(model, history).await
+        }
+        ProviderKind::Deepseek => {
+            let client = deepseek::Client::new(connection.api_key.expose())
+                .map_err(|_| ProviderError::Unreachable)?;
+            let model = client.completion_model(&connection.model);
+            stream_with(model, history).await
+        }
     }
 }
 
 fn classify_completion(error: CompletionError) -> ProviderError {
-    match error
+    let classified = match error
         .provider_response_status()
         .map(|status| status.as_u16())
     {
-        Some(code) => classify_failure_status(code, retry_after_value_from_error(&error)),
+        Some(code) => classify_failure_status(code, retry_after_from_completion(&error)),
         None => ProviderError::Unreachable,
-    }
+    };
+    let json = error.provider_response_json().ok().flatten();
+    with_json_detail(classified, json.as_ref())
 }
 
 fn retry_after_value(headers: &reqwest::header::HeaderMap) -> Option<&str> {
@@ -203,8 +224,12 @@ fn retry_after_value(headers: &reqwest::header::HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
-fn retry_after_value_from_error(error: &CompletionError) -> Option<&str> {
-    retry_after_value(error.provider_response_headers()?)
+fn retry_after_from_completion(error: &CompletionError) -> Option<&str> {
+    error
+        .provider_response_headers()?
+        .get("retry-after")?
+        .to_str()
+        .ok()
 }
 
 async fn stream_with<M>(model: M, history: &[ChatTurn]) -> Result<TokenStream, ProviderError>

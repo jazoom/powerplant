@@ -1,5 +1,7 @@
 <header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
-  <div class="mx-auto flex min-h-16 max-w-3xl items-center gap-3 px-4">
+  <div
+    class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:flex-nowrap"
+  >
     <a
       href="/"
       data-graft
@@ -11,15 +13,15 @@
         alt=""
         width="28"
         height="28"
-        class="circus-mark"
+        class="powerplant-mark"
       />
       <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
-        >circus</span
+        >Power Plant</span
       >
     </a>
     <div
       id="desk-settings"
-      class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2"
+      class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-nowrap"
     >
       {% block desk_settings %}
         {% if desk_error != "" %}
@@ -28,11 +30,12 @@
           </div>
         {% endif %}
         <form
+          id="desk-settings-form"
           data-graft
           data-island="desk-settings"
           method="post"
           action="/model"
-          class="flex min-w-0 flex-wrap items-center justify-end gap-2"
+          class="order-3 grid w-full min-w-0 grid-cols-[minmax(7.5rem,0.8fr)_minmax(0,1.4fr)] items-center gap-2 sm:order-none sm:flex sm:w-auto"
         >
           <input type="hidden" name="provider_model_synced" value="false" />
           <button
@@ -44,7 +47,7 @@
           <label class="sr-only" for="desk-provider">Provider</label>
           <select
             id="desk-provider"
-            class="select select-bordered select-sm max-w-40"
+            class="select select-bordered select-sm w-full sm:w-36"
             name="provider"
             {% if job_active %}disabled{% endif %}
           >
@@ -52,7 +55,6 @@
               <option
                 value="{{ provider.value }}"
                 data-model="{{ provider.model }}"
-                data-current-favourite="{% if provider.favourite %}true{% else %}false{% endif %}"
                 {% if provider.selected %}selected{% endif %}
               >
                 {{ provider.label }}
@@ -60,157 +62,169 @@
             {% endfor %}
           </select>
           <div
-            class="dropdown dropdown-end w-56 max-w-full min-w-0"
+            class="dropdown dropdown-end min-w-0 sm:w-72"
             data-model-combobox
           >
-            <label class="sr-only" for="desk-model">Model</label>
-            <div class="join flex w-full">
-              <input
-                id="desk-model"
-                class="input input-bordered input-sm join-item min-w-0 flex-1 font-mono"
-                name="model"
-                type="text"
-                value="{{ model }}"
-                maxlength="256"
-                autocomplete="off"
-                role="combobox"
-                aria-autocomplete="none"
-                aria-controls="desk-model-options"
-                aria-expanded="false"
-                {% if job_active %}disabled{% endif %}
-              />
-              <button
-                class="btn btn-outline btn-sm join-item px-2"
-                type="button"
-                data-model-toggle
-                aria-label="Show models"
-                aria-controls="desk-model-options"
-                aria-expanded="false"
-                {% if job_active %}disabled{% endif %}
+            <input
+              id="desk-model"
+              name="model"
+              type="hidden"
+              value="{{ model }}"
+            />
+            <button
+              class="select select-bordered select-sm flex w-full min-w-0 items-center text-left sm:w-72"
+              type="button"
+              data-model-toggle
+              aria-label="Model, {{ model }}"
+              aria-controls="desk-model-options"
+              aria-expanded="false"
+              {% if job_active %}disabled{% endif %}
+            >
+              <span class="truncate font-mono" data-model-label
+                >{{ model }}</span
               >
-                <svg
-                  viewBox="0 0 20 20"
-                  width="16"
-                  height="16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.75"
-                  aria-hidden="true"
-                >
-                  <path d="m5 7.5 5 5 5-5" />
-                </svg>
-              </button>
-            </div>
+            </button>
             <div
               id="desk-model-options"
-              class="dropdown-content border-base-300 bg-base-100 z-50 mt-2 max-h-80 w-96 max-w-[calc(100vw-2rem)] overflow-y-auto border p-1 shadow-lg"
+              class="dropdown-content border-base-300 bg-base-100 z-50 mt-2 max-h-[min(28rem,calc(100vh-7rem))] w-[calc(100vw-2rem)] overflow-y-auto border p-1 shadow-[0_14px_32px_oklch(8%_0.01_80/0.45)] sm:w-[30rem]"
               data-model-options
-              role="listbox"
-              aria-label="Models"
+              role="dialog"
+              aria-label="Choose a model"
               hidden
             >
-              {% block desk_model_catalogue %}
-                <div
-                  data-catalogue-pending="{% if catalogue_pending %}true{% else %}false{% endif %}"
+              <div class="bg-base-100 sticky top-0 z-10 p-2">
+                <label class="sr-only" for="desk-model-search"
+                  >Search models</label
                 >
-                  {% if !favourite_models.is_empty() %}
-                    <div
-                      role="group"
-                      aria-labelledby="desk-model-favourites-label"
-                    >
-                      <p
-                        id="desk-model-favourites-label"
-                        class="text-quiet px-3 pt-2 pb-1 text-xs"
+                <input
+                  id="desk-model-search"
+                  class="input input-bordered input-sm w-full font-mono"
+                  type="search"
+                  maxlength="256"
+                  autocomplete="off"
+                  placeholder="Search models"
+                  data-model-search
+                />
+                <p
+                  class="text-quiet px-1 pt-2 text-xs"
+                  data-model-no-results
+                  hidden
+                >
+                  No matching model.
+                </p>
+              </div>
+              <div id="desk-model-catalogue">
+                {% block desk_model_catalogue %}
+                  <div
+                    data-catalogue-pending="{% if catalogue_pending %}true{% else %}false{% endif %}"
+                  >
+                    {% if !favourite_models.is_empty() %}
+                      <div
+                        role="group"
+                        aria-labelledby="desk-model-favourites-label"
+                        data-model-group
                       >
-                        Favourites
-                      </p>
-                      {% for option in favourite_models %}
-                        <button
-                          class="text-base-content hover:bg-base-200 focus:bg-base-200 {% if option.selected %}bg-base-300{% endif %} flex min-h-10 w-full min-w-0 items-center px-3 py-2 text-left font-mono"
-                          type="button"
-                          role="option"
-                          data-model-value="{{ option.id }}"
-                          data-favourite="true"
-                          aria-selected="{% if option.selected %}true{% else %}false{% endif %}"
+                        <p
+                          id="desk-model-favourites-label"
+                          class="text-quiet px-3 pt-2 pb-1 text-xs"
                         >
-                          <span class="truncate">{{ option.id }}</span>
-                        </button>
-                      {% endfor %}
-                    </div>
-                  {% endif %}
-                  {% if !catalogue_models.is_empty() %}
-                    <div
-                      role="group"
-                      aria-labelledby="desk-model-catalogue-label"
-                    >
-                      <p
-                        id="desk-model-catalogue-label"
-                        class="text-quiet px-3 pt-2 pb-1 text-xs"
+                          Favourites
+                        </p>
+                        {% for option in favourite_models %}
+                          <div
+                            class="hover:bg-base-200 focus-within:bg-base-200 flex min-w-0 items-center"
+                            data-model-row
+                          >
+                            <button
+                              class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 items-center py-2 pl-3 text-left font-mono"
+                              type="button"
+                              data-model-value="{{ option.id }}"
+                              aria-pressed="{% if option.selected %}true{% else %}false{% endif %}"
+                            >
+                              <span class="truncate">{{ option.id }}</span>
+                            </button>
+                            <button
+                              class="btn btn-ghost btn-sm text-primary shrink-0 px-3"
+                              type="submit"
+                              name="favourite"
+                              value="{{ option.id }}"
+                              data-model-favourite
+                              aria-label="Unfavourite {{ option.id }}"
+                              aria-pressed="true"
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                width="18"
+                                height="18"
+                                fill="currentColor"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M12 2.75l2.83 5.73 6.32.92-4.57 4.45 1.08 6.29L12 17.16l-5.66 2.98 1.08-6.29L2.85 9.4l6.32-.92L12 2.75z"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                    {% if !catalogue_models.is_empty() %}
+                      <div
+                        role="group"
+                        aria-labelledby="desk-model-catalogue-label"
+                        data-model-group
                       >
-                        Models
-                      </p>
-                      {% for option in catalogue_models %}
-                        <button
-                          class="text-base-content hover:bg-base-200 focus:bg-base-200 {% if option.selected %}bg-base-300{% endif %} flex min-h-10 w-full min-w-0 items-center px-3 py-2 text-left font-mono"
-                          type="button"
-                          role="option"
-                          data-model-value="{{ option.id }}"
-                          data-favourite="false"
-                          aria-selected="{% if option.selected %}true{% else %}false{% endif %}"
+                        <p
+                          id="desk-model-catalogue-label"
+                          class="text-quiet px-3 pt-2 pb-1 text-xs"
                         >
-                          <span class="truncate">{{ option.id }}</span>
-                        </button>
-                      {% endfor %}
-                    </div>
-                  {% endif %}
-                </div>
-              {% endblock %}
+                          Models
+                        </p>
+                        {% for option in catalogue_models %}
+                          <div
+                            class="hover:bg-base-200 focus-within:bg-base-200 flex min-w-0 items-center"
+                            data-model-row
+                          >
+                            <button
+                              class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 items-center py-2 pl-3 text-left font-mono"
+                              type="button"
+                              data-model-value="{{ option.id }}"
+                              aria-pressed="{% if option.selected %}true{% else %}false{% endif %}"
+                            >
+                              <span class="truncate">{{ option.id }}</span>
+                            </button>
+                            <button
+                              class="btn btn-ghost btn-sm text-quiet hover:text-primary shrink-0 px-3"
+                              type="submit"
+                              name="favourite"
+                              value="{{ option.id }}"
+                              data-model-favourite
+                              aria-label="Favourite {{ option.id }}"
+                              aria-pressed="false"
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                width="18"
+                                height="18"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.8"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M12 2.75l2.83 5.73 6.32.92-4.57 4.45 1.08 6.29L12 17.16l-5.66 2.98 1.08-6.29L2.85 9.4l6.32-.92L12 2.75z"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endblock %}
+              </div>
             </div>
           </div>
-          <button
-            class="btn btn-ghost btn-sm px-2"
-            type="submit"
-            name="favourite"
-            value="true"
-            aria-label="{% if current_favourite %}Unfavourite{% else %}Favourite{% endif %} model"
-            aria-pressed="{% if current_favourite %}true{% else %}false{% endif %}"
-            {% if job_active %}disabled{% endif %}
-          >
-            <span
-              data-favourite-icon="on"
-              {% if !current_favourite %}hidden{% endif %}
-              aria-hidden="true"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="currentColor"
-              >
-                <path
-                  d="M12 2.75l2.83 5.73 6.32.92-4.57 4.45 1.08 6.29L12 17.16l-5.66 2.98 1.08-6.29L2.85 9.4l6.32-.92L12 2.75z"
-                />
-              </svg>
-            </span>
-            <span
-              data-favourite-icon="off"
-              {% if current_favourite %}hidden{% endif %}
-              aria-hidden="true"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-              >
-                <path
-                  d="M12 2.75l2.83 5.73 6.32.92-4.57 4.45 1.08 6.29L12 17.16l-5.66 2.98 1.08-6.29L2.85 9.4l6.32-.92L12 2.75z"
-                />
-              </svg>
-            </span>
-          </button>
         </form>
         <form
           id="desk-model-refresh"
@@ -219,7 +233,7 @@
           action="/model"
           hidden
         ></form>
-        <a href="/connect" class="btn btn-ghost btn-sm">Providers</a>
+        <a href="/connect" class="btn btn-outline btn-sm">Manage providers</a>
       {% endblock %}
     </div>
   </div>
@@ -236,7 +250,7 @@
     {% if turns.is_empty() %}
       <div class="text-quiet m-auto max-w-[40ch] py-16 text-center">
         <p class="font-heading text-base-content text-lg font-semibold">
-          Ask Circus
+          Ask Power Plant
         </p>
         <p class="mt-2">Write, explain or review code.</p>
       </div>
@@ -249,34 +263,44 @@
 </section>
 
 <div class="border-base-300 bg-base-100 sticky bottom-0 border-t">
-  <div
-    id="composer"
-    class="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-4"
-  >
-    {% block composer %}
-      {% if job_active %}
-        <div data-island="job-observe" data-job-active="true">
-          <p class="text-quiet text-sm" role="status" aria-live="polite">
-            {{ job_status }}
-          </p>
-          {% if error != "" %}
-            <div class="alert alert-error" role="alert" tabindex="-1">
-              <p>{{ error }}</p>
+  <div class="mx-auto flex w-full max-w-3xl flex-col px-4 py-4">
+    <div id="job-observe">
+      {% block job_observe %}
+        {% if job_active %}
+          <div class="mb-3" data-island="job-observe" data-job-active="true">
+            <p class="text-quiet text-sm" role="status" aria-live="polite">
+              {{ job_status }}
+            </p>
+            {% if job_error != "" %}
+              <div class="alert alert-error" role="alert" tabindex="-1">
+                <p>{{ job_error }}</p>
+              </div>
+            {% endif %}
+            <div class="flex flex-wrap items-center gap-3">
+              <form data-graft method="get" action="/">
+                <div id="job-cursor">
+                  {% include "chat/templates/job_cursor.html" %}
+                </div>
+                <button class="btn btn-outline" type="submit">Refresh</button>
+              </form>
+              <form data-graft method="post" action="/jobs/{{ job_id }}/cancel">
+                <button class="btn btn-outline" type="submit">Stop</button>
+              </form>
+            </div>
+          </div>
+        {% else %}
+          {% if job_error != "" %}
+            <div class="mb-3">
+              <div class="alert alert-error" role="alert" tabindex="-1">
+                <p>{{ job_error }}</p>
+              </div>
             </div>
           {% endif %}
-          <div class="flex flex-wrap items-center gap-3">
-            <form data-graft method="get" action="/">
-              <div id="job-cursor">
-                {% include "chat/templates/job_cursor.html" %}
-              </div>
-              <button class="btn btn-outline" type="submit">Refresh</button>
-            </form>
-            <form data-graft method="post" action="/jobs/{{ job_id }}/cancel">
-              <button class="btn btn-outline" type="submit">Stop</button>
-            </form>
-          </div>
-        </div>
-      {% else %}
+        {% endif %}
+      {% endblock %}
+    </div>
+    <div id="composer" class="flex flex-col gap-3">
+      {% block composer %}
         <form data-graft data-island="composer" method="post" action="/">
           {% if error != "" %}
             <div class="alert alert-error" role="alert" tabindex="-1">
@@ -292,7 +316,7 @@
               required
               maxlength="32768"
               rows="3"
-              placeholder="Message Circus"
+              placeholder="Message Power Plant"
             ></textarea>
             <button class="btn btn-primary" type="submit">Send</button>
           </div>
@@ -300,7 +324,7 @@
             Ctrl or Cmd + Enter to send.
           </p>
         </form>
-      {% endif %}
-    {% endblock %}
+      {% endblock %}
+    </div>
   </div>
 </div>

@@ -13,7 +13,7 @@ impl RuntimeEnvironment {
         match value {
             "development" => Ok(Self::Development),
             "production" => Ok(Self::Production),
-            _ => Err("CIRCUS_ENVIRONMENT must be development or production".to_owned()),
+            _ => Err("POWERPLANT_ENVIRONMENT must be development or production".to_owned()),
         }
     }
 }
@@ -60,26 +60,26 @@ impl StartupConfig {
     }
 
     fn from_values(values: HashMap<String, String>) -> Result<Self, String> {
-        let environment = RuntimeEnvironment::parse(&required(&values, "CIRCUS_ENVIRONMENT")?)?;
+        let environment = RuntimeEnvironment::parse(&required(&values, "POWERPLANT_ENVIRONMENT")?)?;
         let public_origin = match environment {
             RuntimeEnvironment::Development => values
-                .get("CIRCUS_PUBLIC_ORIGIN")
+                .get("POWERPLANT_PUBLIC_ORIGIN")
                 .cloned()
                 .unwrap_or_else(|| "http://localhost:4000".to_owned()),
-            RuntimeEnvironment::Production => required(&values, "CIRCUS_PUBLIC_ORIGIN")?,
+            RuntimeEnvironment::Production => required(&values, "POWERPLANT_PUBLIC_ORIGIN")?,
         };
         let runtime = RuntimeConfig {
             environment,
             public_origin: parse_public_origin(&public_origin)?,
         };
         let bind_address = values
-            .get("CIRCUS_BIND_ADDRESS")
+            .get("POWERPLANT_BIND_ADDRESS")
             .map(String::as_str)
             .unwrap_or("localhost:4000")
             .to_owned();
-        let static_dir = match values.get("CIRCUS_STATIC_DIR") {
+        let static_dir = match values.get("POWERPLANT_STATIC_DIR") {
             Some(path) if PathBuf::from(path).is_absolute() => PathBuf::from(path),
-            Some(_) => return Err("CIRCUS_STATIC_DIR must be absolute".to_owned()),
+            Some(_) => return Err("POWERPLANT_STATIC_DIR must be absolute".to_owned()),
             None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"),
         };
         Ok(Self {
@@ -100,13 +100,13 @@ fn required(values: &HashMap<String, String>, name: &str) -> Result<String, Stri
 }
 
 fn parse_data_dir(values: &HashMap<String, String>) -> Result<PathBuf, String> {
-    if let Some(path) = values.get("CIRCUS_DATA_DIR") {
+    if let Some(path) = values.get("POWERPLANT_DATA_DIR") {
         if path.is_empty() {
-            return Err("CIRCUS_DATA_DIR must not be empty".to_owned());
+            return Err("POWERPLANT_DATA_DIR must not be empty".to_owned());
         }
         let path = PathBuf::from(path);
         if !path.is_absolute() {
-            return Err("CIRCUS_DATA_DIR must be absolute".to_owned());
+            return Err("POWERPLANT_DATA_DIR must be absolute".to_owned());
         }
         return Ok(path);
     }
@@ -114,16 +114,16 @@ fn parse_data_dir(values: &HashMap<String, String>) -> Result<PathBuf, String> {
         .get("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(xdg).join("circus"));
+        return Ok(PathBuf::from(xdg).join("powerplant"));
     }
     if let Some(home) = values.get("HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join(".local/share/circus"));
+        return Ok(PathBuf::from(home).join(".local/share/powerplant"));
     }
-    Err("CIRCUS_DATA_DIR must be set".to_owned())
+    Err("POWERPLANT_DATA_DIR must be set".to_owned())
 }
 
 fn parse_public_origin(value: &str) -> Result<String, String> {
-    let url = Url::parse(value).map_err(|_| "CIRCUS_PUBLIC_ORIGIN is invalid".to_owned())?;
+    let url = Url::parse(value).map_err(|_| "POWERPLANT_PUBLIC_ORIGIN is invalid".to_owned())?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host().is_none()
         || !url.username().is_empty()
@@ -132,7 +132,7 @@ fn parse_public_origin(value: &str) -> Result<String, String> {
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err("CIRCUS_PUBLIC_ORIGIN must be a canonical HTTP(S) origin".to_owned());
+        return Err("POWERPLANT_PUBLIC_ORIGIN must be a canonical HTTP(S) origin".to_owned());
     }
     let host = match url.host().expect("host was checked above") {
         Host::Domain(domain) => domain.to_string(),
@@ -144,7 +144,7 @@ fn parse_public_origin(value: &str) -> Result<String, String> {
         None => format!("{}://{host}", url.scheme()),
     };
     if value != canonical {
-        return Err("CIRCUS_PUBLIC_ORIGIN must be canonical".to_owned());
+        return Err("POWERPLANT_PUBLIC_ORIGIN must be canonical".to_owned());
     }
     Ok(canonical)
 }

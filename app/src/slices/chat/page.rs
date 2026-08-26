@@ -8,7 +8,7 @@ use crate::{
     vault::{DeskProvider, ProviderVault},
 };
 
-pub(super) const DOCUMENT_TITLE: &str = "Chat | Circus";
+pub(super) const DOCUMENT_TITLE: &str = "Chat | Power Plant";
 
 pub(super) struct TurnView {
     pub(super) id: String,
@@ -20,7 +20,6 @@ pub(super) struct DeskProviderOption {
     pub(super) value: &'static str,
     pub(super) label: &'static str,
     pub(super) model: String,
-    pub(super) favourite: bool,
     pub(super) selected: bool,
 }
 
@@ -37,10 +36,10 @@ pub(super) struct ChatViewModel {
     pub(super) favourite_models: Vec<ModelOption>,
     pub(super) catalogue_models: Vec<ModelOption>,
     pub(super) catalogue_pending: bool,
-    pub(super) current_favourite: bool,
     pub(super) desk_error: &'static str,
     pub(super) turns: Vec<TurnView>,
     pub(super) error: &'static str,
+    pub(super) job_error: &'static str,
     pub(super) job_id: String,
     pub(super) cursor: u64,
     pub(super) job_active: bool,
@@ -82,7 +81,6 @@ impl ChatViewModel {
         let mut cursor = 0;
         let mut job_active = false;
         let mut job_status = "";
-        let mut error = error;
         if let Some(job) = job {
             if !job.output.is_empty() && views.len() == job.assistant_index {
                 views.push(assistant_turn(job.assistant_index, &job.output));
@@ -96,17 +94,13 @@ impl ChatViewModel {
                 } else {
                     "Writing"
                 };
-            } else if error.is_empty()
-                && let Some(message) = job.error
-            {
-                error = message;
             }
         }
         let selected = providers.iter().find(|provider| provider.selected);
         let model = selected
             .map(|provider| provider.model.clone())
             .unwrap_or_default();
-        let (favourite_models, catalogue_models, current_favourite) = selected
+        let (favourite_models, catalogue_models) = selected
             .map(|provider| {
                 model_options(
                     &provider.model,
@@ -123,10 +117,6 @@ impl ChatViewModel {
                     value: provider.kind.as_str(),
                     label: provider.kind.label(),
                     model: provider.model.clone(),
-                    favourite: provider
-                        .favourites
-                        .iter()
-                        .any(|item| item == &provider.model),
                     selected: provider.selected,
                 })
                 .collect(),
@@ -134,10 +124,10 @@ impl ChatViewModel {
             favourite_models,
             catalogue_models,
             catalogue_pending,
-            current_favourite,
             desk_error,
             turns: views,
             error,
+            job_error: "",
             job_id,
             cursor,
             job_active,
@@ -152,7 +142,6 @@ impl ChatViewModel {
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
             catalogue_pending: self.catalogue_pending,
-            current_favourite: self.current_favourite,
             desk_error: self.desk_error,
             job_active: self.job_active,
         }
@@ -167,8 +156,16 @@ impl ChatViewModel {
     }
 
     pub(super) fn composer(&self) -> ComposerContents<'_> {
-        ComposerContents {
-            error: self.error,
+        ComposerContents { error: self.error }
+    }
+
+    pub(super) fn job_observe(&self) -> JobObserveContents<'_> {
+        self.job_observe_with("")
+    }
+
+    pub(super) fn job_observe_with<'a>(&'a self, job_error: &'a str) -> JobObserveContents<'a> {
+        JobObserveContents {
+            job_error,
             job_id: &self.job_id,
             cursor: self.cursor,
             job_active: self.job_active,
@@ -205,7 +202,6 @@ pub(super) struct DeskSettingsContents<'a> {
     pub(super) favourite_models: &'a [ModelOption],
     pub(super) catalogue_models: &'a [ModelOption],
     pub(super) catalogue_pending: bool,
-    pub(super) current_favourite: bool,
     pub(super) desk_error: &'a str,
     pub(super) job_active: bool,
 }
@@ -228,25 +224,29 @@ pub(super) struct TranscriptContents<'a> {
 #[template(path = "chat/templates/chat.html", block = "composer")]
 pub(super) struct ComposerContents<'a> {
     pub(super) error: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "chat/templates/chat.html", block = "job_observe")]
+pub(super) struct JobObserveContents<'a> {
+    pub(super) job_error: &'a str,
     pub(super) job_id: &'a str,
     pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) job_status: &'static str,
 }
 
-impl ComposerContents<'static> {
-    pub(super) fn idle(error: &'static str) -> Self {
+impl<'a> JobObserveContents<'a> {
+    pub(super) fn idle(error: &'a str) -> Self {
         Self {
-            error,
+            job_error: error,
             job_id: "",
             cursor: 0,
             job_active: false,
             job_status: "",
         }
     }
-}
 
-impl<'a> ComposerContents<'a> {
     pub(super) fn observing(
         job_id: &'a str,
         cursor: u64,
@@ -254,7 +254,7 @@ impl<'a> ComposerContents<'a> {
         error: &'a str,
     ) -> Self {
         Self {
-            error,
+            job_error: error,
             job_id,
             cursor,
             job_active: true,
@@ -286,7 +286,7 @@ fn model_options(
     current: &str,
     favourites: &[String],
     listed: &[String],
-) -> (Vec<ModelOption>, Vec<ModelOption>, bool) {
+) -> (Vec<ModelOption>, Vec<ModelOption>) {
     let current_favourite = favourites.iter().any(|item| item == current);
     let favourite_models = favourites
         .iter()
@@ -312,7 +312,7 @@ fn model_options(
             },
         );
     }
-    (favourite_models, catalogue_models, current_favourite)
+    (favourite_models, catalogue_models)
 }
 
 fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
@@ -321,6 +321,3 @@ fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
         Role::Assistant => assistant_turn(index, &turn.text),
     }
 }
-
-#[cfg(test)]
-mod tests;

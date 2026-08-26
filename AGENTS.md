@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Circus is a local coding agent. The stack is Axum, Askama, Hypergraft and Rig.
+Power Plant is a local coding agent. The stack is Axum, Askama, Hypergraft and Rig.
 
 There are no user accounts. A local vault stores provider API keys until the user forgets that provider. A browser session holds the transcript in memory.
 

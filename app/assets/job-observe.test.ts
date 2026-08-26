@@ -55,7 +55,7 @@ test("an insertion patch starts one observation request", () => {
             url: "/",
             outcome: "applied-patch",
             status: 200,
-            targetIds: ["composer"],
+            targetIds: ["job-observe"],
         },
     });
     expect(submissions).toBe(1);
@@ -84,7 +84,7 @@ test("an applied patch continues while the job is active", () => {
             url: "/",
             outcome: "applied-patch",
             status: 200,
-            targetIds: ["composer"],
+            targetIds: ["job-observe"],
         },
     });
     expect(submissions).toBe(2);

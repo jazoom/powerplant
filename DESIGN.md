@@ -1,5 +1,5 @@
 ---
-name: Circus
+name: Power Plant
 description: A dark local desk for a coding agent that conducts hosted models.
 colors:
     ring: "oklch(82% 0.13 80)"
@@ -43,15 +43,15 @@ spacing:
     xl: "40px"
 ---
 
-# Design system: Circus
+# Design system: Power Plant
 
 ## Overview
 
 **Creative north star: "The ringmaster's desk"**
 
-Circus is a local desk for a coding agent. The screen is dark. A gold ring marks the product. Message paper is warm and quiet. Action colour is scarce.
+Power Plant is a local desk for a coding agent. The screen is dark. A gold ring marks the product. Message paper is warm and quiet. Action colour is scarce.
 
-The character is precise and calm. It is not a chat toy and it is not a circus poster.
+The character is precise and calm. It is not a chat toy and it is not a gaudy poster.
 
 ## Surfaces
 

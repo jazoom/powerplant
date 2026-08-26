@@ -7,7 +7,7 @@ use crate::{
 
 use super::forms::{ConnectField, ConnectForm, FieldError};
 
-pub(super) const DOCUMENT_TITLE: &str = "Connect | Circus";
+pub(super) const DOCUMENT_TITLE: &str = "Connect | Power Plant";
 
 pub(super) struct ProviderOption {
     pub(super) value: &'static str,
@@ -39,7 +39,7 @@ impl ConnectViewModel {
     }
 
     pub(super) fn failed(vault: &ProviderVault, kind: ProviderKind, error: ProviderError) -> Self {
-        let field = match error {
+        let field = match &error {
             ProviderError::Rejected => ConnectField::ApiKey,
             _ => ConnectField::Provider,
         };
@@ -48,7 +48,7 @@ impl ConnectViewModel {
             options(Some(kind)),
             Some(FieldError {
                 field,
-                message: error.message(),
+                message: error.message().to_owned(),
             }),
         )
     }
@@ -58,7 +58,7 @@ impl ConnectViewModel {
             providers: &self.providers,
             stored: &self.stored,
             open_chat: self.open_chat,
-            error: self.error,
+            error: self.error.as_ref(),
         }
     }
 
@@ -84,7 +84,7 @@ pub(super) struct ConnectCardContents<'a> {
     providers: &'a [ProviderOption],
     stored: &'a [StoredProviderView],
     open_chat: bool,
-    error: Option<FieldError>,
+    error: Option<&'a FieldError>,
 }
 
 fn options(selected: Option<ProviderKind>) -> Vec<ProviderOption> {

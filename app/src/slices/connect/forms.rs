@@ -17,22 +17,22 @@ impl ConnectField {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FieldError {
     pub(super) field: ConnectField,
-    pub(super) message: &'static str,
+    pub(super) message: String,
 }
 
 impl FieldError {
-    pub(super) fn target_id(self) -> &'static str {
+    pub(super) fn target_id(&self) -> &'static str {
         self.field.id()
     }
 
-    pub(super) fn is_provider(self) -> bool {
+    pub(super) fn is_provider(&self) -> bool {
         self.field == ConnectField::Provider
     }
 
-    pub(super) fn is_api_key(self) -> bool {
+    pub(super) fn is_api_key(&self) -> bool {
         self.field == ConnectField::ApiKey
     }
 }
@@ -51,13 +51,13 @@ impl ConnectForm {
         let Some(kind) = self.provider_kind() else {
             return Err(FieldError {
                 field: ConnectField::Provider,
-                message: "Choose a provider.",
+                message: "Choose a provider.".to_owned(),
             });
         };
         if !api_key_is_bounded(&self.api_key) {
             return Err(FieldError {
                 field: ConnectField::ApiKey,
-                message: "Enter an API key.",
+                message: "Enter an API key.".to_owned(),
             });
         }
         Ok(kind)

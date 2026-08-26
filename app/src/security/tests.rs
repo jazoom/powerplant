@@ -13,8 +13,8 @@ fn test_state(config: RuntimeConfig) -> AppState {
 #[test]
 fn normalise_accepts_canonical_origin() {
     assert_eq!(
-        normalise_origin("https://circus.example.com").as_deref(),
-        Some("https://circus.example.com")
+        normalise_origin("https://powerplant.example.com").as_deref(),
+        Some("https://powerplant.example.com")
     );
     assert_eq!(
         normalise_origin("http://localhost:4000").as_deref(),
@@ -25,8 +25,8 @@ fn normalise_accepts_canonical_origin() {
 #[test]
 fn normalise_lowercases_domain_host() {
     assert_eq!(
-        normalise_origin("https://CIRCUS.Example.COM").as_deref(),
-        Some("https://circus.example.com")
+        normalise_origin("https://POWERPLANT.Example.COM").as_deref(),
+        Some("https://powerplant.example.com")
     );
 }
 
@@ -43,15 +43,21 @@ fn normalise_rejects_non_http_schemes() {
 
 #[test]
 fn normalise_rejects_origin_with_path_query_or_fragment() {
-    assert_eq!(normalise_origin("https://circus.example.com/connect"), None);
-    assert_eq!(normalise_origin("https://circus.example.com?x=1"), None);
-    assert_eq!(normalise_origin("https://circus.example.com#frag"), None);
+    assert_eq!(
+        normalise_origin("https://powerplant.example.com/connect"),
+        None
+    );
+    assert_eq!(normalise_origin("https://powerplant.example.com?x=1"), None);
+    assert_eq!(
+        normalise_origin("https://powerplant.example.com#frag"),
+        None
+    );
 }
 
 #[test]
 fn normalise_rejects_origin_with_credentials() {
     assert_eq!(
-        normalise_origin("https://user:pass@circus.example.com"),
+        normalise_origin("https://user:pass@powerplant.example.com"),
         None
     );
 }

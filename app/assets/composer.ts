@@ -1,4 +1,4 @@
-import type { IslandMountContext } from "hypergraft/browser";
+import type { IslandInstance, IslandMountContext } from "hypergraft/browser";
 
 function usesCommandKey(): boolean {
     const nav = navigator as Navigator & {
@@ -17,10 +17,14 @@ export function initShortcutHint(root: HTMLElement): void {
     root.textContent = sendShortcutHint();
 }
 
+function messageField(root: HTMLElement): HTMLTextAreaElement | null {
+    return root.querySelector("#composer-message");
+}
+
 export function initComposer(
     root: HTMLElement,
     { signal }: IslandMountContext,
-): void {
+): IslandInstance | void {
     if (!(root instanceof HTMLFormElement)) {
         return;
     }
@@ -40,4 +44,31 @@ export function initComposer(
     };
 
     root.addEventListener("keydown", onKeyDown, { signal });
+
+    return {
+        reconcile(context) {
+            if (context.cause !== "patch") {
+                return;
+            }
+            if (context.detail.form !== root) {
+                return;
+            }
+            if (context.detail.outcome !== "applied-patch") {
+                return;
+            }
+            if (context.detail.status !== 200) {
+                return;
+            }
+            if (!context.detail.targetIds.includes("transcript")) {
+                return;
+            }
+            const message = messageField(root);
+            if (!message) {
+                return;
+            }
+            message.value = "";
+            message.focus();
+        },
+        destroy() {},
+    };
 }

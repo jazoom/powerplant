@@ -29,7 +29,7 @@ impl ScriptedBackend {
             verify_result: Ok(()),
             models_result: Ok(Vec::new()),
             script: Ok(Script::Chunks(
-                chunk_reply("Hello from Circus.")
+                chunk_reply("Hello from Power Plant.")
                     .into_iter()
                     .map(Ok)
                     .collect(),
@@ -76,7 +76,7 @@ impl ScriptedBackend {
     }
 
     pub(crate) fn verify(&self, _connection: &ProviderConnection) -> Result<(), ProviderError> {
-        self.verify_result
+        self.verify_result.clone()
     }
 
     pub(crate) fn models(

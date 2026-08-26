@@ -46,7 +46,7 @@ export function initJobObserve(root: HTMLElement): IslandInstance {
             // A later segment must start after this one settles. Morph may
             // keep this root, so mount will not run again.
             if (context.detail.outcome === "applied-patch") {
-                if (!context.detail.targetIds.includes("composer")) {
+                if (!context.detail.targetIds.includes("job-observe")) {
                     return;
                 }
                 clearTimer();

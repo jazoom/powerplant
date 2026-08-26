@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
 @plugin "daisyui" {
-    themes: circus-dark --default;
+    themes: powerplant-dark --default;
     logs: false;
 }
 
 @plugin "daisyui/theme" {
-    name: "circus-dark";
+    name: "powerplant-dark";
     default: true;
     prefersdark: true;
     color-scheme: dark;
@@ -51,14 +51,14 @@
 }
 
 @utility text-quiet {
-    color: var(--circus-quiet-ink);
+    color: var(--powerplant-quiet-ink);
 }
 
 @layer base {
     :root {
-        --circus-quiet-ink: oklch(74% 0.018 80);
-        --circus-error-wash: oklch(28% 0.04 25);
-        --circus-strong-rule: oklch(42% 0.02 80);
+        --powerplant-quiet-ink: oklch(74% 0.018 80);
+        --powerplant-error-wash: oklch(28% 0.04 25);
+        --powerplant-strong-rule: oklch(42% 0.02 80);
     }
     html {
         overflow-y: scroll;
@@ -100,14 +100,14 @@
         min-height: 2.5rem;
     }
     .btn-outline {
-        border-color: var(--circus-strong-rule);
+        border-color: var(--powerplant-strong-rule);
         background: var(--color-base-100);
     }
     .input,
     .select,
     .textarea {
         min-height: 2.5rem;
-        border-color: var(--circus-strong-rule);
+        border-color: var(--powerplant-strong-rule);
         border-radius: 0.125rem;
         background: var(--color-base-100);
     }
@@ -140,9 +140,9 @@
     .alert-error {
         border-color: color-mix(in oklch, var(--color-error) 42%, transparent);
         color: var(--color-error);
-        background: var(--circus-error-wash);
+        background: var(--powerplant-error-wash);
     }
-    .circus-mark {
+    .powerplant-mark {
         display: block;
         flex: none;
     }

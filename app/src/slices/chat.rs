@@ -24,7 +24,7 @@ use crate::{
 use self::{
     forms::{ChatForm, CursorError, ModelForm, ObserveQuery},
     job::{observe_response, run_job, user_transcript_patch},
-    page::{ChatViewModel, ComposerContents, TranscriptContents},
+    page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
 
 pub(super) fn router() -> Router<AppState> {
@@ -132,7 +132,7 @@ async fn refresh_model_options(
     match graft {
         GraftRequest::Patch => Ok(hypergraft::outcome::children_patch(
             PatchStatus::Ok,
-            "desk-model-options",
+            "desk-model-catalogue",
             &view(&state, &current, "", "").desk_model_catalogue(),
         )?),
         GraftRequest::Document | GraftRequest::Navigation => {
@@ -222,8 +222,8 @@ async fn cancel(
         }
         CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
             PatchStatus::Ok,
-            "composer",
-            &view(&state, &latest, "", "").composer(),
+            "job-observe",
+            &view(&state, &latest, "", "").job_observe(),
         )?),
     }
 }
@@ -237,7 +237,7 @@ fn toggle_favourite(
     match form.validate_favourite(|kind| state.vault.contains(kind)) {
         Ok((kind, model)) => {
             let model = submitted_model(state, form, kind, model);
-            match state.vault.select_and_toggle_favourite(kind, &model) {
+            match state.vault.toggle_favourite(kind, &model) {
                 Ok(_) => {}
                 Err(crate::vault::FavouriteError::Provider) => {
                     return reject_model(state, graft, session, "Choose a stored provider.");
@@ -263,8 +263,8 @@ fn toggle_favourite(
         }
         CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
             PatchStatus::Ok,
-            "desk-settings",
-            &view(state, session, "", "").desk_settings(),
+            "desk-model-catalogue",
+            &view(state, session, "", "").desk_model_catalogue(),
         )?),
     }
 }
@@ -302,8 +302,8 @@ fn observe(
         Err(CursorError::Malformed | CursorError::Excessive) => {
             return Ok(hypergraft::outcome::children_patch(
                 PatchStatus::UnprocessableEntity,
-                "composer",
-                &view(state, session, "That cursor is not valid.", "").composer(),
+                "job-observe",
+                &view(state, session, "", "").job_observe_with("That cursor is not valid."),
             )?);
         }
     };
@@ -319,16 +319,16 @@ fn observe(
 fn refresh_composer(state: &AppState, session: &SessionSnapshot) -> AppResult<Response> {
     Ok(hypergraft::outcome::children_patch(
         PatchStatus::Ok,
-        "composer",
-        &view(state, session, "", "").composer(),
+        "job-observe",
+        &view(state, session, "", "").job_observe(),
     )?)
 }
 
 fn accept_job_patch(turns: &[crate::providers::ChatTurn], job_id: &str) -> AppResult<Response> {
     let mut patches = user_transcript_patch(turns)?;
     patches.children(
-        "composer",
-        &ComposerContents::observing(job_id, 0, "Writing", ""),
+        "job-observe",
+        &JobObserveContents::observing(job_id, 0, "Writing", ""),
     )?;
     Ok(patches.respond(PatchStatus::Ok)?)
 }
@@ -346,10 +346,10 @@ fn reject_parallel_command(
             view(state, session, MESSAGE, ""),
         ),
         CommandGraft::Patch => {
-            let view = view(state, session, MESSAGE, "");
+            let view = view(state, session, "", "");
             let mut patches = PatchSet::new();
             patches.children("transcript", &TranscriptContents { turns: &view.turns })?;
-            patches.children("composer", &view.composer())?;
+            patches.children("job-observe", &view.job_observe_with(MESSAGE))?;
             Ok(patches.respond(PatchStatus::Conflict)?)
         }
     }

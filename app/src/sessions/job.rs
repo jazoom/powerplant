@@ -104,7 +104,7 @@ pub(crate) struct JobSnapshot {
     pub(crate) output: String,
     pub(crate) latest_seq: u64,
     pub(crate) assistant_index: usize,
-    pub(crate) error: Option<&'static str>,
+    pub(crate) error: Option<String>,
     pub(crate) cancel_requested: bool,
 }
 
@@ -121,7 +121,7 @@ struct JobInner {
     events: Vec<JobEvent>,
     output: String,
     latest_seq: u64,
-    error: Option<&'static str>,
+    error: Option<String>,
 }
 
 impl Job {
@@ -183,7 +183,7 @@ impl Job {
             output: inner.output.clone(),
             latest_seq: inner.latest_seq,
             assistant_index: self.assistant_index,
-            error: inner.error,
+            error: inner.error.clone(),
             cancel_requested: self.cancel.load(Ordering::SeqCst),
         }
     }
@@ -242,7 +242,7 @@ impl Job {
         Some(seq)
     }
 
-    pub(crate) fn finish(&self, status: JobStatus, error: Option<&'static str>) -> Option<u64> {
+    pub(crate) fn finish(&self, status: JobStatus, error: Option<&str>) -> Option<u64> {
         if !matches!(
             status,
             JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled
@@ -254,7 +254,7 @@ impl Job {
             return None;
         }
         inner.status = status;
-        inner.error = error;
+        inner.error = error.map(str::to_owned);
         inner.latest_seq += 1;
         let seq = inner.latest_seq;
         inner.events.push(JobEvent {

@@ -1,6 +1,6 @@
-# Circus
+# Power Plant
 
-Circus is a local coding agent. The process is a web server. You use it in a browser.
+Power Plant is a local coding agent. The process is a web server. You use it in a browser.
 
 The stack is Rust, Axum, Askama, Hypergraft and Rig.
 

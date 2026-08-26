@@ -1,9 +1,10 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    MAXIMUM_LISTED_MODELS, MAXIMUM_MODEL_BYTES, ProviderError, ProviderKind, SecretString,
-    classify_failure_status, classify_verify_status,
+    MAXIMUM_LISTED_MODELS, MAXIMUM_MODEL_BYTES, MAXIMUM_PROVIDER_DETAIL_BYTES, ProviderError,
+    ProviderKind, SecretString, classify_failure_status, classify_verify_status, provider_detail,
     rig::{VERIFY_TIMEOUT, models_at, parse_model_list, verify_at},
+    with_json_detail, with_provider_detail,
 };
 
 #[test]
@@ -16,6 +17,14 @@ fn parses_known_providers() {
     assert_eq!(
         ProviderKind::parse("synthetic"),
         Some(ProviderKind::Synthetic)
+    );
+    assert_eq!(
+        ProviderKind::parse("openrouter"),
+        Some(ProviderKind::Openrouter)
+    );
+    assert_eq!(
+        ProviderKind::parse("deepseek"),
+        Some(ProviderKind::Deepseek)
     );
     assert_eq!(ProviderKind::parse("openai"), None);
 }
@@ -113,6 +122,11 @@ fn completion_failures_use_the_same_status_families() {
         }
     );
     assert_eq!(
+        classify_failure_status(402, None),
+        ProviderError::AccountInactive
+    );
+    assert_eq!(classify_failure_status(404, None), ProviderError::Refused);
+    assert_eq!(
         classify_failure_status(500, None),
         ProviderError::Unreachable
     );
@@ -123,6 +137,14 @@ fn each_provider_outcome_maps_to_one_patch_status() {
     assert_eq!(
         ProviderError::Rejected.patch_status(),
         hypergraft::PatchStatus::Unauthorized
+    );
+    assert_eq!(
+        ProviderError::AccountInactive.patch_status(),
+        hypergraft::PatchStatus::UnprocessableEntity
+    );
+    assert_eq!(
+        ProviderError::Refused.patch_status(),
+        hypergraft::PatchStatus::UnprocessableEntity
     );
     assert_eq!(
         ProviderError::Unreachable.patch_status(),
@@ -166,6 +188,57 @@ fn recovery_copy_does_not_blame_a_valid_key_for_an_outage() {
         ProviderError::RateLimited { retry_after: None }
             .message()
             .contains("rate-limited")
+    );
+    assert!(
+        ProviderError::AccountInactive
+            .message()
+            .contains("subscription")
+    );
+    assert!(!ProviderError::AccountInactive.message().contains("key"));
+    assert!(ProviderError::Refused.message().contains("refused"));
+    assert!(!ProviderError::Refused.message().contains("key"));
+}
+
+#[test]
+fn a_provider_json_message_replaces_an_outage_label() {
+    let body = serde_json::json!({
+        "error": { "message": "You have insufficient credits" }
+    })
+    .to_string();
+    assert_eq!(
+        provider_detail(body.as_bytes()).as_deref(),
+        Some("You have insufficient credits")
+    );
+    assert_eq!(
+        with_provider_detail(ProviderError::Unreachable, Some(body.as_bytes())),
+        ProviderError::Detail("You have insufficient credits".to_owned())
+    );
+    assert_eq!(
+        with_provider_detail(ProviderError::Rejected, Some(body.as_bytes())),
+        ProviderError::Rejected
+    );
+    assert_eq!(provider_detail(b"secret-provider-body-do-not-copy"), None);
+    assert_eq!(
+        with_json_detail(
+            ProviderError::Unreachable,
+            Some(&serde_json::json!({
+                "message": "top-level-only",
+                "error": { "metadata": { "raw": "upstream-only" } }
+            })),
+        ),
+        ProviderError::Unreachable
+    );
+}
+
+#[test]
+fn provider_detail_is_bounded_and_strips_controls() {
+    let long = "a".repeat(MAXIMUM_PROVIDER_DETAIL_BYTES + 20);
+    let body = serde_json::json!({ "error": { "message": long } }).to_string();
+    let detail = provider_detail(body.as_bytes()).expect("detail");
+    assert_eq!(detail.len(), MAXIMUM_PROVIDER_DETAIL_BYTES);
+    assert_eq!(
+        provider_detail(br#"{"error":{"message":"bad\u0000credit"}}"#).as_deref(),
+        Some("badcredit")
     );
 }
 
@@ -331,4 +404,45 @@ async fn verify_preserves_retry_after_and_drops_the_provider_body() {
     );
     let display = result.expect_err("rate limit");
     assert!(!display.to_string().contains("secret-provider-body"));
+}
+
+#[tokio::test]
+async fn verify_surfaces_a_bounded_provider_message() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let body =
+            r#"{"error":{"message":"You have insufficient credits","secret":"do-not-copy"}}"#;
+        let response = format!(
+            "HTTP/1.1 402 Payment Required\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut written = 0;
+        while written < response.len() {
+            if stream.writable().await.is_err() {
+                return;
+            }
+            match stream.try_write(&response.as_bytes()[written..]) {
+                Ok(0) => return,
+                Ok(count) => written += count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => return,
+            }
+        }
+    });
+
+    let result = verify_at(&format!("http://{addr}"), "sk-test", Duration::from_secs(2)).await;
+    assert_eq!(
+        result,
+        Err(ProviderError::Detail(
+            "You have insufficient credits".to_owned()
+        ))
+    );
+    let display = result.expect_err("credits");
+    assert!(!display.to_string().contains("do-not-copy"));
 }

@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::page::{
-    ComposerContents, JobCursorContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
+    JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
     assistant_turn, user_turn,
 };
 
@@ -40,7 +40,7 @@ const OBSERVE_SEGMENT_MAX: Duration = if cfg!(test) {
     Duration::from_secs(20)
 };
 
-// Stay below the 1 MiB envelope after Markdown HTML and the composer patch.
+// Stay below the 1 MiB envelope after Markdown HTML and the job-observe patch.
 pub(super) const MAXIMUM_REPLY_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -380,22 +380,22 @@ fn encode_observe_final(
             "Writing"
         };
         patches.children(
-            "composer",
-            &ComposerContents::observing(job_id, cursor, status, ""),
+            "job-observe",
+            &JobObserveContents::observing(job_id, cursor, status, ""),
         )?;
     } else {
-        let error = snapshot.error.unwrap_or("");
-        patches.children("composer", &ComposerContents::idle(error))?;
+        let error = snapshot.error.as_deref().unwrap_or("");
+        patches.children("job-observe", &JobObserveContents::idle(error))?;
     }
     let status = match snapshot.status {
-        JobStatus::Failed => provider_status_from_message(snapshot.error),
+        JobStatus::Failed => provider_status_from_message(snapshot.error.as_deref()),
         _ => PatchStatus::Ok,
     };
     patches.encode_final(status)
 }
 
 // Stream settlement cannot carry 429. Rate limits keep the recovery copy and 422.
-fn provider_status_from_message(message: Option<&'static str>) -> PatchStatus {
+fn provider_status_from_message(message: Option<&str>) -> PatchStatus {
     match message {
         Some(message) if message == ProviderError::Rejected.message() => PatchStatus::Unauthorized,
         _ => PatchStatus::UnprocessableEntity,

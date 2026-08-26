@@ -4,42 +4,52 @@ import type { IslandInstance, IslandMountContext } from "hypergraft/browser";
 type DeskControls = {
     provider: HTMLSelectElement;
     model: HTMLInputElement;
-    favourite: HTMLButtonElement;
     providerModelSynced: HTMLInputElement;
     combobox: HTMLElement;
     toggle: HTMLButtonElement;
     options: HTMLElement;
+    search: HTMLInputElement;
+    label: HTMLElement;
+    noResults: HTMLElement;
 };
 
 function controls(root: HTMLFormElement): DeskControls | null {
     const provider = root.elements.namedItem("provider");
     const model = root.elements.namedItem("model");
-    const favourite = root.elements.namedItem("favourite");
     const providerModelSynced = root.elements.namedItem(
         "provider_model_synced",
     );
     const combobox = root.querySelector<HTMLElement>("[data-model-combobox]");
     const toggle = root.querySelector<HTMLButtonElement>("[data-model-toggle]");
     const options = root.querySelector<HTMLElement>("[data-model-options]");
+    const search = root.querySelector<HTMLInputElement>("[data-model-search]");
+    const label = root.querySelector<HTMLElement>("[data-model-label]");
+    const noResults = root.querySelector<HTMLElement>(
+        "[data-model-no-results]",
+    );
     if (
         !(provider instanceof HTMLSelectElement) ||
         !(model instanceof HTMLInputElement) ||
-        !(favourite instanceof HTMLButtonElement) ||
         !(providerModelSynced instanceof HTMLInputElement) ||
         !combobox ||
         !toggle ||
-        !options
+        !options ||
+        !search ||
+        !label ||
+        !noResults
     ) {
         return null;
     }
     return {
         provider,
         model,
-        favourite,
         providerModelSynced,
         combobox,
         toggle,
         options,
+        search,
+        label,
+        noResults,
     };
 }
 
@@ -49,38 +59,58 @@ function modelOptions(found: DeskControls): HTMLButtonElement[] {
     );
 }
 
-function setFavourite(favourite: HTMLButtonElement, pressed: boolean): void {
-    favourite.ariaPressed = String(pressed);
-    favourite.ariaLabel = pressed ? "Unfavourite model" : "Favourite model";
-    for (const icon of favourite.querySelectorAll<HTMLElement>(
-        "[data-favourite-icon]",
-    )) {
-        icon.hidden = icon.dataset.favouriteIcon !== (pressed ? "on" : "off");
-    }
+function visibleModelOptions(found: DeskControls): HTMLButtonElement[] {
+    return modelOptions(found).filter(
+        (option) => !option.closest<HTMLElement>("[data-model-row]")?.hidden,
+    );
 }
 
-function syncFavourite(root: HTMLFormElement): void {
+function filterModels(found: DeskControls): void {
+    const query = found.search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const option of modelOptions(found)) {
+        const row = option.closest<HTMLElement>("[data-model-row]");
+        if (!row) {
+            continue;
+        }
+        const matches =
+            query === "" ||
+            (option.dataset.modelValue ?? "")
+                .toLocaleLowerCase()
+                .includes(query);
+        row.hidden = !matches;
+        if (matches) {
+            visible += 1;
+        }
+    }
+    for (const group of found.options.querySelectorAll<HTMLElement>(
+        "[data-model-group]",
+    )) {
+        group.hidden = !Array.from(
+            group.querySelectorAll<HTMLElement>("[data-model-row]"),
+        ).some((row) => !row.hidden);
+    }
+    found.noResults.hidden = query === "" || visible !== 0;
+}
+
+function syncModelSelection(root: HTMLFormElement): void {
     const found = controls(root);
     if (!found) {
         return;
     }
     const value = found.model.value.trim();
-    let favourite = false;
+    found.label.textContent = value;
+    found.toggle.ariaLabel = `Model, ${value}`;
     for (const option of modelOptions(found)) {
         const selected = option.dataset.modelValue === value;
-        option.ariaSelected = String(selected);
+        option.ariaPressed = String(selected);
         option.classList.toggle("bg-base-300", selected);
-        if (selected) {
-            favourite = option.dataset.favourite === "true";
-        }
     }
-    setFavourite(found.favourite, favourite);
 }
 
 function setExpanded(found: DeskControls, expanded: boolean): void {
     found.combobox.classList.toggle("dropdown-open", expanded);
     found.options.hidden = !expanded;
-    found.model.ariaExpanded = String(expanded);
     found.toggle.ariaExpanded = String(expanded);
 }
 
@@ -92,10 +122,7 @@ function syncProvider(root: HTMLFormElement): void {
     const selected = found.provider.selectedOptions.item(0);
     found.model.value = selected?.dataset.model ?? "";
     found.providerModelSynced.value = "true";
-    setFavourite(
-        found.favourite,
-        selected?.dataset.currentFavourite === "true",
-    );
+    syncModelSelection(root);
     setExpanded(found, false);
 }
 
@@ -111,7 +138,7 @@ function focusRelativeOption(
     current: HTMLButtonElement,
     offset: number,
 ): void {
-    const options = modelOptions(found);
+    const options = visibleModelOptions(found);
     const currentIndex = options.indexOf(current);
     if (currentIndex < 0 || options.length === 0) {
         return;
@@ -130,6 +157,38 @@ export function initDeskSettings(
     const submitDesk = () => {
         window.clearTimeout(refreshTimer);
         root.requestSubmit();
+    };
+    const selectListedModel = (
+        found: DeskControls,
+        option: HTMLButtonElement,
+    ) => {
+        found.model.value = option.dataset.modelValue ?? "";
+        syncModelSelection(root);
+        setExpanded(found, false);
+        submitDesk();
+    };
+    const listedModelForEnter = (
+        found: DeskControls,
+    ): HTMLButtonElement | undefined => {
+        const visible = visibleModelOptions(found);
+        const query = found.search.value.trim();
+        const exact = visible.find(
+            (option) => (option.dataset.modelValue ?? "") === query,
+        );
+        if (exact) {
+            return exact;
+        }
+        if (visible.length === 1) {
+            return visible[0];
+        }
+        return undefined;
+    };
+    const focusSearch = (found: DeskControls) => {
+        queueMicrotask(() => {
+            if (!signal.aborted && found.toggle.ariaExpanded === "true") {
+                found.search.focus();
+            }
+        });
     };
     const scheduleCatalogueRefresh = () => {
         if (!catalogueIsPending(root) || signal.aborted) {
@@ -161,7 +220,17 @@ export function initDeskSettings(
             if (event.target.closest("[data-model-toggle]")) {
                 event.preventDefault();
                 event.stopPropagation();
-                setExpanded(found, found.toggle.ariaExpanded !== "true");
+                const expanded = found.toggle.ariaExpanded !== "true";
+                setExpanded(found, expanded);
+                if (expanded) {
+                    found.search.value = "";
+                    filterModels(found);
+                    focusSearch(found);
+                }
+                return;
+            }
+            if (event.target.closest("[data-model-favourite]")) {
+                found.search.focus();
                 return;
             }
             const option =
@@ -169,10 +238,7 @@ export function initDeskSettings(
             if (!option) {
                 return;
             }
-            found.model.value = option.dataset.modelValue ?? "";
-            syncFavourite(root);
-            setExpanded(found, false);
-            submitDesk();
+            selectListedModel(found, option);
         },
         { signal },
     );
@@ -187,16 +253,6 @@ export function initDeskSettings(
                 submitDesk();
                 return;
             }
-            if (
-                event.target instanceof HTMLInputElement &&
-                event.target.name === "model"
-            ) {
-                const found = controls(root);
-                if (found) {
-                    setExpanded(found, false);
-                }
-                submitDesk();
-            }
         },
         { signal },
     );
@@ -205,9 +261,12 @@ export function initDeskSettings(
         (event) => {
             if (
                 event.target instanceof HTMLInputElement &&
-                event.target.name === "model"
+                event.target.matches("[data-model-search]")
             ) {
-                syncFavourite(root);
+                const found = controls(root);
+                if (found) {
+                    filterModels(found);
+                }
             }
         },
         { signal },
@@ -219,26 +278,33 @@ export function initDeskSettings(
             if (!found || !(event.target instanceof Element)) {
                 return;
             }
-            if (event.target === found.model) {
+            if (
+                event.key === "Escape" &&
+                event.target.closest("[data-model-options]")
+            ) {
+                event.preventDefault();
+                setExpanded(found, false);
+                found.toggle.focus();
+                return;
+            }
+            if (event.target === found.search) {
                 if (event.key === "ArrowDown") {
                     event.preventDefault();
-                    setExpanded(found, true);
-                    const options = modelOptions(found);
-                    const selected = options.find(
-                        (option) => option.ariaSelected === "true",
-                    );
-                    (selected ?? options[0])?.focus();
-                } else if (event.key === "Escape") {
-                    setExpanded(found, false);
+                    visibleModelOptions(found)[0]?.focus();
                 } else if (event.key === "Enter") {
                     event.preventDefault();
-                    setExpanded(found, false);
-                    submitDesk();
+                    const option = listedModelForEnter(found);
+                    if (option) {
+                        selectListedModel(found, option);
+                    }
                 }
                 return;
             }
             const option =
-                event.target.closest<HTMLButtonElement>("[data-model-value]");
+                event.target.closest<HTMLButtonElement>("[data-model-value]") ??
+                event.target
+                    .closest("[data-model-row]")
+                    ?.querySelector("[data-model-value]");
             if (!option) {
                 return;
             }
@@ -250,14 +316,22 @@ export function initDeskSettings(
                 focusRelativeOption(found, option, -1);
             } else if (event.key === "Home") {
                 event.preventDefault();
-                modelOptions(found)[0]?.focus();
+                visibleModelOptions(found)[0]?.focus();
             } else if (event.key === "End") {
                 event.preventDefault();
-                modelOptions(found).at(-1)?.focus();
-            } else if (event.key === "Escape") {
+                visibleModelOptions(found).at(-1)?.focus();
+            }
+        },
+        { signal },
+    );
+    root.addEventListener(
+        "mousedown",
+        (event) => {
+            if (
+                event.target instanceof Element &&
+                event.target.closest("[data-model-favourite]")
+            ) {
                 event.preventDefault();
-                setExpanded(found, false);
-                found.model.focus();
             }
         },
         { signal },
@@ -266,8 +340,8 @@ export function initDeskSettings(
         const found = controls(root);
         if (
             found &&
-            event.target instanceof Node &&
-            !root.contains(event.target)
+            event.target instanceof Element &&
+            !event.target.closest("[data-model-combobox]")
         ) {
             setExpanded(found, false);
         }
@@ -292,10 +366,18 @@ export function initDeskSettings(
                 return;
             }
             const targets = context.detail.targetIds;
-            if (targets.includes("desk-model-options")) {
-                syncFavourite(root);
+            if (
+                targets.includes("desk-model-catalogue") ||
+                targets.includes("desk-model-options")
+            ) {
+                syncModelSelection(root);
+                const found = controls(root);
+                if (found) {
+                    filterModels(found);
+                }
             }
             if (
+                targets.includes("desk-model-catalogue") ||
                 targets.includes("desk-model-options") ||
                 targets.includes("desk-settings")
             ) {

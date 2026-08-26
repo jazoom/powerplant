@@ -85,7 +85,7 @@ fn favourite_toggle_requires_a_present_model() {
     let form = ModelForm {
         provider: "xai".to_owned(),
         model: "  ".to_owned(),
-        favourite: Some("true".to_owned()),
+        favourite: Some("  ".to_owned()),
         provider_model_synced: false,
     };
     assert!(form.wants_favourite_toggle());
@@ -96,11 +96,11 @@ fn favourite_toggle_requires_a_present_model() {
 fn favourite_toggle_keeps_the_model_id_verbatim() {
     let form = ModelForm {
         provider: "xai".to_owned(),
-        model: "  grok-4-mini  ".to_owned(),
-        favourite: None,
+        model: "grok-4.6".to_owned(),
+        favourite: Some("  grok-4-mini  ".to_owned()),
         provider_model_synced: false,
     };
-    assert!(!form.wants_favourite_toggle());
+    assert!(form.wants_favourite_toggle());
     assert_eq!(
         form.validate_favourite(|kind| kind == ProviderKind::Xai),
         Ok((ProviderKind::Xai, "grok-4-mini".to_owned()))

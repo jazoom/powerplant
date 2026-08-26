@@ -179,7 +179,7 @@ impl ProviderVault {
         })
     }
 
-    pub(crate) fn select_and_toggle_favourite(
+    pub(crate) fn toggle_favourite(
         &self,
         kind: ProviderKind,
         model: &str,
@@ -199,8 +199,6 @@ impl ProviderVault {
                 stored.favourites.push(model.to_owned());
                 true
             };
-            stored.model = model.to_owned();
-            state.selected = Some(kind);
             Ok(favourite)
         }) {
             Ok(Ok(favourite)) => Ok(favourite),

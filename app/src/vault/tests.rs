@@ -74,21 +74,15 @@ fn favourites_round_trip_respect_the_cap_and_survive_a_new_key() {
         .put(connection(ProviderKind::Xai, "grok-4.6"))
         .unwrap();
     assert_eq!(
-        vault
-            .select_and_toggle_favourite(ProviderKind::Xai, "grok-4.6")
-            .ok(),
+        vault.toggle_favourite(ProviderKind::Xai, "grok-4.6").ok(),
         Some(true)
     );
     assert_eq!(
-        vault
-            .select_and_toggle_favourite(ProviderKind::Xai, "grok-4.6")
-            .ok(),
+        vault.toggle_favourite(ProviderKind::Xai, "grok-4.6").ok(),
         Some(false)
     );
     assert_eq!(
-        vault
-            .select_and_toggle_favourite(ProviderKind::Xai, "grok-4.6")
-            .ok(),
+        vault.toggle_favourite(ProviderKind::Xai, "grok-4.6").ok(),
         Some(true)
     );
 
@@ -104,19 +98,16 @@ fn favourites_round_trip_respect_the_cap_and_survive_a_new_key() {
 
     for index in 1..crate::providers::MAXIMUM_FAVOURITES {
         reloaded
-            .select_and_toggle_favourite(ProviderKind::Xai, &format!("model-{index}"))
+            .toggle_favourite(ProviderKind::Xai, &format!("model-{index}"))
             .unwrap();
     }
     assert!(matches!(
-        reloaded.select_and_toggle_favourite(ProviderKind::Xai, "one-more"),
+        reloaded.toggle_favourite(ProviderKind::Xai, "one-more"),
         Err(super::FavouriteError::Full)
     ));
     assert_eq!(
         reloaded.selected_connection().map(|item| item.model),
-        Some(format!(
-            "model-{}",
-            crate::providers::MAXIMUM_FAVOURITES - 1
-        ))
+        Some("grok-4.6".to_owned())
     );
 }
 

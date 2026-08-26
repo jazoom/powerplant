@@ -338,35 +338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "circus"
-version = "0.0.1"
-dependencies = [
- "ammonia",
- "askama",
- "axum",
- "base64 0.23.1",
- "cookie",
- "futures-util",
- "hypergraft",
- "pulldown-cmark",
- "rand 0.10.2",
- "reqwest",
- "rig-core",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "time",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tower-livereload",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1499,6 +1470,35 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "powerplant"
+version = "0.0.1"
+dependencies = [
+ "ammonia",
+ "askama",
+ "axum",
+ "base64 0.23.1",
+ "cookie",
+ "futures-util",
+ "hypergraft",
+ "pulldown-cmark",
+ "rand 0.10.2",
+ "reqwest",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tower-livereload",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
 
 [[package]]
 name = "ppv-lite86"

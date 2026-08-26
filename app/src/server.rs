@@ -50,7 +50,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         environment = ?state.config.environment(),
         public_origin = %state.config.public_origin(),
-        "Circus starting"
+        "Power Plant starting"
     );
     let app = build_router(state, static_dir.clone());
     #[cfg(feature = "dev")]
@@ -61,7 +61,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "dev")]
     let app = app.layer(live_reload);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;
-    tracing::info!(bind_address, "Circus listening");
+    tracing::info!(bind_address, "Power Plant listening");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -71,7 +71,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn is_application_trace_target(target: &str) -> bool {
-    target == "circus" || target.starts_with("circus::")
+    target == "powerplant" || target.starts_with("powerplant::")
 }
 
 fn request_route<B>(request: &axum::http::Request<B>) -> &str {

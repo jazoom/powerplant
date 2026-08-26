@@ -6,22 +6,22 @@ pnpm = "11.9.0"
 
 [env]
 _.path = ["{{config_root}}/node_modules/.bin"]
-CIRCUS_ENVIRONMENT = "development"
-CIRCUS_BIND_ADDRESS = "localhost:4000"
-CIRCUS_PUBLIC_ORIGIN = "http://localhost:4000"
+POWERPLANT_ENVIRONMENT = "development"
+POWERPLANT_BIND_ADDRESS = "localhost:4000"
+POWERPLANT_PUBLIC_ORIGIN = "http://localhost:4000"
 
 [tasks.build]
-description = "Build Circus"
-run = "cargo build -p circus --release"
+description = "Build Power Plant"
+run = "cargo build -p powerplant --release"
 
 [tasks.server]
 alias = "s"
-description = "Run Circus"
-run = "cargo run -p circus"
+description = "Run Power Plant"
+run = "cargo run -p powerplant"
 
 [tasks.dev]
 alias = "d"
-description = "Run the Circus Rust web server with asset and template reloads"
+description = "Run the Power Plant Rust web server with asset and template reloads"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -54,7 +54,7 @@ watchexec --restart \
   --watch app/askama.toml \
   --watch app/Cargo.toml \
   --watch Cargo.lock \
-  -- cargo run -p circus --quiet --features dev
+  -- cargo run -p powerplant --quiet --features dev
 """
 
 [tasks.format]
@@ -66,14 +66,14 @@ run = [
 ]
 
 [tasks.check]
-description = "Check the Circus Rust project"
+description = "Check the Power Plant Rust project"
 run = [
   "pnpm tsgo --noEmit --incremental --tsBuildInfoFile .cache/tsgo.tsbuildinfo --project app/tsconfig.json",
   "cargo clippy --all-targets --all-features -- --deny warnings",
 ]
 
 [tasks.test]
-description = "Run the Circus test suite"
+description = "Run the Power Plant test suite"
 run = [
   "pnpm test",
   "cargo test --workspace --all-features --quiet",
@@ -81,7 +81,7 @@ run = [
 
 [tasks.clean]
 alias = "c"
-description = "Format and check the Circus Rust project"
+description = "Format and check the Power Plant Rust project"
 run = [
   "mise run format",
   "mise run check",

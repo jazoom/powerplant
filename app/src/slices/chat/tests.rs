@@ -94,7 +94,7 @@ fn stream_frames(body: &[u8]) -> Vec<String> {
 }
 
 fn cookie(token: &str) -> String {
-    format!("circus_session={token}")
+    format!("powerplant_session={token}")
 }
 
 fn patch_send(token: &str) -> Request<Body> {
@@ -262,6 +262,9 @@ async fn a_patch_send_starts_a_job_without_streaming() {
     assert!(text.contains("turn-1"));
     assert!(text.contains("Refresh"));
     assert!(text.contains("Stop"));
+    assert!(text.contains("target=\"job-observe\""));
+    assert!(!text.contains("target=\"composer\""));
+    assert!(!text.contains("composer-message"));
 
     let stored = session_snapshot(&state, &token);
     assert_eq!(
@@ -327,7 +330,7 @@ async fn a_document_send_returns_the_page_before_the_job_finishes() {
     assert!(text.contains("<!doctype html>"));
     assert!(text.contains("Hello"));
     assert!(text.contains("Refresh"));
-    assert!(!text.contains("Hello from Circus."));
+    assert!(!text.contains("Hello from Power Plant."));
 }
 
 #[tokio::test]
@@ -347,14 +350,36 @@ async fn a_later_document_show_renders_the_finished_job() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("<!doctype html>"));
-    assert!(text.contains("Hello from Circus."));
+    assert!(text.contains("Hello from Power Plant."));
     assert!(!text.contains("data-job-active=\"true\""));
 
     let stored = session_snapshot(&state, &token);
     assert_eq!(
         stored.turns.last().map(|turn| turn.text.as_str()),
-        Some("Hello from Circus.")
+        Some("Hello from Power Plant.")
     );
+}
+
+#[tokio::test]
+async fn a_later_document_show_drops_a_failed_job_error() {
+    let state = state_with_backend(ScriptedBackend::chunks([Err(ProviderError::Detail(
+        "You have insufficient credits".to_owned(),
+    ))]));
+    let token = connected(&state);
+    let _ = app(state.clone())
+        .oneshot(patch_send(&token))
+        .await
+        .expect("chat send");
+    wait_until_job_idle(&state, &token).await;
+
+    let response = app(state.clone())
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!text.contains("You have insufficient credits"));
+    assert!(!text.contains("data-job-active=\"true\""));
 }
 
 #[tokio::test]
@@ -395,7 +420,7 @@ async fn observation_streams_one_bounded_segment_with_one_final_frame() {
     assert!(
         frames
             .iter()
-            .any(|frame| frame.contains("Hello from Circus."))
+            .any(|frame| frame.contains("Hello from Power Plant."))
     );
     assert!(!job_active(final_frame));
 }
@@ -523,7 +548,7 @@ async fn an_oversized_reply_is_bounded_and_reported_as_truncated() {
     let joined = frames.join("");
     assert!(joined.contains(&bounded));
     assert!(!joined.contains(&format!("{bounded}a")));
-    assert!(joined.contains("Circus truncated the model reply because it was too long."));
+    assert!(joined.contains("Power Plant truncated the model reply because it was too long."));
     assert!(frames.last().unwrap().contains("status=\"422\""));
     assert!(
         frames
@@ -832,7 +857,7 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
         .expect("pending model refresh");
     let pending_body = to_bytes(pending.into_body(), usize::MAX).await.unwrap();
     let pending_text = String::from_utf8(pending_body.to_vec()).unwrap();
-    assert!(pending_text.contains("target=\"desk-model-options\""));
+    assert!(pending_text.contains("target=\"desk-model-catalogue\""));
     assert!(!pending_text.contains("id=\"desk-provider\""));
     assert!(pending_text.contains("data-catalogue-pending=\"true\""));
     assert!(!pending_text.contains("data-model-value=\"syn:large:text\""));
@@ -959,7 +984,9 @@ async fn the_desk_can_toggle_a_model_favourite() {
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .header(hypergraft::GRAFT_REQUEST, "patch")
                     .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                    .body(Body::from("provider=xai&model=grok-4-mini&favourite=true"))
+                    .body(Body::from(
+                        "provider=xai&model=grok-4.6&favourite=grok-4-mini",
+                    ))
                     .unwrap(),
             )
             .await
@@ -967,7 +994,9 @@ async fn the_desk_can_toggle_a_model_favourite() {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
-        assert!(text.contains("target=\"desk-settings\""));
+        assert!(text.contains("target=\"desk-model-catalogue\""));
+        assert!(!text.contains("id=\"desk-provider\""));
+        assert!(!text.contains("id=\"desk-model-search\""));
         assert!(text.contains(if expected {
             "aria-pressed=\"true\""
         } else {
@@ -983,7 +1012,7 @@ async fn the_desk_can_toggle_a_model_favourite() {
         assert_eq!(favourites.contains(&"grok-4-mini".to_owned()), expected);
         assert_eq!(
             state.vault.selected_connection().map(|item| item.model),
-            Some("grok-4-mini".to_owned())
+            Some("grok-4.6".to_owned())
         );
     }
 }
@@ -1001,7 +1030,7 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from("provider=xai&model=&favourite=true"))
+                .body(Body::from("provider=xai&model=grok-4.6&favourite="))
                 .unwrap(),
         )
         .await

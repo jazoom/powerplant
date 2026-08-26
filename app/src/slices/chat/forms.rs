@@ -58,7 +58,7 @@ impl ModelForm {
         stored: impl Fn(ProviderKind) -> bool,
     ) -> Result<(ProviderKind, String), ModelError> {
         let kind = self.stored_provider(stored)?;
-        let model = self.model.trim();
+        let model = self.favourite.as_deref().unwrap_or_default().trim();
         if model.is_empty() || !model_is_bounded(model) {
             return Err(ModelError::Model);
         }

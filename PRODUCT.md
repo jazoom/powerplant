@@ -14,7 +14,7 @@ They work on their own machine. They already have a provider API key. They want 
 
 ## Product Purpose
 
-Circus is a local coding agent. The user runs a web server on their machine. They talk to a hosted model in a browser.
+Power Plant is a local coding agent. The user runs a web server on their machine. They talk to a hosted model in a browser.
 
 Success is a connected session that streams a useful reply into the transcript.
 
@@ -22,15 +22,15 @@ The longer job is a coding agent that can use tools. Tools are intended soon. Th
 
 ## Positioning
 
-Circus is a thin local desk for a coding agent. It is not an IDE. It is not a cloud workspace.
+Power Plant is a thin local desk for a coding agent. It is not an IDE. It is not a cloud workspace.
 
-The user brings the provider key. Circus does not sell model access and does not create an account.
+The user brings the provider key. Power Plant does not sell model access and does not create an account.
 
 ## Operating Context
 
-The user starts the Circus process on their machine. The default origin is `http://localhost:4000`.
+The user starts the Power Plant process on their machine. The default origin is `http://localhost:4000`.
 
-They open that origin in a browser. They add a key for xAI, OpenAI Codex or Synthetic. Circus can store a key for each provider at the same time.
+They open that origin in a browser. They add a key for xAI, OpenAI Codex, Synthetic, OpenRouter or DeepSeek. Power Plant can store a key for each provider at the same time.
 
 They choose the provider and model in chat. They can keep the provider default.
 
@@ -44,7 +44,7 @@ Hypergraft updates page fragments. Ordinary links still work without it.
 
 Current capabilities:
 
-- Accept an API key for xAI, OpenAI Codex or Synthetic.
+- Accept an API key for xAI, OpenAI Codex, Synthetic, OpenRouter or DeepSeek.
 - Store more than one provider key on the local machine.
 - Choose the provider and model in chat.
 - Send chat turns through Rig.
@@ -63,7 +63,7 @@ Later work:
 
 ## Brand Commitments
 
-The product name is Circus. The wordmark in the product is `circus`. The mark is `app/public/images/logo.svg`.
+The product name is Power Plant. The wordmark in the product is `Power Plant`. The mark is `app/public/images/logo.svg`.
 
 UI copy uses Australian English. Capitalise only the first word of a title, button or heading.
 
@@ -75,8 +75,8 @@ The running product has a connect surface and a chat surface. The logo file exis
 
 ## Product Principles
 
-1. The user runs Circus. There is no product account.
-2. A hosted model is a connection the user brings, not a Circus service.
-3. The desk stays thin. Circus is not an IDE and not a cloud workspace.
-4. Circus stores provider keys on this machine until the user forgets that provider.
+1. The user runs Power Plant. There is no product account.
+2. A hosted model is a connection the user brings, not a Power Plant service.
+3. The desk stays thin. Power Plant is not an IDE and not a cloud workspace.
+4. Power Plant stores provider keys on this machine until the user forgets that provider.
 5. Do not claim work the product cannot do. Chat is current. Tools come later.
