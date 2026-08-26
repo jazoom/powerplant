@@ -106,11 +106,13 @@ pub(crate) struct JobSnapshot {
     pub(crate) assistant_index: usize,
     pub(crate) error: Option<String>,
     pub(crate) cancel_requested: bool,
+    pub(crate) plain_output: bool,
 }
 
 pub(crate) struct Job {
     id: JobId,
     assistant_index: usize,
+    plain_output: bool,
     inner: Mutex<JobInner>,
     notify: Notify,
     cancel: AtomicBool,
@@ -126,9 +128,18 @@ struct JobInner {
 
 impl Job {
     pub(crate) fn new(id: JobId, assistant_index: usize) -> Arc<Self> {
+        Self::create(id, assistant_index, false)
+    }
+
+    pub(crate) fn command(id: JobId, assistant_index: usize) -> Arc<Self> {
+        Self::create(id, assistant_index, true)
+    }
+
+    fn create(id: JobId, assistant_index: usize, plain_output: bool) -> Arc<Self> {
         Arc::new(Self {
             id,
             assistant_index,
+            plain_output,
             inner: Mutex::new(JobInner {
                 status: JobStatus::Running,
                 events: Vec::new(),
@@ -147,6 +158,10 @@ impl Job {
 
     pub(crate) fn assistant_index(&self) -> usize {
         self.assistant_index
+    }
+
+    pub(crate) fn plain_output(&self) -> bool {
+        self.plain_output
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -185,6 +200,7 @@ impl Job {
             assistant_index: self.assistant_index,
             error: inner.error.clone(),
             cancel_requested: self.cancel.load(Ordering::SeqCst),
+            plain_output: self.plain_output,
         }
     }
 

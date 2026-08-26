@@ -50,6 +50,11 @@ pub(super) struct ChatViewModel {
     pub(super) sandbox_progress: String,
     pub(super) sandbox_active: bool,
     pub(super) sandbox_error: &'static str,
+    pub(super) project: String,
+    pub(super) project_error: &'static str,
+    pub(super) project_locked: bool,
+    pub(super) command_mode: bool,
+    pub(super) project_selected: bool,
 }
 
 impl ChatViewModel {
@@ -97,7 +102,11 @@ impl ChatViewModel {
         let mut job_status = "";
         if let Some(job) = job {
             if !job.output.is_empty() && views.len() == job.assistant_index {
-                views.push(assistant_turn(job.assistant_index, &job.output));
+                views.push(output_turn(
+                    job.assistant_index,
+                    &job.output,
+                    job.plain_output,
+                ));
             }
             if job.status == JobStatus::Running {
                 job_id = job.id.as_hex();
@@ -124,6 +133,14 @@ impl ChatViewModel {
             })
             .unwrap_or_default();
         let catalogue_pending = selected.is_some_and(|provider| catalogue.pending(provider.kind));
+        let project_selected = !sandbox.project.is_empty();
+        let command_mode =
+            sandbox.status == crate::sandbox::GuestStatus::Running && project_selected;
+        let project_locked = job_active
+            || !matches!(
+                sandbox.status,
+                crate::sandbox::GuestStatus::Stopped | crate::sandbox::GuestStatus::Crashed
+            );
         Self {
             providers: providers
                 .iter()
@@ -151,6 +168,19 @@ impl ChatViewModel {
             sandbox_progress: sandbox.progress,
             sandbox_active: sandbox.status.is_starting(),
             sandbox_error: sandbox.error,
+            project: sandbox.project,
+            project_error: "",
+            project_locked,
+            command_mode,
+            project_selected,
+        }
+    }
+
+    pub(super) fn project(&self) -> ProjectContents<'_> {
+        ProjectContents {
+            project: &self.project,
+            project_error: self.project_error,
+            project_locked: self.project_locked,
         }
     }
 
@@ -161,6 +191,7 @@ impl ChatViewModel {
             sandbox_progress: &self.sandbox_progress,
             sandbox_active: self.sandbox_active,
             sandbox_error: self.sandbox_error,
+            job_active: self.job_active,
         }
     }
 
@@ -185,7 +216,11 @@ impl ChatViewModel {
     }
 
     pub(super) fn composer(&self) -> ComposerContents<'_> {
-        ComposerContents { error: self.error }
+        ComposerContents {
+            error: self.error,
+            command_mode: self.command_mode,
+            project_selected: self.project_selected,
+        }
     }
 
     pub(super) fn job_observe(&self) -> JobObserveContents<'_> {
@@ -219,6 +254,22 @@ pub(super) fn assistant_turn(index: usize, text: &str) -> TurnView {
     }
 }
 
+pub(super) fn command_turn(index: usize, text: &str) -> TurnView {
+    TurnView {
+        id: turn_id(index),
+        is_user: false,
+        html: format!("<pre><code>{}</code></pre>", markdown::escape_code(text)),
+    }
+}
+
+pub(super) fn output_turn(index: usize, text: &str, plain: bool) -> TurnView {
+    if plain {
+        command_turn(index, text)
+    } else {
+        assistant_turn(index, text)
+    }
+}
+
 pub(super) fn turn_id(index: usize) -> String {
     format!("turn-{}", index + 1)
 }
@@ -231,6 +282,7 @@ pub(super) struct SandboxStatusContents<'a> {
     pub(super) sandbox_progress: &'a str,
     pub(super) sandbox_active: bool,
     pub(super) sandbox_error: &'a str,
+    pub(super) job_active: bool,
 }
 
 #[derive(Template)]
@@ -260,9 +312,19 @@ pub(super) struct TranscriptContents<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "chat/templates/chat.html", block = "project")]
+pub(super) struct ProjectContents<'a> {
+    pub(super) project: &'a str,
+    pub(super) project_error: &'a str,
+    pub(super) project_locked: bool,
+}
+
+#[derive(Template)]
 #[template(path = "chat/templates/chat.html", block = "composer")]
 pub(super) struct ComposerContents<'a> {
     pub(super) error: &'a str,
+    pub(super) command_mode: bool,
+    pub(super) project_selected: bool,
 }
 
 #[derive(Template)]
@@ -358,5 +420,6 @@ fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
     match turn.role {
         Role::User => user_turn(index, &turn.text),
         Role::Assistant => assistant_turn(index, &turn.text),
+        Role::Command => command_turn(index, &turn.text),
     }
 }

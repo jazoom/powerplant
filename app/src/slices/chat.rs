@@ -24,8 +24,10 @@ use crate::{
 };
 
 use self::{
-    forms::{ChatForm, CursorError, ModelForm, ObserveQuery, SandboxAction, SandboxForm},
-    job::{observe_response, run_job, user_transcript_patch},
+    forms::{
+        ChatForm, CursorError, ModelForm, ObserveQuery, ProjectForm, SandboxAction, SandboxForm,
+    },
+    job::{observe_response, run_command_job, run_job, user_transcript_patch},
     page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
 
@@ -34,6 +36,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/", get(show).post(send))
         .route("/model", get(refresh_model_options).post(update_model))
         .route("/sandbox", get(show_sandbox).post(update_sandbox))
+        .route("/project", get(show_project).post(update_project))
         .route("/jobs/{job_id}/cancel", post(cancel))
 }
 
@@ -80,10 +83,25 @@ async fn send(
         return reject_chat_input(&state, graft, &session, "Enter a message.").await;
     }
 
-    let started = match state
-        .sessions
-        .begin_turn(&session.id, form.message.trim().to_owned())
-    {
+    let sandbox = state.sandbox.view().await;
+    let command = !sandbox.project.is_empty();
+    if command {
+        let message = match sandbox.status {
+            crate::sandbox::GuestStatus::Running => "",
+            crate::sandbox::GuestStatus::Starting => "Wait until the sandbox finishes starting.",
+            _ => "Start the sandbox.",
+        };
+        if !message.is_empty() {
+            return reject_chat_input(&state, graft, &session, message).await;
+        }
+    }
+
+    let message = form.message.trim().to_owned();
+    let started = match if command {
+        state.sessions.begin_command(&session.id, message)
+    } else {
+        state.sessions.begin_turn(&session.id, message)
+    } {
         Ok(started) => started,
         Err(BeginTurnError::MissingSession) => {
             return Ok(responses::graft_redirect(graft, "/connect"));
@@ -103,13 +121,26 @@ async fn send(
     };
 
     let job = started.job.clone();
-    tokio::spawn(run_job(
-        state.clone(),
-        session.id,
-        connection,
-        started.turns.clone(),
-        job,
-    ));
+    if command {
+        tokio::spawn(run_command_job(
+            state.clone(),
+            session.id,
+            started
+                .turns
+                .last()
+                .map(|turn| turn.text.clone())
+                .unwrap_or_default(),
+            job,
+        ));
+    } else {
+        tokio::spawn(run_job(
+            state.clone(),
+            session.id,
+            connection,
+            started.turns.clone(),
+            job,
+        ));
+    }
 
     match graft {
         CommandGraft::Document => {
@@ -170,11 +201,7 @@ async fn update_model(
     let Some(current) = state.sessions.snapshot(&session.id) else {
         return Ok(responses::graft_redirect(graft, "/connect"));
     };
-    if current
-        .job
-        .as_ref()
-        .is_some_and(|job| job.status == JobStatus::Running)
-    {
+    if job_is_running(&current) {
         return reject_model(&state, graft, &current, "Wait until this reply finishes.").await;
     }
     if form.wants_favourite_toggle() {
@@ -277,10 +304,9 @@ async fn show_sandbox(
                     .wait_until_changed(previous, SANDBOX_HOLD)
                     .await;
             }
-            Ok(hypergraft::outcome::children_patch(
+            Ok(sandbox_and_composer(
                 PatchStatus::Ok,
-                "sandbox-status",
-                &view(&state, &current, "", "", "").await.sandbox_status(),
+                &view(&state, &current, "", "", "").await,
             )?)
         }
     }
@@ -301,6 +327,9 @@ async fn update_sandbox(
     let Some(current) = state.sessions.snapshot(&session.id) else {
         return Ok(responses::graft_redirect(graft, "/connect"));
     };
+    if job_is_running(&current) {
+        return reject_sandbox(&state, graft, &current, "Wait until this reply finishes.").await;
+    }
     let action = match form.validate() {
         Ok(action) => action,
         Err(_) => {
@@ -324,11 +353,85 @@ async fn update_sandbox(
         CommandGraft::Document => {
             render_document(&state, status, view(&state, &current, "", "", error).await)
         }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+        CommandGraft::Patch => Ok(sandbox_and_composer(
             status,
-            "sandbox-status",
-            &view(&state, &current, "", "", error).await.sandbox_status(),
+            &view(&state, &current, "", "", error).await,
         )?),
+    }
+}
+
+async fn show_project(
+    State(state): State<AppState>,
+    OptionalSession(session): OptionalSession,
+    graft: GraftRequest,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    if !state.vault.has_providers() {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    }
+    match graft {
+        GraftRequest::Document | GraftRequest::Navigation => {
+            Ok(responses::graft_redirect(graft, "/"))
+        }
+        GraftRequest::Patch => {
+            let Some(current) = state.sessions.snapshot(&session.id) else {
+                return Ok(responses::graft_redirect(graft, "/connect"));
+            };
+            Ok(hypergraft::outcome::children_patch(
+                PatchStatus::Ok,
+                "project",
+                &view(&state, &current, "", "", "").await.project(),
+            )?)
+        }
+    }
+}
+
+async fn update_project(
+    State(state): State<AppState>,
+    OptionalSession(session): OptionalSession,
+    graft: CommandGraft,
+    Form(form): Form<ProjectForm>,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    if !state.vault.has_providers() {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    }
+    let Some(current) = state.sessions.snapshot(&session.id) else {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    };
+    if job_is_running(&current) {
+        return reject_project(&state, graft, &current, "Wait until this reply finishes.").await;
+    }
+    let path = match form.validate() {
+        Ok(path) => path,
+        Err(error) => {
+            return reject_project(&state, graft, &current, ProjectForm::message(error)).await;
+        }
+    };
+    let error = match state.sandbox.set_project(path).await {
+        Ok(()) => "",
+        Err(error) => error.message(),
+    };
+    let status = if error.is_empty() {
+        PatchStatus::Ok
+    } else {
+        PatchStatus::UnprocessableEntity
+    };
+    match graft {
+        CommandGraft::Document => {
+            render_document(&state, status, view_project(&state, &current, error).await)
+        }
+        CommandGraft::Patch => {
+            let view = view_project(&state, &current, error).await;
+            let mut patches = PatchSet::new();
+            patches.children("project", &view.project())?;
+            patches.children("composer", &view.composer())?;
+            Ok(patches.respond(status)?)
+        }
     }
 }
 
@@ -506,6 +609,26 @@ async fn reject_model(
     }
 }
 
+async fn reject_project(
+    state: &AppState,
+    graft: CommandGraft,
+    session: &SessionSnapshot,
+    message: &'static str,
+) -> AppResult<Response> {
+    match graft {
+        CommandGraft::Document => render_document(
+            state,
+            PatchStatus::UnprocessableEntity,
+            view_project(state, session, message).await,
+        ),
+        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+            PatchStatus::UnprocessableEntity,
+            "project",
+            &view_project(state, session, message).await.project(),
+        )?),
+    }
+}
+
 async fn reject_sandbox(
     state: &AppState,
     graft: CommandGraft,
@@ -542,6 +665,41 @@ async fn view(
         desk_error,
         sandbox_error,
     )
+}
+
+async fn view_project(
+    state: &AppState,
+    session: &SessionSnapshot,
+    project_error: &'static str,
+) -> ChatViewModel {
+    let mut view = ChatViewModel::from_session(
+        session,
+        &state.vault,
+        &state.models,
+        state.sandbox.view().await,
+        "",
+        "",
+        "",
+    );
+    view.project_error = project_error;
+    view
+}
+
+fn job_is_running(session: &SessionSnapshot) -> bool {
+    session
+        .job
+        .as_ref()
+        .is_some_and(|job| job.status == JobStatus::Running)
+}
+
+fn sandbox_and_composer(
+    status: PatchStatus,
+    view: &ChatViewModel,
+) -> Result<Response, hypergraft::PatchBuildError> {
+    let mut patches = PatchSet::new();
+    patches.children("sandbox-status", &view.sandbox_status())?;
+    patches.children("composer", &view.composer())?;
+    patches.respond(status)
 }
 
 fn navigate_page(state: &AppState, view: &ChatViewModel) -> AppResult<Response> {

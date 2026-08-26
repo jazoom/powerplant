@@ -8,13 +8,14 @@ use hypergraft::{PatchSet, PatchStatus};
 
 use crate::{
     providers::{ChatTurn, ProviderConnection, ProviderError},
+    sandbox::{CommandEvent, SandboxError},
     sessions::{Job, JobEventKind, JobStatus, SessionId},
     state::AppState,
 };
 
 use super::page::{
     JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
-    assistant_turn, user_turn,
+    output_turn, user_turn,
 };
 
 pub(super) const MIN_PROGRESS_INTERVAL: Duration = if cfg!(test) {
@@ -59,6 +60,110 @@ pub(super) fn observe_response(job: Arc<Job>, cursor: u64) -> axum::response::Re
     });
     hypergraft::outcome::stream_response(frames)
 }
+
+pub(super) async fn run_command_job(
+    state: AppState,
+    session_id: SessionId,
+    command: String,
+    job: Arc<Job>,
+) {
+    let mut session = tokio::select! {
+        biased;
+        _ = job.cancelled() => {
+            finish_cancelled(&state, &session_id, &job, "");
+            return;
+        }
+        result = state.sandbox.exec(&command) => match result {
+            Ok(session) => session,
+            Err(error) => {
+                let _ = state
+                    .sessions
+                    .fail_turn(&session_id, &job.id(), String::new());
+                job.finish(JobStatus::Failed, Some(error.message()));
+                return;
+            }
+        },
+    };
+
+    let mut reply = String::new();
+    let mut published = 0usize;
+    let mut last_emit = Instant::now();
+    let mut output_visible = false;
+    let mut exit_code = None;
+
+    loop {
+        let event = tokio::select! {
+            biased;
+            _ = job.cancelled() => {
+                session.kill().await;
+                session.close().await;
+                finish_cancelled(&state, &session_id, &job, &reply);
+                return;
+            }
+            event = session.recv() => event,
+        };
+        let Some(event) = event else {
+            break;
+        };
+        match event {
+            CommandEvent::Output(text) => {
+                let truncated = append_bounded(&mut reply, &text);
+                if progress_due(output_visible, last_emit) {
+                    publish_remaining(&job, &reply, published);
+                    published = reply.len();
+                    output_visible = published > 0;
+                    last_emit = Instant::now();
+                }
+                if truncated {
+                    publish_remaining(&job, &reply, published);
+                    persist_failure(&state, &session_id, &job, &reply);
+                    session.kill().await;
+                    session.close().await;
+                    job.finish(JobStatus::Failed, Some(COMMAND_TOO_LONG));
+                    return;
+                }
+            }
+            CommandEvent::Exited(code) => {
+                exit_code = Some(code);
+                break;
+            }
+            CommandEvent::Failed => {
+                publish_remaining(&job, &reply, published);
+                persist_failure(&state, &session_id, &job, &reply);
+                session.close().await;
+                job.finish(JobStatus::Failed, Some(SandboxError::Exec.message()));
+                return;
+            }
+        }
+    }
+
+    if job.cancel_requested() {
+        session.close().await;
+        finish_cancelled(&state, &session_id, &job, &reply);
+        return;
+    }
+
+    publish_remaining(&job, &reply, published);
+    session.close().await;
+
+    match exit_code {
+        Some(0) => {
+            persist_success(&state, &session_id, &job, &reply);
+            job.finish(JobStatus::Completed, None);
+        }
+        Some(code) => {
+            persist_failure(&state, &session_id, &job, &reply);
+            let message = format!("The command exited with code {code}.");
+            job.finish(JobStatus::Failed, Some(&message));
+        }
+        None => {
+            persist_failure(&state, &session_id, &job, &reply);
+            job.finish(JobStatus::Failed, Some(SandboxError::Exec.message()));
+        }
+    }
+}
+
+const COMMAND_TOO_LONG: &str = "Power Plant truncated the command output because it was too long.";
 
 pub(super) async fn run_job(
     state: AppState,
@@ -225,9 +330,9 @@ async fn observe_segment(tx: mpsc::Sender<hypergraft::StreamFrame>, job: Arc<Job
                     match offer_output_progress(
                         &tx,
                         &mut budget,
+                        &job,
                         &job_id,
                         event.seq,
-                        job.assistant_index(),
                         &text,
                         assistant_visible,
                     )
@@ -278,13 +383,13 @@ fn should_keep_open(job: &Job, started: Instant) -> bool {
 async fn offer_output_progress(
     tx: &mpsc::Sender<hypergraft::StreamFrame>,
     budget: &mut hypergraft::StreamBudget,
+    job: &Job,
     job_id: &str,
     cursor: u64,
-    assistant_index: usize,
     text: &str,
     already_visible: bool,
 ) -> ProgressOffer {
-    let turn = assistant_turn(assistant_index, text);
+    let turn = output_turn(job.assistant_index(), text, job.plain_output());
     let frame = encode_output_progress(job_id, cursor, &turn, already_visible);
     offer_progress(tx, budget, frame, "construct job progress frame").await
 }
@@ -370,7 +475,11 @@ fn encode_observe_final(
     let more = snapshot.latest_seq > cursor || snapshot.status == JobStatus::Running;
     let mut patches = PatchSet::new();
     if !assistant_visible && !snapshot.output.is_empty() {
-        let turn = assistant_turn(snapshot.assistant_index, &snapshot.output);
+        let turn = output_turn(
+            snapshot.assistant_index,
+            &snapshot.output,
+            snapshot.plain_output,
+        );
         patches.append("transcript", &TurnArticle { turn: &turn })?;
     }
     if more {

@@ -32,7 +32,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> AppState
         chat: Arc::new(ChatBackend::Rig),
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
-        sandbox: Arc::new(GuestSandbox::prepare().await),
+        sandbox: Arc::new(GuestSandbox::prepare(config.data_dir.join("project.json")).await),
     }
 }
 

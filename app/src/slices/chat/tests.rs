@@ -1048,6 +1048,16 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
     );
 }
 
+async fn with_project(state: &AppState) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("project");
+    state
+        .sandbox
+        .set_project(Some(dir.path().to_path_buf()))
+        .await
+        .expect("project");
+    dir
+}
+
 fn sandbox_patch(token: &str, action: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
@@ -1064,6 +1074,7 @@ fn sandbox_patch(token: &str, action: &str) -> Request<Body> {
 async fn a_patch_sandbox_start_returns_starting_status() {
     let state = test_state();
     let token = connected(&state);
+    let _project = with_project(&state).await;
     let response = app(state.clone())
         .oneshot(sandbox_patch(&token, "start"))
         .await
@@ -1084,6 +1095,7 @@ async fn a_patch_sandbox_start_returns_starting_status() {
 async fn a_sandbox_observe_patch_settles_when_start_finishes() {
     let state = test_state();
     let token = connected(&state);
+    let _project = with_project(&state).await;
     state.sandbox.start().await.expect("start");
     state.sandbox.complete_start();
     let response = app(state.clone())
@@ -1130,6 +1142,7 @@ async fn a_sandbox_document_get_redirects_to_chat() {
 async fn a_patch_sandbox_stop_updates_sandbox_status() {
     let state = test_state();
     let token = connected(&state);
+    let _project = with_project(&state).await;
     state.sandbox.start().await.expect("start");
     state.sandbox.complete_start();
     let response = app(state.clone())
@@ -1159,4 +1172,340 @@ async fn an_unknown_sandbox_action_is_rejected() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("Choose start or stop."));
     assert!(text.contains("target=\"sandbox-status\""));
+}
+
+fn project_patch(token: &str, path: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/project")
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from(format!("path={path}")))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_document_show_includes_the_project_field() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("id=\"project\""));
+    assert!(text.contains("id=\"project-path\""));
+    assert!(text.contains("action=\"/project\""));
+}
+
+#[tokio::test]
+async fn a_project_document_get_redirects_to_chat() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/project")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("project document");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
+}
+
+#[tokio::test]
+async fn a_patch_project_stores_an_absolute_directory() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = tempfile::tempdir().expect("project");
+    let path = dir.path().canonicalize().expect("canonical project");
+    let encoded = path.to_string_lossy().replace(' ', "%20");
+    let response = app(state.clone())
+        .oneshot(project_patch(&token, &encoded))
+        .await
+        .expect("project");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"project\""));
+    assert!(text.contains("target=\"composer\""));
+    assert!(text.contains(&*path.to_string_lossy()));
+    assert_eq!(state.sandbox.project().as_deref(), Some(path.as_path()));
+}
+
+#[tokio::test]
+async fn a_relative_project_path_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(project_patch(&token, "Projects/app"))
+        .await
+        .expect("project");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Enter an absolute directory path."));
+    assert!(text.contains("target=\"project\""));
+    assert!(!text.contains("target=\"composer\""));
+}
+
+#[tokio::test]
+async fn a_missing_project_directory_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(project_patch(&token, "/no/such/powerplant-project"))
+        .await
+        .expect("project");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("That directory does not exist."));
+}
+
+#[tokio::test]
+async fn a_sandbox_start_without_a_project_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(sandbox_patch(&token, "start"))
+        .await
+        .expect("sandbox start");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose a project directory."));
+    assert!(text.contains("target=\"sandbox-status\""));
+}
+
+#[tokio::test]
+async fn a_project_without_a_running_sandbox_rejects_a_command() {
+    let state = test_state();
+    let token = connected(&state);
+    let _project = with_project(&state).await;
+    let response = app(state)
+        .oneshot(patch_send_message(&token, "ls"))
+        .await
+        .expect("chat send");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Start the sandbox."));
+    assert!(text.contains("target=\"composer\""));
+    assert!(!text.contains("target=\"transcript\""));
+}
+
+#[tokio::test]
+async fn a_command_from_chat_streams_guest_output() {
+    let state = test_state();
+    let token = connected(&state);
+    let _project = with_project(&state).await;
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    let started = app(state.clone())
+        .oneshot(patch_send_message(&token, "ls"))
+        .await
+        .expect("chat send");
+    assert_eq!(started.status(), axum::http::StatusCode::OK);
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let job = job_id_from_body(&started_body);
+    wait_until_job_idle(&state, &token).await;
+
+    let response = app(state.clone())
+        .oneshot(observe_patch(&token, &job, 0))
+        .await
+        .expect("observe");
+    assert_eq!(
+        response.headers().get(hypergraft::GRAFT_TRANSFER).unwrap(),
+        "stream"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let frames = stream_frames(&body);
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.contains("<pre><code>ls</code></pre>"))
+    );
+    assert!(!job_active(frames.last().expect("final")));
+
+    let stored = session_snapshot(&state, &token);
+    assert_eq!(
+        stored
+            .turns
+            .iter()
+            .map(|turn| (turn.role, turn.text.as_str()))
+            .collect::<Vec<_>>(),
+        [(Role::User, "ls"), (Role::Command, "ls")]
+    );
+}
+
+#[tokio::test]
+async fn cancel_stops_a_running_command() {
+    let state = test_state();
+    let token = connected(&state);
+    let _project = with_project(&state).await;
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    state.sandbox.hang_next_command();
+    let started = app(state.clone())
+        .oneshot(patch_send_message(&token, "sleep 30"))
+        .await
+        .expect("chat send");
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let job = job_id_from_body(&started_body);
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/jobs/{job}/cancel"))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("cancel");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    wait_until_job_idle(&state, &token).await;
+    let stored = session_snapshot(&state, &token);
+    assert_eq!(
+        stored.job.as_ref().map(|job| job.status),
+        Some(JobStatus::Cancelled)
+    );
+}
+
+#[tokio::test]
+async fn a_later_document_show_renders_command_output_as_terminal_text() {
+    let state = test_state();
+    let token = connected(&state);
+    let _project = with_project(&state).await;
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    let _ = app(state.clone())
+        .oneshot(patch_send_message(&token, "**boom**"))
+        .await
+        .expect("chat send");
+    wait_until_job_idle(&state, &token).await;
+
+    let response = app(state.clone())
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<pre><code>**boom**</code></pre>"));
+    assert!(!text.contains("<strong>"));
+    assert_eq!(
+        session_snapshot(&state, &token)
+            .turns
+            .last()
+            .map(|turn| turn.role),
+        Some(Role::Command)
+    );
+}
+
+#[tokio::test]
+async fn a_sandbox_stop_during_a_job_is_rejected() {
+    let state = state_with_backend(ScriptedBackend::hang());
+    let token = connected(&state);
+    let _ = app(state.clone())
+        .oneshot(patch_send(&token))
+        .await
+        .expect("chat send");
+    let response = app(state.clone())
+        .oneshot(sandbox_patch(&token, "stop"))
+        .await
+        .expect("sandbox stop");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Wait until this reply finishes."));
+    assert!(text.contains("target=\"sandbox-status\""));
+}
+
+#[tokio::test]
+async fn a_project_change_is_rejected_while_the_sandbox_is_running() {
+    let state = test_state();
+    let token = connected(&state);
+    let _project = with_project(&state).await;
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    let other = tempfile::tempdir().expect("other");
+    let encoded = other
+        .path()
+        .canonicalize()
+        .expect("canonical")
+        .to_string_lossy()
+        .replace(' ', "%20");
+    let response = app(state.clone())
+        .oneshot(project_patch(&token, &encoded))
+        .await
+        .expect("project");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Stop the sandbox before you change the project."));
+    assert!(text.contains("target=\"project\""));
+}
+
+#[tokio::test]
+async fn a_document_show_disables_sandbox_controls_during_a_job() {
+    let state = state_with_backend(ScriptedBackend::hang());
+    let token = connected(&state);
+    let _ = app(state.clone())
+        .oneshot(patch_send(&token))
+        .await
+        .expect("chat send");
+    let response = app(state)
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    let start_at = text.find("Start sandbox").expect("start control");
+    assert!(text[start_at.saturating_sub(160)..start_at].contains("disabled"));
+}
+
+#[tokio::test]
+async fn a_document_show_locks_the_project_field_while_the_sandbox_is_running() {
+    let state = test_state();
+    let token = connected(&state);
+    let _project = with_project(&state).await;
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    let response = app(state)
+        .oneshot(document_show(&token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    let path_at = text.find("id=\"project-path\"").expect("project field");
+    let field = &text[path_at..path_at + 500];
+    assert!(field.contains("disabled"));
 }

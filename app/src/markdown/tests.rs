@@ -1,4 +1,4 @@
-use super::{escape_plain, render};
+use super::{escape_code, escape_plain, render};
 
 #[test]
 fn strips_script_from_markdown_html() {
@@ -19,4 +19,12 @@ fn escapes_plain_user_text() {
     let html = escape_plain("<script>alert(1)</script>");
     assert!(!html.contains("<script>"), "{html}");
     assert!(html.contains("&lt;script&gt;"), "{html}");
+}
+
+#[test]
+fn escape_code_does_not_insert_breaks() {
+    let html = escape_code("<script>\nalert(1)</script>");
+    assert!(!html.contains("<script>"), "{html}");
+    assert!(html.contains("alert(1)"), "{html}");
+    assert!(!html.contains("<br>"), "{html}");
 }

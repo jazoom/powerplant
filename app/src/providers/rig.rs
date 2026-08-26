@@ -376,7 +376,7 @@ where
         .iter()
         .map(|turn| match turn.role {
             Role::User => Message::user(turn.text.clone()),
-            Role::Assistant => Message::assistant(turn.text.clone()),
+            Role::Assistant | Role::Command => Message::assistant(turn.text.clone()),
         })
         .collect::<Vec<_>>();
     let response = model

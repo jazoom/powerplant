@@ -38,7 +38,7 @@ They open that origin in a browser. They add a key or a plan login for a provide
 
 They choose the provider and model in chat. They can keep the provider default.
 
-They choose a project directory. Power Plant bind-mounts that directory into a guest sandbox. Chat runs one agent on that sandbox and project.
+They choose a project directory. Power Plant bind-mounts that directory into a guest sandbox. A chat turn can run a command in that guest. Chat later runs one agent on that sandbox and project.
 
 They send chat turns. Rig streams the model reply on the host. The transcript shows the reply as HTML. Tool traces appear in the transcript.
 
@@ -58,6 +58,8 @@ Current capabilities:
 - Choose the provider and model in chat.
 - Send chat turns through Rig.
 - Stream the reply into the transcript as HTML.
+- Choose a project directory and bind-mount it into the sandbox.
+- Run a command from chat in the guest and stream the output into the transcript.
 
 Current constraints:
 

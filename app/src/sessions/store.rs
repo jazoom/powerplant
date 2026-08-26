@@ -100,6 +100,23 @@ impl SessionStore {
         id: &SessionId,
         message: String,
     ) -> Result<BegunTurn, BeginTurnError> {
+        self.start_turn(id, message, false)
+    }
+
+    pub(crate) fn begin_command(
+        &self,
+        id: &SessionId,
+        message: String,
+    ) -> Result<BegunTurn, BeginTurnError> {
+        self.start_turn(id, message, true)
+    }
+
+    fn start_turn(
+        &self,
+        id: &SessionId,
+        message: String,
+        command: bool,
+    ) -> Result<BegunTurn, BeginTurnError> {
         let mut sessions = self.lock();
         let session =
             live_mut(&mut sessions, id, self.clock.now()).ok_or(BeginTurnError::MissingSession)?;
@@ -111,7 +128,11 @@ impl SessionStore {
             role: Role::User,
             text: message,
         });
-        let job = Job::new(job_id, session.turns.len());
+        let job = if command {
+            Job::command(job_id, session.turns.len())
+        } else {
+            Job::new(job_id, session.turns.len())
+        };
         session.job = Some(job.clone());
         session.active = Some(job_id);
         Ok(BegunTurn {
@@ -176,10 +197,12 @@ impl SessionStore {
             return false;
         }
         if !reply.trim().is_empty() {
-            session.turns.push(ChatTurn {
-                role: Role::Assistant,
-                text: reply,
-            });
+            let role = if session.job.as_ref().is_some_and(|job| job.plain_output()) {
+                Role::Command
+            } else {
+                Role::Assistant
+            };
+            session.turns.push(ChatTurn { role, text: reply });
         }
         session.active = None;
         true

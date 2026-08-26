@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 use crate::providers::{ProviderKind, model_is_bounded, resolve_model};
@@ -5,6 +7,7 @@ use crate::sessions::JobId;
 
 pub(super) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
 pub(super) const MAXIMUM_CURSOR: u64 = 1_000_000;
+pub(super) const MAXIMUM_PROJECT_PATH_BYTES: usize = 4_096;
 
 #[derive(Deserialize)]
 pub(super) struct ChatForm {
@@ -126,6 +129,47 @@ impl SandboxForm {
             "start" => Ok(SandboxAction::Start),
             "stop" => Ok(SandboxAction::Stop),
             _ => Err(SandboxFormError::Action),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProjectForm {
+    #[serde(default)]
+    pub(super) path: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProjectFormError {
+    Excessive,
+    Malformed,
+    Relative,
+}
+
+impl ProjectForm {
+    pub(super) fn validate(&self) -> Result<Option<PathBuf>, ProjectFormError> {
+        let raw = self.path.trim();
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        if raw.len() > MAXIMUM_PROJECT_PATH_BYTES {
+            return Err(ProjectFormError::Excessive);
+        }
+        if raw.chars().any(char::is_control) {
+            return Err(ProjectFormError::Malformed);
+        }
+        let path = PathBuf::from(raw);
+        if !path.is_absolute() {
+            return Err(ProjectFormError::Relative);
+        }
+        Ok(Some(path))
+    }
+
+    pub(super) fn message(error: ProjectFormError) -> &'static str {
+        match error {
+            ProjectFormError::Excessive => "That path is too long.",
+            ProjectFormError::Malformed => "That path is not valid.",
+            ProjectFormError::Relative => "Enter an absolute directory path.",
         }
     }
 }

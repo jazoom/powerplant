@@ -241,6 +241,7 @@ impl ProviderConnection {
 pub(crate) enum Role {
     User,
     Assistant,
+    Command,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
