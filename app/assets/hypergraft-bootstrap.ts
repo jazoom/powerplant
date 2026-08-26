@@ -5,6 +5,7 @@ import {
 } from "hypergraft/browser";
 import { initComposer, initShortcutHint } from "./composer";
 import { initConnectErrors } from "./connect-errors";
+import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initJobObserve } from "./job-observe";
 import { initTranscript } from "./transcript";
@@ -22,6 +23,7 @@ startHypergraft({
     islands: {
         composer: initComposer,
         "connect-errors": initConnectErrors,
+        "connect-plan": initConnectPlan,
         "desk-settings": initDeskSettings,
         "job-observe": initJobObserve,
         "shortcut-hint": initShortcutHint,

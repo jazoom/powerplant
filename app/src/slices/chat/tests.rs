@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use crate::{
     config::RuntimeConfig,
     providers::{
-        ChatBackend, ProviderConnection, ProviderError, ProviderKind, Role, SecretString,
+        ChatBackend, ProviderConnection, ProviderError, ProviderKind, Role,
         scripted::ScriptedBackend,
     },
     sessions::{self, JobStatus},
@@ -43,11 +43,11 @@ fn connected(state: &AppState) -> String {
     let token = sessions::generate_session_token().expect("session token");
     state
         .vault
-        .put(ProviderConnection {
-            kind: ProviderKind::Xai,
-            api_key: SecretString::new("test-key".to_owned()),
-            model: "grok-4.6".to_owned(),
-        })
+        .put(ProviderConnection::with_key(
+            ProviderKind::Xai,
+            "test-key",
+            "grok-4.6",
+        ))
         .expect("vault");
     state.sessions.insert(token.id());
     token.raw().as_str().to_owned()
@@ -841,11 +841,11 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
     let token = connected(&state);
     state
         .vault
-        .put(ProviderConnection {
-            kind: ProviderKind::Synthetic,
-            api_key: SecretString::new("test-synthetic-key".to_owned()),
-            model: "hf:moonshotai/Kimi-K3".to_owned(),
-        })
+        .put(ProviderConnection::with_key(
+            ProviderKind::Synthetic,
+            "test-synthetic-key",
+            "hf:moonshotai/Kimi-K3",
+        ))
         .unwrap();
     state
         .models
@@ -889,11 +889,11 @@ async fn multiple_synthetic_models_are_rendered_and_selectable() {
     let token = connected(&state);
     state
         .vault
-        .put(ProviderConnection {
-            kind: ProviderKind::Synthetic,
-            api_key: SecretString::new("test-synthetic-key".to_owned()),
-            model: "hf:moonshotai/Kimi-K3".to_owned(),
-        })
+        .put(ProviderConnection::with_key(
+            ProviderKind::Synthetic,
+            "test-synthetic-key",
+            "hf:moonshotai/Kimi-K3",
+        ))
         .unwrap();
     state.models.set_for_test(
         ProviderKind::Synthetic,
@@ -938,11 +938,11 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
     let token = connected(&state);
     state
         .vault
-        .put(ProviderConnection {
-            kind: ProviderKind::OpenaiCodex,
-            api_key: SecretString::new("test-openai-key".to_owned()),
-            model: "gpt-5.1-codex".to_owned(),
-        })
+        .put(ProviderConnection::with_key(
+            ProviderKind::OpenaiCodex,
+            "test-openai-key",
+            "gpt-5.1-codex",
+        ))
         .unwrap();
     state
         .vault

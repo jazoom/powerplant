@@ -1,4 +1,4 @@
-use super::{ConnectField, ConnectForm};
+use super::{ConnectField, ConnectForm, PlanForm};
 use crate::providers::{MAXIMUM_API_KEY_BYTES, ProviderKind};
 
 fn form(provider: &str, api_key: &str) -> ConnectForm {
@@ -53,4 +53,36 @@ fn names_the_failed_field() {
     assert_eq!(failed_field("xai", ""), Some(ConnectField::ApiKey));
     assert_eq!(ConnectField::Provider.id(), "connect-provider");
     assert_eq!(ConnectField::ApiKey.id(), "connect-key");
+    assert_eq!(ConnectField::Plan.id(), "connect-plan");
+}
+
+#[test]
+fn plan_form_rejects_non_plan_providers() {
+    assert_eq!(
+        PlanForm {
+            provider: "synthetic".to_owned(),
+        }
+        .validate()
+        .err()
+        .map(|error| error.field),
+        Some(ConnectField::Plan)
+    );
+    assert_eq!(
+        PlanForm {
+            provider: "openai".to_owned(),
+        }
+        .validate()
+        .err()
+        .map(|error| error.field),
+        Some(ConnectField::Plan)
+    );
+    assert_eq!(
+        PlanForm {
+            provider: String::new(),
+        }
+        .validate()
+        .err()
+        .map(|error| error.field),
+        Some(ConnectField::Plan)
+    );
 }

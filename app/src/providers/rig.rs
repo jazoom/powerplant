@@ -4,14 +4,15 @@ use futures_util::StreamExt;
 use rig_core::{
     client::CompletionClient,
     completion::{CompletionError, CompletionModel, Message},
-    providers::{deepseek, openai, openrouter, xai},
+    providers::{chatgpt, deepseek, openai, openrouter, xai},
     streaming::StreamedAssistantContent,
 };
 
 use super::{
-    ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, OPENROUTER_BASE_URL, ProviderConnection,
-    ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL, TokenStream, classify_failure_status,
-    classify_verify_status, model_is_bounded, with_json_detail, with_provider_detail,
+    AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, OPENROUTER_BASE_URL,
+    ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL, TokenStream,
+    classify_failure_status_for, classify_verify_status, model_is_bounded, with_json_detail,
+    with_provider_detail, xai_plan,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -35,12 +36,26 @@ fn base_url(kind: ProviderKind) -> &'static str {
 }
 
 pub(super) async fn verify(connection: &ProviderConnection) -> Result<(), ProviderError> {
-    verify_at(
-        base_url(connection.kind),
-        connection.api_key.expose(),
-        VERIFY_TIMEOUT,
-    )
-    .await
+    match connection.auth {
+        AuthMethod::ApiKey => {
+            verify_at(
+                base_url(connection.kind),
+                connection.api_key.expose(),
+                VERIFY_TIMEOUT,
+            )
+            .await
+        }
+        AuthMethod::Plan => match connection.kind {
+            ProviderKind::OpenaiCodex => chatgpt_plan_client(connection, false)?
+                .authorize()
+                .await
+                .map_err(|_| ProviderError::Reauthenticate),
+            ProviderKind::Xai => xai_plan_token(connection).await.map(|_| ()),
+            ProviderKind::Synthetic | ProviderKind::Openrouter | ProviderKind::Deepseek => {
+                Err(ProviderError::Refused)
+            }
+        },
+    }
 }
 
 // An empty `{}` probe still authenticates and does not spend tokens.
@@ -74,30 +89,61 @@ pub(super) async fn verify_at(
 
 // Read only ids from the model list. Never log the provider body.
 pub(super) async fn models(connection: &ProviderConnection) -> Result<Vec<String>, ProviderError> {
-    models_at(
-        base_url(connection.kind),
-        connection.api_key.expose(),
-        VERIFY_TIMEOUT,
-    )
-    .await
+    match connection.auth {
+        AuthMethod::ApiKey => {
+            models_at(
+                base_url(connection.kind),
+                connection.api_key.expose(),
+                AuthMethod::ApiKey,
+                VERIFY_TIMEOUT,
+                None,
+            )
+            .await
+        }
+        AuthMethod::Plan => match connection.kind {
+            ProviderKind::Xai => {
+                let live = models_at(
+                    xai_plan::XAI_PLAN_BASE_URL,
+                    &xai_plan_token(connection).await?,
+                    AuthMethod::Plan,
+                    VERIFY_TIMEOUT,
+                    Some(&xai_plan::proxy_headers()),
+                )
+                .await
+                .unwrap_or_default();
+                Ok(merge_models(live, connection.kind.plan_models()))
+            }
+            ProviderKind::OpenaiCodex => {
+                Ok(merge_models(Vec::new(), connection.kind.plan_models()))
+            }
+            ProviderKind::Synthetic | ProviderKind::Openrouter | ProviderKind::Deepseek => {
+                Err(ProviderError::Refused)
+            }
+        },
+    }
 }
 
 pub(super) async fn models_at(
     base_url: &str,
     api_key: &str,
+    auth: AuthMethod,
     timeout: Duration,
+    extra_headers: Option<&reqwest::header::HeaderMap>,
 ) -> Result<Vec<String>, ProviderError> {
     let operation = async {
         let url = format!("{}/models", base_url.trim_end_matches('/'));
-        let response = reqwest::Client::new()
-            .get(url)
-            .bearer_auth(api_key)
+        let mut request = reqwest::Client::new().get(url).bearer_auth(api_key);
+        if let Some(headers) = extra_headers {
+            request = request.headers(headers.clone());
+        }
+        let response = request
             .send()
             .await
             .map_err(|_| ProviderError::Unreachable)?;
         let status = response.status().as_u16();
         if !(200..=299).contains(&status) {
-            let classified = classify_failure_status(status, retry_after_value(response.headers()));
+            let classified =
+                classify_failure_status_for(status, retry_after_value(response.headers()), auth);
             let body = bounded_body(response, MAXIMUM_PROVIDER_ERROR_BYTES).await;
             return Err(with_provider_detail(classified, body.as_deref()));
         }
@@ -164,24 +210,55 @@ pub(super) fn parse_model_list(body: &[u8]) -> Vec<String> {
     models
 }
 
+fn merge_models(mut models: Vec<String>, extras: &[&str]) -> Vec<String> {
+    for id in extras {
+        if id.is_empty() || !model_is_bounded(id) || models.iter().any(|listed| listed == id) {
+            continue;
+        }
+        if models.len() >= MAXIMUM_LISTED_MODELS {
+            break;
+        }
+        models.push((*id).to_owned());
+    }
+    models.sort();
+    models
+}
+
 pub(super) async fn stream(
     connection: &ProviderConnection,
     history: &[ChatTurn],
 ) -> Result<TokenStream, ProviderError> {
-    match connection.kind {
-        ProviderKind::Xai => {
+    match (connection.kind, connection.auth) {
+        (ProviderKind::Xai, AuthMethod::ApiKey) => {
             let client = xai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
-        ProviderKind::OpenaiCodex => {
+        (ProviderKind::Xai, AuthMethod::Plan) => {
+            let token = xai_plan_token(connection).await?;
+            let client = openai::Client::builder()
+                .api_key(&token)
+                .base_url(xai_plan::XAI_PLAN_BASE_URL)
+                .http_headers(xai_plan::proxy_headers())
+                .build()
+                .map_err(|_| ProviderError::Unreachable)?
+                .completions_api();
+            let model = client.completion_model(&connection.model);
+            stream_with_auth(model, history, AuthMethod::Plan).await
+        }
+        (ProviderKind::OpenaiCodex, AuthMethod::ApiKey) => {
             let client = openai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
-        ProviderKind::Synthetic => {
+        (ProviderKind::OpenaiCodex, AuthMethod::Plan) => {
+            let client = chatgpt_plan_client(connection, false)?;
+            let model = client.completion_model(&connection.model);
+            stream_with_auth(model, history, AuthMethod::Plan).await
+        }
+        (ProviderKind::Synthetic, _) => {
             let client = openai::Client::builder()
                 .api_key(connection.api_key.expose())
                 .base_url(SYNTHETIC_BASE_URL)
@@ -191,13 +268,13 @@ pub(super) async fn stream(
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
-        ProviderKind::Openrouter => {
+        (ProviderKind::Openrouter, _) => {
             let client = openrouter::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
             stream_with(model, history).await
         }
-        ProviderKind::Deepseek => {
+        (ProviderKind::Deepseek, _) => {
             let client = deepseek::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
@@ -206,16 +283,58 @@ pub(super) async fn stream(
     }
 }
 
-fn classify_completion(error: CompletionError) -> ProviderError {
+fn chatgpt_plan_client(
+    connection: &ProviderConnection,
+    allow_device_flow: bool,
+) -> Result<chatgpt::Client, ProviderError> {
+    let path = connection
+        .plan_file
+        .as_ref()
+        .ok_or(ProviderError::Reauthenticate)?;
+    chatgpt::Client::builder()
+        .oauth()
+        .auth_file(path)
+        .allow_device_flow(allow_device_flow)
+        .default_instructions(PREAMBLE)
+        .build()
+        .map_err(|_| ProviderError::Unreachable)
+}
+
+async fn xai_plan_token(connection: &ProviderConnection) -> Result<String, ProviderError> {
+    let path = connection
+        .plan_file
+        .as_ref()
+        .ok_or(ProviderError::Reauthenticate)?;
+    xai_plan::access_token(path).await
+}
+
+fn classify_completion_for(error: CompletionError, auth: AuthMethod) -> ProviderError {
     let classified = match error
         .provider_response_status()
         .map(|status| status.as_u16())
     {
-        Some(code) => classify_failure_status(code, retry_after_from_completion(&error)),
-        None => ProviderError::Unreachable,
+        Some(code) => classify_failure_status_for(code, retry_after_from_completion(&error), auth),
+        None => {
+            if auth == AuthMethod::Plan && is_invalid_grant(&error) {
+                ProviderError::Reauthenticate
+            } else {
+                ProviderError::Unreachable
+            }
+        }
     };
     let json = error.provider_response_json().ok().flatten();
     with_json_detail(classified, json.as_ref())
+}
+
+fn is_invalid_grant(error: &CompletionError) -> bool {
+    error
+        .provider_response_json()
+        .ok()
+        .flatten()
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(serde_json::Value::as_str)
+        == Some("invalid_grant")
 }
 
 fn retry_after_value(headers: &reqwest::header::HeaderMap) -> Option<&str> {
@@ -233,6 +352,17 @@ fn retry_after_from_completion(error: &CompletionError) -> Option<&str> {
 }
 
 async fn stream_with<M>(model: M, history: &[ChatTurn]) -> Result<TokenStream, ProviderError>
+where
+    M: CompletionModel + Clone,
+{
+    stream_with_auth(model, history, AuthMethod::ApiKey).await
+}
+
+async fn stream_with_auth<M>(
+    model: M,
+    history: &[ChatTurn],
+    auth: AuthMethod,
+) -> Result<TokenStream, ProviderError>
 where
     M: CompletionModel + Clone,
 {
@@ -255,12 +385,12 @@ where
         .messages(prior)
         .stream()
         .await
-        .map_err(classify_completion)?;
-    Ok(Box::pin(response.filter_map(|item| {
+        .map_err(|error| classify_completion_for(error, auth))?;
+    Ok(Box::pin(response.filter_map(move |item| {
         std::future::ready(match item {
             Ok(StreamedAssistantContent::Text(text)) => Some(Ok(text.text)),
             Ok(_) => None,
-            Err(error) => Some(Err(classify_completion(error))),
+            Err(error) => Some(Err(classify_completion_for(error, auth))),
         })
     })))
 }

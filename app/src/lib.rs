@@ -5,6 +5,7 @@ mod config;
 mod error;
 mod markdown;
 mod models;
+mod plan_login;
 mod providers;
 mod responses;
 mod security;

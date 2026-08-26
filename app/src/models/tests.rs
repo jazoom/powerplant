@@ -3,9 +3,7 @@ use std::sync::Arc;
 use super::{ModelCatalogue, refresh};
 use crate::{
     config::RuntimeConfig,
-    providers::{
-        ChatBackend, ProviderConnection, ProviderKind, SecretString, scripted::ScriptedBackend,
-    },
+    providers::{ChatBackend, ProviderConnection, ProviderKind, scripted::ScriptedBackend},
 };
 
 #[test]
@@ -49,11 +47,8 @@ async fn a_successful_backend_refresh_stores_the_model_list() {
             "syn:large:text".to_owned(),
         ]),
     ));
-    let connection = ProviderConnection {
-        kind: ProviderKind::Synthetic,
-        api_key: SecretString::new("test-key".to_owned()),
-        model: "hf:moonshotai/Kimi-K3".to_owned(),
-    };
+    let connection =
+        ProviderConnection::with_key(ProviderKind::Synthetic, "test-key", "hf:moonshotai/Kimi-K3");
 
     refresh(state.clone(), connection);
     for _ in 0..100 {

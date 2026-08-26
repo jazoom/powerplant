@@ -8,8 +8,8 @@
       Connect a provider
     </h1>
     <p class="text-quiet mt-2 max-w-[65ch]">
-      Power Plant stores each key on this machine until you forget that
-      provider.
+      Power Plant stores a key or a plan login on this machine until you forget
+      that provider.
     </p>
 
     {% if open_chat %}
@@ -18,14 +18,47 @@
       </p>
     {% endif %}
 
+    {% if let Some(pending) = pending %}
+      <div
+        id="connect-plan-status"
+        class="border-base-300 mt-6 space-y-3 rounded-sm border p-4"
+        data-island="connect-plan"
+        data-plan-active="{% if pending.active %}true{% else %}false{% endif %}"
+      >
+        <h2 class="text-base font-semibold">Finish sign-in</h2>
+        <p class="text-quiet">{{ pending.provider_label }}</p>
+        {% if let Some(message) = pending.error %}
+          <div class="alert alert-error" role="alert">
+            <p>{{ message }}</p>
+          </div>
+        {% else %}
+          <p>Open this link and enter the code.</p>
+          <p>
+            <a
+              href="{{ pending.verification_uri }}"
+              class="link"
+              rel="noreferrer"
+              target="_blank"
+              >{{ pending.verification_uri }}</a
+            >
+          </p>
+          <p class="font-mono text-lg tracking-wide">{{ pending.user_code }}</p>
+          <form data-graft method="get" action="/connect" hidden></form>
+        {% endif %}
+      </div>
+    {% endif %}
+
     {% if !stored.is_empty() %}
       <h2 class="mt-6 text-base font-semibold">Stored providers</h2>
       <ul class="mt-3 space-y-2">
         {% for provider in stored %}
           <li
-            class="border-base-300 flex min-h-12 items-center justify-between gap-3 rounded-sm border px-3"
+            class="border-base-300 flex min-h-12 items-center justify-between gap-3 rounded-sm border px-3 py-2"
           >
-            <span>{{ provider.label }}</span>
+            <span class="min-w-0">
+              <span class="block">{{ provider.label }}</span>
+              <span class="text-quiet text-sm">{{ provider.method }}</span>
+            </span>
             <form data-graft method="post" action="/connect/forget">
               <input
                 type="hidden"
@@ -50,60 +83,92 @@
       </div>
     {% endif %}
 
-    <form
-      data-graft
-      class="mt-6 space-y-5"
-      method="post"
-      action="/connect"
-      autocomplete="off"
-    >
-      <fieldset
-        id="connect-provider"
-        class="space-y-2"
-        tabindex="-1"
-        {% if let Some(error) = error %}
-          {% if error.is_provider() %}
-            aria-invalid="true" aria-describedby="connect-errors"
-          {% endif %}
+    {% if show_chatgpt || show_grok %}
+      <div id="connect-plan" class="mt-6 space-y-3">
+        <h2 class="text-base font-semibold">Plan login</h2>
+        {% if show_chatgpt %}
+          <form data-graft method="post" action="/connect/plan">
+            <input type="hidden" name="provider" value="openai-codex" />
+            <button
+              class="btn btn-outline w-full"
+              type="submit"
+              {% if let Some(error) = error %}
+                {% if error.is_plan() %}
+                  aria-invalid="true" aria-describedby="connect-errors"
+                {% endif %}
+              {% endif %}
+            >
+              Sign in with ChatGPT
+            </button>
+          </form>
         {% endif %}
+        {% if show_grok %}
+          <form data-graft method="post" action="/connect/plan">
+            <input type="hidden" name="provider" value="xai" />
+            <button class="btn btn-outline w-full" type="submit">
+              Sign in with SuperGrok
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {% if !providers.is_empty() %}
+      <form
+        data-graft
+        class="mt-6 space-y-5"
+        method="post"
+        action="/connect"
+        autocomplete="off"
       >
-        <legend class="label">Provider</legend>
-        {% for provider in providers %}
-          <label
-            class="border-base-300 has-checked:border-primary has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 rounded-sm border px-3"
-          >
-            <input
-              class="radio radio-primary"
-              type="radio"
-              name="provider"
-              value="{{ provider.value }}"
-              {% if provider.selected %}checked{% endif %}
-              required
-            />
-            <span>{{ provider.label }}</span>
-          </label>
-        {% endfor %}
-      </fieldset>
-      <div>
-        <label for="connect-key" class="label">API key</label>
-        <input
-          id="connect-key"
-          class="input input-bordered w-full font-mono"
-          name="api_key"
-          type="password"
-          autocomplete="new-password"
-          required
-          maxlength="4096"
+        <fieldset
+          id="connect-provider"
+          class="space-y-2"
+          tabindex="-1"
           {% if let Some(error) = error %}
-            {% if error.is_api_key() %}
+            {% if error.is_provider() %}
               aria-invalid="true" aria-describedby="connect-errors"
             {% endif %}
           {% endif %}
-        />
-      </div>
-      <button class="btn btn-primary w-full" type="submit">
-        Save provider
-      </button>
-    </form>
+        >
+          <legend class="label">Provider</legend>
+          {% for provider in providers %}
+            <label
+              class="border-base-300 has-checked:border-primary has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 rounded-sm border px-3"
+            >
+              <input
+                class="radio radio-primary"
+                type="radio"
+                name="provider"
+                value="{{ provider.value }}"
+                {% if provider.selected %}checked{% endif %}
+                required
+              />
+              <span>{{ provider.label }}</span>
+            </label>
+          {% endfor %}
+        </fieldset>
+        <div>
+          <label for="connect-key" class="label">API key</label>
+          <input
+            id="connect-key"
+            class="input input-bordered w-full font-mono"
+            name="api_key"
+            type="password"
+            autocomplete="new-password"
+            required
+            maxlength="4096"
+            {% if let Some(error) = error %}
+              {% if error.is_api_key() %}
+                aria-invalid="true" aria-describedby="connect-errors"
+              {% endif %}
+            {% endif %}
+          />
+        </div>
+        <button class="btn btn-primary w-full" type="submit">
+          Save provider
+        </button>
+      </form>
+    {% endif %}
   {% endblock %}
 </section>

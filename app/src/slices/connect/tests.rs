@@ -11,9 +11,9 @@ use tower::ServiceExt;
 
 use crate::{
     config::RuntimeConfig,
+    plan_login::PendingPlan,
     providers::{
-        ChatBackend, ProviderConnection, ProviderError, ProviderKind, SecretString,
-        scripted::ScriptedBackend,
+        ChatBackend, ProviderConnection, ProviderError, ProviderKind, scripted::ScriptedBackend,
     },
     sessions::{self, SESSION_LIFETIME, SessionId, ValidatedToken},
     state::AppState,
@@ -45,11 +45,11 @@ fn state_with_backend(backend: ScriptedBackend) -> AppState {
 fn store_provider(state: &AppState, key: &str) {
     state
         .vault
-        .put(ProviderConnection {
-            kind: ProviderKind::Xai,
-            api_key: SecretString::new(key.to_owned()),
-            model: "grok-4.6".to_owned(),
-        })
+        .put(ProviderConnection::with_key(
+            ProviderKind::Xai,
+            key,
+            "grok-4.6",
+        ))
         .expect("vault");
 }
 
@@ -85,25 +85,6 @@ async fn wait_flag(flag: &AtomicBool, message: &str) {
         tokio::task::yield_now().await;
     }
     panic!("{message}");
-}
-
-#[tokio::test]
-async fn connect_page_states_that_keys_are_stored_locally() {
-    let response = app(test_state())
-        .oneshot(
-            Request::builder()
-                .uri("/connect")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("connect");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("stores each key on this machine"));
-    assert!(!text.contains("only in memory"));
 }
 
 #[tokio::test]
@@ -313,7 +294,7 @@ fn aria_invalid_control(text: &str) -> &str {
     let aria = text.find("aria-invalid").expect("aria-invalid");
     let start = text[..aria].rfind('<').expect("tag open");
     let tag = &text[start..aria];
-    for id in ["connect-provider", "connect-key"] {
+    for id in ["connect-provider", "connect-key", "connect-plan"] {
         if tag.contains(id) {
             return id;
         }
@@ -454,4 +435,114 @@ async fn adding_a_second_provider_keeps_the_first() {
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert!(state.vault.contains(ProviderKind::Xai));
     assert!(state.vault.contains(ProviderKind::Synthetic));
+}
+
+const PLAN_TOKEN: &str = "xai-plan-access-do-not-echo";
+const PLAN_URI: &str = "https://accounts.x.ai/connect";
+const PLAN_CODE: &str = "ABCD-EFGH";
+
+fn pending_state() -> AppState {
+    let state = test_state();
+    state.plan_login.set_pending_for_test(PendingPlan {
+        kind: ProviderKind::Xai,
+        verification_uri: PLAN_URI.to_owned(),
+        user_code: PLAN_CODE.to_owned(),
+        error: None,
+    });
+    state
+}
+
+async fn connect_get(state: AppState, kind: Option<&str>) -> axum::http::Response<Body> {
+    let mut request = Request::builder().uri("/connect");
+    if let Some(kind) = kind {
+        request = request
+            .header(hypergraft::GRAFT_REQUEST, kind)
+            .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+    }
+    app(state)
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .expect("connect")
+}
+
+#[tokio::test]
+async fn pending_login_document_shows_the_url_and_code() {
+    let response = connect_get(pending_state(), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<!doctype html>"));
+    assert!(text.contains(PLAN_URI));
+    assert!(text.contains(PLAN_CODE));
+}
+
+#[tokio::test]
+async fn pending_login_navigation_patches_the_page() {
+    let response = connect_get(pending_state(), Some("navigation")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#"operation="children" target="connect-main""#));
+    assert!(text.contains(PLAN_URI));
+    assert!(text.contains(PLAN_CODE));
+}
+
+#[tokio::test]
+async fn pending_login_patch_updates_the_card() {
+    let response = connect_get(pending_state(), Some("patch")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#"operation="children" target="connect-card""#));
+    assert!(text.contains(PLAN_URI));
+    assert!(text.contains(PLAN_CODE));
+    assert!(!text.contains("<!doctype html>"));
+}
+
+#[tokio::test]
+async fn a_stored_plan_token_is_not_echoed_in_html_or_cookies() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    let plan_path = dir.path().join("xai-auth.json");
+    std::fs::write(&plan_path, format!(r#"{{"access_token":"{PLAN_TOKEN}"}}"#)).unwrap();
+    let mut state = test_state();
+    state.vault = Arc::new(ProviderVault::open(path));
+    state
+        .vault
+        .put(ProviderConnection::with_plan(
+            ProviderKind::Xai,
+            "grok-4.6",
+            Some(plan_path),
+        ))
+        .unwrap();
+
+    let response = connect_get(state, None).await;
+    let cookies = set_cookies(&response);
+    assert!(cookies.iter().all(|value| !value.contains(PLAN_TOKEN)));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!text.contains(PLAN_TOKEN));
+}
+
+#[tokio::test]
+async fn an_unknown_plan_provider_is_rejected() {
+    let response = app(test_state())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connect/plan")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("provider=synthetic"))
+                .unwrap(),
+        )
+        .await
+        .expect("plan");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text.contains("Choose ChatGPT or SuperGrok."));
+    assert!(text.contains("href=\"#connect-plan\""));
 }

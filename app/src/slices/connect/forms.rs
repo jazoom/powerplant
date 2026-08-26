@@ -6,6 +6,7 @@ use crate::providers::{ProviderKind, api_key_is_bounded};
 pub(super) enum ConnectField {
     Provider,
     ApiKey,
+    Plan,
 }
 
 impl ConnectField {
@@ -13,6 +14,7 @@ impl ConnectField {
         match self {
             Self::Provider => "connect-provider",
             Self::ApiKey => "connect-key",
+            Self::Plan => "connect-plan",
         }
     }
 }
@@ -34,6 +36,10 @@ impl FieldError {
 
     pub(super) fn is_api_key(&self) -> bool {
         self.field == ConnectField::ApiKey
+    }
+
+    pub(super) fn is_plan(&self) -> bool {
+        self.field == ConnectField::Plan
     }
 }
 
@@ -77,6 +83,30 @@ pub(super) struct ForgetForm {
 impl ForgetForm {
     pub(super) fn provider_kind(&self) -> Option<ProviderKind> {
         ProviderKind::parse(self.provider.trim())
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct PlanForm {
+    #[serde(default)]
+    pub(super) provider: String,
+}
+
+impl PlanForm {
+    pub(super) fn validate(&self) -> Result<ProviderKind, FieldError> {
+        let Some(kind) = ProviderKind::parse(self.provider.trim()) else {
+            return Err(FieldError {
+                field: ConnectField::Plan,
+                message: "Choose ChatGPT or SuperGrok.".to_owned(),
+            });
+        };
+        if !kind.supports_plan() {
+            return Err(FieldError {
+                field: ConnectField::Plan,
+                message: "Choose ChatGPT or SuperGrok.".to_owned(),
+            });
+        }
+        Ok(kind)
     }
 }
 

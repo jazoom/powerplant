@@ -1,4 +1,6 @@
+pub(crate) mod plan;
 mod rig;
+mod xai_plan;
 
 #[cfg(test)]
 pub(crate) mod scripted;
@@ -70,10 +72,73 @@ impl ProviderKind {
     pub(crate) fn default_model(self) -> &'static str {
         match self {
             Self::Xai => "grok-4.6",
-            Self::OpenaiCodex => "gpt-5.1-codex",
+            Self::OpenaiCodex => "gpt-5.6-sol",
             Self::Synthetic => "hf:moonshotai/Kimi-K3",
             Self::Openrouter => "openai/gpt-4o-mini",
             Self::Deepseek => "deepseek-v4-flash",
+        }
+    }
+
+    // ChatGPT and SuperGrok plan endpoints do not publish a full catalogue.
+    pub(crate) fn plan_models(self) -> &'static [&'static str] {
+        match self {
+            Self::Xai => &[
+                "grok-4.6",
+                "grok-4.5",
+                "grok-4.3",
+                "grok-build",
+                "grok-composer-2.5-fast",
+            ],
+            Self::OpenaiCodex => &[
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.3-codex-spark",
+            ],
+            Self::Synthetic | Self::Openrouter | Self::Deepseek => &[],
+        }
+    }
+
+    pub(crate) fn supports_plan(self) -> bool {
+        matches!(self, Self::Xai | Self::OpenaiCodex)
+    }
+
+    pub(crate) fn plan_file_name(self) -> Option<&'static str> {
+        match self {
+            Self::Xai => Some("xai-auth.json"),
+            Self::OpenaiCodex => Some("chatgpt-auth.json"),
+            Self::Synthetic | Self::Openrouter | Self::Deepseek => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuthMethod {
+    ApiKey,
+    Plan,
+}
+
+impl AuthMethod {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "api_key" => Some(Self::ApiKey),
+            "plan" => Some(Self::Plan),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ApiKey => "api_key",
+            Self::Plan => "plan",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ApiKey => "API key",
+            Self::Plan => "Plan login",
         }
     }
 }
@@ -99,6 +164,21 @@ pub(crate) fn resolve_model(kind: ProviderKind, model: &str) -> String {
     }
 }
 
+// Codex retired these ChatGPT-plan ids. Keep stored vault values sendable.
+pub(crate) fn effective_plan_model(kind: ProviderKind, model: &str) -> String {
+    let model = model.trim();
+    if model.is_empty() || retired_plan_model(kind, model) {
+        kind.default_model().to_owned()
+    } else {
+        model.to_owned()
+    }
+}
+
+fn retired_plan_model(kind: ProviderKind, model: &str) -> bool {
+    kind == ProviderKind::OpenaiCodex
+        && matches!(model, "gpt-5.1-codex" | "gpt-5.2" | "gpt-5.3-codex")
+}
+
 #[derive(Clone)]
 pub(crate) struct SecretString(String);
 
@@ -121,8 +201,40 @@ impl fmt::Debug for SecretString {
 #[derive(Clone, Debug)]
 pub(crate) struct ProviderConnection {
     pub(crate) kind: ProviderKind,
+    pub(crate) auth: AuthMethod,
     pub(crate) api_key: SecretString,
     pub(crate) model: String,
+    pub(crate) plan_file: Option<std::path::PathBuf>,
+}
+
+impl ProviderConnection {
+    pub(crate) fn with_key(
+        kind: ProviderKind,
+        key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            auth: AuthMethod::ApiKey,
+            api_key: SecretString::new(key.into()),
+            model: model.into(),
+            plan_file: None,
+        }
+    }
+
+    pub(crate) fn with_plan(
+        kind: ProviderKind,
+        model: impl Into<String>,
+        plan_file: Option<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            kind,
+            auth: AuthMethod::Plan,
+            api_key: SecretString::new(String::new()),
+            model: model.into(),
+            plan_file,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,6 +252,7 @@ pub(crate) struct ChatTurn {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ProviderError {
     Rejected,
+    Reauthenticate,
     AccountInactive,
     Refused,
     Unreachable,
@@ -163,6 +276,7 @@ impl ProviderError {
     pub(crate) fn message(&self) -> &str {
         match self {
             Self::Rejected => "That key was rejected. Check the provider and try again.",
+            Self::Reauthenticate => "This plan login expired. Sign in again on the connect page.",
             Self::AccountInactive => {
                 "This provider account is not active. Check the subscription and try again."
             }
@@ -182,6 +296,7 @@ impl ProviderError {
     pub(crate) fn patch_status(&self) -> hypergraft::PatchStatus {
         match self {
             Self::Rejected => hypergraft::PatchStatus::Unauthorized,
+            Self::Reauthenticate => hypergraft::PatchStatus::UnprocessableEntity,
             Self::RateLimited { retry_after } => hypergraft::PatchStatus::TooManyRequests(
                 retry_after.unwrap_or_else(default_retry_after),
             ),
@@ -211,7 +326,16 @@ pub(crate) fn classify_verify_status(
 }
 
 pub(crate) fn classify_failure_status(status: u16, retry_after: Option<&str>) -> ProviderError {
+    classify_failure_status_for(status, retry_after, AuthMethod::ApiKey)
+}
+
+pub(crate) fn classify_failure_status_for(
+    status: u16,
+    retry_after: Option<&str>,
+    auth: AuthMethod,
+) -> ProviderError {
     match status {
+        401 | 403 if auth == AuthMethod::Plan => ProviderError::Reauthenticate,
         401 | 403 => ProviderError::Rejected,
         // 402 is an inactive or unpaid account. Do not call it unreachable.
         402 => ProviderError::AccountInactive,
@@ -242,7 +366,9 @@ pub(crate) fn with_json_detail(
 
 fn with_extracted_detail(error: ProviderError, detail: Option<String>) -> ProviderError {
     match error {
-        ProviderError::Rejected | ProviderError::RateLimited { .. } => error,
+        ProviderError::Rejected
+        | ProviderError::Reauthenticate
+        | ProviderError::RateLimited { .. } => error,
         other => detail.map(ProviderError::Detail).unwrap_or(other),
     }
 }

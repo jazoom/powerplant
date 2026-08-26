@@ -8,6 +8,29 @@ use super::{
 };
 
 #[test]
+fn chatgpt_plan_replaces_retired_model_ids() {
+    assert_eq!(
+        super::effective_plan_model(ProviderKind::OpenaiCodex, "gpt-5.1-codex"),
+        "gpt-5.6-sol"
+    );
+    assert_eq!(
+        super::effective_plan_model(ProviderKind::OpenaiCodex, "gpt-5.6-terra"),
+        "gpt-5.6-terra"
+    );
+    assert_eq!(
+        super::effective_plan_model(ProviderKind::Xai, "grok-4.6"),
+        "grok-4.6"
+    );
+}
+
+#[test]
+fn plan_catalogues_include_the_provider_default() {
+    for kind in [ProviderKind::Xai, ProviderKind::OpenaiCodex] {
+        assert!(kind.plan_models().contains(&kind.default_model()));
+    }
+}
+
+#[test]
 fn parses_known_providers() {
     assert_eq!(ProviderKind::parse("xai"), Some(ProviderKind::Xai));
     assert_eq!(
@@ -116,6 +139,10 @@ fn completion_failures_use_the_same_status_families() {
     assert_eq!(classify_failure_status(401, None), ProviderError::Rejected);
     assert_eq!(classify_failure_status(403, None), ProviderError::Rejected);
     assert_eq!(
+        super::classify_failure_status_for(401, None, super::AuthMethod::Plan),
+        ProviderError::Reauthenticate
+    );
+    assert_eq!(
         classify_failure_status(429, Some("20")),
         ProviderError::RateLimited {
             retry_after: hypergraft::RetryAfter::seconds(20),
@@ -137,6 +164,10 @@ fn each_provider_outcome_maps_to_one_patch_status() {
     assert_eq!(
         ProviderError::Rejected.patch_status(),
         hypergraft::PatchStatus::Unauthorized
+    );
+    assert_eq!(
+        ProviderError::Reauthenticate.patch_status(),
+        hypergraft::PatchStatus::UnprocessableEntity
     );
     assert_eq!(
         ProviderError::AccountInactive.patch_status(),
@@ -197,6 +228,12 @@ fn recovery_copy_does_not_blame_a_valid_key_for_an_outage() {
     assert!(!ProviderError::AccountInactive.message().contains("key"));
     assert!(ProviderError::Refused.message().contains("refused"));
     assert!(!ProviderError::Refused.message().contains("key"));
+    assert!(
+        ProviderError::Reauthenticate
+            .message()
+            .contains("plan login")
+    );
+    assert!(!ProviderError::Reauthenticate.message().contains("key"));
 }
 
 #[test]
@@ -319,7 +356,14 @@ async fn a_stalled_model_body_ends_within_the_configured_timeout() {
 
     let timeout = Duration::from_millis(80);
     let started = Instant::now();
-    let result = models_at(&format!("http://{addr}"), "sk-test", timeout).await;
+    let result = models_at(
+        &format!("http://{addr}"),
+        "sk-test",
+        super::AuthMethod::ApiKey,
+        timeout,
+        None,
+    )
+    .await;
     let elapsed = started.elapsed();
 
     assert_eq!(result, Err(ProviderError::Unreachable));
@@ -363,9 +407,15 @@ async fn a_successful_models_response_returns_synthetic_model_ids() {
         }
     });
 
-    let models = models_at(&format!("http://{addr}"), "sk-test", Duration::from_secs(2))
-        .await
-        .expect("models");
+    let models = models_at(
+        &format!("http://{addr}"),
+        "sk-test",
+        super::AuthMethod::ApiKey,
+        Duration::from_secs(2),
+        None,
+    )
+    .await
+    .expect("models");
 
     assert_eq!(models, ["hf:moonshotai/Kimi-K3", "syn:large:text"]);
 }

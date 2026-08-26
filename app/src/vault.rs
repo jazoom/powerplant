@@ -7,8 +7,8 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::providers::{
-    MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString, api_key_is_bounded,
-    model_is_bounded,
+    AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString,
+    api_key_is_bounded, effective_plan_model, model_is_bounded,
 };
 
 #[cfg(test)]
@@ -24,6 +24,7 @@ struct VaultState {
 
 #[derive(Clone)]
 struct StoredProvider {
+    auth: AuthMethod,
     api_key: SecretString,
     model: String,
     favourites: Vec<String>,
@@ -39,10 +40,17 @@ struct VaultFile {
 #[derive(Deserialize, Serialize)]
 struct VaultFileProvider {
     kind: String,
+    #[serde(default = "default_auth")]
+    auth: String,
+    #[serde(default)]
     api_key: String,
     model: String,
     #[serde(default)]
     favourites: Vec<String>,
+}
+
+fn default_auth() -> String {
+    AuthMethod::ApiKey.as_str().to_owned()
 }
 
 #[derive(Debug)]
@@ -77,6 +85,7 @@ impl std::error::Error for FavouriteError {}
 
 pub(crate) struct DeskProvider {
     pub(crate) kind: ProviderKind,
+    pub(crate) auth: AuthMethod,
     pub(crate) model: String,
     pub(crate) selected: bool,
     pub(crate) favourites: Vec<String>,
@@ -114,14 +123,14 @@ impl ProviderVault {
 
     pub(crate) fn selected_connection(&self) -> Option<ProviderConnection> {
         let state = self.lock();
-        connection_from(&state, state.selected?)
+        connection_from(self.path.as_deref(), &state, state.selected?)
     }
 
     pub(crate) fn connections(&self) -> Vec<ProviderConnection> {
         let state = self.lock();
         ProviderKind::ALL
             .into_iter()
-            .filter_map(|kind| connection_from(&state, kind))
+            .filter_map(|kind| connection_from(self.path.as_deref(), &state, kind))
             .collect()
     }
 
@@ -132,7 +141,8 @@ impl ProviderVault {
             .filter_map(|kind| {
                 state.providers.get(&kind).map(|stored| DeskProvider {
                     kind,
-                    model: stored.model.clone(),
+                    auth: stored.auth,
+                    model: stored_model(kind, stored),
                     selected: state.selected == Some(kind),
                     favourites: stored.favourites.clone(),
                 })
@@ -147,9 +157,13 @@ impl ProviderVault {
                 .get(&connection.kind)
                 .map(|stored| (stored.model.clone(), stored.favourites.clone()))
                 .unwrap_or((connection.model, Vec::new()));
+            if connection.auth == AuthMethod::ApiKey {
+                delete_plan_file(self.path.as_deref(), connection.kind);
+            }
             state.providers.insert(
                 connection.kind,
                 StoredProvider {
+                    auth: connection.auth,
                     api_key: connection.api_key,
                     model,
                     favourites,
@@ -159,9 +173,14 @@ impl ProviderVault {
         })
     }
 
+    pub(crate) fn plan_file(&self, kind: ProviderKind) -> Option<PathBuf> {
+        plan_file_path(self.path.as_deref(), kind)
+    }
+
     pub(crate) fn forget(&self, kind: ProviderKind) -> Result<(), VaultError> {
         self.mutate(|state| {
             state.providers.remove(&kind);
+            delete_plan_file(self.path.as_deref(), kind);
             if state.selected == Some(kind) {
                 state.selected = ProviderKind::ALL
                     .into_iter()
@@ -241,12 +260,27 @@ fn sanitise_favourites(raw: &[String]) -> Vec<String> {
     favourites
 }
 
-fn connection_from(state: &VaultState, kind: ProviderKind) -> Option<ProviderConnection> {
+fn connection_from(
+    path: Option<&Path>,
+    state: &VaultState,
+    kind: ProviderKind,
+) -> Option<ProviderConnection> {
     state.providers.get(&kind).map(|stored| ProviderConnection {
         kind,
+        auth: stored.auth,
         api_key: stored.api_key.clone(),
-        model: stored.model.clone(),
+        model: stored_model(kind, stored),
+        plan_file: (stored.auth == AuthMethod::Plan)
+            .then(|| plan_file_path(path, kind))
+            .flatten(),
     })
+}
+
+fn stored_model(kind: ProviderKind, stored: &StoredProvider) -> String {
+    match stored.auth {
+        AuthMethod::Plan => effective_plan_model(kind, &stored.model),
+        AuthMethod::ApiKey => stored.model.clone(),
+    }
 }
 
 fn load(path: &Path) -> Option<VaultState> {
@@ -260,9 +294,26 @@ fn load(path: &Path) -> Option<VaultState> {
         let Some(kind) = ProviderKind::parse(&entry.kind) else {
             continue;
         };
-        if !api_key_is_bounded(&entry.api_key) || !model_is_bounded(&entry.model) {
+        let Some(auth) = AuthMethod::parse(&entry.auth) else {
+            continue;
+        };
+        if !model_is_bounded(&entry.model) {
             continue;
         }
+        let api_key = match auth {
+            AuthMethod::ApiKey => {
+                if !api_key_is_bounded(&entry.api_key) {
+                    continue;
+                }
+                SecretString::new(entry.api_key)
+            }
+            AuthMethod::Plan => {
+                if !kind.supports_plan() {
+                    continue;
+                }
+                SecretString::new(String::new())
+            }
+        };
         let model = if entry.model.trim().is_empty() {
             kind.default_model().to_owned()
         } else {
@@ -271,7 +322,8 @@ fn load(path: &Path) -> Option<VaultState> {
         state.providers.insert(
             kind,
             StoredProvider {
-                api_key: SecretString::new(entry.api_key),
+                auth,
+                api_key,
                 model,
                 favourites: sanitise_favourites(&entry.favourites),
             },
@@ -309,7 +361,11 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
             .filter_map(|kind| {
                 state.providers.get(&kind).map(|stored| VaultFileProvider {
                     kind: kind.as_str().to_owned(),
-                    api_key: stored.api_key.expose().to_owned(),
+                    auth: stored.auth.as_str().to_owned(),
+                    api_key: match stored.auth {
+                        AuthMethod::ApiKey => stored.api_key.expose().to_owned(),
+                        AuthMethod::Plan => String::new(),
+                    },
                     model: stored.model.clone(),
                     favourites: stored.favourites.clone(),
                 })
@@ -323,7 +379,18 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
     write_private(path, &bytes)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
+fn plan_file_path(vault_path: Option<&Path>, kind: ProviderKind) -> Option<PathBuf> {
+    let name = kind.plan_file_name()?;
+    Some(vault_path?.parent()?.join(name))
+}
+
+fn delete_plan_file(vault_path: Option<&Path>, kind: ProviderKind) {
+    if let Some(path) = plan_file_path(vault_path, kind) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
     let tmp = path.with_extension("json.tmp");
     let result = (|| {
         let mut file = File::create(&tmp)?;
