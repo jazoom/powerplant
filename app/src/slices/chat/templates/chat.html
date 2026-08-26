@@ -19,6 +19,62 @@
         >Power Plant</span
       >
     </a>
+    <div id="sandbox-status" class="flex min-w-0 flex-wrap items-center gap-2">
+      {% block sandbox_status %}
+        {% if sandbox_missing != "" %}
+          <div class="alert alert-warning w-full" role="status">
+            <p>{{ sandbox_missing }}</p>
+          </div>
+        {% else %}
+          <div
+            class="flex min-w-0 flex-wrap items-center gap-2"
+            data-sandbox-status="{{ sandbox_status }}"
+            {% if sandbox_active %}
+              data-island="sandbox-status" data-sandbox-active="true"
+            {% endif %}
+          >
+            <p class="text-quiet text-sm" role="status" aria-live="polite">
+              Sandbox {{ sandbox_status }}
+              {% if sandbox_progress != "" %}
+                <span class="block text-xs">{{ sandbox_progress }}</span>
+              {% endif %}
+            </p>
+            {% if sandbox_error != "" %}
+              <div class="alert alert-error w-full" role="alert" tabindex="-1">
+                <p>{{ sandbox_error }}</p>
+              </div>
+            {% endif %}
+            {% if sandbox_active %}
+              <form data-graft method="get" action="/sandbox">
+                <button class="btn btn-outline btn-sm" type="submit">
+                  Refresh
+                </button>
+              </form>
+            {% else if sandbox_status == "running" %}
+              <form data-graft method="post" action="/sandbox">
+                <input type="hidden" name="command" value="stop" />
+                <button class="btn btn-outline btn-sm" type="submit">
+                  Stop sandbox
+                </button>
+              </form>
+            {% else if sandbox_status == "stopped" || sandbox_status == "crashed" %}
+              <form data-graft method="post" action="/sandbox">
+                <input type="hidden" name="command" value="start" />
+                <button class="btn btn-outline btn-sm" type="submit">
+                  Start sandbox
+                </button>
+              </form>
+            {% else %}
+              <form data-graft method="get" action="/sandbox">
+                <button class="btn btn-outline btn-sm" type="submit">
+                  Refresh
+                </button>
+              </form>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endblock %}
+    </div>
     <div
       id="desk-settings"
       class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-nowrap"

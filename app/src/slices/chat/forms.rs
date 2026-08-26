@@ -103,6 +103,33 @@ impl ObserveQuery {
     }
 }
 
+#[derive(Deserialize)]
+pub(super) struct SandboxForm {
+    #[serde(default)]
+    pub(super) command: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SandboxAction {
+    Start,
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SandboxFormError {
+    Action,
+}
+
+impl SandboxForm {
+    pub(super) fn validate(&self) -> Result<SandboxAction, SandboxFormError> {
+        match self.command.trim() {
+            "start" => Ok(SandboxAction::Start),
+            "stop" => Ok(SandboxAction::Stop),
+            _ => Err(SandboxFormError::Action),
+        }
+    }
+}
+
 pub(super) fn parse_cursor(raw: &str) -> Result<u64, CursorError> {
     let raw = raw.trim();
     if raw.is_empty() {

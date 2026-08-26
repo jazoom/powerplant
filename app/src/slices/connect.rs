@@ -61,7 +61,11 @@ async fn show(State(state): State<AppState>, graft: GraftRequest) -> AppResult<R
         &state,
         graft,
         PatchStatus::Ok,
-        ConnectViewModel::initial(&state.vault, state.plan_login.snapshot()),
+        ConnectViewModel::initial(
+            &state.vault,
+            state.plan_login.snapshot(),
+            sandbox_missing(&state).await,
+        ),
     )
 }
 
@@ -78,7 +82,13 @@ async fn submit(
                 &state,
                 graft.into(),
                 PatchStatus::UnprocessableEntity,
-                ConnectViewModel::invalid(&state.vault, state.plan_login.snapshot(), form, error),
+                ConnectViewModel::invalid(
+                    &state.vault,
+                    state.plan_login.snapshot(),
+                    sandbox_missing(&state).await,
+                    form,
+                    error,
+                ),
             );
         }
     };
@@ -89,7 +99,13 @@ async fn submit(
             &state,
             graft.into(),
             error.patch_status(),
-            ConnectViewModel::failed(&state.vault, state.plan_login.snapshot(), kind, error),
+            ConnectViewModel::failed(
+                &state.vault,
+                state.plan_login.snapshot(),
+                sandbox_missing(&state).await,
+                kind,
+                error,
+            ),
         );
     }
 
@@ -114,7 +130,12 @@ async fn start_plan(
                 &state,
                 graft.into(),
                 PatchStatus::UnprocessableEntity,
-                ConnectViewModel::plan_invalid(&state.vault, state.plan_login.snapshot(), error),
+                ConnectViewModel::plan_invalid(
+                    &state.vault,
+                    state.plan_login.snapshot(),
+                    sandbox_missing(&state).await,
+                    error,
+                ),
             );
         }
     };
@@ -126,6 +147,7 @@ async fn start_plan(
             ConnectViewModel::failed(
                 &state.vault,
                 state.plan_login.snapshot(),
+                sandbox_missing(&state).await,
                 kind,
                 ProviderError::Unreachable,
             ),
@@ -140,7 +162,13 @@ async fn start_plan(
                 &state,
                 graft.into(),
                 error.patch_status(),
-                ConnectViewModel::failed(&state.vault, state.plan_login.snapshot(), kind, error),
+                ConnectViewModel::failed(
+                    &state.vault,
+                    state.plan_login.snapshot(),
+                    sandbox_missing(&state).await,
+                    kind,
+                    error,
+                ),
             );
         }
     };
@@ -194,7 +222,11 @@ async fn start_plan(
         &state,
         graft.into(),
         PatchStatus::Ok,
-        ConnectViewModel::initial(&state.vault, state.plan_login.snapshot()),
+        ConnectViewModel::initial(
+            &state.vault,
+            state.plan_login.snapshot(),
+            sandbox_missing(&state).await,
+        ),
     )
 }
 
@@ -225,8 +257,16 @@ async fn forget(
         &state,
         graft.into(),
         PatchStatus::Ok,
-        ConnectViewModel::initial(&state.vault, state.plan_login.snapshot()),
+        ConnectViewModel::initial(
+            &state.vault,
+            state.plan_login.snapshot(),
+            sandbox_missing(&state).await,
+        ),
     )
+}
+
+async fn sandbox_missing(state: &AppState) -> &'static str {
+    state.sandbox.view().await.missing_message()
 }
 
 fn connected_redirect(

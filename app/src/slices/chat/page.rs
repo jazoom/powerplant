@@ -4,6 +4,7 @@ use crate::{
     markdown,
     models::ModelCatalogue,
     providers::{ChatTurn, Role},
+    sandbox::SandboxView,
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
@@ -44,6 +45,11 @@ pub(super) struct ChatViewModel {
     pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) job_status: &'static str,
+    pub(super) sandbox_missing: &'static str,
+    pub(super) sandbox_status: &'static str,
+    pub(super) sandbox_progress: String,
+    pub(super) sandbox_active: bool,
+    pub(super) sandbox_error: &'static str,
 }
 
 impl ChatViewModel {
@@ -51,24 +57,32 @@ impl ChatViewModel {
         session: &SessionSnapshot,
         vault: &ProviderVault,
         catalogue: &ModelCatalogue,
+        sandbox: SandboxView,
         error: &'static str,
         desk_error: &'static str,
+        sandbox_error: &'static str,
     ) -> Self {
-        Self::from_parts(
+        let mut page = Self::from_parts(
             &vault.desk_providers(),
             catalogue,
             &session.turns,
             session.job.as_ref(),
+            sandbox,
             error,
             desk_error,
-        )
+        );
+        if !sandbox_error.is_empty() {
+            page.sandbox_error = sandbox_error;
+        }
+        page
     }
 
-    pub(super) fn from_parts(
+    fn from_parts(
         providers: &[DeskProvider],
         catalogue: &ModelCatalogue,
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
+        sandbox: SandboxView,
         error: &'static str,
         desk_error: &'static str,
     ) -> Self {
@@ -132,6 +146,21 @@ impl ChatViewModel {
             cursor,
             job_active,
             job_status,
+            sandbox_missing: sandbox.missing_message(),
+            sandbox_status: sandbox.status.as_str(),
+            sandbox_progress: sandbox.progress,
+            sandbox_active: sandbox.status.is_starting(),
+            sandbox_error: sandbox.error,
+        }
+    }
+
+    pub(super) fn sandbox_status(&self) -> SandboxStatusContents<'_> {
+        SandboxStatusContents {
+            sandbox_missing: self.sandbox_missing,
+            sandbox_status: self.sandbox_status,
+            sandbox_progress: &self.sandbox_progress,
+            sandbox_active: self.sandbox_active,
+            sandbox_error: self.sandbox_error,
         }
     }
 
@@ -192,6 +221,16 @@ pub(super) fn assistant_turn(index: usize, text: &str) -> TurnView {
 
 pub(super) fn turn_id(index: usize) -> String {
     format!("turn-{}", index + 1)
+}
+
+#[derive(Template)]
+#[template(path = "chat/templates/chat.html", block = "sandbox_status")]
+pub(super) struct SandboxStatusContents<'a> {
+    pub(super) sandbox_missing: &'a str,
+    pub(super) sandbox_status: &'a str,
+    pub(super) sandbox_progress: &'a str,
+    pub(super) sandbox_active: bool,
+    pub(super) sandbox_error: &'a str,
 }
 
 #[derive(Template)]

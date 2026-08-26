@@ -1047,3 +1047,116 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
         Some("grok-4.6".to_owned())
     );
 }
+
+fn sandbox_patch(token: &str, action: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/sandbox")
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from(format!("command={action}")))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_patch_sandbox_start_returns_starting_status() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state.clone())
+        .oneshot(sandbox_patch(&token, "start"))
+        .await
+        .expect("sandbox start");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(response.headers().get(hypergraft::GRAFT_TRANSFER).is_none());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"sandbox-status\""));
+    assert!(text.contains("data-sandbox-status=\"starting\""));
+    assert!(text.contains("data-sandbox-active=\"true\""));
+    assert!(text.contains("Starting the virtual machine"));
+    assert!(!text.contains("phase=\""));
+    assert_eq!(state.sandbox.view().await.status.as_str(), "starting");
+}
+
+#[tokio::test]
+async fn a_sandbox_observe_patch_settles_when_start_finishes() {
+    let state = test_state();
+    let token = connected(&state);
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/sandbox")
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("sandbox observe");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"sandbox-status\""));
+    assert!(text.contains("data-sandbox-status=\"running\""));
+    assert!(!text.contains("data-sandbox-active=\"true\""));
+}
+
+#[tokio::test]
+async fn a_sandbox_document_get_redirects_to_chat() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/sandbox")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("sandbox document");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
+}
+
+#[tokio::test]
+async fn a_patch_sandbox_stop_updates_sandbox_status() {
+    let state = test_state();
+    let token = connected(&state);
+    state.sandbox.start().await.expect("start");
+    state.sandbox.complete_start();
+    let response = app(state.clone())
+        .oneshot(sandbox_patch(&token, "stop"))
+        .await
+        .expect("sandbox stop");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"sandbox-status\""));
+    assert!(text.contains("data-sandbox-status=\"stopped\""));
+}
+
+#[tokio::test]
+async fn an_unknown_sandbox_action_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(state)
+        .oneshot(sandbox_patch(&token, "remove"))
+        .await
+        .expect("sandbox action");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose start or stop."));
+    assert!(text.contains("target=\"sandbox-status\""));
+}

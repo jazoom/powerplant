@@ -12,6 +12,12 @@
       that provider.
     </p>
 
+    {% if sandbox_missing != "" %}
+      <div class="alert alert-warning mt-6" role="status">
+        <p>{{ sandbox_missing }}</p>
+      </div>
+    {% endif %}
+
     {% if open_chat %}
       <p class="mt-4">
         <a href="/" class="link link-hover">Back to chat</a>

@@ -6,6 +6,7 @@ use crate::{
     models::ModelCatalogue,
     plan_login::PlanLogin,
     providers::ChatBackend,
+    sandbox::GuestSandbox,
     sessions::SessionStore,
     vault::ProviderVault,
 };
@@ -19,9 +20,10 @@ pub(crate) struct AppState {
     pub(crate) chat: Arc<ChatBackend>,
     pub(crate) models: Arc<ModelCatalogue>,
     pub(crate) plan_login: Arc<PlanLogin>,
+    pub(crate) sandbox: Arc<GuestSandbox>,
 }
 
-pub(crate) fn build(config: StartupConfig, assets: AssetPaths) -> AppState {
+pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> AppState {
     AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
@@ -30,6 +32,7 @@ pub(crate) fn build(config: StartupConfig, assets: AssetPaths) -> AppState {
         chat: Arc::new(ChatBackend::Rig),
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
+        sandbox: Arc::new(GuestSandbox::prepare().await),
     }
 }
 
@@ -48,5 +51,6 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         )),
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
+        sandbox: Arc::new(GuestSandbox::for_test()),
     }
 }

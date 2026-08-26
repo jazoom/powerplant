@@ -39,26 +39,39 @@ pub(super) struct ConnectViewModel {
     pub(super) open_chat: bool,
     pub(super) show_chatgpt: bool,
     pub(super) show_grok: bool,
+    pub(super) sandbox_missing: &'static str,
     pub(super) error: Option<FieldError>,
 }
 
 impl ConnectViewModel {
-    pub(super) fn initial(vault: &ProviderVault, pending: Option<PendingPlan>) -> Self {
-        Self::new(vault, None, pending, None)
+    pub(super) fn initial(
+        vault: &ProviderVault,
+        pending: Option<PendingPlan>,
+        sandbox_missing: &'static str,
+    ) -> Self {
+        Self::new(vault, None, pending, sandbox_missing, None)
     }
 
     pub(super) fn invalid(
         vault: &ProviderVault,
         pending: Option<PendingPlan>,
+        sandbox_missing: &'static str,
         form: ConnectForm,
         error: FieldError,
     ) -> Self {
-        Self::new(vault, form.provider_kind(), pending, Some(error))
+        Self::new(
+            vault,
+            form.provider_kind(),
+            pending,
+            sandbox_missing,
+            Some(error),
+        )
     }
 
     pub(super) fn failed(
         vault: &ProviderVault,
         pending: Option<PendingPlan>,
+        sandbox_missing: &'static str,
         kind: ProviderKind,
         error: ProviderError,
     ) -> Self {
@@ -71,6 +84,7 @@ impl ConnectViewModel {
             vault,
             Some(kind),
             pending,
+            sandbox_missing,
             Some(FieldError {
                 field,
                 message: error.message().to_owned(),
@@ -81,9 +95,10 @@ impl ConnectViewModel {
     pub(super) fn plan_invalid(
         vault: &ProviderVault,
         pending: Option<PendingPlan>,
+        sandbox_missing: &'static str,
         error: FieldError,
     ) -> Self {
-        Self::new(vault, None, pending, Some(error))
+        Self::new(vault, None, pending, sandbox_missing, Some(error))
     }
 
     pub(super) fn card_contents(&self) -> ConnectCardContents<'_> {
@@ -94,6 +109,7 @@ impl ConnectViewModel {
             open_chat: self.open_chat,
             show_chatgpt: self.show_chatgpt,
             show_grok: self.show_grok,
+            sandbox_missing: self.sandbox_missing,
             error: self.error.as_ref(),
         }
     }
@@ -102,6 +118,7 @@ impl ConnectViewModel {
         vault: &ProviderVault,
         selected: Option<ProviderKind>,
         pending: Option<PendingPlan>,
+        sandbox_missing: &'static str,
         error: Option<FieldError>,
     ) -> Self {
         let stored = stored_providers(vault);
@@ -113,6 +130,7 @@ impl ConnectViewModel {
             open_chat,
             show_chatgpt: !vault.contains(ProviderKind::OpenaiCodex),
             show_grok: !vault.contains(ProviderKind::Xai),
+            sandbox_missing,
             error,
         }
     }
@@ -127,6 +145,7 @@ pub(super) struct ConnectCardContents<'a> {
     open_chat: bool,
     show_chatgpt: bool,
     show_grok: bool,
+    sandbox_missing: &'a str,
     error: Option<&'a FieldError>,
 }
 

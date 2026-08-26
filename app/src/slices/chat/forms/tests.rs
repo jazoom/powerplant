@@ -1,6 +1,6 @@
 use super::{
     ChatForm, CursorError, MAXIMUM_CURSOR, MAXIMUM_MESSAGE_BYTES, ModelError, ModelForm,
-    parse_cursor,
+    SandboxAction, SandboxForm, SandboxFormError, parse_cursor,
 };
 use crate::providers::{MAXIMUM_MODEL_BYTES, ProviderKind};
 
@@ -123,4 +123,36 @@ fn model_form_rejects_an_oversized_or_control_model() {
         provider_model_synced: false,
     };
     assert_eq!(form.validate(|_| true), Err(ModelError::Model));
+}
+
+#[test]
+fn sandbox_form_accepts_start_and_stop() {
+    assert_eq!(
+        SandboxForm {
+            command: " start ".to_owned()
+        }
+        .validate(),
+        Ok(SandboxAction::Start)
+    );
+    assert_eq!(
+        SandboxForm {
+            command: "stop".to_owned()
+        }
+        .validate(),
+        Ok(SandboxAction::Stop)
+    );
+    assert_eq!(
+        SandboxForm {
+            command: "remove".to_owned()
+        }
+        .validate(),
+        Err(SandboxFormError::Action)
+    );
+    assert_eq!(
+        SandboxForm {
+            command: String::new()
+        }
+        .validate(),
+        Err(SandboxFormError::Action)
+    );
 }

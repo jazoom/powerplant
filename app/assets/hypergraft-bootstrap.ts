@@ -8,6 +8,7 @@ import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initJobObserve } from "./job-observe";
+import { initSandboxStatus } from "./sandbox-status";
 import { initTranscript } from "./transcript";
 
 const bound = bindTransportFeedback(document);
@@ -26,6 +27,7 @@ startHypergraft({
         "connect-plan": initConnectPlan,
         "desk-settings": initDeskSettings,
         "job-observe": initJobObserve,
+        "sandbox-status": initSandboxStatus,
         "shortcut-hint": initShortcutHint,
         transcript: initTranscript,
     },
