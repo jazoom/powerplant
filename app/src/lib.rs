@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agents;
 mod assets;
 mod config;
 mod error;
@@ -14,7 +15,9 @@ mod server;
 mod sessions;
 mod slices;
 mod state;
+mod storage;
 mod template_filters;
+mod tools;
 mod vault;
 
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {

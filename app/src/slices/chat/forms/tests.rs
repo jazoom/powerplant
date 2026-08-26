@@ -1,7 +1,6 @@
 use super::{
-    ChatForm, CursorError, MAXIMUM_CURSOR, MAXIMUM_MESSAGE_BYTES, MAXIMUM_PROJECT_PATH_BYTES,
-    ModelError, ModelForm, ProjectForm, ProjectFormError, SandboxAction, SandboxForm,
-    SandboxFormError, parse_cursor,
+    ChatForm, CursorError, MAXIMUM_CURSOR, MAXIMUM_MESSAGE_BYTES, ModelError, ModelForm,
+    SandboxAction, SandboxForm, SandboxFormError, parse_cursor,
 };
 use crate::providers::{MAXIMUM_MODEL_BYTES, ProviderKind};
 
@@ -124,50 +123,6 @@ fn model_form_rejects_an_oversized_or_control_model() {
         provider_model_synced: false,
     };
     assert_eq!(form.validate(|_| true), Err(ModelError::Model));
-}
-
-#[test]
-fn project_form_accepts_an_absolute_path_and_clears_a_blank() {
-    assert_eq!(
-        ProjectForm {
-            path: "  /home/dev/app  ".to_owned()
-        }
-        .validate()
-        .expect("path"),
-        Some(std::path::PathBuf::from("/home/dev/app"))
-    );
-    assert_eq!(
-        ProjectForm {
-            path: "   ".to_owned()
-        }
-        .validate(),
-        Ok(None)
-    );
-}
-
-#[test]
-fn project_form_rejects_relative_oversized_and_control_paths() {
-    assert_eq!(
-        ProjectForm {
-            path: "Projects/app".to_owned()
-        }
-        .validate(),
-        Err(ProjectFormError::Relative)
-    );
-    assert_eq!(
-        ProjectForm {
-            path: "a".repeat(MAXIMUM_PROJECT_PATH_BYTES + 1)
-        }
-        .validate(),
-        Err(ProjectFormError::Excessive)
-    );
-    assert_eq!(
-        ProjectForm {
-            path: "/tmp/bad\u{0000}path".to_owned()
-        }
-        .validate(),
-        Err(ProjectFormError::Malformed)
-    );
 }
 
 #[test]

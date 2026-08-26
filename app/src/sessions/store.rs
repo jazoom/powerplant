@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::{
+    agents::AgentId,
     providers::{ChatTurn, Role},
     sessions::{
         SESSION_LIFETIME,
@@ -42,19 +43,25 @@ impl Clock {
     }
 }
 
-struct StoredSession {
+struct Conversation {
     turns: Vec<ChatTurn>,
     job: Option<Arc<Job>>,
+}
+
+struct StoredSession {
+    conversations: HashMap<AgentId, Conversation>,
     // One in-flight command per session. finish_turn and fail_turn clear it.
-    active: Option<JobId>,
+    active: Option<(AgentId, JobId)>,
     expires_at: Instant,
 }
 
 #[derive(Clone)]
 pub(crate) struct SessionSnapshot {
+    #[allow(dead_code)]
     pub(crate) id: SessionId,
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Option<JobSnapshot>,
+    pub(crate) session_busy: bool,
 }
 
 pub(crate) struct BegunTurn {
@@ -82,22 +89,33 @@ impl SessionStore {
         self.lock().insert(
             id,
             StoredSession {
-                turns: Vec::new(),
-                job: None,
+                conversations: HashMap::new(),
                 active: None,
                 expires_at,
             },
         );
     }
 
-    pub(crate) fn snapshot(&self, id: &SessionId) -> Option<SessionSnapshot> {
+    pub(crate) fn contains_live(&self, id: &SessionId) -> bool {
         let mut sessions = self.lock();
-        live(&mut sessions, id, self.clock.now()).map(|session| snapshot_session(*id, session))
+        live(&mut sessions, id, self.clock.now()).is_some()
+    }
+
+    pub(crate) fn busy(&self, id: &SessionId) -> bool {
+        let mut sessions = self.lock();
+        live(&mut sessions, id, self.clock.now()).is_some_and(|session| session.active.is_some())
+    }
+
+    pub(crate) fn snapshot(&self, id: &SessionId, agent: &AgentId) -> Option<SessionSnapshot> {
+        let mut sessions = self.lock();
+        live(&mut sessions, id, self.clock.now())
+            .map(|session| snapshot_session(*id, agent, session))
     }
 
     pub(crate) fn begin_turn(
         &self,
         id: &SessionId,
+        agent: AgentId,
         message: String,
     ) -> Result<BegunTurn, BeginTurnError> {
         let mut sessions = self.lock();
@@ -107,33 +125,53 @@ impl SessionStore {
             return Err(BeginTurnError::Conflict);
         }
         let job_id = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
-        session.turns.push(ChatTurn {
+        let conversation = session
+            .conversations
+            .entry(agent)
+            .or_insert_with(|| Conversation {
+                turns: Vec::new(),
+                job: None,
+            });
+        conversation.turns.push(ChatTurn {
             role: Role::User,
             text: message,
         });
-        let job = Job::new(job_id, session.turns.len());
-        session.job = Some(job.clone());
-        session.active = Some(job_id);
+        let job = Job::new(job_id, conversation.turns.len());
+        conversation.job = Some(job.clone());
+        session.active = Some((agent, job_id));
         Ok(BegunTurn {
             job,
-            turns: session.turns.clone(),
+            turns: conversation.turns.clone(),
         })
     }
 
-    pub(crate) fn finish_turn(&self, id: &SessionId, job_id: &JobId, reply: String) -> bool {
-        self.complete_turn(id, job_id, reply)
+    pub(crate) fn finish_turn(
+        &self,
+        id: &SessionId,
+        agent: &AgentId,
+        job_id: &JobId,
+        reply: String,
+    ) -> bool {
+        self.complete_turn(id, agent, job_id, reply)
     }
 
-    pub(crate) fn fail_turn(&self, id: &SessionId, job_id: &JobId, partial: String) -> bool {
-        self.complete_turn(id, job_id, partial)
+    pub(crate) fn fail_turn(
+        &self,
+        id: &SessionId,
+        agent: &AgentId,
+        job_id: &JobId,
+        partial: String,
+    ) -> bool {
+        self.complete_turn(id, agent, job_id, partial)
     }
 
-    pub(crate) fn job(&self, id: &SessionId, job_id: &JobId) -> Option<Arc<Job>> {
+    pub(crate) fn job(&self, id: &SessionId, agent: &AgentId, job_id: &JobId) -> Option<Arc<Job>> {
         let mut sessions = self.lock();
         live(&mut sessions, id, self.clock.now()).and_then(|session| {
             session
-                .job
-                .as_ref()
+                .conversations
+                .get(agent)
+                .and_then(|conversation| conversation.job.as_ref())
                 .filter(|job| job.id() == *job_id)
                 .cloned()
         })
@@ -148,7 +186,7 @@ impl SessionStore {
         let now = self.clock.now();
         self.lock().retain(|_, session| {
             if session.expires_at <= now {
-                cancel_job(session);
+                cancel_jobs(session);
                 false
             } else {
                 true
@@ -167,16 +205,24 @@ impl SessionStore {
     }
 
     // Only the active job may complete the turn. A stale writer cannot overwrite a later command.
-    fn complete_turn(&self, id: &SessionId, job_id: &JobId, reply: String) -> bool {
+    fn complete_turn(
+        &self,
+        id: &SessionId,
+        agent: &AgentId,
+        job_id: &JobId,
+        reply: String,
+    ) -> bool {
         let mut sessions = self.lock();
         let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
             return false;
         };
-        if session.active != Some(*job_id) {
+        if session.active != Some((*agent, *job_id)) {
             return false;
         }
-        if !reply.trim().is_empty() {
-            session.turns.push(ChatTurn {
+        if let Some(conversation) = session.conversations.get_mut(agent)
+            && !reply.trim().is_empty()
+        {
+            conversation.turns.push(ChatTurn {
                 role: Role::Assistant,
                 text: reply,
             });
@@ -192,11 +238,16 @@ impl SessionStore {
     }
 }
 
-fn snapshot_session(id: SessionId, session: &StoredSession) -> SessionSnapshot {
+fn snapshot_session(id: SessionId, agent: &AgentId, session: &StoredSession) -> SessionSnapshot {
+    let conversation = session.conversations.get(agent);
     SessionSnapshot {
         id,
-        turns: session.turns.clone(),
-        job: session.job.as_ref().map(|job| job.snapshot()),
+        turns: conversation
+            .map(|conversation| conversation.turns.clone())
+            .unwrap_or_default(),
+        job: conversation
+            .and_then(|conversation| conversation.job.as_ref().map(|job| job.snapshot())),
+        session_busy: session.active.is_some(),
     }
 }
 
@@ -231,16 +282,17 @@ fn evict_if_expired(
     }
 }
 
-// Start cancellation before the session and API key leave the store.
 fn cancel_and_remove(sessions: &mut HashMap<SessionId, StoredSession>, id: &SessionId) {
     if let Some(session) = sessions.get(id) {
-        cancel_job(session);
+        cancel_jobs(session);
     }
     sessions.remove(id);
 }
 
-fn cancel_job(session: &StoredSession) {
-    if let Some(job) = &session.job {
-        job.request_cancel();
+fn cancel_jobs(session: &StoredSession) {
+    for conversation in session.conversations.values() {
+        if let Some(job) = &conversation.job {
+            job.request_cancel();
+        }
     }
 }

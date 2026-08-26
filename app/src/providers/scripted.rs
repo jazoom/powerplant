@@ -1,12 +1,13 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use futures_util::Stream;
 use rig_core::completion::{Message, ToolDefinition};
 
-use super::{ChatTurn, ModelEvent, ModelStream, ProviderConnection, ProviderError, TokenStream};
+use super::{ChatTurn, ModelEvent, ModelStream, ProviderConnection, ProviderError};
 
 #[derive(Clone)]
 enum Script {
@@ -24,6 +25,8 @@ pub(crate) struct ScriptedBackend {
     models_result: Result<Vec<String>, ProviderError>,
     script: Result<Script, ProviderError>,
     round: Arc<AtomicUsize>,
+    last_preamble: Arc<Mutex<Option<String>>>,
+    last_tools: Arc<Mutex<Vec<String>>>,
 }
 
 impl ScriptedBackend {
@@ -38,6 +41,8 @@ impl ScriptedBackend {
                     .collect(),
             )),
             round: Arc::new(AtomicUsize::new(0)),
+            last_preamble: Arc::new(Mutex::new(None)),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -55,6 +60,8 @@ impl ScriptedBackend {
             models_result: Ok(Vec::new()),
             script: Ok(Script::Chunks(chunks.into_iter().collect())),
             round: Arc::new(AtomicUsize::new(0)),
+            last_preamble: Arc::new(Mutex::new(None)),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -74,6 +81,8 @@ impl ScriptedBackend {
                     .collect(),
             ])),
             round: Arc::new(AtomicUsize::new(0)),
+            last_preamble: Arc::new(Mutex::new(None)),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -86,6 +95,8 @@ impl ScriptedBackend {
                 dropped: None,
             }),
             round: Arc::new(AtomicUsize::new(0)),
+            last_preamble: Arc::new(Mutex::new(None)),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -98,7 +109,23 @@ impl ScriptedBackend {
                 dropped: Some(dropped),
             }),
             round: Arc::new(AtomicUsize::new(0)),
+            last_preamble: Arc::new(Mutex::new(None)),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    pub(crate) fn last_preamble(&self) -> Option<String> {
+        self.last_preamble
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn last_tools(&self) -> Vec<String> {
+        self.last_tools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(crate) fn verify(&self, _connection: &ProviderConnection) -> Result<(), ProviderError> {
@@ -112,37 +139,23 @@ impl ScriptedBackend {
         self.models_result.clone()
     }
 
-    pub(crate) fn stream(
-        &self,
-        _connection: &ProviderConnection,
-        _history: &[ChatTurn],
-    ) -> Result<TokenStream, ProviderError> {
-        match self.script.clone() {
-            Ok(Script::Chunks(items)) => Ok(Box::pin(futures_util::stream::iter(items))),
-            Ok(Script::Rounds(rounds)) => {
-                let items = rounds
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|item| match item {
-                        Ok(ModelEvent::Text(text)) => Some(Ok(text)),
-                        Ok(ModelEvent::ToolCall { .. }) => None,
-                        Err(error) => Some(Err(error)),
-                    })
-                    .collect::<Vec<_>>();
-                Ok(Box::pin(futures_util::stream::iter(items)))
-            }
-            Ok(Script::Hang { started, dropped }) => Ok(Box::pin(HangStream { started, dropped })),
-            Err(error) => Err(error),
-        }
-    }
-
     pub(crate) fn stream_turn(
         &self,
         _connection: &ProviderConnection,
         _history: &[ChatTurn],
         _extra: &[Message],
-        _tools: &[ToolDefinition],
+        tools: &[ToolDefinition],
+        preamble: &str,
     ) -> Result<ModelStream, ProviderError> {
+        *self
+            .last_preamble
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(preamble.to_owned());
+        *self
+            .last_tools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            tools.iter().map(|tool| tool.name.clone()).collect();
         match self.script.clone() {
             Ok(Script::Chunks(items)) => Ok(Box::pin(futures_util::stream::iter(
                 items.into_iter().map(|item| item.map(ModelEvent::Text)),
@@ -156,30 +169,6 @@ impl ScriptedBackend {
                 Ok(Box::pin(ModelHangStream { started, dropped }))
             }
             Err(error) => Err(error),
-        }
-    }
-}
-
-struct HangStream {
-    started: Option<Arc<AtomicBool>>,
-    dropped: Option<Arc<AtomicBool>>,
-}
-
-impl Stream for HangStream {
-    type Item = Result<String, ProviderError>;
-
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Some(started) = &self.started {
-            started.store(true, Ordering::SeqCst);
-        }
-        Poll::Pending
-    }
-}
-
-impl Drop for HangStream {
-    fn drop(&mut self) {
-        if let Some(dropped) = &self.dropped {
-            dropped.store(true, Ordering::SeqCst);
         }
     }
 }

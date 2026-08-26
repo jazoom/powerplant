@@ -246,7 +246,7 @@ async fn forget(
 
     if !state.vault.has_providers() {
         if let Some(session) = session {
-            state.sessions.remove(&session.id);
+            state.sessions.remove(&session);
         }
         let mut response = responses::graft_redirect(graft, "/connect");
         sessions::clear_session_cookie(&mut response, &state);
@@ -266,7 +266,7 @@ async fn forget(
 }
 
 async fn sandbox_missing(state: &AppState) -> &'static str {
-    state.sandbox.view().await.missing_message()
+    state.sandboxes.missing_message()
 }
 
 fn connected_redirect(

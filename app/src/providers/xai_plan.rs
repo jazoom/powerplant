@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::vault::{VaultError, write_private};
-
 use super::{
     AuthMethod, MAXIMUM_API_KEY_BYTES, ProviderError, api_key_is_bounded,
     classify_failure_status_for, with_provider_detail,
@@ -281,7 +279,7 @@ fn write_tokens(path: &Path, tokens: &TokenOk) -> Result<(), ProviderError> {
         expires_at: tokens.expires_in.and_then(expiry_from_lifetime),
     };
     let bytes = serde_json::to_vec_pretty(&file).map_err(|_| ProviderError::Unreachable)?;
-    write_private(path, &bytes).map_err(|_: VaultError| ProviderError::Unreachable)
+    crate::storage::write_private(path, &bytes).map_err(|_| ProviderError::Unreachable)
 }
 
 fn read_plan_file(path: &Path) -> Result<PlanFile, ProviderError> {

@@ -70,34 +70,38 @@ fn restore_or(
 
 fn existing_or_restore(state: &AppState, token: &ValidatedToken) -> ResolvedSession {
     let id = SessionId::from_validated(token);
-    if let Some(snapshot) = state.sessions.snapshot(&id) {
-        return ResolvedSession::Present(snapshot);
+    if state.sessions.contains_live(&id) {
+        return ResolvedSession::Present(id);
     }
     if !state.vault.has_providers() {
         return ResolvedSession::Invalid;
     }
     state.sessions.insert(id);
-    match state.sessions.snapshot(&id) {
-        Some(snapshot) => ResolvedSession::Present(snapshot),
-        None => ResolvedSession::Invalid,
+    if state.sessions.contains_live(&id) {
+        ResolvedSession::Present(id)
+    } else {
+        ResolvedSession::Invalid
     }
 }
 
-fn issue_restored_session(state: &AppState) -> Option<(SessionSnapshot, ValidatedToken)> {
+fn issue_restored_session(state: &AppState) -> Option<(SessionId, ValidatedToken)> {
     if !state.vault.has_providers() {
         return None;
     }
     let token = generate_session_token().ok()?;
     state.sessions.insert(token.id());
-    let snapshot = state.sessions.snapshot(&token.id())?;
-    Some((snapshot, token.raw().clone()))
+    if state.sessions.contains_live(&token.id()) {
+        Some((token.id(), token.raw().clone()))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone)]
 pub(crate) enum ResolvedSession {
     Anonymous,
     Invalid,
-    Present(SessionSnapshot),
+    Present(SessionId),
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for ResolvedSession {
@@ -112,7 +116,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ResolvedSession {
     }
 }
 
-pub(crate) struct OptionalSession(pub(crate) Option<SessionSnapshot>);
+pub(crate) struct OptionalSession(pub(crate) Option<SessionId>);
 
 impl<S: Send + Sync> FromRequestParts<S> for OptionalSession {
     type Rejection = std::convert::Infallible;
@@ -120,7 +124,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalSession {
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self(
             match parts.extensions.get::<ResolvedSession>().cloned() {
-                Some(ResolvedSession::Present(snapshot)) => Some(snapshot),
+                Some(ResolvedSession::Present(id)) => Some(id),
                 _ => None,
             },
         ))

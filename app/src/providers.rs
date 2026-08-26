@@ -401,8 +401,6 @@ fn sanitise_detail(text: &str) -> Option<String> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-pub(crate) type TokenStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;
-
 #[derive(Clone, Debug)]
 pub(crate) enum ModelEvent {
     Text(String),
@@ -433,29 +431,20 @@ impl ChatBackend {
         }
     }
 
-    pub(crate) async fn stream(
-        &self,
-        connection: &ProviderConnection,
-        history: &[ChatTurn],
-    ) -> Result<TokenStream, ProviderError> {
-        match self {
-            Self::Rig => rig::stream(connection, history).await,
-            #[cfg(test)]
-            Self::Scripted(backend) => backend.stream(connection, history),
-        }
-    }
-
     pub(crate) async fn stream_turn(
         &self,
         connection: &ProviderConnection,
         history: &[ChatTurn],
         extra: &[Message],
         tools: &[ToolDefinition],
+        preamble: &str,
     ) -> Result<ModelStream, ProviderError> {
         match self {
-            Self::Rig => rig::stream_turn(connection, history, extra, tools).await,
+            Self::Rig => rig::stream_turn(connection, history, extra, tools, preamble).await,
             #[cfg(test)]
-            Self::Scripted(backend) => backend.stream_turn(connection, history, extra, tools),
+            Self::Scripted(backend) => {
+                backend.stream_turn(connection, history, extra, tools, preamble)
+            }
         }
     }
 

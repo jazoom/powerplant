@@ -9,18 +9,29 @@ use hypergraft::{PatchSet, PatchStatus};
 use rig_core::completion::{AssistantContent, Message};
 
 use crate::{
+    agents::{AgentId, DirectoryPolicy, LeaseGuard, ToolId},
     providers::{ChatTurn, ModelEvent, ProviderConnection, ProviderError},
+    sandbox::GuestSandbox,
     sessions::{Job, JobEventKind, JobStatus, SessionId},
     state::AppState,
-};
-
-use super::{
-    page::{
-        JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
-        assistant_turn, user_turn,
-    },
     tools,
 };
+
+use super::page::{
+    JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
+    assistant_turn, user_turn,
+};
+
+pub(super) struct AgentRunSpec {
+    pub(super) agent_id: AgentId,
+    pub(super) revision: u32,
+    pub(super) preamble: String,
+    pub(super) tools: Vec<rig_core::completion::ToolDefinition>,
+    pub(super) tool_ids: Vec<ToolId>,
+    pub(super) policy: DirectoryPolicy,
+    pub(super) connection: ProviderConnection,
+    pub(super) sandbox: std::sync::Arc<GuestSandbox>,
+}
 
 pub(super) const MIN_PROGRESS_INTERVAL: Duration = if cfg!(test) {
     Duration::ZERO
@@ -56,9 +67,13 @@ enum ProgressOffer {
     Closed,
 }
 
-pub(super) fn observe_response(job: Arc<Job>, cursor: u64) -> axum::response::Response {
+pub(super) fn observe_response(
+    job: Arc<Job>,
+    cursor: u64,
+    agent_id: String,
+) -> axum::response::Response {
     let (tx, rx) = mpsc::channel::<hypergraft::StreamFrame>(4);
-    tokio::spawn(observe_segment(tx, job, cursor));
+    tokio::spawn(observe_segment(tx, job, cursor, agent_id));
     let frames = futures_util::stream::unfold(rx, |mut rx| async {
         rx.recv().await.map(|item| (item, rx))
     });
@@ -70,13 +85,19 @@ const MAXIMUM_TOOL_ROUNDS: usize = 12;
 pub(super) async fn run_agent_job(
     state: AppState,
     session_id: SessionId,
-    connection: ProviderConnection,
+    spec: AgentRunSpec,
     turns: Vec<ChatTurn>,
     job: Arc<Job>,
+    _lease: LeaseGuard,
 ) {
-    let tools = tools::definitions();
-    let secret = match connection.auth {
-        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
+    let agent_id = spec.agent_id;
+    tracing::debug!(
+        agent_id = %agent_id,
+        agent_revision = spec.revision,
+        "agent job started"
+    );
+    let secret = match spec.connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(spec.connection.api_key.expose().to_owned()),
         crate::providers::AuthMethod::Plan => None,
     };
     let secret = secret.as_deref();
@@ -88,20 +109,26 @@ pub(super) async fn run_agent_job(
 
     for _ in 0..MAXIMUM_TOOL_ROUNDS {
         if job.cancel_requested() {
-            finish_cancelled(&state, &session_id, &job, &reply);
+            finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
             return;
         }
         let mut events = tokio::select! {
             biased;
             _ = job.cancelled() => {
-                finish_cancelled(&state, &session_id, &job, &reply);
+                finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
                 return;
             }
-            result = state.chat.stream_turn(&connection, &turns, &extra, &tools) => match result {
+            result = state.chat.stream_turn(
+                &spec.connection,
+                &turns,
+                &extra,
+                &spec.tools,
+                &spec.preamble,
+            ) => match result {
                 Ok(stream) => stream,
                 Err(error) => {
                     publish_remaining(&job, &reply, published);
-                    persist_failure(&state, &session_id, &job, &reply);
+                    persist_failure(&state, &session_id, &agent_id, &job, &reply);
                     job.finish(JobStatus::Failed, Some(error.message()));
                     return;
                 }
@@ -114,7 +141,7 @@ pub(super) async fn run_agent_job(
             let chunk = tokio::select! {
                 biased;
                 _ = job.cancelled() => {
-                    finish_cancelled(&state, &session_id, &job, &reply);
+                    finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
                     return;
                 }
                 chunk = events.next() => chunk,
@@ -133,7 +160,7 @@ pub(super) async fn run_agent_job(
                         &mut output_visible,
                         &piece,
                     ) {
-                        persist_failure(&state, &session_id, &job, &reply);
+                        persist_failure(&state, &session_id, &agent_id, &job, &reply);
                         job.finish(
                             JobStatus::Failed,
                             Some(ProviderError::ReplyTooLong.message()),
@@ -148,7 +175,7 @@ pub(super) async fn run_agent_job(
                 }) => calls.push((id, name, arguments)),
                 Err(error) => {
                     publish_remaining(&job, &reply, published);
-                    persist_failure(&state, &session_id, &job, &reply);
+                    persist_failure(&state, &session_id, &agent_id, &job, &reply);
                     job.finish(JobStatus::Failed, Some(error.message()));
                     return;
                 }
@@ -156,27 +183,33 @@ pub(super) async fn run_agent_job(
         }
 
         if job.cancel_requested() {
-            finish_cancelled(&state, &session_id, &job, &reply);
+            finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
             return;
         }
 
         if calls.is_empty() {
             publish_remaining(&job, &reply, published);
             if reply.trim().is_empty() {
-                persist_failure(&state, &session_id, &job, "");
+                persist_failure(&state, &session_id, &agent_id, &job, "");
                 job.finish(JobStatus::Failed, Some(ProviderError::EmptyReply.message()));
                 return;
             }
-            persist_success(&state, &session_id, &job, &reply);
+            persist_success(&state, &session_id, &agent_id, &job, &reply);
             job.finish(JobStatus::Completed, None);
             return;
         }
 
         extra.push(assistant_tool_message(&text, &calls));
+        let context = tools::AgentToolContext {
+            sandbox: &spec.sandbox,
+            policy: &spec.policy,
+            job: &job,
+            tools: &spec.tool_ids,
+        };
         for (id, name, arguments) in calls {
-            let trace = tools::invoke(&state.sandbox, &name, &arguments, &job).await;
+            let trace = tools::invoke(&context, &name, &arguments).await;
             if job.cancel_requested() {
-                finish_cancelled(&state, &session_id, &job, &reply);
+                finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
                 return;
             }
             let output = tools::redact(&trace.output, secret);
@@ -189,7 +222,7 @@ pub(super) async fn run_agent_job(
                 &mut output_visible,
                 &format!("\n\n{visible}"),
             ) {
-                persist_failure(&state, &session_id, &job, &reply);
+                persist_failure(&state, &session_id, &agent_id, &job, &reply);
                 job.finish(
                     JobStatus::Failed,
                     Some(ProviderError::ReplyTooLong.message()),
@@ -201,7 +234,7 @@ pub(super) async fn run_agent_job(
     }
 
     publish_remaining(&job, &reply, published);
-    persist_failure(&state, &session_id, &job, &reply);
+    persist_failure(&state, &session_id, &agent_id, &job, &reply);
     job.finish(JobStatus::Failed, Some(TOOL_LOOP_LIMIT));
 }
 
@@ -240,6 +273,7 @@ fn append_and_publish(
     truncated
 }
 
+#[cfg(any())]
 pub(super) async fn run_job(
     state: AppState,
     session_id: SessionId,
@@ -353,21 +387,21 @@ fn append_bounded(reply: &mut String, piece: &str) -> bool {
     true
 }
 
-fn persist_success(state: &AppState, id: &SessionId, job: &Job, reply: &str) {
+fn persist_success(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job, reply: &str) {
     let _ = state
         .sessions
-        .finish_turn(id, &job.id(), bound_reply(reply).to_owned());
+        .finish_turn(id, agent, &job.id(), bound_reply(reply).to_owned());
 }
 
-fn persist_failure(state: &AppState, id: &SessionId, job: &Job, reply: &str) {
+fn persist_failure(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job, reply: &str) {
     let _ = state
         .sessions
-        .fail_turn(id, &job.id(), bound_reply(reply).to_owned());
+        .fail_turn(id, agent, &job.id(), bound_reply(reply).to_owned());
 }
 
-fn finish_cancelled(state: &AppState, id: &SessionId, job: &Job, reply: &str) {
+fn finish_cancelled(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job, reply: &str) {
     publish_remaining(job, reply, job.snapshot().output.len().min(reply.len()));
-    persist_failure(state, id, job, reply);
+    persist_failure(state, id, agent, job, reply);
     job.finish(JobStatus::Cancelled, None);
 }
 
@@ -382,7 +416,12 @@ fn progress_due(output_visible: bool, last_emit: Instant) -> bool {
     !output_visible || last_emit.elapsed() >= MIN_PROGRESS_INTERVAL
 }
 
-async fn observe_segment(tx: mpsc::Sender<hypergraft::StreamFrame>, job: Arc<Job>, cursor: u64) {
+async fn observe_segment(
+    tx: mpsc::Sender<hypergraft::StreamFrame>,
+    job: Arc<Job>,
+    cursor: u64,
+    agent_id: String,
+) {
     let mut budget = hypergraft::StreamBudget::new();
     let mut sent = cursor;
     let mut assistant_visible = job.has_output_at_or_before(cursor);
@@ -445,7 +484,7 @@ async fn observe_segment(tx: mpsc::Sender<hypergraft::StreamFrame>, job: Arc<Job
         }
     }
 
-    send_observe_final(&tx, &job, &job_id, sent, assistant_visible).await;
+    send_observe_final(&tx, &job, &job_id, sent, assistant_visible, &agent_id).await;
 }
 
 fn should_keep_open(job: &Job, started: Instant) -> bool {
@@ -515,8 +554,9 @@ async fn send_observe_final(
     job_id: &str,
     cursor: u64,
     assistant_visible: bool,
+    agent_id: &str,
 ) {
-    match encode_observe_final(job, job_id, cursor, assistant_visible) {
+    match encode_observe_final(job, job_id, cursor, assistant_visible, agent_id) {
         Ok(frame) => {
             let _ = tx.send(frame).await;
         }
@@ -525,7 +565,7 @@ async fn send_observe_final(
                 "construct job observation final",
                 &build_error,
             );
-            match encode_observe_final(job, job_id, cursor, false) {
+            match encode_observe_final(job, job_id, cursor, false, agent_id) {
                 Ok(frame) => {
                     let _ = tx.send(frame).await;
                 }
@@ -545,6 +585,7 @@ fn encode_observe_final(
     job_id: &str,
     cursor: u64,
     assistant_visible: bool,
+    agent_id: &str,
 ) -> Result<hypergraft::StreamFrame, hypergraft::PatchBuildError> {
     let snapshot = job.snapshot();
     let more = snapshot.latest_seq > cursor || snapshot.status == JobStatus::Running;
@@ -561,11 +602,11 @@ fn encode_observe_final(
         };
         patches.children(
             "job-observe",
-            &JobObserveContents::observing(job_id, cursor, status, ""),
+            &JobObserveContents::observing(job_id, cursor, status, "", agent_id),
         )?;
     } else {
         let error = snapshot.error.as_deref().unwrap_or("");
-        patches.children("job-observe", &JobObserveContents::idle(error))?;
+        patches.children("job-observe", &JobObserveContents::idle(error, agent_id))?;
     }
     let status = match snapshot.status {
         JobStatus::Failed => provider_status_from_message(snapshot.error.as_deref()),

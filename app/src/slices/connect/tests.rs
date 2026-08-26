@@ -135,12 +135,42 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
     ));
     let token = connected(&state);
     let id = session_id(&token);
+    let dir = tempfile::tempdir().expect("project");
+    let record = state
+        .agents
+        .create(crate::agents::AgentDraft {
+            name: "Test agent".to_owned(),
+            instructions: String::new(),
+            tools: crate::agents::ToolId::ALL.to_vec(),
+            directories: vec![crate::agents::DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: dir.path().to_path_buf(),
+                access: crate::agents::AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent");
+    let sandbox = state.sandboxes.handle(record.id);
+    let policy = crate::agents::DirectoryPolicy::from_record(&record);
+    let access = crate::sandbox::GuestAccess::from_connection(
+        &state.vault.selected_connection().expect("connection"),
+    );
+    sandbox
+        .start_with(crate::sandbox::SandboxSpec::from_policy(&policy, access))
+        .await
+        .expect("start");
+    sandbox.complete_start();
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
 
     let send = app(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/")
+                .uri(format!("/agents/{}", record.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
@@ -407,7 +437,8 @@ async fn a_new_process_restores_a_session_from_the_vault_file() {
         .await
         .expect("chat");
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
     let cookies = set_cookies(&response);
     assert!(
         cookies
@@ -415,11 +446,6 @@ async fn a_new_process_restores_a_session_from_the_vault_file() {
             .any(|value| value.contains("powerplant_session="))
     );
     assert!(cookies.iter().all(|value| !value.contains(SECRET_KEY)));
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("<!doctype html>"));
-    assert!(text.contains("id=\"chat-main\""));
-    assert!(!text.contains(SECRET_KEY));
 }
 
 #[tokio::test]

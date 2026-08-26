@@ -1,6 +1,7 @@
 use askama::Template;
 
 use crate::{
+    agents::AgentRecord,
     markdown,
     models::ModelCatalogue,
     providers::{ChatTurn, Role},
@@ -50,15 +51,16 @@ pub(super) struct ChatViewModel {
     pub(super) sandbox_progress: String,
     pub(super) sandbox_active: bool,
     pub(super) sandbox_error: &'static str,
-    pub(super) project: String,
-    pub(super) project_error: &'static str,
-    pub(super) project_locked: bool,
     pub(super) sandbox_ready: bool,
-    pub(super) project_selected: bool,
+    pub(super) session_busy: bool,
+    pub(super) agent_id: String,
+    pub(super) agent_name: String,
 }
 
 impl ChatViewModel {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn from_session(
+        record: &AgentRecord,
         session: &SessionSnapshot,
         vault: &ProviderVault,
         catalogue: &ModelCatalogue,
@@ -68,10 +70,12 @@ impl ChatViewModel {
         sandbox_error: &'static str,
     ) -> Self {
         let mut page = Self::from_parts(
+            record,
             &vault.desk_providers(),
             catalogue,
             &session.turns,
             session.job.as_ref(),
+            session.session_busy,
             sandbox,
             error,
             desk_error,
@@ -82,11 +86,46 @@ impl ChatViewModel {
         page
     }
 
+    pub(super) fn desk_only(
+        vault: &ProviderVault,
+        catalogue: &ModelCatalogue,
+        session_busy: bool,
+        desk_error: &'static str,
+    ) -> Self {
+        Self::from_parts(
+            &AgentRecord {
+                id: crate::agents::AgentId::parse(&"0".repeat(32)).expect("zero id"),
+                revision: 1,
+                name: String::new(),
+                instructions: String::new(),
+                tools: Vec::new(),
+                directories: Vec::new(),
+                primary_directory: String::new(),
+            },
+            &vault.desk_providers(),
+            catalogue,
+            &[],
+            None,
+            session_busy,
+            SandboxView {
+                missing: None,
+                status: crate::sandbox::GuestStatus::Stopped,
+                progress: String::new(),
+                error: "",
+            },
+            "",
+            desk_error,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn from_parts(
+        record: &AgentRecord,
         providers: &[DeskProvider],
         catalogue: &ModelCatalogue,
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
+        session_busy: bool,
         sandbox: SandboxView,
         error: &'static str,
         desk_error: &'static str,
@@ -129,14 +168,7 @@ impl ChatViewModel {
             })
             .unwrap_or_default();
         let catalogue_pending = selected.is_some_and(|provider| catalogue.pending(provider.kind));
-        let project_selected = !sandbox.project.is_empty();
-        let sandbox_ready =
-            sandbox.status == crate::sandbox::GuestStatus::Running && project_selected;
-        let project_locked = job_active
-            || !matches!(
-                sandbox.status,
-                crate::sandbox::GuestStatus::Stopped | crate::sandbox::GuestStatus::Crashed
-            );
+        let sandbox_ready = sandbox.status == crate::sandbox::GuestStatus::Running;
         Self {
             providers: providers
                 .iter()
@@ -164,19 +196,10 @@ impl ChatViewModel {
             sandbox_progress: sandbox.progress,
             sandbox_active: sandbox.status.is_starting(),
             sandbox_error: sandbox.error,
-            project: sandbox.project,
-            project_error: "",
-            project_locked,
             sandbox_ready,
-            project_selected,
-        }
-    }
-
-    pub(super) fn project(&self) -> ProjectContents<'_> {
-        ProjectContents {
-            project: &self.project,
-            project_error: self.project_error,
-            project_locked: self.project_locked,
+            session_busy,
+            agent_id: record.id.as_hex(),
+            agent_name: record.name.clone(),
         }
     }
 
@@ -187,7 +210,8 @@ impl ChatViewModel {
             sandbox_progress: &self.sandbox_progress,
             sandbox_active: self.sandbox_active,
             sandbox_error: self.sandbox_error,
-            job_active: self.job_active,
+            job_active: self.session_busy,
+            agent_id: &self.agent_id,
         }
     }
 
@@ -199,7 +223,7 @@ impl ChatViewModel {
             catalogue_models: &self.catalogue_models,
             catalogue_pending: self.catalogue_pending,
             desk_error: self.desk_error,
-            job_active: self.job_active,
+            job_active: self.session_busy,
         }
     }
 
@@ -215,7 +239,8 @@ impl ChatViewModel {
         ComposerContents {
             error: self.error,
             sandbox_ready: self.sandbox_ready,
-            project_selected: self.project_selected,
+            session_busy: self.session_busy,
+            agent_id: &self.agent_id,
         }
     }
 
@@ -230,6 +255,7 @@ impl ChatViewModel {
             cursor: self.cursor,
             job_active: self.job_active,
             job_status: self.job_status,
+            agent_id: &self.agent_id,
         }
     }
 }
@@ -263,6 +289,7 @@ pub(super) struct SandboxStatusContents<'a> {
     pub(super) sandbox_active: bool,
     pub(super) sandbox_error: &'a str,
     pub(super) job_active: bool,
+    pub(super) agent_id: &'a str,
 }
 
 #[derive(Template)]
@@ -292,19 +319,12 @@ pub(super) struct TranscriptContents<'a> {
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "project")]
-pub(super) struct ProjectContents<'a> {
-    pub(super) project: &'a str,
-    pub(super) project_error: &'a str,
-    pub(super) project_locked: bool,
-}
-
-#[derive(Template)]
 #[template(path = "chat/templates/chat.html", block = "composer")]
 pub(super) struct ComposerContents<'a> {
     pub(super) error: &'a str,
     pub(super) sandbox_ready: bool,
-    pub(super) project_selected: bool,
+    pub(super) session_busy: bool,
+    pub(super) agent_id: &'a str,
 }
 
 #[derive(Template)]
@@ -315,16 +335,18 @@ pub(super) struct JobObserveContents<'a> {
     pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) job_status: &'static str,
+    pub(super) agent_id: &'a str,
 }
 
 impl<'a> JobObserveContents<'a> {
-    pub(super) fn idle(error: &'a str) -> Self {
+    pub(super) fn idle(error: &'a str, agent_id: &'a str) -> Self {
         Self {
             job_error: error,
             job_id: "",
             cursor: 0,
             job_active: false,
             job_status: "",
+            agent_id,
         }
     }
 
@@ -333,6 +355,7 @@ impl<'a> JobObserveContents<'a> {
         cursor: u64,
         status: &'static str,
         error: &'a str,
+        agent_id: &'a str,
     ) -> Self {
         Self {
             job_error: error,
@@ -340,6 +363,7 @@ impl<'a> JobObserveContents<'a> {
             cursor,
             job_active: true,
             job_status: status,
+            agent_id,
         }
     }
 }

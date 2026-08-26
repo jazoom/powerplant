@@ -11,8 +11,8 @@ use rig_core::{
 use super::{
     AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, ModelEvent, ModelStream,
     OPENROUTER_BASE_URL, ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
-    TokenStream, classify_failure_status_for, classify_verify_status, model_is_bounded,
-    with_json_detail, with_provider_detail, xai_plan,
+    classify_failure_status_for, classify_verify_status, model_is_bounded, with_json_detail,
+    with_provider_detail, xai_plan,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -22,7 +22,6 @@ const MAXIMUM_MODEL_LIST_BYTES: usize = 1_048_576;
 const MAXIMUM_PROVIDER_ERROR_BYTES: usize = 4_096;
 
 const PREAMBLE: &str = "You are Power Plant, a local coding agent. Help the user write, explain and review code. Be direct.";
-const AGENT_PREAMBLE: &str = "You are Power Plant, a local coding agent. The project is mounted at /project. Use the tools to list, read and write files, run commands, and inspect or commit git changes. Stay inside /project. Be direct.";
 
 pub(super) const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -47,7 +46,7 @@ pub(super) async fn verify(connection: &ProviderConnection) -> Result<(), Provid
             .await
         }
         AuthMethod::Plan => match connection.kind {
-            ProviderKind::OpenaiCodex => chatgpt_plan_client(connection, false)?
+            ProviderKind::OpenaiCodex => chatgpt_plan_client(connection, false, PREAMBLE)?
                 .authorize()
                 .await
                 .map_err(|_| ProviderError::Reauthenticate),
@@ -225,32 +224,19 @@ fn merge_models(mut models: Vec<String>, extras: &[&str]) -> Vec<String> {
     models
 }
 
-pub(super) async fn stream(
-    connection: &ProviderConnection,
-    history: &[ChatTurn],
-) -> Result<TokenStream, ProviderError> {
-    let events = stream_turn(connection, history, &[], &[]).await?;
-    Ok(Box::pin(events.filter_map(|item| {
-        std::future::ready(match item {
-            Ok(ModelEvent::Text(text)) => Some(Ok(text)),
-            Ok(ModelEvent::ToolCall { .. }) => None,
-            Err(error) => Some(Err(error)),
-        })
-    })))
-}
-
 pub(super) async fn stream_turn(
     connection: &ProviderConnection,
     history: &[ChatTurn],
     extra: &[Message],
     tools: &[ToolDefinition],
+    preamble: &str,
 ) -> Result<ModelStream, ProviderError> {
     match (connection.kind, connection.auth) {
         (ProviderKind::Xai, AuthMethod::ApiKey) => {
             let client = xai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
         }
         (ProviderKind::Xai, AuthMethod::Plan) => {
             let token = xai_plan_token(connection).await?;
@@ -262,18 +248,18 @@ pub(super) async fn stream_turn(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::Plan).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::Plan).await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::ApiKey) => {
             let client = openai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::Plan) => {
-            let client = chatgpt_plan_client(connection, false)?;
+            let client = chatgpt_plan_client(connection, false, preamble)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::Plan).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::Plan).await
         }
         (ProviderKind::Synthetic, _) => {
             let client = openai::Client::builder()
@@ -283,19 +269,19 @@ pub(super) async fn stream_turn(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
         }
         (ProviderKind::Openrouter, _) => {
             let client = openrouter::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
         }
         (ProviderKind::Deepseek, _) => {
             let client = deepseek::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
         }
     }
 }
@@ -303,6 +289,7 @@ pub(super) async fn stream_turn(
 fn chatgpt_plan_client(
     connection: &ProviderConnection,
     allow_device_flow: bool,
+    preamble: &str,
 ) -> Result<chatgpt::Client, ProviderError> {
     let path = connection
         .plan_file
@@ -312,7 +299,7 @@ fn chatgpt_plan_client(
         .oauth()
         .auth_file(path)
         .allow_device_flow(allow_device_flow)
-        .default_instructions(PREAMBLE)
+        .default_instructions(preamble)
         .build()
         .map_err(|_| ProviderError::Unreachable)
 }
@@ -373,6 +360,7 @@ async fn stream_messages<M>(
     history: &[ChatTurn],
     extra: &[Message],
     tools: &[ToolDefinition],
+    preamble: &str,
     auth: AuthMethod,
 ) -> Result<ModelStream, ProviderError>
 where
@@ -389,14 +377,9 @@ where
     let Some(prompt) = messages.pop() else {
         return Err(ProviderError::EmptyReply);
     };
-    let preamble = if tools.is_empty() {
-        PREAMBLE.to_owned()
-    } else {
-        AGENT_PREAMBLE.to_owned()
-    };
     let mut request = model
         .completion_request(prompt)
-        .preamble(preamble)
+        .preamble(preamble.to_owned())
         .messages(messages);
     if !tools.is_empty() {
         request = request.tools(tools.to_vec());

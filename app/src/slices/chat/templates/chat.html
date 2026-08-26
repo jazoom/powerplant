@@ -3,10 +3,9 @@
     class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:flex-nowrap"
   >
     <a
-      href="/"
+      href="/agents"
       data-graft
       class="flex min-w-0 items-center gap-2 rounded-sm"
-      aria-current="page"
     >
       <img
         src="/static/images/logo.svg"
@@ -45,13 +44,21 @@
               </div>
             {% endif %}
             {% if sandbox_active %}
-              <form data-graft method="get" action="/sandbox">
+              <form
+                data-graft
+                method="get"
+                action="/agents/{{ agent_id }}/sandbox"
+              >
                 <button class="btn btn-outline btn-sm" type="submit">
                   Refresh
                 </button>
               </form>
             {% else if sandbox_status == "running" %}
-              <form data-graft method="post" action="/sandbox">
+              <form
+                data-graft
+                method="post"
+                action="/agents/{{ agent_id }}/sandbox"
+              >
                 <input type="hidden" name="command" value="stop" />
                 <button
                   class="btn btn-outline btn-sm"
@@ -62,7 +69,11 @@
                 </button>
               </form>
             {% else if sandbox_status == "stopped" || sandbox_status == "crashed" %}
-              <form data-graft method="post" action="/sandbox">
+              <form
+                data-graft
+                method="post"
+                action="/agents/{{ agent_id }}/sandbox"
+              >
                 <input type="hidden" name="command" value="start" />
                 <button
                   class="btn btn-outline btn-sm"
@@ -73,7 +84,11 @@
                 </button>
               </form>
             {% else %}
-              <form data-graft method="get" action="/sandbox">
+              <form
+                data-graft
+                method="get"
+                action="/agents/{{ agent_id }}/sandbox"
+              >
                 <button class="btn btn-outline btn-sm" type="submit">
                   Refresh
                 </button>
@@ -301,46 +316,21 @@
       {% endblock %}
     </div>
   </div>
-  <div id="project" class="mx-auto w-full max-w-4xl px-4 pb-3">
-    {% block project %}
-      <form
-        data-graft
-        method="post"
-        action="/project"
-        class="flex min-w-0 flex-wrap items-end gap-2"
-      >
-        {% if project_error != "" %}
-          <div class="alert alert-error w-full" role="alert" tabindex="-1">
-            <p>{{ project_error }}</p>
-          </div>
-        {% endif %}
-        <label class="sr-only" for="project-path">Project directory</label>
-        <input
-          id="project-path"
-          class="input input-bordered input-sm min-w-0 flex-1 font-mono"
-          name="path"
-          type="text"
-          maxlength="4096"
-          spellcheck="false"
-          autocomplete="off"
-          placeholder="Absolute project path"
-          value="{{ project }}"
-          {% if project_locked %}disabled{% endif %}
-          {% if project_error != "" %}aria-invalid="true"{% endif %}
-        />
-        <button
-          class="btn btn-outline btn-sm"
-          type="submit"
-          {% if project_locked %}disabled{% endif %}
-        >
-          Use project
-        </button>
-      </form>
-    {% endblock %}
+  <div
+    class="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-2 px-4 pb-3"
+  >
+    <p class="min-w-0 flex-1 truncate text-sm">{{ agent_name }}</p>
+    <a
+      href="/agents/{{ agent_id }}/configuration"
+      data-graft
+      class="btn btn-ghost btn-sm"
+      >Configure</a
+    >
+    <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
   </div>
 </header>
 
-<h1 id="chat-title" class="sr-only">Chat</h1>
+<h1 id="chat-title" class="sr-only">{{ agent_name }}</h1>
 <section
   id="transcript"
   data-island="transcript"
@@ -378,13 +368,17 @@
               </div>
             {% endif %}
             <div class="flex flex-wrap items-center gap-3">
-              <form data-graft method="get" action="/">
+              <form data-graft method="get" action="/agents/{{ agent_id }}">
                 <div id="job-cursor">
                   {% include "chat/templates/job_cursor.html" %}
                 </div>
                 <button class="btn btn-outline" type="submit">Refresh</button>
               </form>
-              <form data-graft method="post" action="/jobs/{{ job_id }}/cancel">
+              <form
+                data-graft
+                method="post"
+                action="/agents/{{ agent_id }}/jobs/{{ job_id }}/cancel"
+              >
                 <button class="btn btn-outline" type="submit">Stop</button>
               </form>
             </div>
@@ -402,7 +396,12 @@
     </div>
     <div id="composer" class="flex flex-col gap-3">
       {% block composer %}
-        <form data-graft data-island="composer" method="post" action="/">
+        <form
+          data-graft
+          data-island="composer"
+          method="post"
+          action="/agents/{{ agent_id }}"
+        >
           {% if error != "" %}
             <div class="alert alert-error" role="alert" tabindex="-1">
               <p>{{ error }}</p>
@@ -417,13 +416,20 @@
               required
               maxlength="32768"
               rows="3"
-              placeholder="{% if project_selected && !sandbox_ready %}
-                Start the sandbox to work on this project
+              {% if session_busy %}disabled{% endif %}
+              placeholder="{% if !sandbox_ready %}
+                Start the sandbox to work with this agent
               {% else %}
                 Message Power Plant
               {% endif %}"
             ></textarea>
-            <button class="btn btn-primary" type="submit">Send</button>
+            <button
+              class="btn btn-primary"
+              type="submit"
+              {% if session_busy %}disabled{% endif %}
+            >
+              Send
+            </button>
           </div>
           <p class="text-quiet text-xs" data-island="shortcut-hint">
             Ctrl or Cmd + Enter to send.

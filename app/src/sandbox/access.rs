@@ -2,7 +2,7 @@ use crate::providers::{AuthMethod, ProviderConnection, ProviderKind, SecretStrin
 
 pub(super) const SECRET_ENV: &str = "POWERPLANT_API_KEY";
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct GuestAccess {
     pub(crate) host: String,
     pub(crate) secret: Option<SecretString>,

@@ -1,0 +1,139 @@
+<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
+  <div
+    class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+  >
+    <a
+      href="/agents"
+      data-graft
+      class="flex min-w-0 items-center gap-2 rounded-sm"
+    >
+      <img
+        src="/static/images/logo.svg"
+        alt=""
+        width="28"
+        height="28"
+        class="powerplant-mark"
+      />
+      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
+        >Power Plant</span
+      >
+    </a>
+    <a href="/agents" data-graft class="btn btn-ghost btn-sm ml-auto">Agents</a>
+  </div>
+</header>
+
+<main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
+  <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
+    {{ title }}
+  </h1>
+  <form
+    data-graft
+    method="post"
+    action="{{ action }}"
+    class="flex flex-col gap-4"
+  >
+    {% if error != "" %}
+      <div class="alert alert-error" role="alert" tabindex="-1">
+        <p>{{ error }}</p>
+      </div>
+    {% endif %}
+    <label class="flex flex-col gap-1">
+      <span class="text-sm">Name</span>
+      <input
+        class="input input-bordered"
+        name="name"
+        required
+        maxlength="80"
+        value="{{ name }}"
+      />
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="text-sm">Instructions</span>
+      <textarea
+        class="textarea textarea-bordered min-h-32"
+        name="instructions"
+        maxlength="32768"
+      >
+{{- instructions -}}</textarea>
+    </label>
+    <fieldset class="space-y-2">
+      <legend class="text-sm">Tools</legend>
+      {% for tool in tools %}
+        <label class="flex items-center gap-2">
+          <input
+            class="checkbox checkbox-sm"
+            type="checkbox"
+            name="tool_{{ tool.name }}"
+            {% if tool.checked %}checked{% endif %}
+          />
+          <span>{{ tool.label }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+    <fieldset class="space-y-3">
+      <legend class="text-sm">Directories</legend>
+      <label class="flex flex-col gap-1">
+        <span class="text-sm">Primary alias</span>
+        <input
+          class="input input-bordered input-sm font-mono"
+          name="primary"
+          required
+          maxlength="32"
+          value="{{ primary }}"
+        />
+      </label>
+      {% for grant in grants %}
+        <div
+          class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-3"
+        >
+          <label class="flex flex-col gap-1">
+            <span class="text-quiet text-xs">Alias</span>
+            <input
+              class="input input-bordered input-sm font-mono"
+              name="alias_{{ grant.index }}"
+              maxlength="32"
+              value="{{ grant.alias }}"
+            />
+          </label>
+          <label class="flex flex-col gap-1 sm:col-span-1">
+            <span class="text-quiet text-xs">Host path</span>
+            <input
+              class="input input-bordered input-sm font-mono"
+              name="path_{{ grant.index }}"
+              maxlength="4096"
+              value="{{ grant.path }}"
+            />
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-quiet text-xs">Access</span>
+            <select
+              class="select select-bordered select-sm"
+              name="access_{{ grant.index }}"
+            >
+              <option
+                value="read-write"
+                {% if grant.read_write %}selected{% endif %}
+              >
+                Read-write
+              </option>
+              <option
+                value="read-only"
+                {% if !grant.read_write %}selected{% endif %}
+              >
+                Read-only
+              </option>
+            </select>
+          </label>
+        </div>
+      {% endfor %}
+    </fieldset>
+    <button class="btn btn-primary self-start" type="submit">
+      {{ submit }}
+    </button>
+  </form>
+  {% if show_delete %}
+    <form data-graft method="post" action="/agents/{{ agent_id }}/delete">
+      <button class="btn btn-outline btn-sm" type="submit">Delete agent</button>
+    </form>
+  {% endif %}
+</main>
