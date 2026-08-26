@@ -3,16 +3,16 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use rig_core::{
     client::CompletionClient,
-    completion::{CompletionError, CompletionModel, Message},
+    completion::{CompletionError, CompletionModel, Message, ToolDefinition},
     providers::{chatgpt, deepseek, openai, openrouter, xai},
     streaming::StreamedAssistantContent,
 };
 
 use super::{
-    AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, OPENROUTER_BASE_URL,
-    ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL, TokenStream,
-    classify_failure_status_for, classify_verify_status, model_is_bounded, with_json_detail,
-    with_provider_detail, xai_plan,
+    AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, ModelEvent, ModelStream,
+    OPENROUTER_BASE_URL, ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
+    TokenStream, classify_failure_status_for, classify_verify_status, model_is_bounded,
+    with_json_detail, with_provider_detail, xai_plan,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -22,6 +22,7 @@ const MAXIMUM_MODEL_LIST_BYTES: usize = 1_048_576;
 const MAXIMUM_PROVIDER_ERROR_BYTES: usize = 4_096;
 
 const PREAMBLE: &str = "You are Power Plant, a local coding agent. Help the user write, explain and review code. Be direct.";
+const AGENT_PREAMBLE: &str = "You are Power Plant, a local coding agent. The project is mounted at /project. Use the tools to list, read and write files, run commands, and inspect or commit git changes. Stay inside /project. Be direct.";
 
 pub(super) const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -228,12 +229,28 @@ pub(super) async fn stream(
     connection: &ProviderConnection,
     history: &[ChatTurn],
 ) -> Result<TokenStream, ProviderError> {
+    let events = stream_turn(connection, history, &[], &[]).await?;
+    Ok(Box::pin(events.filter_map(|item| {
+        std::future::ready(match item {
+            Ok(ModelEvent::Text(text)) => Some(Ok(text)),
+            Ok(ModelEvent::ToolCall { .. }) => None,
+            Err(error) => Some(Err(error)),
+        })
+    })))
+}
+
+pub(super) async fn stream_turn(
+    connection: &ProviderConnection,
+    history: &[ChatTurn],
+    extra: &[Message],
+    tools: &[ToolDefinition],
+) -> Result<ModelStream, ProviderError> {
     match (connection.kind, connection.auth) {
         (ProviderKind::Xai, AuthMethod::ApiKey) => {
             let client = xai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_with(model, history).await
+            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
         }
         (ProviderKind::Xai, AuthMethod::Plan) => {
             let token = xai_plan_token(connection).await?;
@@ -245,18 +262,18 @@ pub(super) async fn stream(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_with_auth(model, history, AuthMethod::Plan).await
+            stream_messages(model, history, extra, tools, AuthMethod::Plan).await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::ApiKey) => {
             let client = openai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_with(model, history).await
+            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::Plan) => {
             let client = chatgpt_plan_client(connection, false)?;
             let model = client.completion_model(&connection.model);
-            stream_with_auth(model, history, AuthMethod::Plan).await
+            stream_messages(model, history, extra, tools, AuthMethod::Plan).await
         }
         (ProviderKind::Synthetic, _) => {
             let client = openai::Client::builder()
@@ -266,19 +283,19 @@ pub(super) async fn stream(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_with(model, history).await
+            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
         }
         (ProviderKind::Openrouter, _) => {
             let client = openrouter::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_with(model, history).await
+            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
         }
         (ProviderKind::Deepseek, _) => {
             let client = deepseek::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_with(model, history).await
+            stream_messages(model, history, extra, tools, AuthMethod::ApiKey).await
         }
     }
 }
@@ -351,44 +368,53 @@ fn retry_after_from_completion(error: &CompletionError) -> Option<&str> {
         .ok()
 }
 
-async fn stream_with<M>(model: M, history: &[ChatTurn]) -> Result<TokenStream, ProviderError>
-where
-    M: CompletionModel + Clone,
-{
-    stream_with_auth(model, history, AuthMethod::ApiKey).await
-}
-
-async fn stream_with_auth<M>(
+async fn stream_messages<M>(
     model: M,
     history: &[ChatTurn],
+    extra: &[Message],
+    tools: &[ToolDefinition],
     auth: AuthMethod,
-) -> Result<TokenStream, ProviderError>
+) -> Result<ModelStream, ProviderError>
 where
     M: CompletionModel + Clone,
 {
-    let Some(last) = history.last() else {
-        return Err(ProviderError::EmptyReply);
-    };
-    if last.role != Role::User {
-        return Err(ProviderError::EmptyReply);
-    }
-    let prior = history[..history.len() - 1]
+    let mut messages = history
         .iter()
         .map(|turn| match turn.role {
             Role::User => Message::user(turn.text.clone()),
-            Role::Assistant | Role::Command => Message::assistant(turn.text.clone()),
+            Role::Assistant => Message::assistant(turn.text.clone()),
         })
         .collect::<Vec<_>>();
-    let response = model
-        .completion_request(last.text.clone())
-        .preamble(PREAMBLE.to_owned())
-        .messages(prior)
+    messages.extend(extra.iter().cloned());
+    let Some(prompt) = messages.pop() else {
+        return Err(ProviderError::EmptyReply);
+    };
+    let preamble = if tools.is_empty() {
+        PREAMBLE.to_owned()
+    } else {
+        AGENT_PREAMBLE.to_owned()
+    };
+    let mut request = model
+        .completion_request(prompt)
+        .preamble(preamble)
+        .messages(messages);
+    if !tools.is_empty() {
+        request = request.tools(tools.to_vec());
+    }
+    let response = request
         .stream()
         .await
         .map_err(|error| classify_completion_for(error, auth))?;
     Ok(Box::pin(response.filter_map(move |item| {
         std::future::ready(match item {
-            Ok(StreamedAssistantContent::Text(text)) => Some(Ok(text.text)),
+            Ok(StreamedAssistantContent::Text(text)) => Some(Ok(ModelEvent::Text(text.text))),
+            Ok(StreamedAssistantContent::ToolCall { tool_call, .. }) => {
+                Some(Ok(ModelEvent::ToolCall {
+                    id: tool_call.id.into_string(),
+                    name: tool_call.function.name,
+                    arguments: tool_call.function.arguments,
+                }))
+            }
             Ok(_) => None,
             Err(error) => Some(Err(classify_completion_for(error, auth))),
         })

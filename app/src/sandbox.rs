@@ -5,16 +5,19 @@ use std::time::Duration;
 
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
+mod access;
 mod command;
 mod project;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use access::GuestAccess;
 pub(crate) use command::{CommandEvent, CommandSession};
+pub(crate) use project::GUEST_PROJECT;
 
 const SANDBOX_NAME: &str = "powerplant";
-const SANDBOX_IMAGE: &str = "alpine";
+const SANDBOX_IMAGE: &str = "alpine/git";
 const SANDBOX_OWNER_LABEL: &str = "works.powerplant.owner";
 const SANDBOX_OWNER_VALUE: &str = "powerplant";
 
@@ -150,6 +153,45 @@ struct Live {
 enum Overlay {
     Idle,
     Starting,
+}
+
+pub(crate) struct GuestExec {
+    pub(crate) program: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) stdin: Option<Vec<u8>>,
+}
+
+impl GuestExec {
+    pub(crate) fn shell(command: &str) -> Self {
+        Self {
+            program: "sh".to_owned(),
+            args: vec!["-c".to_owned(), command.to_owned()],
+            stdin: None,
+        }
+    }
+
+    pub(crate) fn command(program: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            program: program.into(),
+            args,
+            stdin: None,
+        }
+    }
+
+    pub(crate) fn with_stdin(mut self, stdin: Vec<u8>) -> Self {
+        self.stdin = Some(stdin);
+        self
+    }
+
+    #[cfg(test)]
+    fn display(&self) -> String {
+        let mut line = self.program.clone();
+        for arg in &self.args {
+            line.push(' ');
+            line.push_str(arg);
+        }
+        line
+    }
 }
 
 pub(crate) struct GuestSandbox {
@@ -388,9 +430,14 @@ impl GuestSandbox {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn start(&self) -> Result<(), SandboxError> {
+        self.start_with(GuestAccess::default()).await
+    }
+
+    pub(crate) async fn start_with(&self, access: GuestAccess) -> Result<(), SandboxError> {
         match &self.inner {
-            Inner::Microsandbox(guest) => guest.start().await,
+            Inner::Microsandbox(guest) => guest.start(access).await,
             #[cfg(test)]
             Inner::Scripted(guest) => {
                 if guest.live.project().is_none() {
@@ -410,11 +457,27 @@ impl GuestSandbox {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn exec(&self, command: &str) -> Result<CommandSession, SandboxError> {
+        self.exec_cmd(GuestExec::shell(command)).await
+    }
+
+    pub(crate) async fn exec_cmd(
+        &self,
+        request: GuestExec,
+    ) -> Result<CommandSession, SandboxError> {
         match &self.inner {
-            Inner::Microsandbox(guest) => guest.exec(command).await,
+            Inner::Microsandbox(guest) => guest.exec(request).await,
             #[cfg(test)]
-            Inner::Scripted(guest) => guest.exec(command),
+            Inner::Scripted(guest) => guest.exec(request),
+        }
+    }
+
+    pub(crate) async fn access_matches(&self, access: &GuestAccess) -> Result<bool, SandboxError> {
+        match &self.inner {
+            Inner::Microsandbox(_) => current_access_matches(access).await,
+            #[cfg(test)]
+            Inner::Scripted(_) => Ok(true),
         }
     }
 
@@ -459,11 +522,11 @@ impl MicrosandboxGuest {
         Ok(())
     }
 
-    async fn start(&self) -> Result<(), SandboxError> {
+    async fn start(&self, access: GuestAccess) -> Result<(), SandboxError> {
         let project = required_project(&self.live)?;
         if self.live.missing().is_none()
             && current_status().await? == GuestStatus::Running
-            && running_mount_matches(&project).await?
+            && running_matches(&project, &access).await?
         {
             return Ok(());
         }
@@ -481,7 +544,7 @@ impl MicrosandboxGuest {
             let _guard = lock.lock().await;
             let result = async {
                 let project = required_project(&live)?;
-                start_sandbox(&live, project).await
+                start_sandbox(&live, project, &access).await
             }
             .await;
             live.finish_start(result);
@@ -489,7 +552,7 @@ impl MicrosandboxGuest {
         Ok(())
     }
 
-    async fn exec(&self, command: &str) -> Result<CommandSession, SandboxError> {
+    async fn exec(&self, request: GuestExec) -> Result<CommandSession, SandboxError> {
         if let Some(missing) = self.live.missing() {
             return Err(SandboxError::Missing(missing));
         }
@@ -502,7 +565,7 @@ impl MicrosandboxGuest {
             .clone()
             .try_lock_owned()
             .map_err(|_| SandboxError::Active)?;
-        Ok(exec_command(command, &project)
+        Ok(exec_command(request, &project)
             .await?
             .with_lifecycle(lifecycle))
     }
@@ -542,7 +605,7 @@ impl ScriptedGuest {
         Ok(())
     }
 
-    fn exec(&self, command: &str) -> Result<CommandSession, SandboxError> {
+    fn exec(&self, request: GuestExec) -> Result<CommandSession, SandboxError> {
         if let Some(missing) = self.live.missing() {
             return Err(SandboxError::Missing(missing));
         }
@@ -564,7 +627,7 @@ impl ScriptedGuest {
             *lock_mutex(&self.hang_command) = false;
             command::ScriptedCommand::hang()
         } else {
-            command::ScriptedCommand::output(command.to_owned(), 0)
+            command::ScriptedCommand::output(request.display(), 0)
         };
         Ok(CommandSession::scripted(session).with_lifecycle(lifecycle))
     }
@@ -609,25 +672,30 @@ async fn current_status() -> Result<GuestStatus, SandboxError> {
     }
 }
 
-async fn start_sandbox(live: &Live, project: PathBuf) -> Result<(), SandboxError> {
+async fn start_sandbox(
+    live: &Live,
+    project: PathBuf,
+    access: &GuestAccess,
+) -> Result<(), SandboxError> {
     let project = project::resolve_dir(&project)?;
     live.set_project(Some(project.clone()));
     match microsandbox::Sandbox::get(SANDBOX_NAME).await {
         Ok(handle) => {
             ensure_owned(&handle)?;
-            if !mount_matches(&handle, &project) {
-                return replace_with_project(handle, live, &project).await;
+            if running_config_matches(&handle, &project, access) {
+                return match map_status(handle.status_snapshot()) {
+                    GuestStatus::Running => reconnect(handle).await,
+                    GuestStatus::Starting => Ok(()),
+                    GuestStatus::Stopped | GuestStatus::Crashed => {
+                        replace_with_project(handle, live, &project, access).await
+                    }
+                    GuestStatus::Unavailable => Err(SandboxError::Inspect),
+                };
             }
-            match map_status(handle.status_snapshot()) {
-                GuestStatus::Running => reconnect(handle).await,
-                GuestStatus::Starting => Ok(()),
-                GuestStatus::Stopped => start_existing(handle).await,
-                GuestStatus::Crashed => recover_crashed(handle, live, &project).await,
-                GuestStatus::Unavailable => Err(SandboxError::Inspect),
-            }
+            replace_with_project(handle, live, &project, access).await
         }
         Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => {
-            create_detached(live, &project, false).await
+            create_detached(live, &project, false, access).await
         }
         Err(error) => Err(map_error(error, SandboxError::Start)),
     }
@@ -643,51 +711,40 @@ async fn reconnect(handle: microsandbox::sandbox::SandboxHandle) -> Result<(), S
     }
 }
 
-async fn start_existing(handle: microsandbox::sandbox::SandboxHandle) -> Result<(), SandboxError> {
-    match handle.start_detached().await {
-        Ok(sandbox) => {
-            sandbox.detach().await;
-            Ok(())
-        }
-        Err(error) => Err(map_error(error, SandboxError::Start)),
-    }
-}
-
-async fn recover_crashed(
-    handle: microsandbox::sandbox::SandboxHandle,
-    live: &Live,
-    project: &Path,
-) -> Result<(), SandboxError> {
-    match handle.start_detached().await {
-        Ok(sandbox) => {
-            sandbox.detach().await;
-            Ok(())
-        }
-        Err(_) => replace_with_project(handle, live, project).await,
-    }
-}
-
 async fn replace_with_project(
     handle: microsandbox::sandbox::SandboxHandle,
     live: &Live,
     project: &Path,
+    access: &GuestAccess,
 ) -> Result<(), SandboxError> {
     let _ = handle.stop().await;
     match microsandbox::Sandbox::remove(SANDBOX_NAME).await {
         Ok(()) | Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => {
-            create_detached(live, project, true).await
+            create_detached(live, project, true, access).await
         }
         Err(error) => Err(map_error(error, SandboxError::Start)),
     }
 }
 
-async fn create_detached(live: &Live, project: &Path, replace: bool) -> Result<(), SandboxError> {
+async fn create_detached(
+    live: &Live,
+    project: &Path,
+    replace: bool,
+    access: &GuestAccess,
+) -> Result<(), SandboxError> {
+    let host = access.host.clone();
     let mut builder = microsandbox::Sandbox::builder(SANDBOX_NAME)
         .image(SANDBOX_IMAGE)
         .label(SANDBOX_OWNER_LABEL, SANDBOX_OWNER_VALUE)
         .volume(project::GUEST_PROJECT, |mount| mount.bind(project))
         .workdir(project::GUEST_PROJECT)
+        .network(|network| network.policy(access::provider_policy(&host)))
         .detached(true);
+    if let Some(secret) = &access.secret {
+        let value = secret.expose().to_owned();
+        builder =
+            builder.secret(|entry| entry.env(access::SECRET_ENV).value(value).allow_host(host));
+    }
     if replace {
         builder = builder.replace();
     }
@@ -716,14 +773,66 @@ fn required_project(live: &Live) -> Result<PathBuf, SandboxError> {
     project::resolve_dir(&path)
 }
 
-async fn running_mount_matches(project: &Path) -> Result<bool, SandboxError> {
+async fn running_matches(project: &Path, access: &GuestAccess) -> Result<bool, SandboxError> {
     match microsandbox::Sandbox::get(SANDBOX_NAME).await {
         Ok(handle) => {
             ensure_owned(&handle)?;
-            Ok(mount_matches(&handle, project))
+            Ok(running_config_matches(&handle, project, access))
         }
         Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => Ok(false),
         Err(error) => Err(map_error(error, SandboxError::Inspect)),
+    }
+}
+
+async fn current_access_matches(access: &GuestAccess) -> Result<bool, SandboxError> {
+    match microsandbox::Sandbox::get(SANDBOX_NAME).await {
+        Ok(handle) => {
+            ensure_owned(&handle)?;
+            Ok(access_matches(&handle, access))
+        }
+        Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => Ok(false),
+        Err(error) => Err(map_error(error, SandboxError::Inspect)),
+    }
+}
+
+fn running_config_matches(
+    handle: &microsandbox::sandbox::SandboxHandle,
+    project: &Path,
+    access: &GuestAccess,
+) -> bool {
+    mount_matches(handle, project) && image_matches(handle) && access_matches(handle, access)
+}
+
+fn access_matches(handle: &microsandbox::sandbox::SandboxHandle, access: &GuestAccess) -> bool {
+    let Ok(config) = handle.config() else {
+        return false;
+    };
+    let expected_policy = access::provider_policy(&access.host);
+    if serde_json::to_value(config.spec.network.policy.as_ref()).ok()
+        != serde_json::to_value(Some(&expected_policy)).ok()
+    {
+        return false;
+    }
+    let secrets = config
+        .spec
+        .network
+        .secrets
+        .as_ref()
+        .map(|config| config.secrets.as_slice())
+        .unwrap_or_default();
+    match &access.secret {
+        Some(secret) => {
+            let [entry] = secrets else {
+                return false;
+            };
+            entry.env_var == access::SECRET_ENV
+                && entry.value.as_str() == secret.expose()
+                && entry.allowed_hosts
+                    == [microsandbox::sandbox::HostPattern::Exact(
+                        access.host.clone(),
+                    )]
+        }
+        None => secrets.is_empty(),
     }
 }
 
@@ -735,7 +844,20 @@ fn mount_matches(handle: &microsandbox::sandbox::SandboxHandle, project: &Path) 
         .is_some_and(|host| host == project)
 }
 
-async fn exec_command(command: &str, project: &Path) -> Result<CommandSession, SandboxError> {
+fn image_matches(handle: &microsandbox::sandbox::SandboxHandle) -> bool {
+    handle
+        .config()
+        .ok()
+        .is_some_and(|config| match config.spec.image {
+            microsandbox::sandbox::RootfsSource::Oci(oci) => {
+                oci.reference == SANDBOX_IMAGE
+                    || oci.reference.starts_with(&format!("{SANDBOX_IMAGE}:"))
+            }
+            _ => false,
+        })
+}
+
+async fn exec_command(request: GuestExec, project: &Path) -> Result<CommandSession, SandboxError> {
     let handle = match microsandbox::Sandbox::get(SANDBOX_NAME).await {
         Ok(handle) => handle,
         Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => {
@@ -755,9 +877,17 @@ async fn exec_command(command: &str, project: &Path) -> Result<CommandSession, S
         .await
         .map_err(|error| map_error(error, SandboxError::Exec))?;
     let cwd = project::GUEST_PROJECT.to_owned();
-    let script = command.to_owned();
+    let program = request.program;
+    let args = request.args;
+    let stdin = request.stdin;
     match sandbox
-        .exec_stream_with("sh", |options| options.args(["-c", &script]).cwd(cwd))
+        .exec_stream_with(program, |options| {
+            let options = options.args(args).cwd(cwd);
+            match stdin {
+                Some(bytes) => options.stdin_bytes(bytes),
+                None => options,
+            }
+        })
         .await
     {
         Ok(exec) => Ok(CommandSession::microsandbox(sandbox, exec)),

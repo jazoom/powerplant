@@ -38,9 +38,9 @@ They open that origin in a browser. They add a key or a plan login for a provide
 
 They choose the provider and model in chat. They can keep the provider default.
 
-They choose a project directory. Power Plant bind-mounts that directory into a guest sandbox. A chat turn can run a command in that guest. Chat later runs one agent on that sandbox and project.
+They choose a project directory. Power Plant bind-mounts that directory into a guest sandbox. Chat runs one built-in coding agent on that sandbox and project.
 
-They send chat turns. Rig streams the model reply on the host. The transcript shows the reply as HTML. Tool traces appear in the transcript.
+They send chat turns. Rig streams the model reply on the host. The agent can list, read and write files, run a command, and run git status, diff and commit. Those tools run only in the guest. The transcript shows the reply as HTML. Tool traces appear in the transcript.
 
 Forget removes one provider. The connect page stays available so they can add another provider.
 
@@ -59,13 +59,17 @@ Current capabilities:
 - Send chat turns through Rig.
 - Stream the reply into the transcript as HTML.
 - Choose a project directory and bind-mount it into the sandbox.
-- Run a command from chat in the guest and stream the output into the transcript.
+- Run one built-in coding agent on the sandbox and project.
+- List, read and write project files in the guest.
+- Run a command in the guest.
+- Run git status, diff and commit in the guest.
+- Show tool traces in the transcript.
 
 Current constraints:
 
 - Do not create user accounts.
 - The chat surface stays a transcript plus composer.
-- Tools run only in the guest. The guest does not receive a raw provider key or plan token. Model inference stays on the host through Rig.
+- Tools run only in the guest. The guest does not receive a raw provider key or plan token. Microsandbox secrets inject placeholders. Substitution and outbound network traffic are limited to the selected provider host. Model inference stays on the host through Rig.
 - Do not persist the transcript across process restarts.
 - One chat job runs at a time.
 

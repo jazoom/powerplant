@@ -56,33 +56,6 @@ fn parallel_commands_cannot_overwrite_a_completed_turn() {
 }
 
 #[test]
-fn command_output_keeps_its_turn_type() {
-    let store = super::SessionStore::new();
-    let token = sessions::generate_session_token().expect("token");
-    let id = token.id();
-    store.insert(id);
-
-    let begun = store.begin_command(&id, "ls".to_owned()).expect("command");
-    assert!(begun.job.plain_output());
-    assert!(store.finish_turn(&id, &begun.job.id(), "README".to_owned()));
-
-    let snapshot = store.snapshot(&id).expect("session");
-    assert_eq!(
-        snapshot.turns,
-        [
-            ChatTurn {
-                role: Role::User,
-                text: "ls".to_owned(),
-            },
-            ChatTurn {
-                role: Role::Command,
-                text: "README".to_owned(),
-            },
-        ]
-    );
-}
-
-#[test]
 fn expired_sessions_cannot_be_resolved() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");

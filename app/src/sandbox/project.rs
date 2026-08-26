@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::SandboxError;
 
-pub(super) const GUEST_PROJECT: &str = "/project";
+pub(crate) const GUEST_PROJECT: &str = "/project";
 const PROJECT_FILE_VERSION: u32 = 1;
 
 #[derive(Deserialize, Serialize)]

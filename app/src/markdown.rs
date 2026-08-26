@@ -17,9 +17,5 @@ pub(crate) fn escape_plain(text: &str) -> String {
     ammonia::clean_text(text).replace('\n', "<br>\n")
 }
 
-pub(crate) fn escape_code(text: &str) -> String {
-    ammonia::clean_text(text)
-}
-
 #[cfg(test)]
 mod tests;

@@ -417,10 +417,8 @@
               required
               maxlength="32768"
               rows="3"
-              placeholder="{% if command_mode %}
-                Run a command in the project
-              {% else if project_selected %}
-                Start the sandbox to run a command
+              placeholder="{% if project_selected && !sandbox_ready %}
+                Start the sandbox to work on this project
               {% else %}
                 Message Power Plant
               {% endif %}"

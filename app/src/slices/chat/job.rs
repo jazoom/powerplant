@@ -6,16 +6,20 @@ use tokio::sync::mpsc;
 
 use hypergraft::{PatchSet, PatchStatus};
 
+use rig_core::completion::{AssistantContent, Message};
+
 use crate::{
-    providers::{ChatTurn, ProviderConnection, ProviderError},
-    sandbox::{CommandEvent, SandboxError},
+    providers::{ChatTurn, ModelEvent, ProviderConnection, ProviderError},
     sessions::{Job, JobEventKind, JobStatus, SessionId},
     state::AppState,
 };
 
-use super::page::{
-    JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
-    output_turn, user_turn,
+use super::{
+    page::{
+        JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle, TurnBody, TurnView,
+        assistant_turn, user_turn,
+    },
+    tools,
 };
 
 pub(super) const MIN_PROGRESS_INTERVAL: Duration = if cfg!(test) {
@@ -61,109 +65,180 @@ pub(super) fn observe_response(job: Arc<Job>, cursor: u64) -> axum::response::Re
     hypergraft::outcome::stream_response(frames)
 }
 
-pub(super) async fn run_command_job(
+const MAXIMUM_TOOL_ROUNDS: usize = 12;
+
+pub(super) async fn run_agent_job(
     state: AppState,
     session_id: SessionId,
-    command: String,
+    connection: ProviderConnection,
+    turns: Vec<ChatTurn>,
     job: Arc<Job>,
 ) {
-    let mut session = tokio::select! {
-        biased;
-        _ = job.cancelled() => {
-            finish_cancelled(&state, &session_id, &job, "");
-            return;
-        }
-        result = state.sandbox.exec(&command) => match result {
-            Ok(session) => session,
-            Err(error) => {
-                let _ = state
-                    .sessions
-                    .fail_turn(&session_id, &job.id(), String::new());
-                job.finish(JobStatus::Failed, Some(error.message()));
-                return;
-            }
-        },
+    let tools = tools::definitions();
+    let secret = match connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
+        crate::providers::AuthMethod::Plan => None,
     };
-
+    let secret = secret.as_deref();
+    let mut extra: Vec<Message> = Vec::new();
     let mut reply = String::new();
     let mut published = 0usize;
     let mut last_emit = Instant::now();
     let mut output_visible = false;
-    let mut exit_code = None;
 
-    loop {
-        let event = tokio::select! {
+    for _ in 0..MAXIMUM_TOOL_ROUNDS {
+        if job.cancel_requested() {
+            finish_cancelled(&state, &session_id, &job, &reply);
+            return;
+        }
+        let mut events = tokio::select! {
             biased;
             _ = job.cancelled() => {
-                session.kill().await;
-                session.close().await;
                 finish_cancelled(&state, &session_id, &job, &reply);
                 return;
             }
-            event = session.recv() => event,
-        };
-        let Some(event) = event else {
-            break;
-        };
-        match event {
-            CommandEvent::Output(text) => {
-                let truncated = append_bounded(&mut reply, &text);
-                if progress_due(output_visible, last_emit) {
-                    publish_remaining(&job, &reply, published);
-                    published = reply.len();
-                    output_visible = published > 0;
-                    last_emit = Instant::now();
-                }
-                if truncated {
+            result = state.chat.stream_turn(&connection, &turns, &extra, &tools) => match result {
+                Ok(stream) => stream,
+                Err(error) => {
                     publish_remaining(&job, &reply, published);
                     persist_failure(&state, &session_id, &job, &reply);
-                    session.kill().await;
-                    session.close().await;
-                    job.finish(JobStatus::Failed, Some(COMMAND_TOO_LONG));
+                    job.finish(JobStatus::Failed, Some(error.message()));
+                    return;
+                }
+            },
+        };
+
+        let mut text = String::new();
+        let mut calls = Vec::new();
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                _ = job.cancelled() => {
+                    finish_cancelled(&state, &session_id, &job, &reply);
+                    return;
+                }
+                chunk = events.next() => chunk,
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
+            match chunk {
+                Ok(ModelEvent::Text(piece)) => {
+                    text.push_str(&piece);
+                    if append_and_publish(
+                        &job,
+                        &mut reply,
+                        &mut published,
+                        &mut last_emit,
+                        &mut output_visible,
+                        &piece,
+                    ) {
+                        persist_failure(&state, &session_id, &job, &reply);
+                        job.finish(
+                            JobStatus::Failed,
+                            Some(ProviderError::ReplyTooLong.message()),
+                        );
+                        return;
+                    }
+                }
+                Ok(ModelEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }) => calls.push((id, name, arguments)),
+                Err(error) => {
+                    publish_remaining(&job, &reply, published);
+                    persist_failure(&state, &session_id, &job, &reply);
+                    job.finish(JobStatus::Failed, Some(error.message()));
                     return;
                 }
             }
-            CommandEvent::Exited(code) => {
-                exit_code = Some(code);
-                break;
-            }
-            CommandEvent::Failed => {
-                publish_remaining(&job, &reply, published);
-                persist_failure(&state, &session_id, &job, &reply);
-                session.close().await;
-                job.finish(JobStatus::Failed, Some(SandboxError::Exec.message()));
+        }
+
+        if job.cancel_requested() {
+            finish_cancelled(&state, &session_id, &job, &reply);
+            return;
+        }
+
+        if calls.is_empty() {
+            publish_remaining(&job, &reply, published);
+            if reply.trim().is_empty() {
+                persist_failure(&state, &session_id, &job, "");
+                job.finish(JobStatus::Failed, Some(ProviderError::EmptyReply.message()));
                 return;
             }
+            persist_success(&state, &session_id, &job, &reply);
+            job.finish(JobStatus::Completed, None);
+            return;
         }
-    }
 
-    if job.cancel_requested() {
-        session.close().await;
-        finish_cancelled(&state, &session_id, &job, &reply);
-        return;
+        extra.push(assistant_tool_message(&text, &calls));
+        for (id, name, arguments) in calls {
+            let trace = tools::invoke(&state.sandbox, &name, &arguments, &job).await;
+            if job.cancel_requested() {
+                finish_cancelled(&state, &session_id, &job, &reply);
+                return;
+            }
+            let output = tools::redact(&trace.output, secret);
+            let visible = tools::render_trace(&trace.label, &output);
+            if append_and_publish(
+                &job,
+                &mut reply,
+                &mut published,
+                &mut last_emit,
+                &mut output_visible,
+                &format!("\n\n{visible}"),
+            ) {
+                persist_failure(&state, &session_id, &job, &reply);
+                job.finish(
+                    JobStatus::Failed,
+                    Some(ProviderError::ReplyTooLong.message()),
+                );
+                return;
+            }
+            extra.push(Message::tool_result(id, name, output));
+        }
     }
 
     publish_remaining(&job, &reply, published);
-    session.close().await;
-
-    match exit_code {
-        Some(0) => {
-            persist_success(&state, &session_id, &job, &reply);
-            job.finish(JobStatus::Completed, None);
-        }
-        Some(code) => {
-            persist_failure(&state, &session_id, &job, &reply);
-            let message = format!("The command exited with code {code}.");
-            job.finish(JobStatus::Failed, Some(&message));
-        }
-        None => {
-            persist_failure(&state, &session_id, &job, &reply);
-            job.finish(JobStatus::Failed, Some(SandboxError::Exec.message()));
-        }
-    }
+    persist_failure(&state, &session_id, &job, &reply);
+    job.finish(JobStatus::Failed, Some(TOOL_LOOP_LIMIT));
 }
 
-const COMMAND_TOO_LONG: &str = "Power Plant truncated the command output because it was too long.";
+const TOOL_LOOP_LIMIT: &str = "The agent stopped after too many tool calls. Try again.";
+
+fn assistant_tool_message(text: &str, calls: &[(String, String, serde_json::Value)]) -> Message {
+    let mut content = Vec::new();
+    if !text.is_empty() {
+        content.push(AssistantContent::text(text));
+    }
+    for (id, name, arguments) in calls {
+        content.push(AssistantContent::tool_call(
+            id.clone(),
+            name.clone(),
+            arguments.clone(),
+        ));
+    }
+    Message::Assistant { id: None, content }
+}
+
+fn append_and_publish(
+    job: &Job,
+    reply: &mut String,
+    published: &mut usize,
+    last_emit: &mut Instant,
+    output_visible: &mut bool,
+    piece: &str,
+) -> bool {
+    let truncated = append_bounded(reply, piece);
+    if progress_due(*output_visible, *last_emit) {
+        publish_remaining(job, reply, *published);
+        *published = reply.len();
+        *output_visible = *published > 0;
+        *last_emit = Instant::now();
+    }
+    truncated
+}
 
 pub(super) async fn run_job(
     state: AppState,
@@ -389,7 +464,7 @@ async fn offer_output_progress(
     text: &str,
     already_visible: bool,
 ) -> ProgressOffer {
-    let turn = output_turn(job.assistant_index(), text, job.plain_output());
+    let turn = assistant_turn(job.assistant_index(), text);
     let frame = encode_output_progress(job_id, cursor, &turn, already_visible);
     offer_progress(tx, budget, frame, "construct job progress frame").await
 }
@@ -475,11 +550,7 @@ fn encode_observe_final(
     let more = snapshot.latest_seq > cursor || snapshot.status == JobStatus::Running;
     let mut patches = PatchSet::new();
     if !assistant_visible && !snapshot.output.is_empty() {
-        let turn = output_turn(
-            snapshot.assistant_index,
-            &snapshot.output,
-            snapshot.plain_output,
-        );
+        let turn = assistant_turn(snapshot.assistant_index, &snapshot.output);
         patches.append("transcript", &TurnArticle { turn: &turn })?;
     }
     if more {

@@ -1295,7 +1295,7 @@ async fn a_sandbox_start_without_a_project_is_rejected() {
 }
 
 #[tokio::test]
-async fn a_project_without_a_running_sandbox_rejects_a_command() {
+async fn a_project_without_a_running_sandbox_rejects_an_agent_turn() {
     let state = test_state();
     let token = connected(&state);
     let _project = with_project(&state).await;
@@ -1315,14 +1315,18 @@ async fn a_project_without_a_running_sandbox_rejects_a_command() {
 }
 
 #[tokio::test]
-async fn a_command_from_chat_streams_guest_output() {
-    let state = test_state();
+async fn an_agent_turn_streams_a_tool_trace() {
+    let state = state_with_backend(ScriptedBackend::tool_then(
+        "write",
+        serde_json::json!({"path": "note.txt", "contents": "hello"}),
+        "Wrote the note.",
+    ));
     let token = connected(&state);
     let _project = with_project(&state).await;
     state.sandbox.start().await.expect("start");
     state.sandbox.complete_start();
     let started = app(state.clone())
-        .oneshot(patch_send_message(&token, "ls"))
+        .oneshot(patch_send_message(&token, "Add a note"))
         .await
         .expect("chat send");
     assert_eq!(started.status(), axum::http::StatusCode::OK);
@@ -1340,27 +1344,28 @@ async fn a_command_from_chat_streams_guest_output() {
     );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let frames = stream_frames(&body);
-    assert!(
-        frames
-            .iter()
-            .any(|frame| frame.contains("<pre><code>ls</code></pre>"))
-    );
+    assert!(frames.iter().any(|frame| frame.contains("write")));
+    assert!(frames.iter().any(|frame| frame.contains("note.txt")));
     assert!(!job_active(frames.last().expect("final")));
 
     let stored = session_snapshot(&state, &token);
-    assert_eq!(
-        stored
-            .turns
-            .iter()
-            .map(|turn| (turn.role, turn.text.as_str()))
-            .collect::<Vec<_>>(),
-        [(Role::User, "ls"), (Role::Command, "ls")]
-    );
+    let assistant = stored
+        .turns
+        .iter()
+        .find(|turn| turn.role == Role::Assistant)
+        .expect("assistant");
+    assert!(assistant.text.contains("write"));
+    assert!(assistant.text.contains("/project/note.txt"));
+    assert!(assistant.text.contains("Wrote the note."));
 }
 
 #[tokio::test]
 async fn cancel_stops_a_running_command() {
-    let state = test_state();
+    let state = state_with_backend(ScriptedBackend::tool_then(
+        "run",
+        serde_json::json!({"command": "sleep 30"}),
+        "done",
+    ));
     let token = connected(&state);
     let _project = with_project(&state).await;
     state.sandbox.start().await.expect("start");
@@ -1395,14 +1400,18 @@ async fn cancel_stops_a_running_command() {
 }
 
 #[tokio::test]
-async fn a_later_document_show_renders_command_output_as_terminal_text() {
-    let state = test_state();
+async fn a_later_document_show_renders_a_tool_trace() {
+    let state = state_with_backend(ScriptedBackend::tool_then(
+        "write",
+        serde_json::json!({"path": "note.txt", "contents": "hello"}),
+        "Wrote the note.",
+    ));
     let token = connected(&state);
     let _project = with_project(&state).await;
     state.sandbox.start().await.expect("start");
     state.sandbox.complete_start();
     let _ = app(state.clone())
-        .oneshot(patch_send_message(&token, "**boom**"))
+        .oneshot(patch_send_message(&token, "Add a note"))
         .await
         .expect("chat send");
     wait_until_job_idle(&state, &token).await;
@@ -1413,14 +1422,14 @@ async fn a_later_document_show_renders_command_output_as_terminal_text() {
         .expect("chat document");
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("<pre><code>**boom**</code></pre>"));
-    assert!(!text.contains("<strong>"));
+    assert!(text.contains("note.txt"));
+    assert!(text.contains("Wrote the note."));
     assert_eq!(
         session_snapshot(&state, &token)
             .turns
             .last()
             .map(|turn| turn.role),
-        Some(Role::Command)
+        Some(Role::Assistant)
     );
 }
 

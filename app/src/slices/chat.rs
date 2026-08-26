@@ -1,6 +1,7 @@
 mod forms;
 mod job;
 mod page;
+mod tools;
 
 #[cfg(test)]
 mod tests;
@@ -27,7 +28,7 @@ use self::{
     forms::{
         ChatForm, CursorError, ModelForm, ObserveQuery, ProjectForm, SandboxAction, SandboxForm,
     },
-    job::{observe_response, run_command_job, run_job, user_transcript_patch},
+    job::{observe_response, run_agent_job, run_job, user_transcript_patch},
     page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
 
@@ -84,10 +85,24 @@ async fn send(
     }
 
     let sandbox = state.sandbox.view().await;
-    let command = !sandbox.project.is_empty();
-    if command {
+    let agent = !sandbox.project.is_empty();
+    if agent {
         let message = match sandbox.status {
-            crate::sandbox::GuestStatus::Running => "",
+            crate::sandbox::GuestStatus::Running => {
+                let access = crate::sandbox::GuestAccess::from_connection(&connection);
+                let matches = state
+                    .sandbox
+                    .access_matches(&access)
+                    .await
+                    .map_err(|error| {
+                        crate::error::AppError::new("inspect sandbox access", error)
+                    })?;
+                if matches {
+                    ""
+                } else {
+                    "Stop and start the sandbox after you change the provider."
+                }
+            }
             crate::sandbox::GuestStatus::Starting => "Wait until the sandbox finishes starting.",
             _ => "Start the sandbox.",
         };
@@ -97,11 +112,7 @@ async fn send(
     }
 
     let message = form.message.trim().to_owned();
-    let started = match if command {
-        state.sessions.begin_command(&session.id, message)
-    } else {
-        state.sessions.begin_turn(&session.id, message)
-    } {
+    let started = match state.sessions.begin_turn(&session.id, message) {
         Ok(started) => started,
         Err(BeginTurnError::MissingSession) => {
             return Ok(responses::graft_redirect(graft, "/connect"));
@@ -121,15 +132,12 @@ async fn send(
     };
 
     let job = started.job.clone();
-    if command {
-        tokio::spawn(run_command_job(
+    if agent {
+        tokio::spawn(run_agent_job(
             state.clone(),
             session.id,
-            started
-                .turns
-                .last()
-                .map(|turn| turn.text.clone())
-                .unwrap_or_default(),
+            connection,
+            started.turns.clone(),
             job,
         ));
     } else {
@@ -337,7 +345,15 @@ async fn update_sandbox(
         }
     };
     let result = match action {
-        SandboxAction::Start => state.sandbox.start().await,
+        SandboxAction::Start => {
+            let access = state
+                .vault
+                .selected_connection()
+                .as_ref()
+                .map(crate::sandbox::GuestAccess::from_connection)
+                .unwrap_or_default();
+            state.sandbox.start_with(access).await
+        }
         SandboxAction::Stop => state.sandbox.stop().await,
     };
     let error = match result {

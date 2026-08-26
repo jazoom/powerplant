@@ -9,6 +9,7 @@ use std::fmt;
 use std::pin::Pin;
 
 use futures_util::Stream;
+use rig_core::completion::{Message, ToolDefinition};
 
 pub(crate) const SYNTHETIC_BASE_URL: &str = "https://api.synthetic.new/openai/v1";
 pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -241,7 +242,6 @@ impl ProviderConnection {
 pub(crate) enum Role {
     User,
     Assistant,
-    Command,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -403,6 +403,18 @@ fn sanitise_detail(text: &str) -> Option<String> {
 
 pub(crate) type TokenStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;
 
+#[derive(Clone, Debug)]
+pub(crate) enum ModelEvent {
+    Text(String),
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+}
+
+pub(crate) type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent, ProviderError>> + Send>>;
+
 pub(crate) enum ChatBackend {
     Rig,
     #[cfg(test)]
@@ -430,6 +442,20 @@ impl ChatBackend {
             Self::Rig => rig::stream(connection, history).await,
             #[cfg(test)]
             Self::Scripted(backend) => backend.stream(connection, history),
+        }
+    }
+
+    pub(crate) async fn stream_turn(
+        &self,
+        connection: &ProviderConnection,
+        history: &[ChatTurn],
+        extra: &[Message],
+        tools: &[ToolDefinition],
+    ) -> Result<ModelStream, ProviderError> {
+        match self {
+            Self::Rig => rig::stream_turn(connection, history, extra, tools).await,
+            #[cfg(test)]
+            Self::Scripted(backend) => backend.stream_turn(connection, history, extra, tools),
         }
     }
 
