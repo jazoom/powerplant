@@ -327,6 +327,7 @@
       >Configure</a
     >
     <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
+    <a href="/workflows" data-graft class="btn btn-ghost btn-sm">Workflows</a>
     <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
   </div>
 </header>
@@ -362,6 +363,9 @@
           <div class="mb-3" data-island="job-observe" data-job-active="true">
             <p class="text-quiet text-sm" role="status" aria-live="polite">
               {{ job_status }}
+              {% if workflow_name != "" %}
+                <span>{{ workflow_name }}</span>
+              {% endif %}
               {% if run_step != "" %}
                 <span>{{ run_step }}</span>
               {% endif %}
@@ -399,6 +403,9 @@
             <div class="mb-3">
               {% if run_id != "" %}
                 <p class="text-sm">
+                  {% if workflow_name != "" %}
+                    <span class="text-quiet">{{ workflow_name }}</span>
+                  {% endif %}
                   {% if run_step != "" %}
                     <span class="text-quiet">{{ run_step }}</span>
                   {% endif %}
@@ -430,6 +437,41 @@
               <p>{{ error }}</p>
             </div>
           {% endif %}
+          {% if workflow_empty %}
+            <div class="alert alert-warning" role="status">
+              <p>
+                Tasks need a workflow.
+                <a href="/workflows/new" data-graft class="link"
+                  >Create workflow</a
+                >
+              </p>
+            </div>
+          {% else %}
+            <div class="mb-3 flex flex-wrap items-end gap-3">
+              <label class="flex min-w-0 flex-1 flex-col gap-1">
+                <span class="text-sm">Workflow</span>
+                <select
+                  class="select select-bordered select-sm w-full"
+                  name="workflow"
+                  required
+                  {% if session_busy %}disabled{% endif %}
+                >
+                  <option value="">Choose a workflow</option>
+                  {% for option in workflow_options %}
+                    <option
+                      value="{{ option.token }}"
+                      {% if option.selected %}selected{% endif %}
+                    >
+                      {{ option.label }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </label>
+              <a href="/workflows" data-graft class="link text-sm"
+                >Manage workflows</a
+              >
+            </div>
+          {% endif %}
           <div class="flex items-end gap-3">
             <label class="sr-only" for="composer-message">Message</label>
             <textarea
@@ -439,17 +481,20 @@
               required
               maxlength="32768"
               rows="3"
-              {% if session_busy %}disabled{% endif %}
-              placeholder="{% if !sandbox_ready %}
+              {% if session_busy || workflow_empty %}disabled{% endif %}
+              placeholder="{% if workflow_empty %}
+                Create a workflow to send work
+              {% else if !sandbox_ready %}
                 Start the sandbox to work with this agent
               {% else %}
                 Message Power Plant
               {% endif %}"
-            ></textarea>
+            >
+{{- draft_message -}}</textarea>
             <button
               class="btn btn-primary"
               type="submit"
-              {% if session_busy %}disabled{% endif %}
+              {% if session_busy || workflow_empty %}disabled{% endif %}
             >
               Send
             </button>

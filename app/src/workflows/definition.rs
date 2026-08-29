@@ -262,7 +262,7 @@ impl WorkflowDefinition {
         Self::from_file(file)
     }
 
-    pub(super) fn from_file(file: DefinitionFile) -> Result<Self, DefinitionError> {
+    pub(crate) fn from_file(file: DefinitionFile) -> Result<Self, DefinitionError> {
         if file.format_version != DEFINITION_FORMAT_VERSION {
             return Err(DefinitionError::Format);
         }
@@ -319,7 +319,6 @@ impl WorkflowDefinition {
         &self.name
     }
 
-    #[cfg(test)]
     pub(crate) fn roles(&self) -> &[RoleDefinition] {
         &self.roles
     }
@@ -503,6 +502,21 @@ impl AgentAuthority {
         })
     }
 
+    pub(crate) fn allowed_by<'a>(
+        &self,
+        tools: &[ToolId],
+        directories: impl IntoIterator<Item = (&'a str, AccessMode)>,
+    ) -> bool {
+        let grants: Vec<(&str, AccessMode)> = directories.into_iter().collect();
+        self.tools.iter().all(|tool| tools.contains(tool))
+            && self.directories.iter().all(|directory| {
+                grants.iter().any(|(alias, access)| {
+                    *alias == directory.alias
+                        && (!directory.access.is_writable() || access.is_writable())
+                })
+            })
+    }
+
     fn from_file(file: AuthorityFile) -> Result<Self, DefinitionError> {
         let mut tools = Vec::new();
         for name in file.tools {
@@ -574,14 +588,14 @@ impl SystemCommandId {
 }
 
 impl OutputKind {
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "assistant-reply" => Some(Self::AssistantReply),
             _ => None,
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::AssistantReply => "assistant-reply",
         }
@@ -644,6 +658,10 @@ impl DefinitionVersion {
         }
         out
     }
+
+    pub(crate) fn short_hex(&self) -> String {
+        self.as_hex()[..8].to_owned()
+    }
 }
 
 impl std::fmt::Debug for DefinitionVersion {
@@ -655,6 +673,7 @@ impl std::fmt::Debug for DefinitionVersion {
 }
 
 impl PinnedWorkflowDefinition {
+    #[cfg(test)]
     pub(crate) fn pin(workflow_id: Option<WorkflowId>, definition: WorkflowDefinition) -> Self {
         let version = definition.version();
         Self {

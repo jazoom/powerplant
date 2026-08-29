@@ -18,7 +18,11 @@
         >Power Plant</span
       >
     </a>
-    <a href="/runs" data-graft class="btn btn-ghost btn-sm ml-auto">Runs</a>
+    <nav class="ml-auto flex flex-wrap items-center gap-2">
+      <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
+      <a href="/workflows" data-graft class="btn btn-ghost btn-sm">Workflows</a>
+      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
+    </nav>
   </div>
 </header>
 
@@ -28,8 +32,17 @@
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
-            {{ name }}
+            {% if name_href != "" %}
+              <a href="{{ name_href }}" data-graft class="link link-hover"
+                >{{ name }}</a
+              >
+            {% else %}
+              {{ name }}
+            {% endif %}
           </h1>
+          {% if catalogue_note != "" %}
+            <p class="text-quiet mt-1 text-sm">{{ catalogue_note }}</p>
+          {% endif %}
           <p class="text-quiet mt-1 font-mono text-xs break-all">
             {{ version }}
           </p>

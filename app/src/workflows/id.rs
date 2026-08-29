@@ -74,6 +74,12 @@ opaque_id!(WorkflowId);
 opaque_id!(RunId);
 opaque_id!(AttemptId);
 
+impl WorkflowId {
+    pub(crate) fn generate() -> Result<Self, IdError> {
+        Ok(Self(HexId::generate()?))
+    }
+}
+
 impl RunId {
     pub(crate) fn generate() -> Result<Self, IdError> {
         Ok(Self(HexId::generate()?))

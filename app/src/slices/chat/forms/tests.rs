@@ -8,19 +8,22 @@ use crate::providers::{MAXIMUM_MODEL_BYTES, ProviderKind};
 fn rejects_empty_and_oversized_messages() {
     assert!(
         !ChatForm {
-            message: "   ".to_owned()
+            message: "   ".to_owned(),
+            workflow: String::new(),
         }
         .is_bounded()
     );
     assert!(
         !ChatForm {
-            message: "a".repeat(MAXIMUM_MESSAGE_BYTES + 1)
+            message: "a".repeat(MAXIMUM_MESSAGE_BYTES + 1),
+            workflow: String::new(),
         }
         .is_bounded()
     );
     assert!(
         ChatForm {
-            message: "  hello  ".to_owned()
+            message: "  hello  ".to_owned(),
+            workflow: String::new(),
         }
         .is_bounded()
     );

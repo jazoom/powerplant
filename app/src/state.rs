@@ -10,7 +10,7 @@ use crate::{
     sandbox::SandboxFleet,
     sessions::SessionStore,
     vault::ProviderVault,
-    workflows::{WorkflowExecution, WorkflowRunStore},
+    workflows::{WorkflowCatalogue, WorkflowExecution, WorkflowRunStore},
 };
 
 #[derive(Clone)]
@@ -25,6 +25,7 @@ pub(crate) struct AppState {
     pub(crate) agents: Arc<AgentStore>,
     pub(crate) sandboxes: Arc<SandboxFleet>,
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,
+    pub(crate) workflows: Arc<WorkflowCatalogue>,
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
     #[cfg(test)]
@@ -37,6 +38,8 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         &config.data_dir.join("project.json"),
     )
     .map_err(|error| error.message().to_owned())?;
+    let workflows = WorkflowCatalogue::open(config.data_dir.join("workflows.json"))
+        .map_err(|error| error.message().to_owned())?;
     let workflow_runs = WorkflowRunStore::open(config.data_dir.join("workflow-runs"))
         .map_err(|error| error.message().to_owned())?;
     let sandboxes = SandboxFleet::prepare(&agents).await;
@@ -51,6 +54,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         agents: Arc::new(agents),
         sandboxes: Arc::new(sandboxes),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
+        workflows: Arc::new(workflows),
         workflow_runs: Arc::new(workflow_runs),
         workflow_execution: Arc::new(WorkflowExecution::new()),
         #[cfg(test)]
@@ -76,6 +80,7 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         agents: Arc::new(AgentStore::in_memory()),
         sandboxes: Arc::new(SandboxFleet::for_test()),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
+        workflows: Arc::new(WorkflowCatalogue::in_memory()),
         workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
         workflow_execution: Arc::new(WorkflowExecution::new()),
         scratch: Arc::new(std::sync::Mutex::new(Vec::new())),

@@ -110,6 +110,7 @@ pub(crate) struct JobSnapshot {
     pub(crate) error: Option<String>,
     pub(crate) cancel_requested: bool,
     pub(crate) step_label: String,
+    pub(crate) workflow_name: String,
 }
 
 pub(crate) struct Job {
@@ -120,6 +121,7 @@ pub(crate) struct Job {
     notify: Notify,
     cancel: AtomicBool,
     step_label: Mutex<String>,
+    workflow_name: Mutex<String>,
 }
 
 struct JobInner {
@@ -146,6 +148,7 @@ impl Job {
             notify: Notify::new(),
             cancel: AtomicBool::new(false),
             step_label: Mutex::new(String::new()),
+            workflow_name: Mutex::new(String::new()),
         })
     }
 
@@ -167,6 +170,21 @@ impl Job {
 
     pub(crate) fn step_label(&self) -> String {
         self.step_label
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn set_workflow_name(&self, name: String) {
+        *self
+            .workflow_name
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = name;
+        self.notify.notify_waiters();
+    }
+
+    pub(crate) fn workflow_name(&self) -> String {
+        self.workflow_name
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -214,6 +232,7 @@ impl Job {
             error: inner.error.clone(),
             cancel_requested: self.cancel.load(Ordering::SeqCst),
             step_label: self.step_label(),
+            workflow_name: self.workflow_name(),
         }
     }
 

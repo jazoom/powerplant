@@ -621,6 +621,7 @@ fn encode_observe_final(
     }
     let run_id = snapshot.run_id.as_hex();
     let run_step = snapshot.step_label.as_str();
+    let workflow_name = snapshot.workflow_name.as_str();
     if more {
         let status = if snapshot.cancel_requested {
             "Stopping"
@@ -629,13 +630,22 @@ fn encode_observe_final(
         };
         patches.children(
             "job-observe",
-            &JobObserveContents::observing(job_id, cursor, status, "", agent_id, &run_id, run_step),
+            &JobObserveContents::observing(
+                job_id,
+                cursor,
+                status,
+                "",
+                agent_id,
+                &run_id,
+                run_step,
+                workflow_name,
+            ),
         )?;
     } else {
         let error = snapshot.error.as_deref().unwrap_or("");
         patches.children(
             "job-observe",
-            &JobObserveContents::idle(error, agent_id, &run_id, run_step),
+            &JobObserveContents::idle(error, agent_id, &run_id, run_step, workflow_name),
         )?;
     }
     let status = match snapshot.status {

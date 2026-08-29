@@ -2,7 +2,7 @@ use askama::Template;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::workflows::{RunSummary, WorkflowRun};
+use crate::workflows::{RunSummary, WorkflowCatalogue, WorkflowRun};
 
 pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
 pub(super) const DETAIL_TITLE: &str = "Run | Power Plant";
@@ -30,6 +30,7 @@ pub(super) struct RunIndexView {
 
 pub(super) struct IndexRow {
     pub(super) id: String,
+    pub(super) uncatalogued: bool,
     pub(super) name: String,
     pub(super) version: String,
     pub(super) state: String,
@@ -45,6 +46,7 @@ impl RunIndexView {
                 .iter()
                 .map(|summary| IndexRow {
                     id: summary.id.as_hex(),
+                    uncatalogued: summary.workflow_id.is_none(),
                     name: summary.name.clone(),
                     version: summary.version.as_hex(),
                     state: summary.state.clone(),
@@ -62,6 +64,8 @@ impl RunIndexView {
 pub(super) struct RunDetailView {
     pub(super) run_id: String,
     pub(super) name: String,
+    pub(super) name_href: String,
+    pub(super) catalogue_note: String,
     pub(super) version: String,
     pub(super) state: &'static str,
     pub(super) created: String,
@@ -75,6 +79,8 @@ pub(super) struct RunDetailView {
 pub(super) struct RunDetailContents<'a> {
     pub(super) run_id: &'a str,
     pub(super) name: &'a str,
+    pub(super) name_href: &'a str,
+    pub(super) catalogue_note: &'a str,
     pub(super) version: &'a str,
     pub(super) state: &'static str,
     pub(super) created: &'a str,
@@ -84,10 +90,13 @@ pub(super) struct RunDetailContents<'a> {
 }
 
 impl RunDetailView {
-    pub(super) fn from_run(run: &WorkflowRun) -> Self {
+    pub(super) fn from_run(run: &WorkflowRun, catalogue: &WorkflowCatalogue) -> Self {
+        let (name_href, catalogue_note) = catalogue_presentation(run, catalogue);
         Self {
             run_id: run.id.as_hex(),
             name: run.pinned.definition.name().to_owned(),
+            name_href,
+            catalogue_note,
             version: run.pinned.version.as_hex(),
             state: run.state.as_label(),
             created: format_time(run.created_at_ms),
@@ -126,6 +135,8 @@ impl RunDetailView {
         RunDetailContents {
             run_id: &self.run_id,
             name: &self.name,
+            name_href: &self.name_href,
+            catalogue_note: &self.catalogue_note,
             version: &self.version,
             state: self.state,
             created: &self.created,
@@ -133,6 +144,23 @@ impl RunDetailView {
             steps: &self.steps,
             attempts: &self.attempts,
         }
+    }
+}
+
+fn catalogue_presentation(run: &WorkflowRun, catalogue: &WorkflowCatalogue) -> (String, String) {
+    let Some(id) = run.pinned.workflow_id else {
+        return (String::new(), "Uncatalogued definition".to_owned());
+    };
+    match catalogue.get(&id) {
+        None => (String::new(), "Workflow deleted from catalogue".to_owned()),
+        Some(record) if record.definition_version != run.pinned.version => (
+            format!("/workflows/{}/configuration", id.as_hex()),
+            "Earlier pinned version".to_owned(),
+        ),
+        Some(_) => (
+            format!("/workflows/{}/configuration", id.as_hex()),
+            String::new(),
+        ),
     }
 }
 

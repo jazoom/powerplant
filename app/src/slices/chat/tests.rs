@@ -107,7 +107,22 @@ async fn connected_with(state: &AppState, start_guest: bool) -> String {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
+    if state.workflows.list().is_empty() {
+        state
+            .workflows
+            .create(crate::workflows::seeds::one_agent_definition())
+            .expect("workflow");
+    }
     token.raw().as_str().to_owned()
+}
+
+fn workflow_token(state: &AppState) -> String {
+    let record = &state.workflows.list()[0];
+    crate::workflows::WorkflowSelection {
+        workflow_id: record.id,
+        definition_version: record.definition_version,
+    }
+    .as_token()
 }
 
 fn patch_send_message(state: &AppState, token: &str, message: &str) -> Request<Body> {
@@ -118,7 +133,10 @@ fn patch_send_message(state: &AppState, token: &str, message: &str) -> Request<B
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(hypergraft::GRAFT_REQUEST, "patch")
         .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-        .body(Body::from(format!("message={message}")))
+        .body(Body::from(format!(
+            "message={message}&workflow={}",
+            workflow_token(state)
+        )))
         .unwrap()
 }
 
@@ -378,7 +396,10 @@ async fn a_document_send_returns_the_page_before_the_job_finishes() {
                 .uri(chat_path(&state))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(Body::from("message=Hello"))
+                .body(Body::from(format!(
+                    "message=Hello&workflow={}",
+                    workflow_token(&state)
+                )))
                 .unwrap(),
         )
         .await
@@ -1457,6 +1478,30 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
+    let reader = {
+        let base = crate::workflows::seeds::one_agent_definition();
+        let mut steps = base.steps().to_vec();
+        if let crate::workflows::definition::StepAction::Agent(action) = &mut steps[0].action {
+            action.authority = crate::workflows::definition::AgentAuthority::new(
+                vec![ToolId::List, ToolId::Read],
+                action.authority.directories.clone(),
+            )
+            .expect("authority");
+        }
+        crate::workflows::definition::WorkflowDefinition::from_parts(
+            "Reader".to_owned(),
+            base.roles().to_vec(),
+            base.first_step().clone(),
+            steps,
+        )
+        .expect("reader")
+    };
+    let reader = state.workflows.create(reader).expect("reader workflow");
+    let reader_token = crate::workflows::WorkflowSelection {
+        workflow_id: reader.id,
+        definition_version: reader.definition_version,
+    }
+    .as_token();
 
     let send = app(&state)
         .oneshot(
@@ -1467,7 +1512,7 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from("message=Hello"))
+                .body(Body::from(format!("message=Hello&workflow={reader_token}")))
                 .unwrap(),
         )
         .await
@@ -1516,4 +1561,108 @@ async fn a_second_session_cannot_start_while_a_workflow_runs() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("Wait until the current workflow finishes."));
+}
+
+#[tokio::test]
+async fn a_missing_workflow_token_is_rejected_before_a_job_starts() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(chat_path(&state))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("message=Hello"))
+                .unwrap(),
+        )
+        .await
+        .expect("send");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.contains("Choose a workflow."));
+    assert!(session_snapshot(&state, &token).job.is_none());
+    assert!(state.workflow_runs.summaries().is_empty());
+}
+
+#[tokio::test]
+async fn a_stale_workflow_selection_is_a_conflict() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let stale = workflow_token(&state);
+    let current = state.workflows.list().into_iter().next().expect("workflow");
+    state
+        .workflows
+        .update(
+            &current.id,
+            current.revision,
+            crate::workflows::definition::WorkflowDefinition::from_parts(
+                "Edited agent".to_owned(),
+                current.definition.roles().to_vec(),
+                current.definition.first_step().clone(),
+                current.definition.steps().to_vec(),
+            )
+            .expect("edited"),
+        )
+        .expect("update");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(chat_path(&state))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!("message=Hello&workflow={stale}")))
+                .unwrap(),
+        )
+        .await
+        .expect("send");
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert!(session_snapshot(&state, &token).job.is_none());
+}
+
+#[tokio::test]
+async fn a_new_run_pins_the_selected_catalogue_identity() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let record = state.workflows.list().into_iter().next().expect("workflow");
+    let _ = app(&state)
+        .oneshot(patch_send(&state, &token))
+        .await
+        .expect("send");
+    wait_until_job_idle(&state, &token).await;
+    let run = &state.workflow_runs.summaries()[0];
+    assert_eq!(run.workflow_id, Some(record.id));
+    assert_eq!(run.version, record.definition_version);
+    state
+        .workflows
+        .update(
+            &record.id,
+            record.revision,
+            crate::workflows::definition::WorkflowDefinition::from_parts(
+                "Later name".to_owned(),
+                record.definition.roles().to_vec(),
+                record.definition.first_step().clone(),
+                record.definition.steps().to_vec(),
+            )
+            .expect("later"),
+        )
+        .expect("update");
+    let stored = state.workflow_runs.get(&run.id).expect("run");
+    assert_eq!(stored.pinned.definition.name(), "One agent");
+    assert_eq!(stored.pinned.workflow_id, Some(record.id));
 }

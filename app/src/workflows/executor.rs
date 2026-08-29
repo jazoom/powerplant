@@ -8,7 +8,6 @@ use crate::sessions::{Job, JobStatus, SessionId};
 use crate::slices::{AgentOutcome, AgentRunSpec};
 use crate::state::AppState;
 
-use super::compatibility::compose_preamble;
 use super::definition::{AgentAuthority, AgentStep, StepAction, StepDefinition, SystemCommandId};
 use super::execution::ExecutionGuard;
 use super::id::{AttemptId, RunId};
@@ -126,6 +125,26 @@ async fn dispatch_step(state: &AppState, job: &WorkflowJob, step: &StepDefinitio
 }
 
 async fn run_agent_step(state: &AppState, job: &WorkflowJob, action: &AgentStep) -> StepOutcome {
+    if let Some(record) = state.agents.get(&job.agent_id) {
+        let directories: Vec<(String, AccessMode)> = record
+            .directories
+            .iter()
+            .map(|grant| (grant.alias.clone(), grant.access))
+            .collect();
+        if !action.authority.allowed_by(
+            &record.tools,
+            directories
+                .iter()
+                .map(|(alias, access)| (alias.as_str(), *access)),
+        ) {
+            return StepOutcome::Failed {
+                category: FailureCategory::Authority,
+                error: Some(
+                    "The pinned step authority exceeds the current agent ceiling.".to_owned(),
+                ),
+            };
+        }
+    }
     let policy = match intersect_authority(&action.authority, &job.host_policy) {
         Ok(policy) => policy,
         Err(()) => {
@@ -147,7 +166,33 @@ async fn run_agent_step(state: &AppState, job: &WorkflowJob, action: &AgentStep)
             error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
         };
     };
-    let preamble = compose_preamble(&role, &action.authority, &policy);
+    let agent_instructions = state
+        .agents
+        .get(&job.agent_id)
+        .map(|record| record.instructions)
+        .unwrap_or_default();
+    let instructions = match (
+        role.prompt_defaults.trim().is_empty(),
+        agent_instructions.trim().is_empty(),
+    ) {
+        (true, true) => String::new(),
+        (false, true) => role.prompt_defaults.clone(),
+        (true, false) => agent_instructions,
+        (false, false) => format!(
+            "{}
+
+{}",
+            role.prompt_defaults.trim(),
+            agent_instructions.trim()
+        ),
+    };
+    let preamble = crate::agents::compose_role(
+        &role.name,
+        &role.expertise,
+        &instructions,
+        &action.authority.tools,
+        &policy,
+    );
     let spec = AgentRunSpec {
         agent_id: job.agent_id,
         revision: 0,

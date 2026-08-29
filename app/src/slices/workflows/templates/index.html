@@ -27,35 +27,36 @@
 </header>
 
 <main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
-  <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">Runs</h1>
-  {% if runs.is_empty() %}
-    <p class="text-quiet">No workflow runs yet.</p>
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
+      Workflows
+    </h1>
+    <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
+      >New workflow</a
+    >
+  </div>
+  {% if workflows.is_empty() %}
+    <div class="border-base-300 space-y-3 rounded-sm border px-4 py-6">
+      <p>Tasks need a workflow before you can send work.</p>
+      <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
+        >New workflow</a
+      >
+    </div>
   {% else %}
     <ul class="space-y-2">
-      {% for run in runs %}
+      {% for workflow in workflows %}
         <li class="border-base-300 rounded-sm border px-3 py-3">
           <a
-            href="/runs/{{ run.id }}"
+            href="/workflows/{{ workflow.id }}/configuration"
             data-graft
             class="link link-hover font-medium"
-            >{{ run.name }}</a
+            >{{ workflow.name }}</a
           >
-          {% if run.uncatalogued %}
-            <p class="text-quiet mt-1 text-xs">Uncatalogued definition</p>
-          {% endif %}
-          <p class="text-quiet mt-1 font-mono text-xs break-all">
-            {{ run.version }}
+          <p class="text-quiet mt-1 text-xs">
+            {{ workflow.roles }} roles · {{ workflow.steps }} steps ·
+            <span class="font-mono">{{ workflow.version }}</span>
+            · {{ workflow.updated }}
           </p>
-          <p class="text-sm">
-            {{ run.state }}
-            {% if run.current_step != "" %}
-              <span>{{ run.current_step }}</span>
-            {% endif %}
-          </p>
-          <p class="text-quiet text-xs">{{ run.created }}</p>
-          {% if run.latest_attempt != "" %}
-            <p class="text-sm">{{ run.latest_attempt }}</p>
-          {% endif %}
         </li>
       {% endfor %}
     </ul>

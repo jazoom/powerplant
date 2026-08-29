@@ -11,7 +11,7 @@ use crate::{
         job::{Job, JobId, JobSnapshot},
         tokens::SessionId,
     },
-    workflows::RunId,
+    workflows::{RunId, WorkflowId},
 };
 
 #[cfg(test)]
@@ -47,6 +47,7 @@ impl Clock {
 struct Conversation {
     turns: Vec<ChatTurn>,
     job: Option<Arc<Job>>,
+    preferred_workflow: Option<WorkflowId>,
 }
 
 struct StoredSession {
@@ -63,6 +64,7 @@ pub(crate) struct SessionSnapshot {
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Option<JobSnapshot>,
     pub(crate) session_busy: bool,
+    pub(crate) preferred_workflow: Option<WorkflowId>,
 }
 
 pub(crate) struct BegunTurn {
@@ -113,6 +115,36 @@ impl SessionStore {
             .map(|session| snapshot_session(*id, agent, session))
     }
 
+    pub(crate) fn set_preferred_workflow(
+        &self,
+        id: &SessionId,
+        agent: AgentId,
+        workflow: WorkflowId,
+    ) {
+        let mut sessions = self.lock();
+        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
+            return;
+        };
+        let conversation = session
+            .conversations
+            .entry(agent)
+            .or_insert_with(|| Conversation {
+                turns: Vec::new(),
+                job: None,
+                preferred_workflow: None,
+            });
+        conversation.preferred_workflow = Some(workflow);
+    }
+
+    pub(crate) fn clear_preferred_workflow(&self, id: &SessionId, agent: &AgentId) {
+        let mut sessions = self.lock();
+        if let Some(session) = live_mut(&mut sessions, id, self.clock.now())
+            && let Some(conversation) = session.conversations.get_mut(agent)
+        {
+            conversation.preferred_workflow = None;
+        }
+    }
+
     pub(crate) fn begin_turn(
         &self,
         id: &SessionId,
@@ -133,6 +165,7 @@ impl SessionStore {
             .or_insert_with(|| Conversation {
                 turns: Vec::new(),
                 job: None,
+                preferred_workflow: None,
             });
         conversation.turns.push(ChatTurn {
             role: Role::User,
@@ -272,6 +305,7 @@ fn snapshot_session(id: SessionId, agent: &AgentId, session: &StoredSession) -> 
         job: conversation
             .and_then(|conversation| conversation.job.as_ref().map(|job| job.snapshot())),
         session_busy: session.active.is_some(),
+        preferred_workflow: conversation.and_then(|conversation| conversation.preferred_workflow),
     }
 }
 

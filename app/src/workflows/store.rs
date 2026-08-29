@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use super::definition::DefinitionVersion;
-use super::id::RunId;
+use super::id::{RunId, WorkflowId};
 use super::run::{AttemptRecord, RunRecordError, WorkflowRun, now_ms};
 
 pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
@@ -13,6 +13,7 @@ pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
 #[derive(Clone, Debug)]
 pub(crate) struct RunSummary {
     pub(crate) id: RunId,
+    pub(crate) workflow_id: Option<WorkflowId>,
     pub(crate) name: String,
     pub(crate) version: DefinitionVersion,
     pub(crate) state: String,
@@ -122,6 +123,7 @@ impl WorkflowRunStore {
 fn summary_of(run: &WorkflowRun) -> RunSummary {
     RunSummary {
         id: run.id,
+        workflow_id: run.pinned.workflow_id,
         name: run.pinned.definition.name().to_owned(),
         version: run.pinned.version,
         state: run.state.as_label().to_owned(),

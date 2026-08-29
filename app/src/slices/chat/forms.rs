@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 use crate::providers::{ProviderKind, model_is_bounded, resolve_model};
 use crate::sessions::JobId;
+use crate::workflows::WorkflowSelection;
 
 pub(super) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
 pub(super) const MAXIMUM_CURSOR: u64 = 1_000_000;
@@ -10,12 +11,28 @@ pub(super) const MAXIMUM_CURSOR: u64 = 1_000_000;
 pub(super) struct ChatForm {
     #[serde(default)]
     pub(super) message: String,
+    #[serde(default)]
+    pub(super) workflow: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WorkflowTokenError {
+    Absent,
+    Malformed,
 }
 
 impl ChatForm {
     pub(super) fn is_bounded(&self) -> bool {
         let message = self.message.trim();
         !message.is_empty() && message.len() <= MAXIMUM_MESSAGE_BYTES
+    }
+
+    pub(super) fn workflow_selection(&self) -> Result<WorkflowSelection, WorkflowTokenError> {
+        let token = self.workflow.trim();
+        if token.is_empty() {
+            return Err(WorkflowTokenError::Absent);
+        }
+        WorkflowSelection::parse(token).ok_or(WorkflowTokenError::Malformed)
     }
 }
 

@@ -57,6 +57,16 @@ pub(super) struct ChatViewModel {
     pub(super) agent_name: String,
     pub(super) run_id: String,
     pub(super) run_step: String,
+    pub(super) workflow_name: String,
+    pub(super) workflow_options: Vec<WorkflowOption>,
+    pub(super) workflow_empty: bool,
+    pub(super) draft_message: String,
+}
+
+pub(super) struct WorkflowOption {
+    pub(super) token: String,
+    pub(super) label: String,
+    pub(super) selected: bool,
 }
 
 impl ChatViewModel {
@@ -143,9 +153,11 @@ impl ChatViewModel {
         let mut job_status = "";
         let mut run_id = String::new();
         let mut run_step = String::new();
+        let mut workflow_name = String::new();
         if let Some(job) = job {
             run_id = job.run_id.as_hex();
             run_step = job.step_label.clone();
+            workflow_name = job.workflow_name.clone();
             if !job.output.is_empty() && views.len() == job.assistant_index {
                 views.push(assistant_turn(job.assistant_index, &job.output));
             }
@@ -208,6 +220,10 @@ impl ChatViewModel {
             agent_name: record.name.clone(),
             run_id,
             run_step,
+            workflow_name,
+            workflow_options: Vec::new(),
+            workflow_empty: false,
+            draft_message: String::new(),
         }
     }
 
@@ -249,6 +265,9 @@ impl ChatViewModel {
             sandbox_ready: self.sandbox_ready,
             session_busy: self.session_busy,
             agent_id: &self.agent_id,
+            workflow_options: &self.workflow_options,
+            workflow_empty: self.workflow_empty,
+            draft_message: &self.draft_message,
         }
     }
 
@@ -266,6 +285,7 @@ impl ChatViewModel {
             agent_id: &self.agent_id,
             run_id: &self.run_id,
             run_step: &self.run_step,
+            workflow_name: &self.workflow_name,
         }
     }
 }
@@ -335,6 +355,9 @@ pub(super) struct ComposerContents<'a> {
     pub(super) sandbox_ready: bool,
     pub(super) session_busy: bool,
     pub(super) agent_id: &'a str,
+    pub(super) workflow_options: &'a [WorkflowOption],
+    pub(super) workflow_empty: bool,
+    pub(super) draft_message: &'a str,
 }
 
 #[derive(Template)]
@@ -348,6 +371,7 @@ pub(super) struct JobObserveContents<'a> {
     pub(super) agent_id: &'a str,
     pub(super) run_id: &'a str,
     pub(super) run_step: &'a str,
+    pub(super) workflow_name: &'a str,
 }
 
 impl<'a> JobObserveContents<'a> {
@@ -356,6 +380,7 @@ impl<'a> JobObserveContents<'a> {
         agent_id: &'a str,
         run_id: &'a str,
         run_step: &'a str,
+        workflow_name: &'a str,
     ) -> Self {
         Self {
             job_error: error,
@@ -366,9 +391,11 @@ impl<'a> JobObserveContents<'a> {
             agent_id,
             run_id,
             run_step,
+            workflow_name,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn observing(
         job_id: &'a str,
         cursor: u64,
@@ -377,6 +404,7 @@ impl<'a> JobObserveContents<'a> {
         agent_id: &'a str,
         run_id: &'a str,
         run_step: &'a str,
+        workflow_name: &'a str,
     ) -> Self {
         Self {
             job_error: error,
@@ -387,6 +415,7 @@ impl<'a> JobObserveContents<'a> {
             agent_id,
             run_id,
             run_step,
+            workflow_name,
         }
     }
 }

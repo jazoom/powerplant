@@ -165,6 +165,15 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
+    let workflow = state
+        .workflows
+        .create(crate::workflows::seeds::one_agent_definition())
+        .expect("workflow");
+    let token_value = crate::workflows::WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
 
     let send = app(state.clone())
         .oneshot(
@@ -175,7 +184,7 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from("message=Hello"))
+                .body(Body::from(format!("message=Hello&workflow={token_value}")))
                 .unwrap(),
         )
         .await

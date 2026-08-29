@@ -81,7 +81,7 @@ async fn detail(
     let Some(run) = state.workflow_runs.get(&id) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };
-    let view = RunDetailView::from_run(&run);
+    let view = RunDetailView::from_run(&run, &state.workflows);
     match graft {
         GraftRequest::Document => {
             let mut response =

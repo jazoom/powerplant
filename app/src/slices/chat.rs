@@ -23,7 +23,10 @@ use crate::{
     sandbox::{GuestAccess, SandboxSpec},
     sessions::{self, BeginTurnError, JobIdError, OptionalSession, SessionId, SessionSnapshot},
     state::AppState,
-    workflows::{self, PinnedWorkflowDefinition, WorkflowJob, WorkflowRun},
+    workflows::{
+        self, ResolveWorkflowError, WorkflowJob, WorkflowRun, WorkflowSelection,
+        definition_fits_agent,
+    },
 };
 
 use self::{
@@ -118,8 +121,30 @@ async fn send(
     };
 
     if !form.is_bounded() {
-        return reject_chat_input(&state, graft, &record, &snapshot, "Enter a message.").await;
+        return reject_chat_input(
+            &state,
+            graft,
+            &record,
+            &snapshot,
+            "Enter a message.",
+            &form.message,
+        )
+        .await;
     }
+    let selection = match form.workflow_selection() {
+        Ok(selection) => selection,
+        Err(_) => {
+            return reject_chat_input(
+                &state,
+                graft,
+                &record,
+                &snapshot,
+                "Choose a workflow.",
+                &form.message,
+            )
+            .await;
+        }
+    };
     if snapshot.session_busy {
         return reject_parallel_command(&state, graft, &record, &snapshot).await;
     }
@@ -131,6 +156,7 @@ async fn send(
             &record,
             &snapshot,
             "Wait until the current workflow finishes.",
+            &form.message,
         )
         .await;
     };
@@ -141,6 +167,7 @@ async fn send(
             &record,
             &snapshot,
             "Wait until this agent finishes.",
+            &form.message,
         )
         .await;
     };
@@ -154,6 +181,7 @@ async fn send(
             &latest,
             &snapshot,
             "The agent configuration changed. Try again.",
+            &form.message,
         )
         .await;
     }
@@ -166,7 +194,7 @@ async fn send(
         } else {
             "Start the sandbox."
         };
-        return reject_chat_input(&state, graft, &record, &snapshot, message).await;
+        return reject_chat_input(&state, graft, &record, &snapshot, message, &form.message).await;
     }
     let policy = DirectoryPolicy::from_record(&record);
     if policy.confirm_hosts().is_err() {
@@ -176,6 +204,7 @@ async fn send(
             &record,
             &snapshot,
             "A granted directory is no longer at the saved path.",
+            &form.message,
         )
         .await;
     }
@@ -192,6 +221,45 @@ async fn send(
             &record,
             &snapshot,
             "Stop and start the sandbox after you change the provider or directories.",
+            &form.message,
+        )
+        .await;
+    }
+
+    let resolved = match state.workflows.resolve(&selection) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            let status = match error {
+                ResolveWorkflowError::Missing | ResolveWorkflowError::Changed => {
+                    PatchStatus::Conflict
+                }
+                ResolveWorkflowError::Invalid => PatchStatus::UnprocessableEntity,
+            };
+            return reject_chat_selection(
+                &state,
+                graft,
+                &record,
+                &snapshot,
+                error.message(),
+                &form.message,
+                status,
+            )
+            .await;
+        }
+    };
+    let directories: Vec<(String, crate::agents::AccessMode)> = record
+        .directories
+        .iter()
+        .map(|grant| (grant.alias.clone(), grant.access))
+        .collect();
+    if !definition_fits_agent(&resolved.pinned.definition, &record.tools, &directories) {
+        return reject_chat_input(
+            &state,
+            graft,
+            &record,
+            &snapshot,
+            "That workflow needs access this agent does not allow.",
+            &form.message,
         )
         .await;
     }
@@ -199,13 +267,14 @@ async fn send(
     let message = form.message.trim().to_owned();
     let run_id = workflows::RunId::generate()
         .map_err(|error| crate::error::AppError::new("create workflow run identifier", error))?;
-    let definition = workflows::compatibility_definition(&record)
-        .map_err(|error| crate::error::AppError::new("build compatibility workflow", error))?;
-    let step_name = definition
-        .step(definition.first_step())
+    let workflow_name = resolved.pinned.definition.name().to_owned();
+    let step_name = resolved
+        .pinned
+        .definition
+        .step(resolved.pinned.definition.first_step())
         .map(|step| step.name.clone())
         .unwrap_or_default();
-    let pinned = PinnedWorkflowDefinition::pin(None, definition);
+    let pinned = resolved.pinned;
     let started = match state
         .sessions
         .begin_turn(&session, record.id, run_id, message)
@@ -234,6 +303,10 @@ async fn send(
             .rollback_turn(&session, &record.id, &started.job.id());
         return Err(crate::error::AppError::new("store workflow run", error));
     }
+    state
+        .sessions
+        .set_preferred_workflow(&session, record.id, selection.workflow_id);
+    started.job.set_workflow_name(workflow_name);
     started.job.set_step_label(step_name);
     tokio::spawn(workflows::execute_run(
         state.clone(),
@@ -268,6 +341,7 @@ async fn send(
             &record.id.as_hex(),
             &started.job.run_id().as_hex(),
             &started.job.step_label(),
+            &started.job.workflow_name(),
         ),
     }
 }
@@ -608,11 +682,21 @@ fn accept_job_patch(
     agent_id: &str,
     run_id: &str,
     run_step: &str,
+    workflow_name: &str,
 ) -> AppResult<Response> {
     let mut patches = user_transcript_patch(turns)?;
     patches.children(
         "job-observe",
-        &JobObserveContents::observing(job_id, 0, "Writing", "", agent_id, run_id, run_step),
+        &JobObserveContents::observing(
+            job_id,
+            0,
+            "Writing",
+            "",
+            agent_id,
+            run_id,
+            run_step,
+            workflow_name,
+        ),
     )?;
     Ok(patches.respond(PatchStatus::Ok)?)
 }
@@ -646,19 +730,37 @@ async fn reject_chat_input(
     record: &AgentRecord,
     session: &SessionSnapshot,
     message: &'static str,
+    draft: &str,
 ) -> AppResult<Response> {
+    reject_chat_selection(
+        state,
+        graft,
+        record,
+        session,
+        message,
+        draft,
+        PatchStatus::UnprocessableEntity,
+    )
+    .await
+}
+
+async fn reject_chat_selection(
+    state: &AppState,
+    graft: CommandGraft,
+    record: &AgentRecord,
+    session: &SessionSnapshot,
+    message: &'static str,
+    draft: &str,
+    status: PatchStatus,
+) -> AppResult<Response> {
+    let mut page = view(state, record, session, message, "", "").await;
+    page.draft_message = draft.trim().to_owned();
     match graft {
-        CommandGraft::Document => render_document(
-            state,
-            PatchStatus::UnprocessableEntity,
-            view(state, record, session, message, "", "").await,
-        ),
+        CommandGraft::Document => render_document(state, status, page),
         CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            PatchStatus::UnprocessableEntity,
+            status,
             "composer",
-            &view(state, record, session, message, "", "")
-                .await
-                .composer(),
+            &page.composer(),
         )?),
     }
 }
@@ -712,7 +814,7 @@ async fn view(
     desk_error: &'static str,
     sandbox_error: &'static str,
 ) -> ChatViewModel {
-    ChatViewModel::from_session(
+    let mut page = ChatViewModel::from_session(
         record,
         session,
         &state.vault,
@@ -721,7 +823,52 @@ async fn view(
         error,
         desk_error,
         sandbox_error,
-    )
+    );
+    attach_workflow_ui(state, session, &mut page);
+    page
+}
+
+fn attach_workflow_ui(state: &AppState, session: &SessionSnapshot, page: &mut ChatViewModel) {
+    let records = state.workflows.list();
+    if records.is_empty() {
+        if session.preferred_workflow.is_some()
+            && let Some(agent) = crate::agents::AgentId::parse(&page.agent_id)
+        {
+            state.sessions.clear_preferred_workflow(&session.id, &agent);
+        }
+        page.workflow_options = Vec::new();
+        page.workflow_empty = true;
+    } else {
+        let mut preferred = session.preferred_workflow;
+        if let Some(id) = preferred
+            && state.workflows.get(&id).is_none()
+        {
+            if let Some(agent) = crate::agents::AgentId::parse(&page.agent_id) {
+                state.sessions.clear_preferred_workflow(&session.id, &agent);
+            }
+            preferred = None;
+        }
+        let selected = preferred.or_else(|| {
+            if records.len() == 1 {
+                Some(records[0].id)
+            } else {
+                None
+            }
+        });
+        page.workflow_empty = false;
+        page.workflow_options = records
+            .iter()
+            .map(|record| page::WorkflowOption {
+                token: WorkflowSelection {
+                    workflow_id: record.id,
+                    definition_version: record.definition_version,
+                }
+                .as_token(),
+                label: record.definition.name().to_owned(),
+                selected: selected == Some(record.id),
+            })
+            .collect();
+    }
 }
 
 async fn desk_view(state: &AppState, session: SessionId) -> ChatViewModel {
