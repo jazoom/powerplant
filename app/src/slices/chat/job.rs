@@ -9,7 +9,7 @@ use hypergraft::{PatchSet, PatchStatus};
 use rig_core::completion::{AssistantContent, Message};
 
 use crate::{
-    agents::{AgentId, DirectoryPolicy, LeaseGuard, ToolId},
+    agents::{AgentId, DirectoryPolicy, ToolId},
     providers::{ChatTurn, ModelEvent, ProviderConnection, ProviderError},
     sandbox::GuestSandbox,
     sessions::{Job, JobEventKind, JobStatus, SessionId},
@@ -22,15 +22,15 @@ use super::page::{
     assistant_turn, user_turn,
 };
 
-pub(super) struct AgentRunSpec {
-    pub(super) agent_id: AgentId,
-    pub(super) revision: u32,
-    pub(super) preamble: String,
-    pub(super) tools: Vec<rig_core::completion::ToolDefinition>,
-    pub(super) tool_ids: Vec<ToolId>,
-    pub(super) policy: DirectoryPolicy,
-    pub(super) connection: ProviderConnection,
-    pub(super) sandbox: std::sync::Arc<GuestSandbox>,
+pub(crate) struct AgentRunSpec {
+    pub(crate) agent_id: AgentId,
+    pub(crate) revision: u32,
+    pub(crate) preamble: String,
+    pub(crate) tools: Vec<rig_core::completion::ToolDefinition>,
+    pub(crate) tool_ids: Vec<ToolId>,
+    pub(crate) policy: DirectoryPolicy,
+    pub(crate) connection: ProviderConnection,
+    pub(crate) sandbox: std::sync::Arc<GuestSandbox>,
 }
 
 pub(super) const MIN_PROGRESS_INTERVAL: Duration = if cfg!(test) {
@@ -82,14 +82,26 @@ pub(super) fn observe_response(
 
 const MAXIMUM_TOOL_ROUNDS: usize = 12;
 
-pub(super) async fn run_agent_job(
-    state: AppState,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentOutcome {
+    Completed,
+    ProviderFailure,
+    ToolFailure,
+    Cancelled,
+}
+
+pub(crate) struct AgentActionEnd {
+    pub(crate) outcome: AgentOutcome,
+    pub(crate) error: Option<String>,
+}
+
+pub(crate) async fn run_agent_action(
+    state: &AppState,
     session_id: SessionId,
     spec: AgentRunSpec,
     turns: Vec<ChatTurn>,
     job: Arc<Job>,
-    _lease: LeaseGuard,
-) {
+) -> AgentActionEnd {
     let agent_id = spec.agent_id;
     tracing::debug!(
         agent_id = %agent_id,
@@ -109,14 +121,12 @@ pub(super) async fn run_agent_job(
 
     for _ in 0..MAXIMUM_TOOL_ROUNDS {
         if job.cancel_requested() {
-            finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
-            return;
+            return cancel_action(state, &session_id, &agent_id, &job, &reply);
         }
         let mut events = tokio::select! {
             biased;
             _ = job.cancelled() => {
-                finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
-                return;
+                return cancel_action(state, &session_id, &agent_id, &job, &reply);
             }
             result = state.chat.stream_turn(
                 &spec.connection,
@@ -128,9 +138,11 @@ pub(super) async fn run_agent_job(
                 Ok(stream) => stream,
                 Err(error) => {
                     publish_remaining(&job, &reply, published);
-                    persist_failure(&state, &session_id, &agent_id, &job, &reply);
-                    job.finish(JobStatus::Failed, Some(error.message()));
-                    return;
+                    persist_failure(state, &session_id, &agent_id, &job, &reply);
+                    return AgentActionEnd {
+                        outcome: AgentOutcome::ProviderFailure,
+                        error: Some(error.message().to_owned()),
+                    };
                 }
             },
         };
@@ -141,8 +153,7 @@ pub(super) async fn run_agent_job(
             let chunk = tokio::select! {
                 biased;
                 _ = job.cancelled() => {
-                    finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
-                    return;
+                    return cancel_action(state, &session_id, &agent_id, &job, &reply);
                 }
                 chunk = events.next() => chunk,
             };
@@ -160,12 +171,11 @@ pub(super) async fn run_agent_job(
                         &mut output_visible,
                         &piece,
                     ) {
-                        persist_failure(&state, &session_id, &agent_id, &job, &reply);
-                        job.finish(
-                            JobStatus::Failed,
-                            Some(ProviderError::ReplyTooLong.message()),
-                        );
-                        return;
+                        persist_failure(state, &session_id, &agent_id, &job, &reply);
+                        return AgentActionEnd {
+                            outcome: AgentOutcome::ProviderFailure,
+                            error: Some(ProviderError::ReplyTooLong.message().to_owned()),
+                        };
                     }
                 }
                 Ok(ModelEvent::ToolCall {
@@ -175,28 +185,33 @@ pub(super) async fn run_agent_job(
                 }) => calls.push((id, name, arguments)),
                 Err(error) => {
                     publish_remaining(&job, &reply, published);
-                    persist_failure(&state, &session_id, &agent_id, &job, &reply);
-                    job.finish(JobStatus::Failed, Some(error.message()));
-                    return;
+                    persist_failure(state, &session_id, &agent_id, &job, &reply);
+                    return AgentActionEnd {
+                        outcome: AgentOutcome::ProviderFailure,
+                        error: Some(error.message().to_owned()),
+                    };
                 }
             }
         }
 
         if job.cancel_requested() {
-            finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
-            return;
+            return cancel_action(state, &session_id, &agent_id, &job, &reply);
         }
 
         if calls.is_empty() {
             publish_remaining(&job, &reply, published);
             if reply.trim().is_empty() {
-                persist_failure(&state, &session_id, &agent_id, &job, "");
-                job.finish(JobStatus::Failed, Some(ProviderError::EmptyReply.message()));
-                return;
+                persist_failure(state, &session_id, &agent_id, &job, "");
+                return AgentActionEnd {
+                    outcome: AgentOutcome::ProviderFailure,
+                    error: Some(ProviderError::EmptyReply.message().to_owned()),
+                };
             }
-            persist_success(&state, &session_id, &agent_id, &job, &reply);
-            job.finish(JobStatus::Completed, None);
-            return;
+            persist_success(state, &session_id, &agent_id, &job, &reply);
+            return AgentActionEnd {
+                outcome: AgentOutcome::Completed,
+                error: None,
+            };
         }
 
         extra.push(assistant_tool_message(&text, &calls));
@@ -209,8 +224,7 @@ pub(super) async fn run_agent_job(
         for (id, name, arguments) in calls {
             let trace = tools::invoke(&context, &name, &arguments).await;
             if job.cancel_requested() {
-                finish_cancelled(&state, &session_id, &agent_id, &job, &reply);
-                return;
+                return cancel_action(state, &session_id, &agent_id, &job, &reply);
             }
             let output = tools::redact(&trace.output, secret);
             let visible = tools::render_trace(&trace.label, &output);
@@ -222,20 +236,22 @@ pub(super) async fn run_agent_job(
                 &mut output_visible,
                 &format!("\n\n{visible}"),
             ) {
-                persist_failure(&state, &session_id, &agent_id, &job, &reply);
-                job.finish(
-                    JobStatus::Failed,
-                    Some(ProviderError::ReplyTooLong.message()),
-                );
-                return;
+                persist_failure(state, &session_id, &agent_id, &job, &reply);
+                return AgentActionEnd {
+                    outcome: AgentOutcome::ProviderFailure,
+                    error: Some(ProviderError::ReplyTooLong.message().to_owned()),
+                };
             }
             extra.push(Message::tool_result(id, name, output));
         }
     }
 
     publish_remaining(&job, &reply, published);
-    persist_failure(&state, &session_id, &agent_id, &job, &reply);
-    job.finish(JobStatus::Failed, Some(TOOL_LOOP_LIMIT));
+    persist_failure(state, &session_id, &agent_id, &job, &reply);
+    AgentActionEnd {
+        outcome: AgentOutcome::ToolFailure,
+        error: Some(TOOL_LOOP_LIMIT.to_owned()),
+    }
 }
 
 const TOOL_LOOP_LIMIT: &str = "The agent stopped after too many tool calls. Try again.";
@@ -399,10 +415,19 @@ fn persist_failure(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job,
         .fail_turn(id, agent, &job.id(), bound_reply(reply).to_owned());
 }
 
-fn finish_cancelled(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job, reply: &str) {
+fn cancel_action(
+    state: &AppState,
+    id: &SessionId,
+    agent: &AgentId,
+    job: &Job,
+    reply: &str,
+) -> AgentActionEnd {
     publish_remaining(job, reply, job.snapshot().output.len().min(reply.len()));
     persist_failure(state, id, agent, job, reply);
-    job.finish(JobStatus::Cancelled, None);
+    AgentActionEnd {
+        outcome: AgentOutcome::Cancelled,
+        error: None,
+    }
 }
 
 fn publish_remaining(job: &Job, reply: &str, published: usize) {
@@ -594,6 +619,8 @@ fn encode_observe_final(
         let turn = assistant_turn(snapshot.assistant_index, &snapshot.output);
         patches.append("transcript", &TurnArticle { turn: &turn })?;
     }
+    let run_id = snapshot.run_id.as_hex();
+    let run_step = snapshot.step_label.as_str();
     if more {
         let status = if snapshot.cancel_requested {
             "Stopping"
@@ -602,11 +629,14 @@ fn encode_observe_final(
         };
         patches.children(
             "job-observe",
-            &JobObserveContents::observing(job_id, cursor, status, "", agent_id),
+            &JobObserveContents::observing(job_id, cursor, status, "", agent_id, &run_id, run_step),
         )?;
     } else {
         let error = snapshot.error.as_deref().unwrap_or("");
-        patches.children("job-observe", &JobObserveContents::idle(error, agent_id))?;
+        patches.children(
+            "job-observe",
+            &JobObserveContents::idle(error, agent_id, &run_id, run_step),
+        )?;
     }
     let status = match snapshot.status {
         JobStatus::Failed => provider_status_from_message(snapshot.error.as_deref()),

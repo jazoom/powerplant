@@ -55,6 +55,8 @@ pub(super) struct ChatViewModel {
     pub(super) session_busy: bool,
     pub(super) agent_id: String,
     pub(super) agent_name: String,
+    pub(super) run_id: String,
+    pub(super) run_step: String,
 }
 
 impl ChatViewModel {
@@ -139,7 +141,11 @@ impl ChatViewModel {
         let mut cursor = 0;
         let mut job_active = false;
         let mut job_status = "";
+        let mut run_id = String::new();
+        let mut run_step = String::new();
         if let Some(job) = job {
+            run_id = job.run_id.as_hex();
+            run_step = job.step_label.clone();
             if !job.output.is_empty() && views.len() == job.assistant_index {
                 views.push(assistant_turn(job.assistant_index, &job.output));
             }
@@ -200,6 +206,8 @@ impl ChatViewModel {
             session_busy,
             agent_id: record.id.as_hex(),
             agent_name: record.name.clone(),
+            run_id,
+            run_step,
         }
     }
 
@@ -256,6 +264,8 @@ impl ChatViewModel {
             job_active: self.job_active,
             job_status: self.job_status,
             agent_id: &self.agent_id,
+            run_id: &self.run_id,
+            run_step: &self.run_step,
         }
     }
 }
@@ -336,10 +346,17 @@ pub(super) struct JobObserveContents<'a> {
     pub(super) job_active: bool,
     pub(super) job_status: &'static str,
     pub(super) agent_id: &'a str,
+    pub(super) run_id: &'a str,
+    pub(super) run_step: &'a str,
 }
 
 impl<'a> JobObserveContents<'a> {
-    pub(super) fn idle(error: &'a str, agent_id: &'a str) -> Self {
+    pub(super) fn idle(
+        error: &'a str,
+        agent_id: &'a str,
+        run_id: &'a str,
+        run_step: &'a str,
+    ) -> Self {
         Self {
             job_error: error,
             job_id: "",
@@ -347,6 +364,8 @@ impl<'a> JobObserveContents<'a> {
             job_active: false,
             job_status: "",
             agent_id,
+            run_id,
+            run_step,
         }
     }
 
@@ -356,6 +375,8 @@ impl<'a> JobObserveContents<'a> {
         status: &'static str,
         error: &'a str,
         agent_id: &'a str,
+        run_id: &'a str,
+        run_step: &'a str,
     ) -> Self {
         Self {
             job_error: error,
@@ -364,6 +385,8 @@ impl<'a> JobObserveContents<'a> {
             job_active: true,
             job_status: status,
             agent_id,
+            run_id,
+            run_step,
         }
     }
 }

@@ -284,6 +284,8 @@ struct ScriptedGuest {
     live: Arc<Live>,
     status: Mutex<GuestStatus>,
     hang_command: Mutex<bool>,
+    fail_command: Mutex<bool>,
+    last_exec: Mutex<Option<String>>,
     lock: Arc<AsyncMutex<()>>,
 }
 
@@ -475,6 +477,8 @@ impl SandboxFleet {
                     live,
                     status: Mutex::new(GuestStatus::Stopped),
                     hang_command: Mutex::new(false),
+                    fail_command: Mutex::new(false),
+                    last_exec: Mutex::new(None),
                     lock: Arc::new(AsyncMutex::new(())),
                 })
             }
@@ -522,6 +526,22 @@ impl GuestSandbox {
         match &self.inner {
             Inner::Microsandbox(_) => {}
             Inner::Scripted(guest) => *lock_mutex(&guest.hang_command) = true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_command(&self) {
+        match &self.inner {
+            Inner::Microsandbox(_) => {}
+            Inner::Scripted(guest) => *lock_mutex(&guest.fail_command) = true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_exec(&self) -> Option<String> {
+        match &self.inner {
+            Inner::Microsandbox(_) => None,
+            Inner::Scripted(guest) => lock_mutex(&guest.last_exec).clone(),
         }
     }
 
@@ -780,9 +800,13 @@ impl ScriptedGuest {
             .clone()
             .try_lock_owned()
             .map_err(|_| SandboxError::Active)?;
+        *lock_mutex(&self.last_exec) = Some(request.display());
         let session = if *lock_mutex(&self.hang_command) {
             *lock_mutex(&self.hang_command) = false;
             command::ScriptedCommand::hang()
+        } else if *lock_mutex(&self.fail_command) {
+            *lock_mutex(&self.fail_command) = false;
+            command::ScriptedCommand::output(request.display(), 1)
         } else {
             command::ScriptedCommand::output(request.display(), 0)
         };

@@ -167,7 +167,7 @@ async fn update_configuration(
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
-    let Ok(_operation) = state.runs.acquire(record.id) else {
+    let Ok(_operation) = state.agent_leases.acquire(record.id) else {
         return render_form(
             &state,
             graft.into(),
@@ -235,7 +235,7 @@ async fn delete_agent(
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
-    let Ok(_operation) = state.runs.acquire(record.id) else {
+    let Ok(_operation) = state.agent_leases.acquire(record.id) else {
         return render_form(
             &state,
             graft.into(),

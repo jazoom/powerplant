@@ -11,6 +11,8 @@ use rand::rand_core::TryRng;
 use rand::rngs::SysRng;
 use tokio::sync::Notify;
 
+use crate::workflows::RunId;
+
 pub(crate) const JOB_ID_LENGTH: usize = 32;
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -100,20 +102,24 @@ pub(crate) struct JobEvent {
 #[derive(Clone, Debug)]
 pub(crate) struct JobSnapshot {
     pub(crate) id: JobId,
+    pub(crate) run_id: RunId,
     pub(crate) status: JobStatus,
     pub(crate) output: String,
     pub(crate) latest_seq: u64,
     pub(crate) assistant_index: usize,
     pub(crate) error: Option<String>,
     pub(crate) cancel_requested: bool,
+    pub(crate) step_label: String,
 }
 
 pub(crate) struct Job {
     id: JobId,
+    run_id: RunId,
     assistant_index: usize,
     inner: Mutex<JobInner>,
     notify: Notify,
     cancel: AtomicBool,
+    step_label: Mutex<String>,
 }
 
 struct JobInner {
@@ -125,9 +131,10 @@ struct JobInner {
 }
 
 impl Job {
-    pub(crate) fn new(id: JobId, assistant_index: usize) -> Arc<Self> {
+    pub(crate) fn new(id: JobId, run_id: RunId, assistant_index: usize) -> Arc<Self> {
         Arc::new(Self {
             id,
+            run_id,
             assistant_index,
             inner: Mutex::new(JobInner {
                 status: JobStatus::Running,
@@ -138,11 +145,31 @@ impl Job {
             }),
             notify: Notify::new(),
             cancel: AtomicBool::new(false),
+            step_label: Mutex::new(String::new()),
         })
     }
 
     pub(crate) fn id(&self) -> JobId {
         self.id
+    }
+
+    pub(crate) fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    pub(crate) fn set_step_label(&self, label: String) {
+        *self
+            .step_label
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = label;
+        self.notify.notify_waiters();
+    }
+
+    pub(crate) fn step_label(&self) -> String {
+        self.step_label
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(crate) fn assistant_index(&self) -> usize {
@@ -179,12 +206,14 @@ impl Job {
         let inner = self.lock();
         JobSnapshot {
             id: self.id,
+            run_id: self.run_id,
             status: inner.status,
             output: inner.output.clone(),
             latest_seq: inner.latest_seq,
             assistant_index: self.assistant_index,
             error: inner.error.clone(),
             cancel_requested: self.cancel.load(Ordering::SeqCst),
+            step_label: self.step_label(),
         }
     }
 

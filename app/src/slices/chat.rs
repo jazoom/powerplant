@@ -17,20 +17,22 @@ use axum::{
 use hypergraft::{CommandGraft, GraftRequest, PatchSet, PatchStatus};
 
 use crate::{
-    agents::{AgentId, AgentRecord, DirectoryPolicy, compose},
+    agents::{AgentId, AgentRecord, DirectoryPolicy},
     error::AppResult,
     responses,
     sandbox::{GuestAccess, SandboxSpec},
     sessions::{self, BeginTurnError, JobIdError, OptionalSession, SessionId, SessionSnapshot},
     state::AppState,
-    tools,
+    workflows::{self, PinnedWorkflowDefinition, WorkflowJob, WorkflowRun},
 };
 
 use self::{
     forms::{ChatForm, CursorError, ModelForm, ObserveQuery, SandboxAction, SandboxForm},
-    job::{AgentRunSpec, observe_response, run_agent_job, user_transcript_patch},
+    job::{observe_response, user_transcript_patch},
     page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
+
+pub(crate) use job::{AgentOutcome, AgentRunSpec, run_agent_action};
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -122,7 +124,17 @@ async fn send(
         return reject_parallel_command(&state, graft, &record, &snapshot).await;
     }
 
-    let Ok(lease) = state.runs.acquire(record.id) else {
+    let Ok(execution) = state.workflow_execution.acquire() else {
+        return reject_chat_input(
+            &state,
+            graft,
+            &record,
+            &snapshot,
+            "Wait until the current workflow finishes.",
+        )
+        .await;
+    };
+    let Ok(lease) = state.agent_leases.acquire(record.id) else {
         return reject_chat_input(
             &state,
             graft,
@@ -185,7 +197,19 @@ async fn send(
     }
 
     let message = form.message.trim().to_owned();
-    let started = match state.sessions.begin_turn(&session, record.id, message) {
+    let run_id = workflows::RunId::generate()
+        .map_err(|error| crate::error::AppError::new("create workflow run identifier", error))?;
+    let definition = workflows::compatibility_definition(&record)
+        .map_err(|error| crate::error::AppError::new("build compatibility workflow", error))?;
+    let step_name = definition
+        .step(definition.first_step())
+        .map(|step| step.name.clone())
+        .unwrap_or_default();
+    let pinned = PinnedWorkflowDefinition::pin(None, definition);
+    let started = match state
+        .sessions
+        .begin_turn(&session, record.id, run_id, message)
+    {
         Ok(started) => started,
         Err(BeginTurnError::MissingSession) => {
             return Ok(responses::graft_redirect(graft, "/connect"));
@@ -203,24 +227,28 @@ async fn send(
             ));
         }
     };
-
-    let run = AgentRunSpec {
-        agent_id: record.id,
-        revision: record.revision,
-        preamble: compose(&record, &policy),
-        tools: tools::definitions(&record.tools),
-        tool_ids: record.tools.clone(),
-        policy,
-        connection,
-        sandbox,
-    };
-    tokio::spawn(run_agent_job(
+    let run = WorkflowRun::create(run_id, workflows::now_ms(), pinned);
+    if let Err(error) = state.workflow_runs.create(run) {
+        let _ = state
+            .sessions
+            .rollback_turn(&session, &record.id, &started.job.id());
+        return Err(crate::error::AppError::new("store workflow run", error));
+    }
+    started.job.set_step_label(step_name);
+    tokio::spawn(workflows::execute_run(
         state.clone(),
-        session,
-        run,
-        started.turns.clone(),
-        started.job.clone(),
+        WorkflowJob {
+            run_id,
+            session_id: session,
+            agent_id: record.id,
+            connection,
+            sandbox,
+            host_policy: policy,
+            turns: started.turns.clone(),
+            job: started.job.clone(),
+        },
         lease,
+        execution,
     ));
 
     match graft {
@@ -238,6 +266,8 @@ async fn send(
             &started.turns,
             &started.job.id().as_hex(),
             &record.id.as_hex(),
+            &started.job.run_id().as_hex(),
+            &started.job.step_label(),
         ),
     }
 }
@@ -406,7 +436,7 @@ async fn update_sandbox(
         )
         .await;
     }
-    let Ok(_operation) = state.runs.acquire(record.id) else {
+    let Ok(_operation) = state.agent_leases.acquire(record.id) else {
         return reject_sandbox(
             &state,
             graft,
@@ -576,11 +606,13 @@ fn accept_job_patch(
     turns: &[crate::providers::ChatTurn],
     job_id: &str,
     agent_id: &str,
+    run_id: &str,
+    run_step: &str,
 ) -> AppResult<Response> {
     let mut patches = user_transcript_patch(turns)?;
     patches.children(
         "job-observe",
-        &JobObserveContents::observing(job_id, 0, "Writing", "", agent_id),
+        &JobObserveContents::observing(job_id, 0, "Writing", "", agent_id, run_id, run_step),
     )?;
     Ok(patches.respond(PatchStatus::Ok)?)
 }

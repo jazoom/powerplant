@@ -3,9 +3,14 @@ use std::time::Duration;
 use crate::agents::AgentId;
 use crate::providers::{ChatTurn, Role};
 use crate::sessions::{self, BeginTurnError, SESSION_LIFETIME};
+use crate::workflows::RunId;
 
 fn agent() -> AgentId {
     AgentId::generate().expect("agent")
+}
+
+fn run() -> RunId {
+    RunId::generate().expect("run")
 }
 
 #[test]
@@ -17,10 +22,10 @@ fn parallel_commands_cannot_overwrite_a_completed_turn() {
     store.insert(id);
 
     let first = store
-        .begin_turn(&id, agent, "First".to_owned())
+        .begin_turn(&id, agent, run(), "First".to_owned())
         .expect("first");
     assert!(matches!(
-        store.begin_turn(&id, agent, "Second".to_owned()),
+        store.begin_turn(&id, agent, run(), "Second".to_owned()),
         Err(BeginTurnError::Conflict)
     ));
     assert_eq!(
@@ -34,7 +39,7 @@ fn parallel_commands_cannot_overwrite_a_completed_turn() {
     assert!(store.finish_turn(&id, &agent, &first.job.id(), "Done".to_owned()));
 
     let second = store
-        .begin_turn(&id, agent, "Third".to_owned())
+        .begin_turn(&id, agent, run(), "Third".to_owned())
         .expect("third");
     assert!(!store.finish_turn(&id, &agent, &first.job.id(), "Late".to_owned()));
 
@@ -74,10 +79,10 @@ fn one_session_job_blocks_another_agent() {
     let second = agent();
     store.insert(id);
     store
-        .begin_turn(&id, first, "First".to_owned())
+        .begin_turn(&id, first, run(), "First".to_owned())
         .expect("first");
     assert!(matches!(
-        store.begin_turn(&id, second, "Second".to_owned()),
+        store.begin_turn(&id, second, run(), "Second".to_owned()),
         Err(BeginTurnError::Conflict)
     ));
     assert!(
@@ -99,7 +104,7 @@ fn transcripts_are_independent_per_agent() {
     let second = agent();
     store.insert(id);
     let begun = store
-        .begin_turn(&id, first, "Hello".to_owned())
+        .begin_turn(&id, first, run(), "Hello".to_owned())
         .expect("begin");
     assert!(store.finish_turn(&id, &first, &begun.job.id(), "Hi".to_owned()));
     assert_eq!(
@@ -170,7 +175,7 @@ fn remove_cancels_the_active_job() {
     let agent = agent();
     store.insert(id);
     let begun = store
-        .begin_turn(&id, agent, "Hello".to_owned())
+        .begin_turn(&id, agent, run(), "Hello".to_owned())
         .expect("begin");
     store.remove(&id);
     assert!(begun.job.cancel_requested());
@@ -186,8 +191,54 @@ fn job_lookup_requires_the_agent_identity() {
     let second = agent();
     store.insert(id);
     let begun = store
-        .begin_turn(&id, first, "Hello".to_owned())
+        .begin_turn(&id, first, run(), "Hello".to_owned())
         .expect("begin");
     assert!(store.job(&id, &first, &begun.job.id()).is_some());
     assert!(store.job(&id, &second, &begun.job.id()).is_none());
+}
+
+#[test]
+fn rollback_removes_the_reserved_turn() {
+    let store = super::SessionStore::new();
+    let token = sessions::generate_session_token().expect("token");
+    let id = token.id();
+    let agent = agent();
+    store.insert(id);
+    let begun = store
+        .begin_turn(&id, agent, run(), "Hello".to_owned())
+        .expect("begin");
+    assert!(store.rollback_turn(&id, &agent, &begun.job.id()));
+    let snapshot = store.snapshot(&id, &agent).expect("session");
+    assert!(snapshot.turns.is_empty());
+    assert!(!snapshot.session_busy);
+    assert!(snapshot.job.is_none());
+}
+
+#[test]
+fn a_stale_rollback_cannot_remove_a_later_turn() {
+    let store = super::SessionStore::new();
+    let token = sessions::generate_session_token().expect("token");
+    let id = token.id();
+    let agent = agent();
+    store.insert(id);
+    let first = store
+        .begin_turn(&id, agent, run(), "First".to_owned())
+        .expect("first");
+    assert!(store.rollback_turn(&id, &agent, &first.job.id()));
+    let second = store
+        .begin_turn(&id, agent, run(), "Second".to_owned())
+        .expect("second");
+    assert!(!store.rollback_turn(&id, &agent, &first.job.id()));
+    let snapshot = store.snapshot(&id, &agent).expect("session");
+    assert_eq!(
+        snapshot.turns,
+        [ChatTurn {
+            role: Role::User,
+            text: "Second".to_owned(),
+        }]
+    );
+    assert_eq!(
+        snapshot.job.as_ref().map(|job| job.id),
+        Some(second.job.id())
+    );
 }

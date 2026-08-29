@@ -1,0 +1,247 @@
+use axum::{
+    body::{Body, to_bytes},
+    http::{Request, header},
+    middleware::from_fn_with_state,
+};
+use tower::ServiceExt;
+
+use crate::{
+    agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
+    config::RuntimeConfig,
+    providers::{ProviderConnection, ProviderKind},
+    sessions,
+    state::AppState,
+    workflows::{PinnedWorkflowDefinition, RunId, WorkflowRun, compatibility_definition},
+};
+
+fn test_state() -> AppState {
+    crate::state::for_test(RuntimeConfig::development_for_test())
+}
+
+fn app(state: &AppState) -> axum::Router {
+    crate::slices::router()
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone())
+}
+
+fn cookie(token: &str) -> String {
+    format!("powerplant_session={token}")
+}
+
+fn connected(state: &AppState) -> String {
+    let token = sessions::generate_session_token().expect("session token");
+    state
+        .vault
+        .put(ProviderConnection::with_key(
+            ProviderKind::Xai,
+            "test-key",
+            "grok-4.6",
+        ))
+        .expect("vault");
+    state.sessions.insert(token.id());
+    token.raw().as_str().to_owned()
+}
+
+fn stored_run(state: &AppState) -> RunId {
+    let dir = tempfile::tempdir().expect("dir");
+    let record = state
+        .agents
+        .create(AgentDraft {
+            name: "Maintainer".to_owned(),
+            instructions: String::new(),
+            tools: vec![ToolId::List],
+            directories: vec![DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: dir.path().to_path_buf(),
+                access: AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent");
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+    let definition = compatibility_definition(&record).expect("definition");
+    let run = WorkflowRun::create(
+        RunId::generate().expect("run"),
+        1,
+        PinnedWorkflowDefinition::pin(None, definition),
+    );
+    let id = run.id;
+    state.workflow_runs.create(run).expect("store");
+    id
+}
+
+#[tokio::test]
+async fn a_runs_document_uses_chat_main() {
+    let state = test_state();
+    let token = connected(&state);
+    stored_run(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/runs")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("index");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<!doctype html>"));
+    assert_eq!(text.matches("id=\"chat-main\"").count(), 1);
+    assert!(text.contains("href=\"/runs/"));
+    assert!(text.contains("data-graft"));
+}
+
+#[tokio::test]
+async fn a_runs_navigation_patches_chat_main() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/runs")
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "navigation")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("navigation");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!text.contains("<!doctype html>"));
+    assert!(text.contains("operation=\"children\" target=\"chat-main\""));
+}
+
+#[tokio::test]
+async fn a_runs_patch_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/runs")
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("patch");
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_detail_document_uses_chat_main() {
+    let state = test_state();
+    let token = connected(&state);
+    let id = stored_run(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs/{}", id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("detail");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<!doctype html>"));
+    assert_eq!(text.matches("id=\"run-detail\"").count(), 1);
+    assert!(text.contains("Refresh"));
+}
+
+#[tokio::test]
+async fn a_detail_navigation_patches_chat_main() {
+    let state = test_state();
+    let token = connected(&state);
+    let id = stored_run(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs/{}", id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "navigation")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("navigation");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("operation=\"children\" target=\"chat-main\""));
+}
+
+#[tokio::test]
+async fn a_detail_patch_targets_run_detail() {
+    let state = test_state();
+    let token = connected(&state);
+    let id = stored_run(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs/{}", id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("patch");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("operation=\"children\" target=\"run-detail\""));
+    assert!(!text.contains("id=\"run-detail\""));
+}
+
+#[tokio::test]
+async fn an_unknown_run_redirects_to_the_index() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs/{}", "a".repeat(32)))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("missing");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/runs");
+}
+
+#[tokio::test]
+async fn anonymous_run_pages_redirect_to_connect() {
+    let state = test_state();
+    let response = app(&state)
+        .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+        .await
+        .expect("index");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "/connect"
+    );
+}

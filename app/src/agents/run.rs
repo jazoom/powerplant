@@ -3,16 +3,16 @@ use std::sync::{Arc, Mutex};
 
 use super::id::AgentId;
 
-pub(crate) struct RunCoordinator {
+pub(crate) struct AgentLeaseCoordinator {
     leases: Mutex<HashSet<AgentId>>,
 }
 
 pub(crate) struct LeaseGuard {
-    coordinator: Arc<RunCoordinator>,
+    coordinator: Arc<AgentLeaseCoordinator>,
     agent_id: AgentId,
 }
 
-impl RunCoordinator {
+impl AgentLeaseCoordinator {
     pub(crate) fn new() -> Self {
         Self {
             leases: Mutex::new(HashSet::new()),

@@ -824,7 +824,12 @@ async fn an_oversized_navigation_falls_back_to_a_document() {
     let id = session_snapshot(&state, &token).id;
     let begun = state
         .sessions
-        .begin_turn(&id, agent_id(&state), "Hello".to_owned())
+        .begin_turn(
+            &id,
+            agent_id(&state),
+            crate::workflows::RunId::generate().expect("run"),
+            "Hello".to_owned(),
+        )
         .expect("begin");
     assert!(state.sessions.finish_turn(
         &id,
@@ -1486,4 +1491,29 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
     assert_ne!(first_preamble, second_preamble);
     assert_eq!(second_tools, ["list".to_owned(), "read".to_owned()]);
     assert_ne!(first_tools, second_tools);
+}
+
+#[tokio::test]
+async fn a_second_session_cannot_start_while_a_workflow_runs() {
+    let state = state_with_backend(ScriptedBackend::hang());
+    let first = connected(&state).await;
+    let second_token = sessions::generate_session_token().expect("session token");
+    state.sessions.insert(second_token.id());
+    let second = second_token.raw().as_str().to_owned();
+    let started = app(&state)
+        .oneshot(patch_send(&state, &first))
+        .await
+        .expect("first");
+    assert_eq!(started.status(), axum::http::StatusCode::OK);
+    let response = app(&state)
+        .oneshot(patch_send(&state, &second))
+        .await
+        .expect("second");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Wait until the current workflow finishes."));
 }

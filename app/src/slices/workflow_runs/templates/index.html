@@ -1,0 +1,56 @@
+<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
+  <div
+    class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+  >
+    <a
+      href="/agents"
+      data-graft
+      class="flex min-w-0 items-center gap-2 rounded-sm"
+    >
+      <img
+        src="/static/images/logo.svg"
+        alt=""
+        width="28"
+        height="28"
+        class="powerplant-mark"
+      />
+      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
+        >Power Plant</span
+      >
+    </a>
+    <a href="/agents" data-graft class="btn btn-ghost btn-sm ml-auto">Agents</a>
+  </div>
+</header>
+
+<main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
+  <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">Runs</h1>
+  {% if runs.is_empty() %}
+    <p class="text-quiet">No workflow runs yet.</p>
+  {% else %}
+    <ul class="space-y-2">
+      {% for run in runs %}
+        <li class="border-base-300 rounded-sm border px-3 py-3">
+          <a
+            href="/runs/{{ run.id }}"
+            data-graft
+            class="link link-hover font-medium"
+            >{{ run.name }}</a
+          >
+          <p class="text-quiet mt-1 font-mono text-xs break-all">
+            {{ run.version }}
+          </p>
+          <p class="text-sm">
+            {{ run.state }}
+            {% if run.current_step != "" %}
+              <span>{{ run.current_step }}</span>
+            {% endif %}
+          </p>
+          <p class="text-quiet text-xs">{{ run.created }}</p>
+          {% if run.latest_attempt != "" %}
+            <p class="text-sm">{{ run.latest_attempt }}</p>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</main>

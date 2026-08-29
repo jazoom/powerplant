@@ -1,4 +1,4 @@
-use super::compose;
+use super::compose_role;
 use crate::agents::policy::DirectoryPolicy;
 use crate::agents::record::{AccessMode, AgentRecord, DirectoryGrant};
 use crate::agents::{AgentId, ToolId};
@@ -19,7 +19,13 @@ fn composed_preamble_omits_host_paths() {
         primary_directory: "project".to_owned(),
     };
     let policy = DirectoryPolicy::from_record(&record);
-    let preamble = compose(&record, &policy);
+    let preamble = compose_role(
+        &record.name,
+        "",
+        &record.instructions,
+        &record.tools,
+        &policy,
+    );
     assert!(preamble.contains("Power Plant contract"));
     assert!(preamble.contains("Keep public interfaces stable."));
     assert!(preamble.contains("/project"));

@@ -37,12 +37,27 @@ impl DirectoryPolicy {
         }
     }
 
+    pub(crate) fn from_grants(grants: Vec<PolicyGrant>, primary_alias: String) -> Self {
+        Self {
+            grants,
+            primary_alias,
+        }
+    }
+
     pub(crate) fn grants(&self) -> &[PolicyGrant] {
         &self.grants
     }
 
+    pub(crate) fn primary_alias(&self) -> &str {
+        &self.primary_alias
+    }
+
     pub(crate) fn primary_guest(&self) -> &str {
-        GUEST_PROJECT
+        self.grants
+            .iter()
+            .find(|grant| grant.alias == self.primary_alias)
+            .map(|grant| grant.guest_path.as_str())
+            .unwrap_or(GUEST_PROJECT)
     }
 
     pub(crate) fn primary_access(&self) -> AccessMode {

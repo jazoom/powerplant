@@ -96,6 +96,34 @@ async fn stop_is_rejected_while_a_command_is_running() {
     sandbox.stop().await.expect("stop after command");
 }
 
+#[tokio::test]
+async fn a_failed_command_records_the_guest_program() {
+    let sandbox = GuestSandbox::for_test();
+    let dir = tempfile::tempdir().expect("project");
+    sandbox.start_with(spec(dir.path())).await.expect("start");
+    sandbox.complete_start();
+    sandbox.fail_next_command();
+    let mut session = sandbox
+        .exec_cmd(super::GuestExec::command(
+            "git",
+            vec!["status".to_owned(), "--porcelain=v1".to_owned()],
+        ))
+        .await
+        .expect("exec");
+    assert_eq!(
+        sandbox.last_exec().as_deref(),
+        Some("git status --porcelain=v1")
+    );
+    let mut code = None;
+    while let Some(event) = session.recv().await {
+        if let super::CommandEvent::Exited(value) = event {
+            code = Some(value);
+        }
+    }
+    session.close().await;
+    assert_eq!(code, Some(1));
+}
+
 #[test]
 fn stale_mounts_are_rejected() {
     let sandbox_spec = SandboxSpec {

@@ -19,6 +19,7 @@ mod storage;
 mod template_filters;
 mod tools;
 mod vault;
+mod workflows;
 
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     server::run().await

@@ -11,6 +11,7 @@ use crate::{
         job::{Job, JobId, JobSnapshot},
         tokens::SessionId,
     },
+    workflows::RunId,
 };
 
 #[cfg(test)]
@@ -116,6 +117,7 @@ impl SessionStore {
         &self,
         id: &SessionId,
         agent: AgentId,
+        run_id: RunId,
         message: String,
     ) -> Result<BegunTurn, BeginTurnError> {
         let mut sessions = self.lock();
@@ -136,7 +138,7 @@ impl SessionStore {
             role: Role::User,
             text: message,
         });
-        let job = Job::new(job_id, conversation.turns.len());
+        let job = Job::new(job_id, run_id, conversation.turns.len());
         conversation.job = Some(job.clone());
         session.active = Some((agent, job_id));
         Ok(BegunTurn {
@@ -163,6 +165,28 @@ impl SessionStore {
         partial: String,
     ) -> bool {
         self.complete_turn(id, agent, job_id, partial)
+    }
+
+    pub(crate) fn rollback_turn(&self, id: &SessionId, agent: &AgentId, job_id: &JobId) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
+            return false;
+        };
+        if session.active != Some((*agent, *job_id)) {
+            return false;
+        }
+        if let Some(conversation) = session.conversations.get_mut(agent) {
+            conversation.turns.pop();
+            if conversation
+                .job
+                .as_ref()
+                .is_some_and(|job| job.id() == *job_id)
+            {
+                conversation.job = None;
+            }
+        }
+        session.active = None;
+        true
     }
 
     pub(crate) fn job(&self, id: &SessionId, agent: &AgentId, job_id: &JobId) -> Option<Arc<Job>> {

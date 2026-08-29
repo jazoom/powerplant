@@ -1,4 +1,13 @@
 use super::{JOB_ID_LENGTH, Job, JobId, JobStatus};
+use crate::workflows::RunId;
+
+fn job() -> std::sync::Arc<Job> {
+    Job::new(
+        JobId::generate().expect("job id"),
+        RunId::generate().expect("run"),
+        1,
+    )
+}
 
 #[test]
 fn generated_job_ids_round_trip() {
@@ -20,7 +29,7 @@ fn rejects_malformed_job_ids() {
 
 #[test]
 fn output_events_are_monotonic_and_reconstructable() {
-    let job = Job::new(JobId::generate().expect("job id"), 1);
+    let job = job();
     assert_eq!(job.push_output("Hel".to_owned()), Some(1));
     assert_eq!(job.push_output("lo".to_owned()), Some(2));
     assert_eq!(job.output_up_to(0), "");
@@ -33,7 +42,7 @@ fn output_events_are_monotonic_and_reconstructable() {
 
 #[test]
 fn finish_is_idempotent() {
-    let job = Job::new(JobId::generate().expect("job id"), 1);
+    let job = job();
     assert_eq!(job.finish(JobStatus::Completed, None), Some(1));
     assert_eq!(job.finish(JobStatus::Failed, Some("no")), None);
     assert_eq!(job.snapshot().status, JobStatus::Completed);

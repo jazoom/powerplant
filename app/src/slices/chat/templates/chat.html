@@ -326,6 +326,7 @@
       class="btn btn-ghost btn-sm"
       >Configure</a
     >
+    <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
     <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
   </div>
 </header>
@@ -361,7 +362,17 @@
           <div class="mb-3" data-island="job-observe" data-job-active="true">
             <p class="text-quiet text-sm" role="status" aria-live="polite">
               {{ job_status }}
+              {% if run_step != "" %}
+                <span>{{ run_step }}</span>
+              {% endif %}
             </p>
+            {% if run_id != "" %}
+              <p class="text-sm">
+                <a href="/runs/{{ run_id }}" data-graft class="link"
+                  >Current run</a
+                >
+              </p>
+            {% endif %}
             {% if job_error != "" %}
               <div class="alert alert-error" role="alert" tabindex="-1">
                 <p>{{ job_error }}</p>
@@ -384,11 +395,23 @@
             </div>
           </div>
         {% else %}
-          {% if job_error != "" %}
+          {% if job_error != "" || run_id != "" %}
             <div class="mb-3">
-              <div class="alert alert-error" role="alert" tabindex="-1">
-                <p>{{ job_error }}</p>
-              </div>
+              {% if run_id != "" %}
+                <p class="text-sm">
+                  {% if run_step != "" %}
+                    <span class="text-quiet">{{ run_step }}</span>
+                  {% endif %}
+                  <a href="/runs/{{ run_id }}" data-graft class="link"
+                    >Current run</a
+                  >
+                </p>
+              {% endif %}
+              {% if job_error != "" %}
+                <div class="alert alert-error" role="alert" tabindex="-1">
+                  <p>{{ job_error }}</p>
+                </div>
+              {% endif %}
             </div>
           {% endif %}
         {% endif %}
