@@ -1,9 +1,10 @@
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
-    AgentAuthority, AgentStep, GuestDirectoryAccess, MAXIMUM_DIRECTORIES, MAXIMUM_OUTPUTS,
-    MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind, RequiredOutput, RoleDefinition, RoleKey,
-    StepAction, StepDefinition, StepKey, SuccessTransition, SystemCommandId, SystemCommandStep,
-    WorkflowDefinition,
+    AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, GuestDirectoryAccess, InputKey,
+    MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey,
+    OutputKind, RequiredInput, RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition,
+    StepEnvironment, StepKey, SuccessTransition, SystemCommandId, SystemCommandStep,
+    WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
 use crate::workflows::{CatalogueError, WorkflowRecord};
 
@@ -35,6 +36,8 @@ pub(super) enum FormIntent {
     RemoveOutput { step: usize, output: usize },
     MoveOutputUp { step: usize, output: usize },
     MoveOutputDown { step: usize, output: usize },
+    AddInput(usize),
+    RemoveInput { step: usize, input: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -58,20 +61,30 @@ pub(super) struct OutputDraft {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct InputDraft {
+    pub(super) key: String,
+    pub(super) kind: String,
+    pub(super) source: String,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct StepDraft {
     pub(super) key: String,
     pub(super) name: String,
     pub(super) action: String,
+    pub(super) environment: String,
     pub(super) role: String,
     pub(super) command: String,
     pub(super) tools: Vec<ToolId>,
     pub(super) directories: Vec<DirectoryDraft>,
+    pub(super) inputs: Vec<InputDraft>,
     pub(super) outputs: Vec<OutputDraft>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct WorkflowFormState {
     pub(super) name: String,
+    pub(super) default_environment: String,
     pub(super) revision: Option<u64>,
     pub(super) roles: Vec<RoleDraft>,
     pub(super) steps: Vec<StepDraft>,
@@ -97,13 +110,22 @@ pub(super) struct OutputErrors {
 }
 
 #[derive(Clone, Debug, Default)]
+pub(super) struct InputErrors {
+    pub(super) key: &'static str,
+    pub(super) kind: &'static str,
+    pub(super) source: &'static str,
+}
+
+#[derive(Clone, Debug, Default)]
 pub(super) struct StepErrors {
     pub(super) key: &'static str,
     pub(super) name: &'static str,
     pub(super) action: &'static str,
+    pub(super) environment: &'static str,
     pub(super) role: &'static str,
     pub(super) command: &'static str,
     pub(super) directories: Vec<DirectoryErrors>,
+    pub(super) inputs: Vec<InputErrors>,
     pub(super) outputs: Vec<OutputErrors>,
 }
 
@@ -111,6 +133,7 @@ pub(super) struct StepErrors {
 pub(super) struct FormErrors {
     pub(super) summary: &'static str,
     pub(super) name: &'static str,
+    pub(super) default_environment: &'static str,
     pub(super) roles: Vec<RoleErrors>,
     pub(super) steps: Vec<StepErrors>,
 }
@@ -137,15 +160,21 @@ impl FormErrors {
         }
     }
 
+    pub(super) fn for_state(state: &WorkflowFormState) -> Self {
+        Self::sized(state.roles.len(), &state.steps)
+    }
+
     fn sized(roles: usize, steps: &[StepDraft]) -> Self {
         Self {
             summary: "",
             name: "",
+            default_environment: "",
             roles: vec![RoleErrors::default(); roles],
             steps: steps
                 .iter()
                 .map(|step| StepErrors {
                     directories: vec![DirectoryErrors::default(); step.directories.len()],
+                    inputs: vec![InputErrors::default(); step.inputs.len()],
                     outputs: vec![OutputErrors::default(); step.outputs.len()],
                     ..StepErrors::default()
                 })
@@ -155,6 +184,7 @@ impl FormErrors {
 
     fn has_field_error(&self) -> bool {
         !self.name.is_empty()
+            || !self.default_environment.is_empty()
             || self.roles.iter().any(|role| {
                 !role.key.is_empty()
                     || !role.name.is_empty()
@@ -165,12 +195,16 @@ impl FormErrors {
                 !step.key.is_empty()
                     || !step.name.is_empty()
                     || !step.action.is_empty()
+                    || !step.environment.is_empty()
                     || !step.role.is_empty()
                     || !step.command.is_empty()
                     || step
                         .directories
                         .iter()
                         .any(|directory| !directory.alias.is_empty())
+                    || step.inputs.iter().any(|input| {
+                        !input.key.is_empty() || !input.kind.is_empty() || !input.source.is_empty()
+                    })
                     || step
                         .outputs
                         .iter()
@@ -183,6 +217,7 @@ impl WorkflowFormState {
     pub(super) fn blank() -> Self {
         Self {
             name: String::new(),
+            default_environment: String::new(),
             revision: None,
             roles: vec![RoleDraft {
                 key: "role-1".to_owned(),
@@ -217,6 +252,7 @@ impl WorkflowFormState {
         }
         Self {
             name: record.definition.name().to_owned(),
+            default_environment: record.definition.default_environment().as_hex(),
             revision: Some(record.revision),
             roles,
             steps,
@@ -226,6 +262,7 @@ impl WorkflowFormState {
     pub(super) fn parse(pairs: Vec<(String, String)>) -> Result<(Self, FormIntent), FormError> {
         let mut seen = Vec::new();
         let mut name = String::new();
+        let mut default_environment = String::new();
         let mut revision = None;
         let mut intent = None;
         let mut role_fields: Vec<(usize, RolePart, String)> = Vec::new();
@@ -237,6 +274,7 @@ impl WorkflowFormState {
             seen.push(key.clone());
             match parse_field(&key)? {
                 Field::Name => name = value,
+                Field::DefaultEnvironment => default_environment = value,
                 Field::Revision => {
                     if !value.trim().is_empty() {
                         revision = Some(parse_revision(&value)?);
@@ -256,6 +294,7 @@ impl WorkflowFormState {
         Ok((
             Self {
                 name,
+                default_environment,
                 revision,
                 roles,
                 steps,
@@ -313,7 +352,11 @@ impl WorkflowFormState {
                     .first()
                     .map(|role| role.key.clone())
                     .unwrap_or_else(|| "role-1".to_owned());
-                self.steps.push(blank_agent_step(&key, &role));
+                let mut added = blank_agent_step(&key, &role);
+                if let Some(input) = added.inputs.first_mut() {
+                    input.source = latest_candidate_source(&self.steps);
+                }
+                self.steps.push(added);
                 Ok(())
             }
             FormIntent::RemoveStep(index) => {
@@ -325,6 +368,29 @@ impl WorkflowFormState {
             }
             FormIntent::MoveStepUp(index) => move_item(&mut self.steps, index, true),
             FormIntent::MoveStepDown(index) => move_item(&mut self.steps, index, false),
+            FormIntent::AddInput(step) => {
+                if step >= self.steps.len() {
+                    return Err(FormError::Index);
+                }
+                if self.steps[step].inputs.len() >= MAXIMUM_INPUTS {
+                    return Err(FormError::Excessive);
+                }
+                let source = latest_candidate_source(&self.steps[..step]);
+                self.steps[step].inputs.push(InputDraft {
+                    key: String::new(),
+                    kind: ArtefactKind::CandidateRevision.as_str().to_owned(),
+                    source,
+                });
+                Ok(())
+            }
+            FormIntent::RemoveInput { step, input } => {
+                let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
+                if input >= row.inputs.len() {
+                    return Err(FormError::Index);
+                }
+                row.inputs.remove(input);
+                Ok(())
+            }
             FormIntent::AddOutput(step) => {
                 let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
                 if row.outputs.len() >= MAXIMUM_OUTPUTS {
@@ -405,7 +471,23 @@ impl WorkflowFormState {
             steps[index].on_success = SuccessTransition::Next(steps[index + 1].key.clone());
         }
         steps[last].on_success = SuccessTransition::CompleteRun;
-        match WorkflowDefinition::from_parts(self.name.clone(), roles, first, steps) {
+        let default_environment =
+            match crate::environments::EnvironmentId::parse(self.default_environment.trim()) {
+                Some(id) => id,
+                None => {
+                    errors.default_environment =
+                        crate::workflows::definition::DefinitionError::Environment.message();
+                    errors.summary = "Fix the highlighted fields.";
+                    return Err(errors);
+                }
+            };
+        match WorkflowDefinition::from_parts(
+            self.name.clone(),
+            default_environment,
+            roles,
+            first,
+            steps,
+        ) {
             Ok(definition) => Ok(definition),
             Err(error) => {
                 relate_definition_error(self, error, &mut errors);
@@ -431,6 +513,7 @@ impl From<CatalogueError> for FormErrors {
 #[derive(Clone, Copy)]
 enum Field {
     Name,
+    DefaultEnvironment,
     Revision,
     Intent,
     Role { index: usize, part: RolePart },
@@ -450,10 +533,12 @@ enum StepPart {
     Key,
     Name,
     Action,
+    Environment,
     Role,
     Command,
     Tool(ToolId),
     Dir { index: usize, part: DirPart },
+    Input { index: usize, part: InputPart },
     Output { index: usize, part: OutputPart },
 }
 
@@ -469,9 +554,17 @@ enum OutputPart {
     Kind,
 }
 
+#[derive(Clone, Copy)]
+enum InputPart {
+    Key,
+    Kind,
+    Source,
+}
+
 fn parse_field(name: &str) -> Result<Field, FormError> {
     match name {
         "name" => Ok(Field::Name),
+        "default-environment" => Ok(Field::DefaultEnvironment),
         "revision" => Ok(Field::Revision),
         "intent" => Ok(Field::Intent),
         _ => parse_row_field(name),
@@ -502,6 +595,7 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("key") => StepPart::Key,
                 Some("name") => StepPart::Name,
                 Some("action") => StepPart::Action,
+                Some("environment") => StepPart::Environment,
                 Some("role") => StepPart::Role,
                 Some("command") => StepPart::Command,
                 Some("tool") => {
@@ -530,6 +624,22 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                         part: dir_part,
                     }
                 }
+                Some("input") => {
+                    let input = parse_index(parts.next().ok_or(FormError::UnknownField)?)?;
+                    let input_part = match parts.next() {
+                        Some("key") => InputPart::Key,
+                        Some("kind") => InputPart::Kind,
+                        Some("source") => InputPart::Source,
+                        _ => return Err(FormError::UnknownField),
+                    };
+                    if parts.next().is_some() {
+                        return Err(FormError::UnknownField);
+                    }
+                    StepPart::Input {
+                        index: input,
+                        part: input_part,
+                    }
+                }
                 Some("output") => {
                     let output = parse_index(parts.next().ok_or(FormError::UnknownField)?)?;
                     let output_part = match parts.next() {
@@ -547,8 +657,10 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 }
                 _ => return Err(FormError::UnknownField),
             };
-            if !matches!(part, StepPart::Dir { .. } | StepPart::Output { .. })
-                && parts.next().is_some()
+            if !matches!(
+                part,
+                StepPart::Dir { .. } | StepPart::Input { .. } | StepPart::Output { .. }
+            ) && parts.next().is_some()
             {
                 return Err(FormError::UnknownField);
             }
@@ -599,6 +711,14 @@ fn parse_indexed_intent(raw: &str) -> Result<FormIntent, FormError> {
         "remove-step" if parts.next().is_none() => Ok(FormIntent::RemoveStep(first)),
         "move-step-up" if parts.next().is_none() => Ok(FormIntent::MoveStepUp(first)),
         "move-step-down" if parts.next().is_none() => Ok(FormIntent::MoveStepDown(first)),
+        "add-input" if parts.next().is_none() => Ok(FormIntent::AddInput(first)),
+        "remove-input" => {
+            let input = parse_index(parts.next().ok_or(FormError::Intent)?)?;
+            if parts.next().is_some() {
+                return Err(FormError::Intent);
+            }
+            Ok(FormIntent::RemoveInput { step: first, input })
+        }
         "add-output" if parts.next().is_none() => Ok(FormIntent::AddOutput(first)),
         "remove-output" => {
             let output = parse_index(parts.next().ok_or(FormError::Intent)?)?;
@@ -667,6 +787,7 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
     }
     let mut steps = vec![empty_step(); count];
     let mut dir_seen = vec![Vec::<usize>::new(); count];
+    let mut input_seen = vec![Vec::<usize>::new(); count];
     let mut output_seen = vec![Vec::<usize>::new(); count];
     for (index, part, value) in fields {
         let step = &mut steps[index];
@@ -674,6 +795,7 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             StepPart::Key => step.key = value,
             StepPart::Name => step.name = value,
             StepPart::Action => step.action = value,
+            StepPart::Environment => step.environment = value,
             StepPart::Role => step.role = value,
             StepPart::Command => step.command = value,
             StepPart::Tool(tool) => {
@@ -693,6 +815,22 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
                 match dir_part {
                     DirPart::Alias => step.directories[dir].alias = value,
                     DirPart::Access => step.directories[dir].access = value,
+                }
+            }
+            StepPart::Input {
+                index: input,
+                part: input_part,
+            } => {
+                ensure_row(&mut step.inputs, input, || InputDraft {
+                    key: String::new(),
+                    kind: ArtefactKind::CandidateRevision.as_str().to_owned(),
+                    source: String::new(),
+                })?;
+                input_seen[index].push(input);
+                match input_part {
+                    InputPart::Key => step.inputs[input].key = value,
+                    InputPart::Kind => step.inputs[input].kind = value,
+                    InputPart::Source => step.inputs[input].source = value,
                 }
             }
             StepPart::Output {
@@ -715,6 +853,12 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
         if !dir_seen[index].is_empty() {
             dense_count(dir_seen[index].iter().copied())?;
             if step.directories.len() > MAXIMUM_DIRECTORIES {
+                return Err(FormError::Excessive);
+            }
+        }
+        if !input_seen[index].is_empty() {
+            dense_count(input_seen[index].iter().copied())?;
+            if step.inputs.len() > MAXIMUM_INPUTS {
                 return Err(FormError::Excessive);
             }
         }
@@ -748,7 +892,7 @@ fn dense_count(indices: impl Iterator<Item = usize>) -> Result<usize, FormError>
 }
 
 fn ensure_row<T>(rows: &mut Vec<T>, index: usize, make: impl Fn() -> T) -> Result<(), FormError> {
-    if index >= MAXIMUM_DIRECTORIES.max(MAXIMUM_OUTPUTS) {
+    if index >= MAXIMUM_DIRECTORIES.max(MAXIMUM_OUTPUTS).max(MAXIMUM_INPUTS) {
         return Err(FormError::Excessive);
     }
     while rows.len() <= index {
@@ -766,10 +910,12 @@ fn empty_step() -> StepDraft {
         key: String::new(),
         name: String::new(),
         action: "agent".to_owned(),
+        environment: String::new(),
         role: String::new(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: Vec::new(),
         directories: Vec::new(),
+        inputs: Vec::new(),
         outputs: Vec::new(),
     }
 }
@@ -784,15 +930,76 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         key: key.to_owned(),
         name: String::new(),
         action: "agent".to_owned(),
+        environment: String::new(),
         role: role.to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: ToolId::ALL.to_vec(),
         directories,
-        outputs: vec![OutputDraft {
-            key: "assistant-reply".to_owned(),
-            kind: OutputKind::AssistantReply.as_str().to_owned(),
-        }],
+        inputs: vec![input_from_required(&initial_candidate_input())],
+        outputs: vec![
+            OutputDraft {
+                key: "assistant-reply".to_owned(),
+                kind: OutputKind::AssistantReply.as_str().to_owned(),
+            },
+            output_from_required(&candidate_revision_output()),
+        ],
     }
+}
+
+fn latest_candidate_source(earlier: &[StepDraft]) -> String {
+    for step in earlier.iter().rev() {
+        if let Some(output) = step
+            .outputs
+            .iter()
+            .rev()
+            .find(|output| output.kind == OutputKind::CandidateRevision.as_str())
+        {
+            return format!("step-output:{}:{}", step.key, output.key);
+        }
+    }
+    "run-initial-candidate".to_owned()
+}
+
+fn input_from_required(input: &RequiredInput) -> InputDraft {
+    InputDraft {
+        key: input.key.as_str().to_owned(),
+        kind: input.kind.as_str().to_owned(),
+        source: source_token(&input.source),
+    }
+}
+
+fn output_from_required(output: &RequiredOutput) -> OutputDraft {
+    OutputDraft {
+        key: output.key.as_str().to_owned(),
+        kind: output.kind.as_str().to_owned(),
+    }
+}
+
+fn source_token(source: &ArtefactSource) -> String {
+    match source {
+        ArtefactSource::RunInitialCandidate => "run-initial-candidate".to_owned(),
+        ArtefactSource::StepOutput { step, output } => {
+            format!("step-output:{}:{}", step.as_str(), output.as_str())
+        }
+    }
+}
+
+fn parse_source(
+    raw: &str,
+) -> Result<ArtefactSource, crate::workflows::definition::DefinitionError> {
+    if raw == "run-initial-candidate" {
+        return Ok(ArtefactSource::RunInitialCandidate);
+    }
+    let Some(rest) = raw.strip_prefix("step-output:") else {
+        return Err(crate::workflows::definition::DefinitionError::Format);
+    };
+    let Some((step, output)) = rest.split_once(':') else {
+        return Err(crate::workflows::definition::DefinitionError::Format);
+    };
+    Ok(ArtefactSource::StepOutput {
+        step: StepKey::parse(step)?,
+        output: OutputKey::parse(output)?,
+    })
 }
 
 fn pad_directories(directories: &mut Vec<DirectoryDraft>) {
@@ -821,17 +1028,16 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 key: step.key.as_str().to_owned(),
                 name: step.name.clone(),
                 action: "agent".to_owned(),
+                environment: step_environment_token(action.environment),
                 role: action.role.as_str().to_owned(),
                 command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
                 tools: action.authority.tools.clone(),
                 directories,
+                inputs: step.inputs.iter().map(input_from_required).collect(),
                 outputs: action
                     .required_outputs
                     .iter()
-                    .map(|output| OutputDraft {
-                        key: output.key.as_str().to_owned(),
-                        kind: output.kind.as_str().to_owned(),
-                    })
+                    .map(output_from_required)
                     .collect(),
             }
         }
@@ -839,10 +1045,12 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             key: step.key.as_str().to_owned(),
             name: step.name.clone(),
             action: "system-command".to_owned(),
+            environment: step_environment_token(action.environment),
             role: String::new(),
             command: action.command.as_str().to_owned(),
             tools: Vec::new(),
             directories: Vec::new(),
+            inputs: step.inputs.iter().map(input_from_required).collect(),
             outputs: Vec::new(),
         },
     }
@@ -872,9 +1080,33 @@ fn build_step(step: &StepDraft, errors: &mut StepErrors) -> Option<StepDefinitio
             return None;
         }
     };
+    let mut inputs = Vec::new();
+    for (index, input) in step.inputs.iter().enumerate() {
+        let key = match InputKey::parse(&input.key) {
+            Ok(key) => key,
+            Err(error) => {
+                errors.inputs[index].key = error.message();
+                return None;
+            }
+        };
+        let Some(kind) = ArtefactKind::parse(&input.kind) else {
+            errors.inputs[index].kind =
+                crate::workflows::definition::DefinitionError::Format.message();
+            return None;
+        };
+        let source = match parse_source(&input.source) {
+            Ok(source) => source,
+            Err(error) => {
+                errors.inputs[index].source = error.message();
+                return None;
+            }
+        };
+        inputs.push(RequiredInput { key, kind, source });
+    }
     Some(StepDefinition {
         key,
         name: display_name,
+        inputs,
         action,
         on_success: SuccessTransition::CompleteRun,
     })
@@ -927,6 +1159,7 @@ fn build_agent_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepA
         outputs.push(RequiredOutput { key, kind });
     }
     Some(StepAction::Agent(AgentStep {
+        environment: parse_step_environment(&step.environment, errors)?,
         role,
         authority,
         required_outputs: outputs,
@@ -939,9 +1172,32 @@ fn build_command_action(step: &StepDraft, errors: &mut StepErrors) -> Option<Ste
         return None;
     };
     Some(StepAction::SystemCommand(SystemCommandStep {
+        environment: parse_step_environment(&step.environment, errors)?,
         command,
         required_outputs: Vec::new(),
     }))
+}
+
+fn step_environment_token(environment: StepEnvironment) -> String {
+    match environment {
+        StepEnvironment::WorkflowDefault => String::new(),
+        StepEnvironment::Override { environment_id } => environment_id.as_hex(),
+    }
+}
+
+fn parse_step_environment(raw: &str, errors: &mut StepErrors) -> Option<StepEnvironment> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Some(StepEnvironment::WorkflowDefault);
+    }
+    match crate::environments::EnvironmentId::parse(raw) {
+        Some(environment_id) => Some(StepEnvironment::Override { environment_id }),
+        None => {
+            errors.environment =
+                crate::workflows::definition::DefinitionError::Environment.message();
+            None
+        }
+    }
 }
 
 fn relate_definition_error(

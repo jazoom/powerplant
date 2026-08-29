@@ -13,7 +13,7 @@ use axum::{
 use hypergraft::{CommandGraft, GraftRequest, PatchStatus};
 
 use crate::{
-    agents::{AgentId, AgentRecord, grants_changed},
+    agents::{AgentId, AgentRecord},
     error::AppResult,
     responses,
     sessions::{OptionalSession, SessionId},
@@ -188,23 +188,6 @@ async fn update_configuration(
             );
         }
     };
-    if grants_changed(
-        &record.directories,
-        &draft.directories,
-        &record.primary_directory,
-        &draft.primary_directory,
-    ) {
-        let sandbox = state.sandboxes.handle(record.id);
-        if let Err(error) = sandbox.reject_if_active().await {
-            return render_form(
-                &state,
-                graft.into(),
-                PatchStatus::UnprocessableEntity,
-                page::CONFIG_TITLE,
-                AgentFormView::edit(&record, error.message()),
-            );
-        }
-    }
     match state.agents.update(&record.id, draft) {
         Ok(updated) => render_form(
             &state,
@@ -244,15 +227,6 @@ async fn delete_agent(
             AgentFormView::edit(&record, "Wait until this reply finishes."),
         );
     };
-    if let Err(error) = state.sandboxes.remove_agent(record.id).await {
-        return render_form(
-            &state,
-            graft.into(),
-            PatchStatus::UnprocessableEntity,
-            page::CONFIG_TITLE,
-            AgentFormView::edit(&record, error.message()),
-        );
-    }
     if let Err(error) = state.agents.delete(&record.id) {
         return render_catalogue(
             &state,

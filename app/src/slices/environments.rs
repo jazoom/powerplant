@@ -409,7 +409,17 @@ async fn edit_view_with_state(
     delete_error: &'static str,
 ) -> AppResult<EnvironmentFormView> {
     let status = status_view(state, record).await;
+    let affected = state
+        .workflows
+        .referencing(&record.id)
+        .into_iter()
+        .map(|workflow| page::AffectedWorkflow {
+            name: workflow.definition.name().to_owned(),
+            href: format!("/workflows/{}/configuration", workflow.id.as_hex()),
+        })
+        .collect();
     EnvironmentFormView::edit(record, form, errors, delete_error, &status)
+        .map(|view| view.with_affected(affected))
         .map_err(|error| crate::error::AppError::new("render environment form", error))
 }
 

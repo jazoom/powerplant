@@ -1,11 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
-
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
-use crate::agents::{AgentId, AgentStore, DirectoryPolicy};
+use crate::agents::DirectoryPolicy;
+use crate::workflows::RunId;
 
 mod access;
 mod command;
@@ -17,16 +16,15 @@ pub(crate) use crate::agents::GUEST_PROJECT;
 pub(crate) use access::{GuestAccess, public_network_policy};
 pub(crate) use command::{CommandEvent, CommandSession};
 
-const LEGACY_SANDBOX_NAME: &str = "powerplant";
-const SANDBOX_IMAGE: &str = "alpine/git";
 pub(crate) const SANDBOX_OWNER_LABEL: &str = "works.powerplant.owner";
 pub(crate) const SANDBOX_OWNER_VALUE: &str = "powerplant";
-const SANDBOX_AGENT_LABEL: &str = "works.powerplant.agent";
 pub(crate) const SANDBOX_KIND_LABEL: &str = "works.powerplant.guest-kind";
-pub(crate) const GUEST_KIND_AGENT: &str = "agent";
 pub(crate) const GUEST_KIND_PREPARATION: &str = "preparation";
+pub(crate) const GUEST_KIND_WORKFLOW_RUN: &str = "workflow-run";
 pub(crate) const SANDBOX_ENVIRONMENT_LABEL: &str = "works.powerplant.environment";
 pub(crate) const SANDBOX_PREPARATION_LABEL: &str = "works.powerplant.preparation";
+pub(crate) const SANDBOX_RUN_LABEL: &str = "works.powerplant.run";
+pub(crate) const SANDBOX_SNAPSHOT_LABEL: &str = "works.powerplant.snapshot";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GuestStatus {
@@ -35,22 +33,6 @@ pub(crate) enum GuestStatus {
     Stopped,
     Crashed,
     Unavailable,
-}
-
-impl GuestStatus {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Starting => "starting",
-            Self::Stopped => "stopped",
-            Self::Crashed => "crashed",
-            Self::Unavailable => "unavailable",
-        }
-    }
-
-    pub(crate) fn is_starting(self) -> bool {
-        self == Self::Starting
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,14 +64,6 @@ pub(crate) struct SandboxView {
     pub(crate) status: GuestStatus,
     pub(crate) progress: String,
     pub(crate) error: &'static str,
-}
-
-impl SandboxView {
-    pub(crate) fn missing_message(&self) -> &'static str {
-        self.missing
-            .map(MissingRuntime::message)
-            .unwrap_or_default()
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -146,7 +120,6 @@ pub(crate) enum SandboxError {
     Missing(MissingRuntime),
     Busy,
     Start,
-    Stop,
     Inspect,
     Ownership,
     NeedProject,
@@ -154,7 +127,6 @@ pub(crate) enum SandboxError {
     NotADirectory,
     DirectoryAccess,
     StaleMount,
-    ProjectLocked,
     Active,
     NotRunning,
     Exec,
@@ -167,7 +139,6 @@ impl SandboxError {
             Self::Missing(missing) => missing.message(),
             Self::Busy => "Wait until the sandbox finishes starting.",
             Self::Start => "Power Plant could not start the sandbox. Try again.",
-            Self::Stop => "Power Plant could not stop the sandbox. Try again.",
             Self::Inspect => "Power Plant could not read the sandbox status. Try again.",
             Self::Ownership => {
                 "Power Plant cannot use the sandbox name because another sandbox owns it."
@@ -177,7 +148,6 @@ impl SandboxError {
             Self::NotADirectory => "That path is not a directory.",
             Self::DirectoryAccess => "Power Plant cannot access that directory.",
             Self::StaleMount => "A granted directory is no longer at the saved path.",
-            Self::ProjectLocked => "Stop the sandbox before you change the directories.",
             Self::Active => "Wait until the running command finishes.",
             Self::NotRunning => "Start the sandbox.",
             Self::Exec => "Power Plant could not run the command. Try again.",
@@ -262,16 +232,19 @@ impl GuestExec {
 
 pub(crate) struct SandboxFleet {
     runtime: Arc<RuntimePrep>,
-    handles: Mutex<HashMap<AgentId, Arc<GuestSandbox>>>,
+    run_handles: Mutex<HashMap<RunId, Arc<GuestSandbox>>>,
     orphans: Mutex<Vec<OrphanSandbox>>,
     scripted: bool,
+    #[cfg(test)]
+    hang_command: Mutex<bool>,
 }
 
 pub(crate) struct GuestSandbox {
-    id: AgentId,
+    id: RunId,
     name: String,
     runtime: Arc<RuntimePrep>,
     inner: Inner,
+    snapshot_digest: Mutex<Option<String>>,
 }
 
 enum Inner {
@@ -377,24 +350,10 @@ impl Live {
     fn snapshot(&self, missing: Option<MissingRuntime>, status: GuestStatus) -> SandboxView {
         self.snapshot_with_error(missing, status, None)
     }
-
-    async fn wait_until_changed(
-        &self,
-        missing: Option<MissingRuntime>,
-        previous: SandboxView,
-        hold: Duration,
-        status: GuestStatus,
-    ) {
-        let notified = self.notify.notified();
-        if self.snapshot(missing, status) != previous {
-            return;
-        }
-        let _ = tokio::time::timeout(hold, notified).await;
-    }
 }
 
 impl SandboxFleet {
-    pub(crate) async fn prepare(agents: &AgentStore) -> Self {
+    pub(crate) async fn prepare() -> Self {
         if !microsandbox::setup::is_installed() {
             tracing::info!("installing microsandbox runtime");
             if microsandbox::setup::install().await.is_err() {
@@ -408,16 +367,18 @@ impl SandboxFleet {
             missing: Mutex::new(inspect_runtime()),
         });
         let orphans = if lock_mutex(&runtime.missing).is_none() {
-            recover_preparation_guests().await;
-            collect_orphans(agents).await
+            recover_transient_guests().await;
+            collect_orphans().await
         } else {
             Vec::new()
         };
         Self {
             runtime,
-            handles: Mutex::new(HashMap::new()),
+            run_handles: Mutex::new(HashMap::new()),
             orphans: Mutex::new(orphans),
             scripted: false,
+            #[cfg(test)]
+            hang_command: Mutex::new(false),
         }
     }
 
@@ -427,9 +388,10 @@ impl SandboxFleet {
             runtime: Arc::new(RuntimePrep {
                 missing: Mutex::new(None),
             }),
-            handles: Mutex::new(HashMap::new()),
+            run_handles: Mutex::new(HashMap::new()),
             orphans: Mutex::new(Vec::new()),
             scripted: true,
+            hang_command: Mutex::new(false),
         }
     }
 
@@ -443,8 +405,16 @@ impl SandboxFleet {
             .unwrap_or_default()
     }
 
-    pub(crate) fn handle(&self, id: AgentId) -> Arc<GuestSandbox> {
-        let mut handles = lock_mutex(&self.handles);
+    #[cfg(test)]
+    pub(crate) fn hang_next_command(&self) {
+        *lock_mutex(&self.hang_command) = true;
+        for handle in lock_mutex(&self.run_handles).values() {
+            handle.hang_next_command();
+        }
+    }
+
+    pub(crate) fn run_handle(&self, id: RunId) -> Arc<GuestSandbox> {
+        let mut handles = lock_mutex(&self.run_handles);
         handles
             .entry(id)
             .or_insert_with(|| Arc::new(self.new_handle(id)))
@@ -467,15 +437,8 @@ impl SandboxFleet {
         Ok(())
     }
 
-    pub(crate) async fn remove_agent(&self, id: AgentId) -> Result<(), SandboxError> {
-        let handle = self.handle(id);
-        handle.remove().await?;
-        lock_mutex(&self.handles).remove(&id);
-        Ok(())
-    }
-
-    fn new_handle(&self, id: AgentId) -> GuestSandbox {
-        let name = sandbox_name(&id);
+    fn new_handle(&self, id: RunId) -> GuestSandbox {
+        let name = format!("pp-run-{}", id.as_hex());
         let live = Arc::new(Live::new());
         let inner = if self.scripted {
             #[cfg(test)]
@@ -483,7 +446,7 @@ impl SandboxFleet {
                 Inner::Scripted(ScriptedGuest {
                     live,
                     status: Mutex::new(GuestStatus::Stopped),
-                    hang_command: Mutex::new(false),
+                    hang_command: Mutex::new(*lock_mutex(&self.hang_command)),
                     fail_command: Mutex::new(false),
                     last_exec: Mutex::new(None),
                     lock: Arc::new(AsyncMutex::new(())),
@@ -507,6 +470,7 @@ impl SandboxFleet {
             name,
             runtime: self.runtime.clone(),
             inner,
+            snapshot_digest: Mutex::new(None),
         }
     }
 }
@@ -514,18 +478,7 @@ impl SandboxFleet {
 impl GuestSandbox {
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        SandboxFleet::for_test().new_handle(AgentId::generate().expect("id"))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn complete_start(&self) {
-        match &self.inner {
-            Inner::Microsandbox(_) => {}
-            Inner::Scripted(guest) => {
-                *lock_mutex(&guest.status) = GuestStatus::Running;
-                guest.live.finish_start(Ok(()));
-            }
-        }
+        SandboxFleet::for_test().new_handle(RunId::generate().expect("id"))
     }
 
     #[cfg(test)]
@@ -565,41 +518,54 @@ impl GuestSandbox {
         }
     }
 
-    pub(crate) async fn wait_until_changed(&self, previous: SandboxView, hold: Duration) {
-        let missing = self.missing();
+    pub(crate) async fn start_from_snapshot(
+        &self,
+        artifact: &std::path::Path,
+        digest: &str,
+        spec: SandboxSpec,
+    ) -> Result<(), SandboxError> {
+        confirm_mounts(&spec)?;
+        let current = lock_mutex(&self.snapshot_digest).clone();
+        if current.as_deref() == Some(digest)
+            && self.view().await.status == GuestStatus::Running
+            && self.spec_matches(&spec).await?
+        {
+            return Ok(());
+        }
+        let _ = self.remove().await;
         match &self.inner {
             Inner::Microsandbox(guest) => {
-                let status = if guest.live.overlay() == Overlay::Starting {
-                    GuestStatus::Starting
-                } else {
-                    current_status(&self.name, self.id)
-                        .await
-                        .unwrap_or(GuestStatus::Unavailable)
-                };
-                guest
-                    .live
-                    .wait_until_changed(missing, previous, hold, status)
-                    .await;
+                if let Some(missing) = self.missing() {
+                    return Err(SandboxError::Missing(missing));
+                }
+                if !guest.live.begin_start(None)? {
+                    return Ok(());
+                }
+                let live = guest.live.clone();
+                let name = self.name.clone();
+                let id = self.id;
+                let artifact = artifact.to_path_buf();
+                let result = create_detached(&live, id, &name, &spec, &artifact, digest).await;
+                if result.is_ok() {
+                    *lock_mutex(&self.snapshot_digest) = Some(digest.to_owned());
+                }
+                match &result {
+                    Ok(()) => live.finish_start(Ok(())),
+                    Err(SandboxError::Missing(missing)) => {
+                        live.finish_start(Err(SandboxError::Missing(*missing)));
+                    }
+                    Err(_) => live.finish_start(Err(SandboxError::Start)),
+                }
+                result
             }
             #[cfg(test)]
             Inner::Scripted(guest) => {
-                let status = *lock_mutex(&guest.status);
-                guest
-                    .live
-                    .wait_until_changed(missing, previous, hold, status)
-                    .await;
+                guest.start(spec, self.missing())?;
+                *lock_mutex(&guest.status) = GuestStatus::Running;
+                guest.live.finish_start(Ok(()));
+                *lock_mutex(&self.snapshot_digest) = Some(digest.to_owned());
+                Ok(())
             }
-        }
-    }
-
-    pub(crate) async fn start_with(&self, spec: SandboxSpec) -> Result<(), SandboxError> {
-        confirm_mounts(&spec)?;
-        match &self.inner {
-            Inner::Microsandbox(guest) => {
-                guest.start(self.id, &self.name, spec, self.missing()).await
-            }
-            #[cfg(test)]
-            Inner::Scripted(guest) => guest.start(spec, self.missing()),
         }
     }
 
@@ -628,14 +594,6 @@ impl GuestSandbox {
         }
     }
 
-    pub(crate) async fn stop(&self) -> Result<(), SandboxError> {
-        match &self.inner {
-            Inner::Microsandbox(guest) => guest.stop(&self.name, self.id, self.missing()).await,
-            #[cfg(test)]
-            Inner::Scripted(guest) => guest.stop(self.missing()),
-        }
-    }
-
     pub(crate) async fn remove(&self) -> Result<(), SandboxError> {
         match &self.inner {
             Inner::Microsandbox(guest) => guest.remove(&self.name, self.id, self.missing()).await,
@@ -643,26 +601,14 @@ impl GuestSandbox {
             Inner::Scripted(guest) => guest.remove(self.missing()),
         }
     }
-
-    pub(crate) async fn reject_if_active(&self) -> Result<(), SandboxError> {
-        let view = self.view().await;
-        if view.status.is_starting() {
-            return Err(SandboxError::Busy);
-        }
-        match view.status {
-            GuestStatus::Running | GuestStatus::Starting => Err(SandboxError::ProjectLocked),
-            GuestStatus::Unavailable => Err(SandboxError::Inspect),
-            GuestStatus::Stopped | GuestStatus::Crashed => Ok(()),
-        }
-    }
 }
 
 impl MicrosandboxGuest {
-    async fn view(&self, name: &str, id: AgentId, missing: Option<MissingRuntime>) -> SandboxView {
+    async fn view(&self, name: &str, kind: RunId, missing: Option<MissingRuntime>) -> SandboxView {
         if missing.is_some() || self.live.overlay() == Overlay::Starting {
             return self.live.snapshot(missing, GuestStatus::Stopped);
         }
-        match current_status(name, id).await {
+        match current_status(name, kind).await {
             Ok(status) => self.live.snapshot(missing, status),
             Err(error) => self.live.snapshot_with_error(
                 missing,
@@ -672,45 +618,10 @@ impl MicrosandboxGuest {
         }
     }
 
-    async fn start(
-        &self,
-        id: AgentId,
-        name: &str,
-        spec: SandboxSpec,
-        missing: Option<MissingRuntime>,
-    ) -> Result<(), SandboxError> {
-        if spec.mounts.is_empty() {
-            return Err(SandboxError::NeedProject);
-        }
-        if missing.is_none()
-            && current_status(name, id).await? == GuestStatus::Running
-            && running_matches(name, id, &spec).await?
-        {
-            return Ok(());
-        }
-        if self.live.overlay() == Overlay::Starting {
-            return Ok(());
-        }
-        let lock = self.lock.clone();
-        let _busy = lock.try_lock().map_err(|_| SandboxError::Active)?;
-        if !self.live.begin_start(missing)? {
-            return Ok(());
-        }
-        drop(_busy);
-        let live = self.live.clone();
-        let name = name.to_owned();
-        tokio::spawn(async move {
-            let _guard = lock.lock().await;
-            let result = start_sandbox(&live, id, &name, spec).await;
-            live.finish_start(result);
-        });
-        Ok(())
-    }
-
     async fn exec(
         &self,
         name: &str,
-        id: AgentId,
+        kind: RunId,
         request: GuestExec,
         missing: Option<MissingRuntime>,
     ) -> Result<CommandSession, SandboxError> {
@@ -725,31 +636,15 @@ impl MicrosandboxGuest {
             .clone()
             .try_lock_owned()
             .map_err(|_| SandboxError::Active)?;
-        Ok(exec_command(name, id, request)
+        Ok(exec_command(name, kind, request)
             .await?
             .with_lifecycle(lifecycle))
-    }
-
-    async fn stop(
-        &self,
-        name: &str,
-        id: AgentId,
-        missing: Option<MissingRuntime>,
-    ) -> Result<(), SandboxError> {
-        if let Some(missing) = missing {
-            return Err(SandboxError::Missing(missing));
-        }
-        if self.live.overlay() == Overlay::Starting {
-            return Err(SandboxError::Busy);
-        }
-        let _guard = self.lock.try_lock().map_err(|_| SandboxError::Active)?;
-        stop_named(name, id).await
     }
 
     async fn remove(
         &self,
         name: &str,
-        id: AgentId,
+        kind: RunId,
         missing: Option<MissingRuntime>,
     ) -> Result<(), SandboxError> {
         if let Some(missing) = missing {
@@ -759,7 +654,7 @@ impl MicrosandboxGuest {
             return Err(SandboxError::Busy);
         }
         let _guard = self.lock.try_lock().map_err(|_| SandboxError::Active)?;
-        remove_owned(name, id).await
+        remove_owned(name, kind).await
     }
 }
 
@@ -837,10 +732,6 @@ impl ScriptedGuest {
     }
 }
 
-fn sandbox_name(id: &AgentId) -> String {
-    format!("pp-{}", id.as_hex())
-}
-
 fn confirm_mounts(spec: &SandboxSpec) -> Result<(), SandboxError> {
     if spec.mounts.is_empty() {
         return Err(SandboxError::NeedProject);
@@ -870,10 +761,10 @@ fn map_fs_error(error: std::io::Error) -> SandboxError {
     }
 }
 
-async fn current_status(name: &str, id: AgentId) -> Result<GuestStatus, SandboxError> {
+async fn current_status(name: &str, kind: RunId) -> Result<GuestStatus, SandboxError> {
     match microsandbox::Sandbox::get(name).await {
         Ok(handle) => {
-            ensure_owned(&handle, id)?;
+            ensure_owned(&handle, kind)?;
             Ok(map_status(handle.status_snapshot()))
         }
         Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => Ok(GuestStatus::Stopped),
@@ -881,75 +772,20 @@ async fn current_status(name: &str, id: AgentId) -> Result<GuestStatus, SandboxE
     }
 }
 
-async fn start_sandbox(
-    live: &Live,
-    id: AgentId,
-    name: &str,
-    spec: SandboxSpec,
-) -> Result<(), SandboxError> {
-    confirm_mounts(&spec)?;
-    *lock_mutex(&live.spec) = Some(spec.clone());
-    match microsandbox::Sandbox::get(name).await {
-        Ok(handle) => {
-            ensure_owned(&handle, id)?;
-            if running_config_matches(&handle, &spec) {
-                return match map_status(handle.status_snapshot()) {
-                    GuestStatus::Running => reconnect(handle).await,
-                    GuestStatus::Starting => Ok(()),
-                    GuestStatus::Stopped | GuestStatus::Crashed => {
-                        replace_sandbox(handle, live, id, name, &spec).await
-                    }
-                    GuestStatus::Unavailable => Err(SandboxError::Inspect),
-                };
-            }
-            replace_sandbox(handle, live, id, name, &spec).await
-        }
-        Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => {
-            create_detached(live, id, name, &spec, false).await
-        }
-        Err(error) => Err(map_error(error, SandboxError::Start)),
-    }
-}
-
-async fn reconnect(handle: microsandbox::sandbox::SandboxHandle) -> Result<(), SandboxError> {
-    match handle.connect().await {
-        Ok(sandbox) => {
-            sandbox.detach().await;
-            Ok(())
-        }
-        Err(error) => Err(map_error(error, SandboxError::Start)),
-    }
-}
-
-async fn replace_sandbox(
-    handle: microsandbox::sandbox::SandboxHandle,
-    live: &Live,
-    id: AgentId,
-    name: &str,
-    spec: &SandboxSpec,
-) -> Result<(), SandboxError> {
-    let _ = handle.stop().await;
-    match microsandbox::Sandbox::remove(name).await {
-        Ok(()) | Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => {
-            create_detached(live, id, name, spec, true).await
-        }
-        Err(error) => Err(map_error(error, SandboxError::Start)),
-    }
-}
-
 async fn create_detached(
     live: &Live,
-    id: AgentId,
+    id: RunId,
     name: &str,
     spec: &SandboxSpec,
-    replace: bool,
+    snapshot: &Path,
+    digest: &str,
 ) -> Result<(), SandboxError> {
+    *lock_mutex(&live.spec) = Some(spec.clone());
     let host = spec.access.host.clone();
     let mut builder = microsandbox::Sandbox::builder(name)
-        .image(SANDBOX_IMAGE)
-        .label(SANDBOX_OWNER_LABEL, SANDBOX_OWNER_VALUE)
-        .label(SANDBOX_KIND_LABEL, GUEST_KIND_AGENT)
-        .label(SANDBOX_AGENT_LABEL, id.as_hex())
+        .from_snapshot(snapshot.to_string_lossy().into_owned())
+        .label(SANDBOX_SNAPSHOT_LABEL, digest);
+    builder = apply_owner_labels(builder, id)
         .workdir(&spec.workdir)
         .network(|network| network.policy(access::provider_policy(&host)))
         .detached(true);
@@ -966,9 +802,6 @@ async fn create_detached(
         let value = secret.expose().to_owned();
         builder =
             builder.secret(|entry| entry.env(access::SECRET_ENV).value(value).allow_host(host));
-    }
-    if replace {
-        builder = builder.replace();
     }
     let (mut progress, task) = match builder.create_detached_with_pull_progress() {
         Ok(started) => started,
@@ -988,14 +821,24 @@ async fn create_detached(
     }
 }
 
+fn apply_owner_labels(
+    builder: microsandbox::sandbox::SandboxBuilder,
+    id: RunId,
+) -> microsandbox::sandbox::SandboxBuilder {
+    builder
+        .label(SANDBOX_OWNER_LABEL, SANDBOX_OWNER_VALUE)
+        .label(SANDBOX_KIND_LABEL, GUEST_KIND_WORKFLOW_RUN)
+        .label(SANDBOX_RUN_LABEL, id.as_hex())
+}
+
 async fn running_matches(
     name: &str,
-    id: AgentId,
+    kind: RunId,
     spec: &SandboxSpec,
 ) -> Result<bool, SandboxError> {
     match microsandbox::Sandbox::get(name).await {
         Ok(handle) => {
-            ensure_owned(&handle, id)?;
+            ensure_owned(&handle, kind)?;
             Ok(running_config_matches(&handle, spec))
         }
         Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => Ok(false),
@@ -1007,7 +850,7 @@ fn running_config_matches(
     handle: &microsandbox::sandbox::SandboxHandle,
     spec: &SandboxSpec,
 ) -> bool {
-    mounts_match(handle, spec) && image_matches(handle) && access_matches(handle, &spec.access)
+    mounts_match(handle, spec) && access_matches(handle, &spec.access)
 }
 
 fn access_matches(handle: &microsandbox::sandbox::SandboxHandle, access: &GuestAccess) -> bool {
@@ -1071,22 +914,9 @@ fn mounts_match(handle: &microsandbox::sandbox::SandboxHandle, spec: &SandboxSpe
     })
 }
 
-fn image_matches(handle: &microsandbox::sandbox::SandboxHandle) -> bool {
-    handle
-        .config()
-        .ok()
-        .is_some_and(|config| match config.spec.image {
-            microsandbox::sandbox::RootfsSource::Oci(oci) => {
-                oci.reference == SANDBOX_IMAGE
-                    || oci.reference.starts_with(&format!("{SANDBOX_IMAGE}:"))
-            }
-            _ => false,
-        })
-}
-
 async fn exec_command(
     name: &str,
-    id: AgentId,
+    kind: RunId,
     request: GuestExec,
 ) -> Result<CommandSession, SandboxError> {
     let handle = match microsandbox::Sandbox::get(name).await {
@@ -1096,7 +926,7 @@ async fn exec_command(
         }
         Err(error) => return Err(map_error(error, SandboxError::Exec)),
     };
-    ensure_owned(&handle, id)?;
+    ensure_owned(&handle, kind)?;
     if map_status(handle.status_snapshot()) != GuestStatus::Running {
         return Err(SandboxError::NotRunning);
     }
@@ -1126,24 +956,10 @@ async fn exec_command(
     }
 }
 
-async fn stop_named(name: &str, id: AgentId) -> Result<(), SandboxError> {
+async fn remove_owned(name: &str, kind: RunId) -> Result<(), SandboxError> {
     match microsandbox::Sandbox::get(name).await {
         Ok(handle) => {
-            ensure_owned(&handle, id)?;
-            handle
-                .stop()
-                .await
-                .map_err(|error| map_error(error, SandboxError::Stop))
-        }
-        Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => Ok(()),
-        Err(error) => Err(map_error(error, SandboxError::Stop)),
-    }
-}
-
-async fn remove_owned(name: &str, id: AgentId) -> Result<(), SandboxError> {
-    match microsandbox::Sandbox::get(name).await {
-        Ok(handle) => {
-            ensure_owned(&handle, id)?;
+            ensure_owned(&handle, kind)?;
             if matches!(
                 map_status(handle.status_snapshot()),
                 GuestStatus::Running | GuestStatus::Starting
@@ -1188,7 +1004,7 @@ async fn remove_named(name: &str) -> Result<(), SandboxError> {
     }
 }
 
-async fn collect_orphans(agents: &AgentStore) -> Vec<OrphanSandbox> {
+async fn collect_orphans() -> Vec<OrphanSandbox> {
     let Ok(handles) = list_owned().await else {
         return Vec::new();
     };
@@ -1200,35 +1016,9 @@ async fn collect_orphans(agents: &AgentStore) -> Vec<OrphanSandbox> {
         if !owns_sandbox_owner(&config.spec.labels) {
             continue;
         }
-        let name = handle.name().to_owned();
-        if name == LEGACY_SANDBOX_NAME {
-            if remove_named(&name).await.is_err() {
-                orphans.push(OrphanSandbox { name });
-            }
-            continue;
-        }
-        if config
-            .spec
-            .labels
-            .get(SANDBOX_KIND_LABEL)
-            .map(String::as_str)
-            == Some(GUEST_KIND_PREPARATION)
-        {
-            orphans.push(OrphanSandbox { name });
-            continue;
-        }
-        let Some(agent) = config
-            .spec
-            .labels
-            .get(SANDBOX_AGENT_LABEL)
-            .and_then(|value| AgentId::parse(value))
-        else {
-            orphans.push(OrphanSandbox { name });
-            continue;
-        };
-        if agents.get(&agent).is_none() {
-            orphans.push(OrphanSandbox { name });
-        }
+        orphans.push(OrphanSandbox {
+            name: handle.name().to_owned(),
+        });
     }
     orphans
 }
@@ -1271,10 +1061,23 @@ fn map_status(status: microsandbox::sandbox::SandboxStatus) -> GuestStatus {
 
 fn ensure_owned(
     handle: &microsandbox::sandbox::SandboxHandle,
-    id: AgentId,
+    id: RunId,
 ) -> Result<(), SandboxError> {
     let config = handle.config().map_err(|_| SandboxError::Inspect)?;
-    if owns_agent(&config.spec.labels, id) {
+    let owned = owns_sandbox_owner(&config.spec.labels)
+        && config
+            .spec
+            .labels
+            .get(SANDBOX_KIND_LABEL)
+            .map(String::as_str)
+            == Some(GUEST_KIND_WORKFLOW_RUN)
+        && config
+            .spec
+            .labels
+            .get(SANDBOX_RUN_LABEL)
+            .map(String::as_str)
+            == Some(&id.as_hex());
+    if owned {
         Ok(())
     } else {
         Err(SandboxError::Ownership)
@@ -1292,12 +1095,7 @@ fn owns_sandbox_owner(labels: &BTreeMap<String, String>) -> bool {
     labels.get(SANDBOX_OWNER_LABEL).map(String::as_str) == Some(SANDBOX_OWNER_VALUE)
 }
 
-fn owns_agent(labels: &BTreeMap<String, String>, id: AgentId) -> bool {
-    owns_sandbox_owner(labels)
-        && labels.get(SANDBOX_AGENT_LABEL).map(String::as_str) == Some(&id.as_hex())
-}
-
-async fn recover_preparation_guests() {
+async fn recover_transient_guests() {
     let Ok(handles) = list_owned().await else {
         return;
     };
@@ -1305,13 +1103,12 @@ async fn recover_preparation_guests() {
         let Ok(config) = handle.config() else {
             continue;
         };
-        if config
+        let kind = config
             .spec
             .labels
             .get(SANDBOX_KIND_LABEL)
-            .map(String::as_str)
-            != Some(GUEST_KIND_PREPARATION)
-        {
+            .map(String::as_str);
+        if kind != Some(GUEST_KIND_PREPARATION) && kind != Some(GUEST_KIND_WORKFLOW_RUN) {
             continue;
         }
         let name = handle.name().to_owned();

@@ -1,10 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+use crate::environments::snapshot::{OciManifestDigest, RecordedIntegrity, SnapshotArtifactKey};
+use crate::environments::{
+    EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
+};
+
+use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::definition::{
-    DefinitionFile, DefinitionVersion, PinnedWorkflowDefinition, StepAction, StepDefinition,
-    StepKey, SuccessTransition, WorkflowDefinition,
+    DefinitionFile, DefinitionVersion, InputKey, OutputKey, PinnedWorkflowDefinition, StepAction,
+    StepDefinition, StepKey, SuccessTransition, WorkflowDefinition,
 };
 use super::id::{AttemptId, RunId, WorkflowId};
+use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
 pub(crate) const RUN_RECORD_VERSION: u32 = 1;
 
@@ -13,19 +20,54 @@ pub(crate) struct WorkflowRun {
     pub(crate) id: RunId,
     pub(crate) created_at_ms: u64,
     pub(crate) pinned: PinnedWorkflowDefinition,
+    pub(crate) environments: ResolvedEnvironmentSet,
     pub(crate) state: RunState,
+    pub(crate) source: RunSource,
+    pub(crate) artefacts: Vec<ArtefactRecord>,
     pub(crate) attempts: Vec<AttemptRecord>,
     pub(crate) transitions: Vec<TransitionRecord>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RunState {
+    InitialisingSource,
     Ready { step: StepKey },
     Active { step: StepKey, attempt: AttemptId },
     Completed,
     Failed,
     Cancelled,
     Interrupted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RunSource {
+    Pending,
+    Captured { source: RunSourceState },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RunSourceState {
+    pub(crate) initial: ArtefactReference,
+    pub(crate) accepted: ArtefactReference,
+    pub(crate) observed: ObservedCandidate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ObservedCandidate {
+    Exact { artefact: ArtefactReference },
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttemptArtefactInput {
+    pub(crate) key: InputKey,
+    pub(crate) artefact: ArtefactReference,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttemptArtefactOutput {
+    pub(crate) key: OutputKey,
+    pub(crate) artefact: ArtefactReference,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +81,10 @@ pub(crate) enum AttemptState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TransitionCause {
+    InitialSourceCaptureStarted,
+    InitialSourceCaptured,
+    InitialSourceCaptureFailed,
+    SourceDriftDetected,
     AttemptStarted,
     AttemptCompleted,
     AttemptFailed,
@@ -65,6 +111,8 @@ pub(crate) struct AttemptRecord {
     pub(crate) finished_at_ms: Option<u64>,
     pub(crate) state: AttemptState,
     pub(crate) result: Option<AttemptResult>,
+    pub(crate) inputs: Vec<AttemptArtefactInput>,
+    pub(crate) outputs: Vec<AttemptArtefactOutput>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,7 +158,10 @@ pub(super) struct RunFile {
     workflow_id: Option<String>,
     version: String,
     definition: DefinitionFile,
+    environments: ResolvedEnvironmentSetFile,
     state: RunStateFile,
+    source: RunSourceFile,
+    artefacts: Vec<ArtefactFile>,
     attempts: Vec<AttemptFile>,
     transitions: Vec<TransitionFile>,
 }
@@ -118,6 +169,7 @@ pub(super) struct RunFile {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum RunStateFile {
+    InitialisingSource,
     Ready { step: String },
     Active { step: String, attempt: String },
     Completed,
@@ -137,6 +189,110 @@ struct AttemptFile {
     finished_at_ms: Option<u64>,
     state: String,
     result: Option<AttemptResultFile>,
+    #[serde(default)]
+    inputs: Vec<AttemptInputFile>,
+    #[serde(default)]
+    outputs: Vec<AttemptOutputFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct AttemptInputFile {
+    key: String,
+    artefact: ArtefactRefFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct AttemptOutputFile {
+    key: String,
+    artefact: ArtefactRefFile,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ArtefactRefFile {
+    id: String,
+    kind: String,
+    artefact_hash: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+#[allow(clippy::large_enum_variant)]
+enum RunSourceFile {
+    Pending,
+    Captured { source: RunSourceStateFile },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct RunSourceStateFile {
+    initial: ArtefactRefFile,
+    accepted: ArtefactRefFile,
+    observed: ObservedCandidateFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum ObservedCandidateFile {
+    Exact { artefact: ArtefactRefFile },
+    Unknown,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ArtefactFile {
+    id: String,
+    kind: String,
+    artefact_hash: String,
+    object_hash: String,
+    payload_bytes: u64,
+    created_at_ms: u64,
+    provenance: ProvenanceFile,
+    summary: SummaryFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ProvenanceFile {
+    run_id: String,
+    producer: ProducerFile,
+    inputs: Vec<ArtefactRefFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "producer", rename_all = "kebab-case")]
+enum ProducerFile {
+    RunSourceCapture,
+    StepAttempt {
+        attempt_id: String,
+        step: String,
+        output: Option<String>,
+        disposition: String,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum SummaryFile {
+    Plan {
+        markdown_bytes: u64,
+    },
+    Review {
+        candidate: String,
+        verdict: String,
+    },
+    Test {
+        candidate: String,
+        outcome: String,
+    },
+    Candidate {
+        candidate: String,
+        entries: u64,
+        bytes: u64,
+        disposition: String,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -158,17 +314,120 @@ struct TransitionFile {
     to: RunStateFile,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ResolvedEnvironmentSetFile {
+    environments: Vec<ResolvedEnvironmentFile>,
+    steps: Vec<ResolvedStepEnvironmentFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ResolvedEnvironmentFile {
+    environment_id: String,
+    name: String,
+    preparation_id: String,
+    recipe_version: String,
+    snapshot: PinnedSnapshotFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct ResolvedStepEnvironmentFile {
+    step: String,
+    environment_id: String,
+    preparation_id: String,
+    snapshot_digest: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct PinnedSnapshotFile {
+    artifact_key: String,
+    snapshot_digest: String,
+    image_reference: String,
+    image_manifest_digest: String,
+    upper_integrity: PinnedIntegrityFile,
+    upper_size_bytes: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct PinnedIntegrityFile {
+    algorithm: String,
+    value: String,
+}
+
 impl WorkflowRun {
-    pub(crate) fn create(id: RunId, created_at_ms: u64, pinned: PinnedWorkflowDefinition) -> Self {
+    pub(crate) fn create(
+        id: RunId,
+        created_at_ms: u64,
+        pinned: PinnedWorkflowDefinition,
+        environments: ResolvedEnvironmentSet,
+    ) -> Self {
         let step = pinned.definition.first_step().clone();
         Self {
             id,
             created_at_ms,
             pinned,
+            environments,
             state: RunState::Ready { step },
+            source: RunSource::Pending,
+            artefacts: Vec::new(),
             attempts: Vec::new(),
             transitions: Vec::new(),
         }
+    }
+
+    pub(crate) fn record_initial_candidate(
+        &mut self,
+        record: crate::workflows::artefacts::ArtefactRecord,
+    ) -> Result<(), TransitionError> {
+        if !matches!(self.source, RunSource::Pending) {
+            return Err(TransitionError::Invalid);
+        }
+        if record.kind != crate::workflows::definition::ArtefactKind::CandidateRevision {
+            return Err(TransitionError::Invalid);
+        }
+        if record.provenance.run_id != self.id {
+            return Err(TransitionError::Invalid);
+        }
+        let reference = ArtefactReference {
+            id: record.id,
+            kind: record.kind,
+            artefact_hash: record.artefact_hash,
+        };
+        self.artefacts.push(record);
+        self.source = RunSource::Captured {
+            source: RunSourceState {
+                initial: reference.clone(),
+                accepted: reference.clone(),
+                observed: ObservedCandidate::Exact {
+                    artefact: reference,
+                },
+            },
+        };
+        Ok(())
+    }
+
+    pub(crate) fn artefact(
+        &self,
+        id: &crate::workflows::id::ArtefactId,
+    ) -> Option<&crate::workflows::artefacts::ArtefactRecord> {
+        self.artefacts.iter().find(|record| record.id == *id)
+    }
+
+    pub(crate) fn observed_candidate_hash(
+        &self,
+    ) -> Option<crate::workflows::artefacts::CandidateHash> {
+        let RunSource::Captured { source } = &self.source else {
+            return None;
+        };
+        let ObservedCandidate::Exact { artefact } = &source.observed else {
+            return None;
+        };
+        self.artefact(&artefact.id)
+            .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
     }
 
     pub(crate) fn start_attempt(
@@ -205,6 +464,8 @@ impl WorkflowRun {
             finished_at_ms: None,
             state: AttemptState::Active,
             result: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
         });
         let from = self.state.clone();
         let to = RunState::Active {
@@ -215,10 +476,60 @@ impl WorkflowRun {
         Ok(())
     }
 
+    pub(crate) fn start_attempt_with_inputs(
+        &mut self,
+        attempt_id: AttemptId,
+        inputs: Vec<AttemptArtefactInput>,
+        at_ms: u64,
+    ) -> Result<(), TransitionError> {
+        self.start_attempt(attempt_id, at_ms)?;
+        if let Some(attempt) = self.attempts.iter_mut().find(|item| item.id == attempt_id) {
+            attempt.inputs = inputs;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_attempt_outputs(
+        &mut self,
+        attempt_id: AttemptId,
+        artefacts: Vec<crate::workflows::artefacts::ArtefactRecord>,
+        outputs: Vec<AttemptArtefactOutput>,
+        accepted: Option<ArtefactReference>,
+        observed: ObservedCandidate,
+    ) -> Result<(), TransitionError> {
+        if artefacts.len()
+            > crate::workflows::artefacts::MAXIMUM_ARTEFACTS.saturating_sub(self.artefacts.len())
+        {
+            return Err(TransitionError::Invalid);
+        }
+        for record in &artefacts {
+            if record.provenance.run_id != self.id
+                || self.artefacts.iter().any(|item| item.id == record.id)
+            {
+                return Err(TransitionError::Invalid);
+            }
+        }
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|item| item.id == attempt_id && item.state == AttemptState::Active)
+        else {
+            return Err(TransitionError::Invalid);
+        };
+        attempt.outputs = outputs;
+        self.artefacts.extend(artefacts);
+        if let RunSource::Captured { source } = &mut self.source {
+            source.observed = observed;
+            if let Some(accepted) = accepted {
+                source.accepted = accepted;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn complete_attempt(
         &mut self,
         attempt_id: AttemptId,
-        outputs: Vec<String>,
         at_ms: u64,
     ) -> Result<(), TransitionError> {
         if !self.accepts_time(at_ms) {
@@ -237,13 +548,6 @@ impl WorkflowRun {
             .ok_or(TransitionError::Invalid)?;
         let on_success = definition_step.on_success.clone();
         let expected_outputs = required_output_keys(&definition_step.action);
-        if outputs.len() != expected_outputs.len()
-            || expected_outputs
-                .iter()
-                .any(|expected| !outputs.contains(expected))
-        {
-            return Err(TransitionError::Invalid);
-        }
         self.finish_attempt(
             attempt_id,
             at_ms,
@@ -259,6 +563,25 @@ impl WorkflowRun {
         };
         self.push_transition(at_ms, TransitionCause::AttemptCompleted, from, to);
         Ok(())
+    }
+
+    pub(crate) fn fail_before_attempt(&mut self, at_ms: u64) -> Result<(), TransitionError> {
+        if !self.accepts_time(at_ms) {
+            return Err(TransitionError::Invalid);
+        }
+        match self.state.clone() {
+            RunState::Ready { .. } | RunState::InitialisingSource => {
+                let from = self.state.clone();
+                self.push_transition(
+                    at_ms,
+                    TransitionCause::InitialSourceCaptureFailed,
+                    from,
+                    RunState::Failed,
+                );
+                Ok(())
+            }
+            _ => Err(TransitionError::Invalid),
+        }
     }
 
     pub(crate) fn fail_attempt(
@@ -323,6 +646,16 @@ impl WorkflowRun {
                 );
                 Ok(())
             }
+            RunState::InitialisingSource => {
+                let from = self.state.clone();
+                self.push_transition(
+                    at_ms,
+                    TransitionCause::CancellationRequested,
+                    from,
+                    RunState::Cancelled,
+                );
+                Ok(())
+            }
             RunState::Completed
             | RunState::Failed
             | RunState::Cancelled
@@ -333,6 +666,16 @@ impl WorkflowRun {
     pub(crate) fn interrupt(&mut self, at_ms: u64) -> Result<(), TransitionError> {
         if !self.accepts_time(at_ms) {
             return Err(TransitionError::Invalid);
+        }
+        if matches!(self.state, RunState::InitialisingSource) {
+            let from = self.state.clone();
+            self.push_transition(
+                at_ms,
+                TransitionCause::ProcessRestarted,
+                from,
+                RunState::Interrupted,
+            );
+            return Ok(());
         }
         let RunState::Active { attempt, .. } = self.state.clone() else {
             return Err(TransitionError::Invalid);
@@ -454,7 +797,10 @@ impl WorkflowRun {
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
             version: self.pinned.version.as_hex(),
             definition: self.pinned.definition.to_file(),
+            environments: environment_set_to_file(&self.environments),
             state: RunStateFile::from_state(&self.state),
+            source: source_to_file(&self.source),
+            artefacts: self.artefacts.iter().map(artefact_to_file).collect(),
             attempts: self.attempts.iter().map(AttemptRecord::to_file).collect(),
             transitions: self
                 .transitions
@@ -492,6 +838,13 @@ impl WorkflowRun {
             .into_iter()
             .map(TransitionRecord::from_file)
             .collect::<Result<Vec<_>, _>>()?;
+        let environments = environment_set_from_file(file.environments)?;
+        let source = source_from_file(file.source)?;
+        let artefacts = file
+            .artefacts
+            .into_iter()
+            .map(artefact_from_file)
+            .collect::<Result<Vec<_>, _>>()?;
         let run = Self {
             id,
             created_at_ms: file.created_at_ms,
@@ -500,7 +853,10 @@ impl WorkflowRun {
                 version,
                 definition,
             },
+            environments,
             state,
+            source,
+            artefacts,
             attempts,
             transitions,
         };
@@ -540,13 +896,15 @@ impl WorkflowRun {
             &self.attempts,
             &self.transitions,
             &self.state,
-        )
+        )?;
+        validate_environments(self)
     }
 }
 
 impl RunState {
     pub(crate) fn as_label(&self) -> &'static str {
         match self {
+            Self::InitialisingSource => "Source capture",
             Self::Ready { .. } => "Ready",
             Self::Active { .. } => "Active",
             Self::Completed => "Completed",
@@ -558,6 +916,7 @@ impl RunState {
 
     fn from_file(file: RunStateFile) -> Result<Self, RunRecordError> {
         Ok(match file {
+            RunStateFile::InitialisingSource => Self::InitialisingSource,
             RunStateFile::Ready { step } => Self::Ready {
                 step: StepKey::parse(&step).map_err(|_| RunRecordError::Corrupt)?,
             },
@@ -576,6 +935,7 @@ impl RunState {
 impl RunStateFile {
     fn from_state(state: &RunState) -> Self {
         match state {
+            RunState::InitialisingSource => Self::InitialisingSource,
             RunState::Ready { step } => Self::Ready {
                 step: step.as_str().to_owned(),
             },
@@ -602,6 +962,22 @@ impl AttemptRecord {
             finished_at_ms: self.finished_at_ms,
             state: self.state.as_str().to_owned(),
             result: self.result.as_ref().map(AttemptResult::to_file),
+            inputs: self
+                .inputs
+                .iter()
+                .map(|input| AttemptInputFile {
+                    key: input.key.as_str().to_owned(),
+                    artefact: ref_to_file(&input.artefact),
+                })
+                .collect(),
+            outputs: self
+                .outputs
+                .iter()
+                .map(|output| AttemptOutputFile {
+                    key: output.key.as_str().to_owned(),
+                    artefact: ref_to_file(&output.artefact),
+                })
+                .collect(),
         }
     }
 
@@ -618,6 +994,16 @@ impl AttemptRecord {
             finished_at_ms: file.finished_at_ms,
             state: AttemptState::parse(&file.state).ok_or(RunRecordError::Corrupt)?,
             result: file.result.map(AttemptResult::from_file).transpose()?,
+            inputs: file
+                .inputs
+                .into_iter()
+                .map(input_from_file)
+                .collect::<Result<Vec<_>, _>>()?,
+            outputs: file
+                .outputs
+                .into_iter()
+                .map(output_from_file)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -782,6 +1168,10 @@ impl TransitionRecord {
 impl TransitionCause {
     fn parse(value: &str) -> Option<Self> {
         match value {
+            "initial-source-capture-started" => Some(Self::InitialSourceCaptureStarted),
+            "initial-source-captured" => Some(Self::InitialSourceCaptured),
+            "initial-source-capture-failed" => Some(Self::InitialSourceCaptureFailed),
+            "source-drift-detected" => Some(Self::SourceDriftDetected),
             "attempt-started" => Some(Self::AttemptStarted),
             "attempt-completed" => Some(Self::AttemptCompleted),
             "attempt-failed" => Some(Self::AttemptFailed),
@@ -793,6 +1183,10 @@ impl TransitionCause {
 
     fn as_str(self) -> &'static str {
         match self {
+            Self::InitialSourceCaptureStarted => "initial-source-capture-started",
+            Self::InitialSourceCaptured => "initial-source-captured",
+            Self::InitialSourceCaptureFailed => "initial-source-capture-failed",
+            Self::SourceDriftDetected => "source-drift-detected",
             Self::AttemptStarted => "attempt-started",
             Self::AttemptCompleted => "attempt-completed",
             Self::AttemptFailed => "attempt-failed",
@@ -800,6 +1194,377 @@ impl TransitionCause {
             Self::ProcessRestarted => "process-restarted",
         }
     }
+}
+
+fn validate_environments(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    let set = &run.environments;
+    let mut seen = Vec::new();
+    for environment in &set.environments {
+        if seen.contains(&environment.environment_id) {
+            return Err(RunRecordError::Corrupt);
+        }
+        seen.push(environment.environment_id);
+    }
+    let mut bound_steps = Vec::new();
+    for binding in &set.steps {
+        if bound_steps.contains(&binding.step) {
+            return Err(RunRecordError::Corrupt);
+        }
+        let stored = set
+            .environments
+            .iter()
+            .find(|environment| environment.environment_id == binding.environment_id)
+            .ok_or(RunRecordError::Corrupt)?;
+        if stored.preparation_id != binding.preparation_id
+            || stored.snapshot.snapshot_digest != binding.snapshot_digest
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        let step = run
+            .pinned
+            .definition
+            .step(&binding.step)
+            .ok_or(RunRecordError::Corrupt)?;
+        if !step.is_sandbox_backed() {
+            return Err(RunRecordError::Corrupt);
+        }
+        bound_steps.push(binding.step.clone());
+    }
+    for step in run.pinned.definition.steps() {
+        if step.is_sandbox_backed() && !bound_steps.iter().any(|key| key == &step.key) {
+            return Err(RunRecordError::Corrupt);
+        }
+    }
+    Ok(())
+}
+
+fn environment_set_to_file(set: &ResolvedEnvironmentSet) -> ResolvedEnvironmentSetFile {
+    ResolvedEnvironmentSetFile {
+        environments: set
+            .environments
+            .iter()
+            .map(|environment| ResolvedEnvironmentFile {
+                environment_id: environment.environment_id.as_hex(),
+                name: environment.name.clone(),
+                preparation_id: environment.preparation_id.as_hex(),
+                recipe_version: environment.recipe_version.as_hex(),
+                snapshot: PinnedSnapshotFile {
+                    artifact_key: environment.snapshot.artifact_key.as_str().to_owned(),
+                    snapshot_digest: environment.snapshot.snapshot_digest.as_str().to_owned(),
+                    image_reference: environment.snapshot.image_reference.clone(),
+                    image_manifest_digest: environment
+                        .snapshot
+                        .image_manifest_digest
+                        .as_str()
+                        .to_owned(),
+                    upper_integrity: PinnedIntegrityFile {
+                        algorithm: environment.snapshot.upper_integrity.algorithm.clone(),
+                        value: environment.snapshot.upper_integrity.value.clone(),
+                    },
+                    upper_size_bytes: environment.snapshot.upper_size_bytes,
+                },
+            })
+            .collect(),
+        steps: set
+            .steps
+            .iter()
+            .map(|binding| ResolvedStepEnvironmentFile {
+                step: binding.step.as_str().to_owned(),
+                environment_id: binding.environment_id.as_hex(),
+                preparation_id: binding.preparation_id.as_hex(),
+                snapshot_digest: binding.snapshot_digest.as_str().to_owned(),
+            })
+            .collect(),
+    }
+}
+
+fn environment_set_from_file(
+    file: ResolvedEnvironmentSetFile,
+) -> Result<ResolvedEnvironmentSet, RunRecordError> {
+    Ok(ResolvedEnvironmentSet {
+        environments: file
+            .environments
+            .into_iter()
+            .map(|environment| {
+                Ok(ResolvedEnvironment {
+                    environment_id: EnvironmentId::parse(&environment.environment_id)
+                        .ok_or(RunRecordError::Corrupt)?,
+                    name: environment.name,
+                    preparation_id: PreparationId::parse(&environment.preparation_id)
+                        .ok_or(RunRecordError::Corrupt)?,
+                    recipe_version: EnvironmentRecipeVersion::parse(&environment.recipe_version)
+                        .ok_or(RunRecordError::Corrupt)?,
+                    snapshot: PreparedSnapshot {
+                        artifact_key: SnapshotArtifactKey::parse(
+                            &environment.snapshot.artifact_key,
+                        )
+                        .ok_or(RunRecordError::Corrupt)?,
+                        snapshot_digest: SnapshotDigest::parse(
+                            &environment.snapshot.snapshot_digest,
+                        )
+                        .ok_or(RunRecordError::Corrupt)?,
+                        image_reference: environment.snapshot.image_reference,
+                        image_manifest_digest: OciManifestDigest::parse(
+                            &environment.snapshot.image_manifest_digest,
+                        )
+                        .ok_or(RunRecordError::Corrupt)?,
+                        upper_integrity: RecordedIntegrity {
+                            algorithm: environment.snapshot.upper_integrity.algorithm,
+                            value: environment.snapshot.upper_integrity.value,
+                        },
+                        upper_size_bytes: environment.snapshot.upper_size_bytes,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        steps: file
+            .steps
+            .into_iter()
+            .map(|binding| {
+                Ok(ResolvedStepEnvironment {
+                    step: StepKey::parse(&binding.step).map_err(|_| RunRecordError::Corrupt)?,
+                    environment_id: EnvironmentId::parse(&binding.environment_id)
+                        .ok_or(RunRecordError::Corrupt)?,
+                    preparation_id: PreparationId::parse(&binding.preparation_id)
+                        .ok_or(RunRecordError::Corrupt)?,
+                    snapshot_digest: SnapshotDigest::parse(&binding.snapshot_digest)
+                        .ok_or(RunRecordError::Corrupt)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn ref_to_file(reference: &ArtefactReference) -> ArtefactRefFile {
+    ArtefactRefFile {
+        id: reference.id.as_hex(),
+        kind: reference.kind.as_str().to_owned(),
+        artefact_hash: reference.artefact_hash.as_str(),
+    }
+}
+
+fn ref_from_file(file: ArtefactRefFile) -> Result<ArtefactReference, RunRecordError> {
+    Ok(ArtefactReference {
+        id: super::id::ArtefactId::parse(&file.id).ok_or(RunRecordError::Corrupt)?,
+        kind: crate::workflows::definition::ArtefactKind::parse(&file.kind)
+            .ok_or(RunRecordError::Corrupt)?,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::parse(&file.artefact_hash)
+            .ok_or(RunRecordError::Corrupt)?,
+    })
+}
+
+fn input_from_file(file: AttemptInputFile) -> Result<AttemptArtefactInput, RunRecordError> {
+    Ok(AttemptArtefactInput {
+        key: InputKey::parse(&file.key).map_err(|_| RunRecordError::Corrupt)?,
+        artefact: ref_from_file(file.artefact)?,
+    })
+}
+
+fn output_from_file(file: AttemptOutputFile) -> Result<AttemptArtefactOutput, RunRecordError> {
+    Ok(AttemptArtefactOutput {
+        key: OutputKey::parse(&file.key).map_err(|_| RunRecordError::Corrupt)?,
+        artefact: ref_from_file(file.artefact)?,
+    })
+}
+
+fn source_to_file(source: &RunSource) -> RunSourceFile {
+    match source {
+        RunSource::Pending => RunSourceFile::Pending,
+        RunSource::Captured { source } => RunSourceFile::Captured {
+            source: RunSourceStateFile {
+                initial: ref_to_file(&source.initial),
+                accepted: ref_to_file(&source.accepted),
+                observed: match &source.observed {
+                    ObservedCandidate::Exact { artefact } => ObservedCandidateFile::Exact {
+                        artefact: ref_to_file(artefact),
+                    },
+                    ObservedCandidate::Unknown => ObservedCandidateFile::Unknown,
+                },
+            },
+        },
+    }
+}
+
+fn source_from_file(file: RunSourceFile) -> Result<RunSource, RunRecordError> {
+    Ok(match file {
+        RunSourceFile::Pending => RunSource::Pending,
+        RunSourceFile::Captured { source } => RunSource::Captured {
+            source: RunSourceState {
+                initial: ref_from_file(source.initial)?,
+                accepted: ref_from_file(source.accepted)?,
+                observed: match source.observed {
+                    ObservedCandidateFile::Exact { artefact } => ObservedCandidate::Exact {
+                        artefact: ref_from_file(artefact)?,
+                    },
+                    ObservedCandidateFile::Unknown => ObservedCandidate::Unknown,
+                },
+            },
+        },
+    })
+}
+
+fn artefact_to_file(record: &ArtefactRecord) -> ArtefactFile {
+    ArtefactFile {
+        id: record.id.as_hex(),
+        kind: record.kind.as_str().to_owned(),
+        artefact_hash: record.artefact_hash.as_str(),
+        object_hash: record.object_hash.as_str(),
+        payload_bytes: record.payload_bytes,
+        created_at_ms: record.created_at_ms,
+        provenance: ProvenanceFile {
+            run_id: record.provenance.run_id.as_hex(),
+            producer: producer_to_file(&record.provenance.producer),
+            inputs: record.provenance.inputs.iter().map(ref_to_file).collect(),
+        },
+        summary: summary_to_file(&record.summary),
+    }
+}
+
+fn artefact_from_file(file: ArtefactFile) -> Result<ArtefactRecord, RunRecordError> {
+    use crate::workflows::artefacts::ArtefactProvenance;
+    Ok(ArtefactRecord {
+        id: super::id::ArtefactId::parse(&file.id).ok_or(RunRecordError::Corrupt)?,
+        kind: crate::workflows::definition::ArtefactKind::parse(&file.kind)
+            .ok_or(RunRecordError::Corrupt)?,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::parse(&file.artefact_hash)
+            .ok_or(RunRecordError::Corrupt)?,
+        object_hash: crate::workflows::artefacts::ObjectHash::parse(&file.object_hash)
+            .ok_or(RunRecordError::Corrupt)?,
+        payload_bytes: file.payload_bytes,
+        created_at_ms: file.created_at_ms,
+        provenance: ArtefactProvenance {
+            run_id: RunId::parse(&file.provenance.run_id).ok_or(RunRecordError::Corrupt)?,
+            producer: producer_from_file(file.provenance.producer)?,
+            inputs: file
+                .provenance
+                .inputs
+                .into_iter()
+                .map(ref_from_file)
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        summary: summary_from_file(file.summary)?,
+    })
+}
+
+fn producer_to_file(producer: &crate::workflows::artefacts::ArtefactProducer) -> ProducerFile {
+    use crate::workflows::artefacts::ArtefactProducer;
+    match producer {
+        ArtefactProducer::RunSourceCapture => ProducerFile::RunSourceCapture,
+        ArtefactProducer::StepAttempt {
+            attempt_id,
+            step,
+            output,
+            disposition,
+        } => ProducerFile::StepAttempt {
+            attempt_id: attempt_id.as_hex(),
+            step: step.as_str().to_owned(),
+            output: output.as_ref().map(|item| item.as_str().to_owned()),
+            disposition: disposition.as_str().to_owned(),
+        },
+    }
+}
+
+fn producer_from_file(
+    file: ProducerFile,
+) -> Result<crate::workflows::artefacts::ArtefactProducer, RunRecordError> {
+    use crate::workflows::artefacts::{ArtefactProducer, ProductionDisposition};
+    Ok(match file {
+        ProducerFile::RunSourceCapture => ArtefactProducer::RunSourceCapture,
+        ProducerFile::StepAttempt {
+            attempt_id,
+            step,
+            output,
+            disposition,
+        } => ArtefactProducer::StepAttempt {
+            attempt_id: AttemptId::parse(&attempt_id).ok_or(RunRecordError::Corrupt)?,
+            step: StepKey::parse(&step).map_err(|_| RunRecordError::Corrupt)?,
+            output: output
+                .map(|value| OutputKey::parse(&value).map_err(|_| RunRecordError::Corrupt))
+                .transpose()?,
+            disposition: ProductionDisposition::parse(&disposition)
+                .ok_or(RunRecordError::Corrupt)?,
+        },
+    })
+}
+
+fn summary_to_file(summary: &crate::workflows::artefacts::ArtefactSummary) -> SummaryFile {
+    use crate::workflows::artefacts::ArtefactSummary;
+    match summary {
+        ArtefactSummary::Plan { markdown_bytes } => SummaryFile::Plan {
+            markdown_bytes: *markdown_bytes,
+        },
+        ArtefactSummary::Review { candidate, verdict } => SummaryFile::Review {
+            candidate: candidate.as_str(),
+            verdict: match verdict {
+                crate::workflows::artefacts::ReviewVerdict::Approved => "approved".to_owned(),
+                crate::workflows::artefacts::ReviewVerdict::RevisionRequired => {
+                    "revision-required".to_owned()
+                }
+                crate::workflows::artefacts::ReviewVerdict::Blocked => "blocked".to_owned(),
+            },
+        },
+        ArtefactSummary::Test { candidate, outcome } => SummaryFile::Test {
+            candidate: candidate.as_str(),
+            outcome: match outcome {
+                crate::workflows::artefacts::TestOutcome::Passed => "passed".to_owned(),
+                crate::workflows::artefacts::TestOutcome::Failed => "failed".to_owned(),
+                crate::workflows::artefacts::TestOutcome::NotRun => "not-run".to_owned(),
+            },
+        },
+        ArtefactSummary::Candidate {
+            candidate,
+            entries,
+            bytes,
+            disposition,
+        } => SummaryFile::Candidate {
+            candidate: candidate.as_str(),
+            entries: *entries,
+            bytes: *bytes,
+            disposition: disposition.as_str().to_owned(),
+        },
+    }
+}
+
+fn summary_from_file(
+    file: SummaryFile,
+) -> Result<crate::workflows::artefacts::ArtefactSummary, RunRecordError> {
+    use crate::workflows::artefacts::{ArtefactSummary, ProductionDisposition};
+    Ok(match file {
+        SummaryFile::Plan { markdown_bytes } => ArtefactSummary::Plan { markdown_bytes },
+        SummaryFile::Review { candidate, verdict } => ArtefactSummary::Review {
+            candidate: crate::workflows::artefacts::CandidateHash::parse(&candidate)
+                .ok_or(RunRecordError::Corrupt)?,
+            verdict: match verdict.as_str() {
+                "approved" => crate::workflows::artefacts::ReviewVerdict::Approved,
+                "revision-required" => crate::workflows::artefacts::ReviewVerdict::RevisionRequired,
+                "blocked" => crate::workflows::artefacts::ReviewVerdict::Blocked,
+                _ => return Err(RunRecordError::Corrupt),
+            },
+        },
+        SummaryFile::Test { candidate, outcome } => ArtefactSummary::Test {
+            candidate: crate::workflows::artefacts::CandidateHash::parse(&candidate)
+                .ok_or(RunRecordError::Corrupt)?,
+            outcome: match outcome.as_str() {
+                "passed" => crate::workflows::artefacts::TestOutcome::Passed,
+                "failed" => crate::workflows::artefacts::TestOutcome::Failed,
+                "not-run" => crate::workflows::artefacts::TestOutcome::NotRun,
+                _ => return Err(RunRecordError::Corrupt),
+            },
+        },
+        SummaryFile::Candidate {
+            candidate,
+            entries,
+            bytes,
+            disposition,
+        } => ArtefactSummary::Candidate {
+            candidate: crate::workflows::artefacts::CandidateHash::parse(&candidate)
+                .ok_or(RunRecordError::Corrupt)?,
+            entries,
+            bytes,
+            disposition: ProductionDisposition::parse(&disposition)
+                .ok_or(RunRecordError::Corrupt)?,
+        },
+    })
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -876,6 +1641,36 @@ fn validate_transitions(
             return Err(RunRecordError::Corrupt);
         }
         match transition.cause {
+            TransitionCause::InitialSourceCaptureStarted => {
+                if !matches!(
+                    transition.from,
+                    RunState::Ready { .. } | RunState::InitialisingSource
+                ) || transition.to != RunState::InitialisingSource
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
+            TransitionCause::InitialSourceCaptured => {
+                if transition.from != RunState::InitialisingSource
+                    || !matches!(transition.to, RunState::Ready { .. })
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
+            TransitionCause::InitialSourceCaptureFailed => {
+                if !matches!(
+                    transition.from,
+                    RunState::InitialisingSource | RunState::Ready { .. }
+                ) || transition.to != RunState::Failed
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
+            TransitionCause::SourceDriftDetected => {
+                if transition.to != RunState::Failed {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
             TransitionCause::AttemptStarted => {
                 let (
                     RunState::Ready { step: from_step },
@@ -936,7 +1731,8 @@ fn validate_transitions(
                 }
             }
             TransitionCause::CancellationRequested => match &transition.from {
-                RunState::Ready { .. } if transition.to == RunState::Cancelled => {}
+                RunState::InitialisingSource | RunState::Ready { .. }
+                    if transition.to == RunState::Cancelled => {}
                 RunState::Active { attempt, .. } if transition.to == RunState::Cancelled => {
                     let record = attempts
                         .iter()
@@ -951,6 +1747,13 @@ fn validate_transitions(
                 _ => return Err(RunRecordError::Corrupt),
             },
             TransitionCause::ProcessRestarted => {
+                if matches!(transition.from, RunState::InitialisingSource)
+                    && transition.to == RunState::Interrupted
+                {
+                    previous_time = transition.occurred_at_ms;
+                    expected_state = transition.to.clone();
+                    continue;
+                }
                 let RunState::Active { attempt, .. } = &transition.from else {
                     return Err(RunRecordError::Corrupt);
                 };

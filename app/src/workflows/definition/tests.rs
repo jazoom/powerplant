@@ -1,9 +1,12 @@
 use super::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, DefinitionError, GuestDirectoryAccess, OutputKey,
-    OutputKind, RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepKey,
+    ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, DefinitionError,
+    GuestDirectoryAccess, InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput,
+    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    candidate_revision_output, initial_candidate_input, test_environment_id,
 };
 use crate::agents::{AccessMode, ToolId};
+use crate::environments::EnvironmentId;
 
 fn role() -> RoleDefinition {
     RoleDefinition::new(
@@ -27,16 +30,39 @@ fn authority() -> AgentAuthority {
 }
 
 fn agent_step(key: &str, next: SuccessTransition) -> StepDefinition {
+    write_agent_step(
+        key,
+        next,
+        ArtefactSource::RunInitialCandidate,
+        vec![
+            RequiredOutput {
+                key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                kind: OutputKind::AssistantReply,
+            },
+            candidate_revision_output(),
+        ],
+    )
+}
+
+fn write_agent_step(
+    key: &str,
+    next: SuccessTransition,
+    candidate: ArtefactSource,
+    outputs: Vec<RequiredOutput>,
+) -> StepDefinition {
     StepDefinition {
         key: StepKey::parse(key).expect("step"),
         name: "Reply".to_owned(),
+        inputs: vec![RequiredInput {
+            key: InputKey::parse("candidate").expect("input"),
+            kind: ArtefactKind::CandidateRevision,
+            source: candidate,
+        }],
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse("agent").expect("role"),
+            environment: StepEnvironment::WorkflowDefault,
             authority: authority(),
-            required_outputs: vec![RequiredOutput {
-                key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                kind: OutputKind::AssistantReply,
-            }],
+            required_outputs: outputs,
         }),
         on_success: next,
     }
@@ -46,8 +72,10 @@ fn command_step(key: &str, next: SuccessTransition) -> StepDefinition {
     StepDefinition {
         key: StepKey::parse(key).expect("step"),
         name: "Status".to_owned(),
+        inputs: vec![initial_candidate_input()],
         action: StepAction::SystemCommand(SystemCommandStep {
             command: SystemCommandId::RepositoryStatus,
+            environment: StepEnvironment::WorkflowDefault,
             required_outputs: Vec::new(),
         }),
         on_success: next,
@@ -57,6 +85,7 @@ fn command_step(key: &str, next: SuccessTransition) -> StepDefinition {
 fn one_agent() -> WorkflowDefinition {
     WorkflowDefinition::from_parts(
         "Maintainer".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
@@ -68,6 +97,7 @@ fn one_agent() -> WorkflowDefinition {
 fn duplicate_role_keys_are_rejected() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role(), role()],
         StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
@@ -80,6 +110,7 @@ fn duplicate_role_keys_are_rejected() {
 fn duplicate_step_keys_are_rejected() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("reply").expect("first"),
         vec![
@@ -102,6 +133,7 @@ fn unknown_roles_are_rejected() {
     }
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("reply").expect("first"),
         vec![step],
@@ -121,6 +153,7 @@ fn unused_roles_are_rejected() {
     .expect("role");
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role(), extra],
         StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
@@ -133,6 +166,7 @@ fn unused_roles_are_rejected() {
 fn unknown_successors_are_rejected() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("reply").expect("first"),
         vec![agent_step(
@@ -148,6 +182,7 @@ fn unknown_successors_are_rejected() {
 fn cycles_are_rejected() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("one").expect("first"),
         vec![
@@ -169,6 +204,7 @@ fn cycles_are_rejected() {
 fn joins_are_rejected() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("one").expect("first"),
         vec![
@@ -191,6 +227,7 @@ fn joins_are_rejected() {
 fn extra_sources_are_rejected_as_branches() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("one").expect("first"),
         vec![
@@ -206,6 +243,7 @@ fn extra_sources_are_rejected_as_branches() {
 fn unreachable_steps_are_rejected() {
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("one").expect("first"),
         vec![
@@ -225,24 +263,34 @@ fn unreachable_steps_are_rejected() {
 
 #[test]
 fn arbitrary_command_values_are_rejected() {
-    let json = r#"{
+    let json = format!(
+        r#"{{
         "format-version": 1,
         "name": "Status",
+        "default-environment": "{}",
         "roles": [],
         "first-step": "status",
         "steps": [
-            {
+            {{
                 "key": "status",
                 "name": "Status",
-                "action": {
+                "inputs": [{{
+                    "key": "candidate",
+                    "kind": "candidate-revision",
+                    "source": {{ "source": "run-initial-candidate" }}
+                }}],
+                "action": {{
                     "type": "system-command",
                     "command": "rm -rf /",
+                    "environment": {{ "source": "workflow-default" }},
                     "required-outputs": []
-                },
-                "on-success": { "type": "complete-run" }
-            }
+                }},
+                "on-success": {{ "type": "complete-run" }}
+            }}
         ]
-    }"#;
+    }}"#,
+        test_environment_id().as_hex()
+    );
     assert_eq!(
         WorkflowDefinition::from_file_bytes(json.as_bytes()).err(),
         Some(DefinitionError::Command)
@@ -260,6 +308,7 @@ fn command_outputs_that_the_command_cannot_produce_are_rejected() {
     }
     let error = WorkflowDefinition::from_parts(
         "Status".to_owned(),
+        test_environment_id(),
         Vec::new(),
         StepKey::parse("status").expect("first"),
         vec![step],
@@ -279,6 +328,7 @@ fn duplicate_output_keys_are_rejected() {
     }
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("reply").expect("first"),
         vec![step],
@@ -292,6 +342,7 @@ fn content_versions_round_trip_both_action_kinds() {
     let agent = one_agent();
     let command = WorkflowDefinition::from_parts(
         "Status".to_owned(),
+        test_environment_id(),
         Vec::new(),
         StepKey::parse("status").expect("first"),
         vec![command_step("status", SuccessTransition::CompleteRun)],
@@ -311,6 +362,7 @@ fn a_definition_change_creates_a_different_content_version() {
     let original = one_agent();
     let changed = WorkflowDefinition::from_parts(
         "Changed".to_owned(),
+        test_environment_id(),
         vec![role()],
         StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
@@ -331,4 +383,274 @@ fn pretty_printed_bytes_do_not_change_the_content_version() {
             .version(),
         definition.version()
     );
+}
+
+#[test]
+fn malformed_environment_identifiers_are_rejected_before_graph_checks() {
+    let mut file = one_agent().to_file();
+    file.default_environment = "not-an-id".to_owned();
+    let bytes = serde_json::to_vec(&file).expect("json");
+    assert_eq!(
+        WorkflowDefinition::from_file_bytes(&bytes).err(),
+        Some(DefinitionError::Environment)
+    );
+}
+
+#[test]
+fn an_override_equal_to_the_default_normalises_to_workflow_default() {
+    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    if let StepAction::Agent(action) = &mut step.action {
+        action.environment = StepEnvironment::Override {
+            environment_id: test_environment_id(),
+        };
+    }
+    let definition = WorkflowDefinition::from_parts(
+        "Maintainer".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("reply").expect("first"),
+        vec![step],
+    )
+    .expect("definition");
+    assert_eq!(
+        definition.steps()[0].environment(),
+        StepEnvironment::WorkflowDefault
+    );
+}
+
+#[test]
+fn environment_identifiers_change_the_content_version() {
+    let original = one_agent();
+    let other = EnvironmentId::parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").expect("other");
+    let changed = WorkflowDefinition::from_parts(
+        "Maintainer".to_owned(),
+        other,
+        vec![role()],
+        StepKey::parse("reply").expect("first"),
+        vec![agent_step("reply", SuccessTransition::CompleteRun)],
+    )
+    .expect("changed");
+    assert_ne!(original.version(), changed.version());
+}
+
+#[test]
+fn earlier_formats_are_rejected() {
+    let json = serde_json::json!({
+        "format-version": 0,
+        "name": "Maintainer",
+        "default-environment": test_environment_id().as_hex(),
+        "roles": [{
+            "key": "agent",
+            "name": "Maintainer",
+            "expertise": "",
+            "prompt-defaults": ""
+        }],
+        "first-step": "reply",
+        "steps": [{
+            "key": "reply",
+            "name": "Reply",
+            "action": {
+                "type": "agent",
+                "role": "agent",
+                "environment": { "source": "workflow-default" },
+                "authority": {
+                    "tools": ["list"],
+                    "directories": [{
+                        "alias": "project",
+                        "access": "read-write"
+                    }]
+                },
+                "required-outputs": [{
+                    "key": "assistant-reply",
+                    "kind": "assistant-reply"
+                }]
+            },
+            "on-success": { "type": "complete-run" }
+        }]
+    });
+    let bytes = serde_json::to_vec(&json).expect("bytes");
+    assert_eq!(
+        WorkflowDefinition::from_file_bytes(&bytes).err(),
+        Some(DefinitionError::Format)
+    );
+}
+
+fn from_step(step: &str, output: &str) -> ArtefactSource {
+    ArtefactSource::StepOutput {
+        step: StepKey::parse(step).expect("step"),
+        output: OutputKey::parse(output).expect("output"),
+    }
+}
+
+#[test]
+fn unknown_step_outputs_are_rejected() {
+    let later = write_agent_step(
+        "reply",
+        SuccessTransition::Next(StepKey::parse("status").expect("next")),
+        ArtefactSource::RunInitialCandidate,
+        vec![
+            RequiredOutput {
+                key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                kind: OutputKind::AssistantReply,
+            },
+            candidate_revision_output(),
+        ],
+    );
+    let mut status = command_step("status", SuccessTransition::CompleteRun);
+    status.inputs = vec![
+        RequiredInput {
+            key: InputKey::parse("candidate").expect("input"),
+            kind: ArtefactKind::CandidateRevision,
+            source: from_step("reply", "candidate"),
+        },
+        RequiredInput {
+            key: InputKey::parse("plan").expect("input"),
+            kind: ArtefactKind::Plan,
+            source: from_step("reply", "plan"),
+        },
+    ];
+    let error = WorkflowDefinition::from_parts(
+        "Team".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("reply").expect("first"),
+        vec![later, status],
+    )
+    .err();
+    assert_eq!(error, Some(DefinitionError::UnknownOutput));
+}
+
+#[test]
+fn input_kind_mismatch_is_rejected() {
+    let planner = write_agent_step(
+        "plan",
+        SuccessTransition::Next(StepKey::parse("review").expect("next")),
+        ArtefactSource::RunInitialCandidate,
+        vec![
+            RequiredOutput {
+                key: OutputKey::parse("plan").expect("output"),
+                kind: OutputKind::Plan,
+            },
+            candidate_revision_output(),
+        ],
+    );
+    let mut review = write_agent_step(
+        "review",
+        SuccessTransition::CompleteRun,
+        from_step("plan", "candidate"),
+        vec![
+            RequiredOutput {
+                key: OutputKey::parse("report").expect("output"),
+                kind: OutputKind::ReviewReport,
+            },
+            candidate_revision_output(),
+        ],
+    );
+    review.inputs.push(RequiredInput {
+        key: InputKey::parse("plan").expect("input"),
+        kind: ArtefactKind::ReviewReport,
+        source: from_step("plan", "plan"),
+    });
+    let error = WorkflowDefinition::from_parts(
+        "Team".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("plan").expect("first"),
+        vec![planner, review],
+    )
+    .err();
+    assert_eq!(error, Some(DefinitionError::InputKind));
+}
+
+#[test]
+fn stale_candidate_sources_are_rejected() {
+    let first = agent_step(
+        "one",
+        SuccessTransition::Next(StepKey::parse("two").expect("two")),
+    );
+    let second = write_agent_step(
+        "two",
+        SuccessTransition::CompleteRun,
+        ArtefactSource::RunInitialCandidate,
+        vec![
+            RequiredOutput {
+                key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                kind: OutputKind::AssistantReply,
+            },
+            candidate_revision_output(),
+        ],
+    );
+    let error = WorkflowDefinition::from_parts(
+        "Team".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("one").expect("first"),
+        vec![first, second],
+    )
+    .err();
+    assert_eq!(error, Some(DefinitionError::CandidateInput));
+}
+
+#[test]
+fn sandbox_steps_without_candidate_inputs_are_rejected() {
+    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    step.inputs.clear();
+    let error = WorkflowDefinition::from_parts(
+        "Team".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("reply").expect("first"),
+        vec![step],
+    )
+    .err();
+    assert_eq!(error, Some(DefinitionError::CandidateInput));
+}
+
+#[test]
+fn write_steps_without_candidate_outputs_are_rejected() {
+    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    if let StepAction::Agent(action) = &mut step.action {
+        action
+            .required_outputs
+            .retain(|output| output.kind != OutputKind::CandidateRevision);
+    }
+    let error = WorkflowDefinition::from_parts(
+        "Team".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("reply").expect("first"),
+        vec![step],
+    )
+    .err();
+    assert_eq!(error, Some(DefinitionError::CandidateOutput));
+}
+
+#[test]
+fn secondary_write_grants_are_rejected() {
+    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    if let StepAction::Agent(action) = &mut step.action {
+        action.authority = AgentAuthority::new(
+            vec![ToolId::List],
+            vec![
+                GuestDirectoryAccess {
+                    alias: "project".to_owned(),
+                    access: AccessMode::ReadWrite,
+                },
+                GuestDirectoryAccess {
+                    alias: "docs".to_owned(),
+                    access: AccessMode::ReadWrite,
+                },
+            ],
+        )
+        .expect("authority");
+    }
+    let error = WorkflowDefinition::from_parts(
+        "Team".to_owned(),
+        test_environment_id(),
+        vec![role()],
+        StepKey::parse("reply").expect("first"),
+        vec![step],
+    )
+    .err();
+    assert_eq!(error, Some(DefinitionError::SecondaryWrite));
 }

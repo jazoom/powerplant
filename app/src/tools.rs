@@ -75,11 +75,77 @@ pub(crate) fn definitions(selected: &[ToolId]) -> Vec<ToolDefinition> {
         .collect()
 }
 
+pub(crate) fn definitions_for_step(
+    selected: &[ToolId],
+    outputs: &[crate::workflows::definition::RequiredOutput],
+) -> Vec<ToolDefinition> {
+    let mut tools = definitions(selected);
+    if outputs.iter().any(|output| {
+        matches!(
+            output.kind,
+            crate::workflows::definition::OutputKind::Plan
+                | crate::workflows::definition::OutputKind::ReviewReport
+                | crate::workflows::definition::OutputKind::TestReport
+        )
+    }) {
+        tools.push(submit_definition(outputs));
+    }
+    tools
+}
+
+fn submit_definition(outputs: &[crate::workflows::definition::RequiredOutput]) -> ToolDefinition {
+    let keys: Vec<&str> = outputs
+        .iter()
+        .filter(|output| {
+            matches!(
+                output.kind,
+                crate::workflows::definition::OutputKind::Plan
+                    | crate::workflows::definition::OutputKind::ReviewReport
+                    | crate::workflows::definition::OutputKind::TestReport
+            )
+        })
+        .map(|output| output.key.as_str())
+        .collect();
+    ToolDefinition {
+        name: SUBMIT_WORKFLOW_OUTPUT.to_owned(),
+        description: "Submit a declared plan or report output for this step.".to_owned(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "enum": keys
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["plan", "review-report", "test-report"]
+                },
+                "markdown": { "type": "string" },
+                "verdict": {
+                    "type": "string",
+                    "enum": ["approved", "revision-required", "blocked"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["passed", "failed", "not-run"]
+                }
+            },
+            "required": ["key", "kind"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+pub(crate) const SUBMIT_WORKFLOW_OUTPUT: &str = "submit_workflow_output";
+
 pub(crate) struct AgentToolContext<'a> {
     pub(crate) sandbox: &'a GuestSandbox,
     pub(crate) policy: &'a DirectoryPolicy,
     pub(crate) job: &'a Job,
     pub(crate) tools: &'a [ToolId],
+    pub(crate) output_drafts:
+        Option<&'a std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
+    pub(crate) required_outputs: &'a [crate::workflows::definition::RequiredOutput],
 }
 
 pub(crate) struct ToolTrace {
@@ -92,6 +158,9 @@ pub(crate) async fn invoke(
     name: &str,
     arguments: &serde_json::Value,
 ) -> ToolTrace {
+    if name == SUBMIT_WORKFLOW_OUTPUT {
+        return submit_output(context, arguments);
+    }
     let Some(kind) = ToolId::parse(name).filter(|kind| context.tools.contains(kind)) else {
         return ToolTrace {
             label: name.to_owned(),
@@ -103,6 +172,61 @@ pub(crate) async fn invoke(
         Err(message) => ToolTrace {
             label: kind.as_str().to_owned(),
             output: message.to_owned(),
+        },
+    }
+}
+
+fn submit_output(context: &AgentToolContext<'_>, arguments: &serde_json::Value) -> ToolTrace {
+    let Some(drafts) = context.output_drafts else {
+        return ToolTrace {
+            label: SUBMIT_WORKFLOW_OUTPUT.to_owned(),
+            output: "That tool is not available.".to_owned(),
+        };
+    };
+    let key = arguments
+        .get("key")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let kind = arguments
+        .get("kind")
+        .and_then(|value| value.as_str())
+        .and_then(crate::workflows::definition::OutputKind::parse);
+    let Some(kind) = kind else {
+        return ToolTrace {
+            label: SUBMIT_WORKFLOW_OUTPUT.to_owned(),
+            output: crate::workflows::artefacts::output::OutputDraftError::Kind
+                .message()
+                .to_owned(),
+        };
+    };
+    let markdown = arguments
+        .get("markdown")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    let verdict = arguments.get("verdict").and_then(|value| value.as_str());
+    let outcome = arguments.get("outcome").and_then(|value| value.as_str());
+    let candidate = arguments.get("candidate").is_some();
+    let human = arguments.get("decision").is_some();
+    let mut guard = drafts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match guard.submit(
+        context.required_outputs,
+        key,
+        kind,
+        markdown,
+        verdict,
+        outcome,
+        candidate,
+        human,
+    ) {
+        Ok(()) => ToolTrace {
+            label: format!("submit `{key}`"),
+            output: "Stored.".to_owned(),
+        },
+        Err(error) => ToolTrace {
+            label: SUBMIT_WORKFLOW_OUTPUT.to_owned(),
+            output: error.message().to_owned(),
         },
     }
 }

@@ -9,7 +9,6 @@ import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initJobObserve } from "./job-observe";
 import { initEnvironmentPreparation } from "./environment-preparation";
-import { initSandboxStatus } from "./sandbox-status";
 import { initTranscript } from "./transcript";
 
 const bound = bindTransportFeedback(document);
@@ -29,7 +28,6 @@ startHypergraft({
         "desk-settings": initDeskSettings,
         "environment-preparation": initEnvironmentPreparation,
         "job-observe": initJobObserve,
-        "sandbox-status": initSandboxStatus,
         "shortcut-hint": initShortcutHint,
         transcript: initTranscript,
     },

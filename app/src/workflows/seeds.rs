@@ -1,9 +1,10 @@
 use crate::agents::{AccessMode, ToolId};
+use crate::environments::EnvironmentId;
 
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind,
-    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepKey,
-    SuccessTransition, WorkflowDefinition,
+    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
+    SuccessTransition, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
 
 pub(crate) const ONE_AGENT_V1: &str = "one-agent-v1";
@@ -43,14 +44,14 @@ impl SeedKey {
     }
 }
 
-pub(crate) fn production_seeds() -> Vec<WorkflowSeed> {
+pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<WorkflowSeed> {
     vec![WorkflowSeed {
         key: SeedKey::parse(ONE_AGENT_V1).expect("one-agent seed key"),
-        definition: one_agent_definition(),
+        definition: one_agent_definition(default_environment),
     }]
 }
 
-pub(crate) fn one_agent_definition() -> WorkflowDefinition {
+pub(crate) fn one_agent_definition(default_environment: EnvironmentId) -> WorkflowDefinition {
     let role = RoleDefinition::new(
         RoleKey::parse("coding-agent").expect("role"),
         "Coding agent".to_owned(),
@@ -69,18 +70,24 @@ pub(crate) fn one_agent_definition() -> WorkflowDefinition {
     let step = StepDefinition {
         key: StepKey::parse("work-on-task").expect("step"),
         name: "Work on task".to_owned(),
+        inputs: vec![initial_candidate_input()],
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse("coding-agent").expect("role"),
+            environment: StepEnvironment::WorkflowDefault,
             authority,
-            required_outputs: vec![RequiredOutput {
-                key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                kind: OutputKind::AssistantReply,
-            }],
+            required_outputs: vec![
+                RequiredOutput {
+                    key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                    kind: OutputKind::AssistantReply,
+                },
+                candidate_revision_output(),
+            ],
         }),
         on_success: SuccessTransition::CompleteRun,
     };
     WorkflowDefinition::from_parts(
         "One agent".to_owned(),
+        default_environment,
         vec![role],
         StepKey::parse("work-on-task").expect("first"),
         vec![step],

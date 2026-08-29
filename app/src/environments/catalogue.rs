@@ -56,6 +56,21 @@ pub(crate) struct DeletedEnvironment {
     pub(crate) id: EnvironmentId,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadyPointer {
+    pub(crate) environment_id: EnvironmentId,
+    pub(crate) name: String,
+    pub(crate) preparation_id: PreparationId,
+    pub(crate) recipe_version: EnvironmentRecipeVersion,
+    pub(crate) snapshot: PreparedSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReadyPointerError {
+    Missing,
+    NotReady,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RefreshCursor {
     pub(crate) generation: u64,
@@ -201,6 +216,60 @@ impl EnvironmentCatalogue {
                 .then(left.id.cmp(&right.id))
         });
         records
+    }
+
+    pub(crate) fn seed_id(&self, key: &str) -> Option<EnvironmentId> {
+        let key = SeedKey::parse(key)?;
+        self.lock()
+            .applied_seeds
+            .iter()
+            .find(|seed| seed.key == key)
+            .map(|seed| seed.environment_id)
+    }
+
+    pub(crate) fn copy_ready_pointer(
+        &self,
+        id: &EnvironmentId,
+    ) -> Result<ReadyPointer, ReadyPointerError> {
+        let state = self.lock();
+        let environment = state
+            .environments
+            .iter()
+            .find(|record| record.id == *id)
+            .ok_or(ReadyPointerError::Missing)?;
+        let preparation_id = environment
+            .ready_preparation
+            .ok_or(ReadyPointerError::NotReady)?;
+        let preparation = state
+            .preparations
+            .iter()
+            .find(|record| record.id == preparation_id)
+            .ok_or(ReadyPointerError::NotReady)?;
+        if preparation.environment_id != *id || preparation.state != PreparationState::Ready {
+            return Err(ReadyPointerError::NotReady);
+        }
+        let snapshot = preparation
+            .snapshot
+            .clone()
+            .ok_or(ReadyPointerError::NotReady)?;
+        Ok(ReadyPointer {
+            environment_id: *id,
+            name: environment.name.clone(),
+            preparation_id,
+            recipe_version: preparation.recipe_version,
+            snapshot,
+        })
+    }
+
+    pub(crate) fn ready_pointer_matches(&self, copied: &ReadyPointer) -> bool {
+        match self.copy_ready_pointer(&copied.environment_id) {
+            Ok(current) => {
+                current.preparation_id == copied.preparation_id
+                    && current.snapshot.snapshot_digest == copied.snapshot.snapshot_digest
+                    && current.snapshot.artifact_key == copied.snapshot.artifact_key
+            }
+            Err(_) => false,
+        }
     }
 
     pub(crate) fn get(&self, id: &EnvironmentId) -> Option<EnvironmentRecord> {

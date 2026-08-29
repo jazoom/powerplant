@@ -122,6 +122,25 @@
             </div>
           {% endif %}
           <input type="hidden" name="revision" value="{{ revision }}" />
+          {% if !affected_workflows.is_empty() %}
+            <div class="alert alert-warning" role="status">
+              <div class="space-y-2">
+                <p>
+                  Deletion blocks new runs for these workflows until their
+                  configuration changes. Earlier runs keep pinned snapshots.
+                </p>
+                <ul class="list-disc pl-5">
+                  {% for workflow in affected_workflows %}
+                    <li>
+                      <a href="{{ workflow.href }}" data-graft class="link"
+                        >{{ workflow.name }}</a
+                      >
+                    </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </div>
+          {% endif %}
           <label class="flex items-center gap-2">
             <input
               class="checkbox checkbox-sm"

@@ -19,12 +19,13 @@ use crate::{
     workflows::RunId,
 };
 
-use self::page::{RunDetailView, RunIndexView};
+use self::page::{ArtefactView, RunDetailView, RunIndexView};
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/runs", get(index))
         .route("/runs/{run_id}", get(detail))
+        .route("/runs/{run_id}/artefacts/{artefact_id}", get(artefact))
 }
 
 async fn require_session(
@@ -81,7 +82,7 @@ async fn detail(
     let Some(run) = state.workflow_runs.get(&id) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };
-    let view = RunDetailView::from_run(&run, &state.workflows);
+    let view = RunDetailView::from_run(&run, &state.workflows, &state.environments);
     match graft {
         GraftRequest::Document => {
             let mut response =
@@ -98,6 +99,46 @@ async fn detail(
             PatchStatus::Ok,
             "run-detail",
             &view.contents(),
+        )?),
+    }
+}
+
+async fn artefact(
+    State(state): State<AppState>,
+    OptionalSession(session): OptionalSession,
+    graft: PageGraft,
+    Path((run_id, artefact_id)): Path<(String, String)>,
+) -> AppResult<Response> {
+    if require_session(&state, session, graft).await.is_err() {
+        return Ok(responses::graft_redirect(graft, "/connect"));
+    }
+    let Some(run_id) = RunId::parse(&run_id) else {
+        return Ok(responses::graft_redirect(graft, "/runs"));
+    };
+    let Some(artefact_id) = crate::workflows::ArtefactId::parse(&artefact_id) else {
+        return Ok(responses::graft_redirect(graft, "/runs"));
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
+        return Ok(responses::graft_redirect(graft, "/runs"));
+    };
+    let Some(record) = run.artefact(&artefact_id) else {
+        return Ok(responses::graft_redirect(
+            graft,
+            &format!("/runs/{}", run.id.as_hex()),
+        ));
+    };
+    let view = ArtefactView::from_record(&run, record, &state);
+    match graft {
+        PageGraft::Document => {
+            let mut response =
+                responses::chat_page_response(page::ARTEFACT_TITLE, &state.assets, &view)?;
+            responses::apply_patch_status(&mut response, PatchStatus::Ok);
+            Ok(response)
+        }
+        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
+            page::ARTEFACT_TITLE,
+            "chat-main",
+            &view,
         )?),
     }
 }

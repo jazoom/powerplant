@@ -102,7 +102,13 @@ pub(super) struct EnvironmentFormView {
     pub(super) show_status: bool,
     pub(super) show_delete: bool,
     pub(super) delete_error: &'static str,
+    pub(super) affected_workflows: Vec<AffectedWorkflow>,
     pub(super) status_html: String,
+}
+
+pub(super) struct AffectedWorkflow {
+    pub(super) name: String,
+    pub(super) href: String,
 }
 
 #[derive(Template)]
@@ -122,6 +128,7 @@ pub(super) struct EnvironmentFormContents<'a> {
     pub(super) environment_id: &'a str,
     pub(super) show_delete: bool,
     pub(super) delete_error: &'static str,
+    pub(super) affected_workflows: &'a [AffectedWorkflow],
 }
 
 #[derive(Template)]
@@ -229,8 +236,14 @@ impl EnvironmentFormView {
             show_status,
             show_delete,
             delete_error,
+            affected_workflows: Vec::new(),
             status_html,
         }
+    }
+
+    pub(super) fn with_affected(mut self, affected: Vec<AffectedWorkflow>) -> Self {
+        self.affected_workflows = affected;
+        self
     }
 
     pub(super) fn contents(&self) -> EnvironmentFormContents<'_> {
@@ -249,6 +262,7 @@ impl EnvironmentFormView {
             environment_id: &self.environment_id,
             show_delete: self.show_delete,
             delete_error: self.delete_error,
+            affected_workflows: &self.affected_workflows,
         }
     }
 }

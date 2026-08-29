@@ -1,57 +1,24 @@
 use std::fs;
 
 use super::{StoreError, WorkflowRunStore};
-use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind,
-    PinnedWorkflowDefinition, RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition,
-    StepKey, SuccessTransition, WorkflowDefinition,
+    PinnedWorkflowDefinition, WorkflowDefinition, test_named_definition,
 };
 use crate::workflows::id::{AttemptId, RunId};
 use crate::workflows::run::{RunState, WorkflowRun};
 
 fn definition(name: &str) -> WorkflowDefinition {
-    let role = RoleDefinition::new(
-        RoleKey::parse("agent").expect("role"),
-        name.to_owned(),
-        String::new(),
-        String::new(),
-    )
-    .expect("role");
-    let authority = AgentAuthority::new(
-        vec![ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority");
-    WorkflowDefinition::from_parts(
-        name.to_owned(),
-        vec![role],
-        StepKey::parse("reply").expect("first"),
-        vec![StepDefinition {
-            key: StepKey::parse("reply").expect("step"),
-            name: "Reply".to_owned(),
-            action: StepAction::Agent(AgentStep {
-                role: RoleKey::parse("agent").expect("role"),
-                authority,
-                required_outputs: vec![RequiredOutput {
-                    key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                    kind: OutputKind::AssistantReply,
-                }],
-            }),
-            on_success: SuccessTransition::CompleteRun,
-        }],
-    )
-    .expect("definition")
+    test_named_definition(name)
 }
 
 fn run_named(name: &str, created_at_ms: u64) -> WorkflowRun {
+    let definition = definition(name);
+    let environments = crate::workflows::test_environment_set(&definition);
     WorkflowRun::create(
         RunId::generate().expect("run"),
         created_at_ms,
-        PinnedWorkflowDefinition::pin(None, definition(name)),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
     )
 }
 
@@ -61,11 +28,13 @@ fn a_source_definition_edit_cannot_alter_an_earlier_run() {
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
     let first = definition("Original");
     let version = first.version();
+    let environments = crate::workflows::test_environment_set(&first);
     let run = store
         .create(WorkflowRun::create(
             RunId::generate().expect("run"),
             1,
             PinnedWorkflowDefinition::pin(None, first),
+            environments,
         ))
         .expect("create");
     let later = definition("Edited");
@@ -196,9 +165,7 @@ fn a_terminal_attempt_without_a_result_fails_startup() {
         .mutate(&run.id, |run| run.start_attempt(attempt, 2))
         .expect("start");
     store
-        .mutate(&run.id, |run| {
-            run.complete_attempt(attempt, vec![ASSISTANT_REPLY.to_owned()], 3)
-        })
+        .mutate(&run.id, |run| run.complete_attempt(attempt, 3))
         .expect("complete");
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
@@ -221,9 +188,7 @@ fn a_transition_with_the_wrong_cause_fails_startup() {
         .mutate(&run.id, |run| run.start_attempt(attempt, 2))
         .expect("start");
     store
-        .mutate(&run.id, |run| {
-            run.complete_attempt(attempt, vec![ASSISTANT_REPLY.to_owned()], 3)
-        })
+        .mutate(&run.id, |run| run.complete_attempt(attempt, 3))
         .expect("complete");
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
@@ -246,9 +211,7 @@ fn persisted_bytes_omit_secrets_prompts_and_command_output() {
         .mutate(&run.id, |run| run.start_attempt(attempt, 2))
         .expect("start");
     store
-        .mutate(&run.id, |run| {
-            run.complete_attempt(attempt, vec![ASSISTANT_REPLY.to_owned()], 3)
-        })
+        .mutate(&run.id, |run| run.complete_attempt(attempt, 3))
         .expect("complete");
     let bytes = fs::read(dir.path().join(format!("{}.json", run.id.as_hex()))).expect("read");
     let text = String::from_utf8(bytes).expect("utf8");

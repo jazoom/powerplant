@@ -5,7 +5,6 @@ use crate::{
     markdown,
     models::ModelCatalogue,
     providers::{ChatTurn, Role},
-    sandbox::SandboxView,
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
@@ -46,12 +45,6 @@ pub(super) struct ChatViewModel {
     pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) job_status: &'static str,
-    pub(super) sandbox_missing: &'static str,
-    pub(super) sandbox_status: &'static str,
-    pub(super) sandbox_progress: String,
-    pub(super) sandbox_active: bool,
-    pub(super) sandbox_error: &'static str,
-    pub(super) sandbox_ready: bool,
     pub(super) session_busy: bool,
     pub(super) agent_id: String,
     pub(super) agent_name: String,
@@ -61,6 +54,13 @@ pub(super) struct ChatViewModel {
     pub(super) workflow_options: Vec<WorkflowOption>,
     pub(super) workflow_empty: bool,
     pub(super) draft_message: String,
+    pub(super) environment_preview: Vec<PreviewLine>,
+    pub(super) environment_preview_error: &'static str,
+    pub(super) preview_ready: bool,
+}
+
+pub(super) struct PreviewLine {
+    pub(super) text: String,
 }
 
 pub(super) struct WorkflowOption {
@@ -70,32 +70,24 @@ pub(super) struct WorkflowOption {
 }
 
 impl ChatViewModel {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn from_session(
         record: &AgentRecord,
         session: &SessionSnapshot,
         vault: &ProviderVault,
         catalogue: &ModelCatalogue,
-        sandbox: SandboxView,
         error: &'static str,
         desk_error: &'static str,
-        sandbox_error: &'static str,
     ) -> Self {
-        let mut page = Self::from_parts(
+        Self::from_parts(
             record,
             &vault.desk_providers(),
             catalogue,
             &session.turns,
             session.job.as_ref(),
             session.session_busy,
-            sandbox,
             error,
             desk_error,
-        );
-        if !sandbox_error.is_empty() {
-            page.sandbox_error = sandbox_error;
-        }
-        page
+        )
     }
 
     pub(super) fn desk_only(
@@ -119,12 +111,6 @@ impl ChatViewModel {
             &[],
             None,
             session_busy,
-            SandboxView {
-                missing: None,
-                status: crate::sandbox::GuestStatus::Stopped,
-                progress: String::new(),
-                error: "",
-            },
             "",
             desk_error,
         )
@@ -138,7 +124,6 @@ impl ChatViewModel {
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
         session_busy: bool,
-        sandbox: SandboxView,
         error: &'static str,
         desk_error: &'static str,
     ) -> Self {
@@ -167,6 +152,10 @@ impl ChatViewModel {
                 job_active = true;
                 job_status = if job.cancel_requested {
                     "Stopping"
+                } else if job.step_label == "Preparing environment" {
+                    "Preparing environment"
+                } else if job.step_label == "Source capture" {
+                    "Source capture"
                 } else {
                     "Writing"
                 };
@@ -186,7 +175,6 @@ impl ChatViewModel {
             })
             .unwrap_or_default();
         let catalogue_pending = selected.is_some_and(|provider| catalogue.pending(provider.kind));
-        let sandbox_ready = sandbox.status == crate::sandbox::GuestStatus::Running;
         Self {
             providers: providers
                 .iter()
@@ -209,12 +197,6 @@ impl ChatViewModel {
             cursor,
             job_active,
             job_status,
-            sandbox_missing: sandbox.missing_message(),
-            sandbox_status: sandbox.status.as_str(),
-            sandbox_progress: sandbox.progress,
-            sandbox_active: sandbox.status.is_starting(),
-            sandbox_error: sandbox.error,
-            sandbox_ready,
             session_busy,
             agent_id: record.id.as_hex(),
             agent_name: record.name.clone(),
@@ -224,18 +206,9 @@ impl ChatViewModel {
             workflow_options: Vec::new(),
             workflow_empty: false,
             draft_message: String::new(),
-        }
-    }
-
-    pub(super) fn sandbox_status(&self) -> SandboxStatusContents<'_> {
-        SandboxStatusContents {
-            sandbox_missing: self.sandbox_missing,
-            sandbox_status: self.sandbox_status,
-            sandbox_progress: &self.sandbox_progress,
-            sandbox_active: self.sandbox_active,
-            sandbox_error: self.sandbox_error,
-            job_active: self.session_busy,
-            agent_id: &self.agent_id,
+            environment_preview: Vec::new(),
+            environment_preview_error: "",
+            preview_ready: false,
         }
     }
 
@@ -262,12 +235,14 @@ impl ChatViewModel {
     pub(super) fn composer(&self) -> ComposerContents<'_> {
         ComposerContents {
             error: self.error,
-            sandbox_ready: self.sandbox_ready,
             session_busy: self.session_busy,
             agent_id: &self.agent_id,
             workflow_options: &self.workflow_options,
             workflow_empty: self.workflow_empty,
             draft_message: &self.draft_message,
+            environment_preview: &self.environment_preview,
+            environment_preview_error: self.environment_preview_error,
+            preview_ready: self.preview_ready,
         }
     }
 
@@ -311,18 +286,6 @@ pub(super) fn turn_id(index: usize) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "sandbox_status")]
-pub(super) struct SandboxStatusContents<'a> {
-    pub(super) sandbox_missing: &'a str,
-    pub(super) sandbox_status: &'a str,
-    pub(super) sandbox_progress: &'a str,
-    pub(super) sandbox_active: bool,
-    pub(super) sandbox_error: &'a str,
-    pub(super) job_active: bool,
-    pub(super) agent_id: &'a str,
-}
-
-#[derive(Template)]
 #[template(path = "chat/templates/chat.html", block = "desk_settings")]
 pub(super) struct DeskSettingsContents<'a> {
     pub(super) providers: &'a [DeskProviderOption],
@@ -352,12 +315,14 @@ pub(super) struct TranscriptContents<'a> {
 #[template(path = "chat/templates/chat.html", block = "composer")]
 pub(super) struct ComposerContents<'a> {
     pub(super) error: &'a str,
-    pub(super) sandbox_ready: bool,
     pub(super) session_busy: bool,
     pub(super) agent_id: &'a str,
     pub(super) workflow_options: &'a [WorkflowOption],
     pub(super) workflow_empty: bool,
     pub(super) draft_message: &'a str,
+    pub(super) environment_preview: &'a [PreviewLine],
+    pub(super) environment_preview_error: &'static str,
+    pub(super) preview_ready: bool,
 }
 
 #[derive(Template)]

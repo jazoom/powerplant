@@ -63,9 +63,39 @@
         <h2 class="text-base font-semibold">Steps</h2>
         <ol class="list-decimal space-y-1 pl-5">
           {% for step in steps %}
-            <li>{{ step.name }} ({{ step.action }})</li>
+            <li>
+              {{ step.name }} ({{ step.action }})
+              {% if step.environment != "" %}
+                <span class="text-quiet text-xs">{{ step.environment }}</span>
+              {% endif %}
+            </li>
           {% endfor %}
         </ol>
+      </section>
+      <section class="space-y-2">
+        <h2 class="text-base font-semibold">Environments</h2>
+        {% for environment in environments %}
+          <article
+            class="border-base-300 space-y-1 rounded-sm border px-3 py-2"
+          >
+            <p class="text-sm">{{ environment.name }}</p>
+            {% if environment.note != "" %}
+              <p class="text-quiet text-xs">{{ environment.note }}</p>
+            {% endif %}
+            <p class="text-quiet font-mono text-xs break-all">
+              Preparation {{ environment.preparation }}
+            </p>
+            <p class="text-quiet font-mono text-xs break-all">
+              Recipe {{ environment.recipe }}
+            </p>
+            <p class="text-quiet font-mono text-xs break-all">
+              Snapshot {{ environment.snapshot }}
+            </p>
+            <p class="text-quiet font-mono text-xs break-all">
+              Image {{ environment.image }}
+            </p>
+          </article>
+        {% endfor %}
       </section>
       <section class="space-y-2">
         <h2 class="text-base font-semibold">Attempts</h2>
@@ -87,6 +117,30 @@
                 {% endif %}
                 {% if attempt.result != "" %}
                   <p class="text-sm">{{ attempt.result }}</p>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </section>
+      <section class="space-y-2">
+        <h2 class="text-base font-semibold">Artefacts</h2>
+        {% if artefacts.is_empty() %}
+          <p class="text-quiet">No artefacts yet.</p>
+        {% else %}
+          <ul class="space-y-2">
+            {% for artefact in artefacts %}
+              <li class="border-base-300 rounded-sm border px-3 py-2">
+                <p class="text-sm">
+                  <a href="{{ artefact.href }}" data-graft class="link"
+                    >{{ artefact.kind }}</a
+                  >
+                </p>
+                <p class="text-quiet font-mono text-xs">{{ artefact.hash }}</p>
+                <p class="text-quiet text-xs">{{ artefact.producer }}</p>
+                <p class="text-quiet text-xs">{{ artefact.created }}</p>
+                {% if artefact.status != "" %}
+                  <p class="text-sm">{{ artefact.status }}</p>
                 {% endif %}
               </li>
             {% endfor %}

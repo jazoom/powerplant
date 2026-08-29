@@ -102,6 +102,8 @@ pub(super) struct ObserveQuery {
     pub(super) job: String,
     #[serde(default)]
     pub(super) cursor: String,
+    #[serde(default)]
+    pub(super) workflow: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -117,33 +119,6 @@ impl ObserveQuery {
 
     pub(super) fn cursor(&self) -> Result<u64, CursorError> {
         parse_cursor(&self.cursor)
-    }
-}
-
-#[derive(Deserialize)]
-pub(super) struct SandboxForm {
-    #[serde(default)]
-    pub(super) command: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SandboxAction {
-    Start,
-    Stop,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SandboxFormError {
-    Action,
-}
-
-impl SandboxForm {
-    pub(super) fn validate(&self) -> Result<SandboxAction, SandboxFormError> {
-        match self.command.trim() {
-            "start" => Ok(SandboxAction::Start),
-            "stop" => Ok(SandboxAction::Stop),
-            _ => Err(SandboxFormError::Action),
-        }
     }
 }
 

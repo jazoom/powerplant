@@ -45,10 +45,34 @@ fn connected(state: &AppState) -> String {
     token.raw().as_str().to_owned()
 }
 
-fn create_body() -> String {
+async fn seed_ready_environment(state: &AppState) -> crate::environments::EnvironmentId {
+    let (environment, preparation) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Alpine Git".to_owned(),
+            oci_image: "alpine/git".to_owned(),
+            setup_script: String::new(),
+        })
+        .expect("environment");
+    state.environments.claim_oldest_queued().expect("claim");
+    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+    state.environment_snapshots.mark(
+        snapshot.artifact_key.clone(),
+        crate::environments::SnapshotAvailability::Available,
+    );
+    state
+        .environments
+        .finish_ready(&preparation.id, snapshot, preparation.log)
+        .expect("ready");
+    environment.id
+}
+
+fn create_body(environment_id: crate::environments::EnvironmentId) -> String {
+    let environment = format!("default-environment={}", environment_id.as_hex());
     [
         "intent=save",
         "name=One+step",
+        environment.as_str(),
         "role_0_key=coding-agent",
         "role_0_name=Coding+agent",
         "role_0_expertise=",
@@ -60,8 +84,13 @@ fn create_body() -> String {
         "step_0_tool_list=on",
         "step_0_dir_0_alias=project",
         "step_0_dir_0_access=read-write",
+        "step_0_input_0_key=candidate",
+        "step_0_input_0_kind=candidate-revision",
+        "step_0_input_0_source=run-initial-candidate",
         "step_0_output_0_key=assistant-reply",
         "step_0_output_0_kind=assistant-reply",
+        "step_0_output_1_key=candidate",
+        "step_0_output_1_kind=candidate-revision",
     ]
     .join("&")
 }
@@ -134,6 +163,7 @@ async fn a_catalogue_patch_is_rejected() {
 async fn create_redirects_to_configuration() {
     let state = test_state();
     let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
     let response = app(&state)
         .oneshot(
             Request::builder()
@@ -141,7 +171,7 @@ async fn create_redirects_to_configuration() {
                 .uri("/workflows")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(Body::from(create_body()))
+                .body(Body::from(create_body(environment)))
                 .unwrap(),
         )
         .await
@@ -156,6 +186,36 @@ async fn create_redirects_to_configuration() {
     assert!(location.starts_with("/workflows/"));
     assert!(location.ends_with("/configuration"));
     assert_eq!(state.workflows.list()[0].definition.name(), "One step");
+}
+
+#[tokio::test]
+async fn create_rejects_an_unready_environment() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(create_body(
+                    crate::workflows::definition::test_environment_id(),
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("unready");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"workflow-form\""));
+    assert!(state.workflows.list().is_empty());
 }
 
 #[tokio::test]
@@ -189,9 +249,10 @@ async fn create_validation_returns_unprocessable() {
 async fn stale_updates_return_conflict() {
     let state = test_state();
     let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
     let record = state
         .workflows
-        .create(one_agent_definition())
+        .create(one_agent_definition(environment))
         .expect("create");
     state
         .workflows
@@ -200,6 +261,7 @@ async fn stale_updates_return_conflict() {
             record.revision,
             crate::workflows::definition::WorkflowDefinition::from_parts(
                 "Edited".to_owned(),
+                environment,
                 record.definition.roles().to_vec(),
                 record.definition.first_step().clone(),
                 record.definition.steps().to_vec(),
@@ -218,7 +280,7 @@ async fn stale_updates_return_conflict() {
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "{}&revision={}",
-                    create_body(),
+                    create_body(environment),
                     record.revision
                 )))
                 .unwrap(),
@@ -234,7 +296,9 @@ async fn delete_redirects_to_the_catalogue() {
     let token = connected(&state);
     let record = state
         .workflows
-        .create(one_agent_definition())
+        .create(one_agent_definition(
+            crate::workflows::definition::test_environment_id(),
+        ))
         .expect("create");
     let response = app(&state)
         .oneshot(

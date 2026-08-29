@@ -31,6 +31,9 @@ pub(crate) struct AgentRunSpec {
     pub(crate) policy: DirectoryPolicy,
     pub(crate) connection: ProviderConnection,
     pub(crate) sandbox: std::sync::Arc<GuestSandbox>,
+    pub(crate) output_drafts:
+        Option<std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>>,
+    pub(crate) required_outputs: Vec<crate::workflows::definition::RequiredOutput>,
 }
 
 pub(super) const MIN_PROGRESS_INTERVAL: Duration = if cfg!(test) {
@@ -220,6 +223,8 @@ pub(crate) async fn run_agent_action(
             policy: &spec.policy,
             job: &job,
             tools: &spec.tool_ids,
+            output_drafts: spec.output_drafts.as_deref(),
+            required_outputs: &spec.required_outputs,
         };
         for (id, name, arguments) in calls {
             let trace = tools::invoke(&context, &name, &arguments).await;

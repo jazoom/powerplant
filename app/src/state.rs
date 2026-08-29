@@ -13,7 +13,9 @@ use crate::{
     sandbox::SandboxFleet,
     sessions::SessionStore,
     vault::ProviderVault,
-    workflows::{WorkflowCatalogue, WorkflowExecution, WorkflowRunStore},
+    workflows::{
+        WorkflowArtefactRepository, WorkflowCatalogue, WorkflowExecution, WorkflowRunStore,
+    },
 };
 
 #[derive(Clone)]
@@ -30,6 +32,7 @@ pub(crate) struct AppState {
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,
     pub(crate) workflows: Arc<WorkflowCatalogue>,
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
+    pub(crate) workflow_artefacts: Arc<WorkflowArtefactRepository>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
     pub(crate) environments: Arc<EnvironmentCatalogue>,
     pub(crate) environment_snapshots: Arc<EnvironmentSnapshotRepository>,
@@ -44,19 +47,27 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         &config.data_dir.join("project.json"),
     )
     .map_err(|error| error.message().to_owned())?;
-    let workflows = WorkflowCatalogue::open(config.data_dir.join("workflows.json"))
-        .map_err(|error| error.message().to_owned())?;
-    let workflow_runs = WorkflowRunStore::open(config.data_dir.join("workflow-runs"))
-        .map_err(|error| error.message().to_owned())?;
     let environments = EnvironmentCatalogue::open(
         config.data_dir.join("environments.json"),
         config.data_dir.join("environment-preparation-logs"),
     )
     .map_err(|error| error.message().to_owned())?;
+    let seeds = environments
+        .seed_id(crate::environments::seeds::ALPINE_GIT_V1)
+        .map(crate::workflows::seeds::production_seeds)
+        .unwrap_or_default();
+    let workflows =
+        WorkflowCatalogue::open_with_seeds(config.data_dir.join("workflows.json"), &seeds)
+            .map_err(|error| error.message().to_owned())?;
+    let workflow_artefacts =
+        WorkflowArtefactRepository::open(config.data_dir.join("workflow-artefacts"))
+            .map_err(|error| error.message().to_owned())?;
+    let workflow_runs = WorkflowRunStore::open(config.data_dir.join("workflow-runs"))
+        .map_err(|error| error.message().to_owned())?;
     let environment_snapshots =
         EnvironmentSnapshotRepository::open(config.data_dir.join("environment-snapshots"))
             .map_err(|_| "The environment snapshot store is unreadable.".to_owned())?;
-    let sandboxes = SandboxFleet::prepare(&agents).await;
+    let sandboxes = SandboxFleet::prepare().await;
     for environment in environments.list() {
         let Some(ready) = environment.ready_preparation else {
             continue;
@@ -87,6 +98,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(workflows),
         workflow_runs: Arc::new(workflow_runs),
+        workflow_artefacts: Arc::new(workflow_artefacts),
         workflow_execution: Arc::new(WorkflowExecution::new()),
         environments,
         environment_snapshots,
@@ -120,6 +132,7 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(WorkflowCatalogue::in_memory()),
         workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
+        workflow_artefacts: Arc::new(WorkflowArtefactRepository::in_memory()),
         workflow_execution: Arc::new(WorkflowExecution::new()),
         environments,
         environment_snapshots,

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::agents::{AccessMode, ToolId};
+use crate::environments::EnvironmentId;
 
 use super::id::WorkflowId;
 
@@ -13,13 +14,17 @@ pub(crate) const MAXIMUM_KEY_BYTES: usize = 32;
 pub(crate) const MAXIMUM_ROLES: usize = 16;
 pub(crate) const MAXIMUM_STEPS: usize = 32;
 pub(crate) const MAXIMUM_OUTPUTS: usize = 8;
+pub(crate) const MAXIMUM_INPUTS: usize = 8;
 pub(crate) const MAXIMUM_DIRECTORIES: usize = 8;
 pub(crate) const ASSISTANT_REPLY: &str = "assistant-reply";
+pub(crate) const PRIMARY_SOURCE_ALIAS: &str = "project";
+pub(crate) const CANDIDATE_OUTPUT_KEY: &str = "candidate";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowDefinition {
     format_version: u32,
     name: String,
+    default_environment: EnvironmentId,
     roles: Vec<RoleDefinition>,
     first_step: StepKey,
     steps: Vec<StepDefinition>,
@@ -37,6 +42,7 @@ pub(crate) struct RoleDefinition {
 pub(crate) struct StepDefinition {
     pub(crate) key: StepKey,
     pub(crate) name: String,
+    pub(crate) inputs: Vec<RequiredInput>,
     pub(crate) action: StepAction,
     pub(crate) on_success: SuccessTransition,
 }
@@ -50,6 +56,7 @@ pub(crate) enum StepAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentStep {
     pub(crate) role: RoleKey,
+    pub(crate) environment: StepEnvironment,
     pub(crate) authority: AgentAuthority,
     pub(crate) required_outputs: Vec<RequiredOutput>,
 }
@@ -57,7 +64,14 @@ pub(crate) struct AgentStep {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SystemCommandStep {
     pub(crate) command: SystemCommandId,
+    pub(crate) environment: StepEnvironment,
     pub(crate) required_outputs: Vec<RequiredOutput>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StepEnvironment {
+    WorkflowDefault,
+    Override { environment_id: EnvironmentId },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +87,19 @@ pub(crate) struct GuestDirectoryAccess {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RequiredInput {
+    pub(crate) key: InputKey,
+    pub(crate) kind: ArtefactKind,
+    pub(crate) source: ArtefactSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ArtefactSource {
+    RunInitialCandidate,
+    StepOutput { step: StepKey, output: OutputKey },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RequiredOutput {
     pub(crate) key: OutputKey,
     pub(crate) kind: OutputKind,
@@ -81,6 +108,18 @@ pub(crate) struct RequiredOutput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutputKind {
     AssistantReply,
+    Plan,
+    CandidateRevision,
+    ReviewReport,
+    TestReport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ArtefactKind {
+    Plan,
+    CandidateRevision,
+    ReviewReport,
+    TestReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -103,6 +142,9 @@ pub(crate) struct StepKey(String);
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct OutputKey(String);
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct InputKey(String);
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) struct DefinitionVersion([u8; 32]);
 
@@ -116,6 +158,7 @@ pub(crate) struct PinnedWorkflowDefinition {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DefinitionError {
     Format,
+    Environment,
     Name,
     Expertise,
     PromptDefaults,
@@ -127,7 +170,18 @@ pub(crate) enum DefinitionError {
     DuplicateRole,
     DuplicateStep,
     DuplicateOutput,
+    DuplicateInput,
+    InputCount,
     UnsupportedOutput,
+    ForwardInput,
+    SelfInput,
+    UnknownOutput,
+    InputKind,
+    AssistantInput,
+    CandidateInput,
+    CandidateOutput,
+    AssuranceInput,
+    SecondaryWrite,
     UnusedRole,
     UnknownRole,
     UnknownStep,
@@ -145,6 +199,7 @@ impl DefinitionError {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::Format => "That workflow definition uses an unsupported format.",
+            Self::Environment => "Enter a valid environment identifier.",
             Self::Name => "Enter a name of at most 80 bytes.",
             Self::Expertise => "Those expertise notes are too long.",
             Self::PromptDefaults => "Those prompt defaults are too long.",
@@ -156,7 +211,24 @@ impl DefinitionError {
             Self::DuplicateRole => "Role keys must be unique.",
             Self::DuplicateStep => "Step keys must be unique.",
             Self::DuplicateOutput => "Output keys must be unique in a step.",
+            Self::DuplicateInput => "Input keys must be unique in a step.",
+            Self::InputCount => "Add at most eight inputs for each step.",
             Self::UnsupportedOutput => "That action cannot produce the required output.",
+            Self::ForwardInput => "An input cannot name a later step.",
+            Self::SelfInput => "An input cannot name its own step.",
+            Self::UnknownOutput => "An input names an unknown earlier output.",
+            Self::InputKind => "That input kind does not match the named output.",
+            Self::AssistantInput => "Assistant replies cannot be artefact inputs.",
+            Self::CandidateInput => {
+                "Each sandbox-backed step needs exactly one latest candidate input."
+            }
+            Self::CandidateOutput => {
+                "A source-write step must produce exactly one candidate revision."
+            }
+            Self::AssuranceInput => {
+                "A step that uses an assurance artefact also needs a candidate input."
+            }
+            Self::SecondaryWrite => "Secondary directory grants must stay read-only.",
             Self::UnusedRole => "Every role must be used by an agent step.",
             Self::UnknownRole => "An agent step names an unknown role.",
             Self::UnknownStep => "A step names an unknown successor.",
@@ -182,17 +254,18 @@ impl std::fmt::Display for DefinitionError {
 
 impl std::error::Error for DefinitionError {}
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct DefinitionFile {
     format_version: u32,
     name: String,
+    default_environment: String,
     roles: Vec<RoleFile>,
     first_step: String,
     steps: Vec<StepFile>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct RoleFile {
     key: String,
@@ -201,53 +274,79 @@ struct RoleFile {
     prompt_defaults: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct StepFile {
     key: String,
     name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    inputs: Vec<InputFile>,
     action: ActionFile,
     on_success: TransitionFile,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum ActionFile {
     Agent {
         role: String,
+        environment: StepEnvironmentFile,
         authority: AuthorityFile,
         #[serde(rename = "required-outputs")]
         required_outputs: Vec<OutputFile>,
     },
     SystemCommand {
         command: String,
+        environment: StepEnvironmentFile,
         #[serde(rename = "required-outputs")]
         required_outputs: Vec<OutputFile>,
     },
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+enum StepEnvironmentFile {
+    WorkflowDefault,
+    Override { environment_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct AuthorityFile {
     tools: Vec<String>,
     directories: Vec<DirectoryFile>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct DirectoryFile {
     alias: String,
     access: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct OutputFile {
     key: String,
     kind: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct InputFile {
+    key: String,
+    kind: String,
+    source: InputSourceFile,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+enum InputSourceFile {
+    RunInitialCandidate,
+    StepOutput { step: String, output: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "step", rename_all = "kebab-case")]
 enum TransitionFile {
     Next(String),
@@ -266,57 +365,44 @@ impl WorkflowDefinition {
         if file.format_version != DEFINITION_FORMAT_VERSION {
             return Err(DefinitionError::Format);
         }
-        let name = normalise_name(&file.name)?;
-        if file.roles.len() > MAXIMUM_ROLES {
-            return Err(DefinitionError::RoleCount);
-        }
-        if file.steps.is_empty() || file.steps.len() > MAXIMUM_STEPS {
-            return Err(DefinitionError::StepCount);
-        }
-        let roles = file
-            .roles
-            .into_iter()
-            .map(RoleDefinition::from_file)
-            .collect::<Result<Vec<_>, _>>()?;
-        let first_step = StepKey::parse(&file.first_step)?;
-        let steps = file
-            .steps
-            .into_iter()
-            .map(StepDefinition::from_file)
-            .collect::<Result<Vec<_>, _>>()?;
-        Self::from_parts(name, roles, first_step, steps)
+        from_current_file(file)
     }
 
     pub(crate) fn from_parts(
         name: String,
+        default_environment: EnvironmentId,
         roles: Vec<RoleDefinition>,
         first_step: StepKey,
         steps: Vec<StepDefinition>,
     ) -> Result<Self, DefinitionError> {
-        let name = normalise_name(&name)?;
-        if roles.len() > MAXIMUM_ROLES {
-            return Err(DefinitionError::RoleCount);
-        }
-        if steps.is_empty() || steps.len() > MAXIMUM_STEPS {
-            return Err(DefinitionError::StepCount);
-        }
-        reject_duplicate_roles(&roles)?;
-        reject_duplicate_steps(&steps)?;
-        reject_step_outputs(&steps)?;
-        reject_unsupported_outputs(&steps)?;
-        reject_role_use(&roles, &steps)?;
-        validate_serial_chain(&first_step, &steps)?;
-        Ok(Self {
-            format_version: DEFINITION_FORMAT_VERSION,
-            name,
-            roles,
-            first_step,
-            steps,
-        })
+        assemble(name, default_environment, roles, first_step, steps)
     }
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    pub(crate) fn default_environment(&self) -> EnvironmentId {
+        self.default_environment
+    }
+
+    pub(crate) fn referenced_environments(&self) -> Vec<EnvironmentId> {
+        let mut ids = vec![self.default_environment];
+        for step in &self.steps {
+            if let StepEnvironment::Override { environment_id } = step.environment()
+                && !ids.contains(&environment_id)
+            {
+                ids.push(environment_id);
+            }
+        }
+        ids
+    }
+
+    pub(crate) fn effective_environment(&self, step: &StepDefinition) -> EnvironmentId {
+        match step.environment() {
+            StepEnvironment::WorkflowDefault => self.default_environment,
+            StepEnvironment::Override { environment_id } => environment_id,
+        }
     }
 
     pub(crate) fn roles(&self) -> &[RoleDefinition] {
@@ -347,6 +433,7 @@ impl WorkflowDefinition {
         DefinitionFile {
             format_version: self.format_version,
             name: self.name.clone(),
+            default_environment: self.default_environment.as_hex(),
             roles: self
                 .roles
                 .iter()
@@ -401,15 +488,63 @@ impl StepDefinition {
         Ok(Self {
             key: StepKey::parse(&file.key)?,
             name: normalise_name(&file.name)?,
+            inputs: parse_inputs(file.inputs)?,
             action: StepAction::from_file(file.action)?,
             on_success: SuccessTransition::from_file(file.on_success)?,
         })
+    }
+
+    pub(crate) fn environment(&self) -> StepEnvironment {
+        match &self.action {
+            StepAction::Agent(action) => action.environment,
+            StepAction::SystemCommand(action) => action.environment,
+        }
+    }
+
+    pub(crate) fn is_sandbox_backed(&self) -> bool {
+        matches!(
+            self.action,
+            StepAction::Agent(_) | StepAction::SystemCommand(_)
+        )
+    }
+
+    pub(crate) fn required_outputs(&self) -> &[RequiredOutput] {
+        match &self.action {
+            StepAction::Agent(action) => &action.required_outputs,
+            StepAction::SystemCommand(action) => &action.required_outputs,
+        }
+    }
+
+    pub(crate) fn writes_primary_source(&self) -> bool {
+        match &self.action {
+            StepAction::Agent(action) => action.authority.directories.iter().any(|directory| {
+                directory.alias == PRIMARY_SOURCE_ALIAS && directory.access.is_writable()
+            }),
+            StepAction::SystemCommand(_) => false,
+        }
     }
 
     fn to_file(&self) -> StepFile {
         StepFile {
             key: self.key.as_str().to_owned(),
             name: self.name.clone(),
+            inputs: self
+                .inputs
+                .iter()
+                .map(|input| InputFile {
+                    key: input.key.as_str().to_owned(),
+                    kind: input.kind.as_str().to_owned(),
+                    source: match &input.source {
+                        ArtefactSource::RunInitialCandidate => InputSourceFile::RunInitialCandidate,
+                        ArtefactSource::StepOutput { step, output } => {
+                            InputSourceFile::StepOutput {
+                                step: step.as_str().to_owned(),
+                                output: output.as_str().to_owned(),
+                            }
+                        }
+                    },
+                })
+                .collect(),
             action: self.action.to_file(),
             on_success: self.on_success.to_file(),
         }
@@ -421,18 +556,22 @@ impl StepAction {
         match file {
             ActionFile::Agent {
                 role,
+                environment,
                 authority,
                 required_outputs,
             } => Ok(Self::Agent(AgentStep {
                 role: RoleKey::parse(&role)?,
+                environment: StepEnvironment::from_file(environment)?,
                 authority: AgentAuthority::from_file(authority)?,
                 required_outputs: parse_outputs(required_outputs)?,
             })),
             ActionFile::SystemCommand {
                 command,
+                environment,
                 required_outputs,
             } => Ok(Self::SystemCommand(SystemCommandStep {
                 command: SystemCommandId::parse(&command).ok_or(DefinitionError::Command)?,
+                environment: StepEnvironment::from_file(environment)?,
                 required_outputs: parse_outputs(required_outputs)?,
             })),
         }
@@ -442,11 +581,13 @@ impl StepAction {
         match self {
             Self::Agent(step) => ActionFile::Agent {
                 role: step.role.as_str().to_owned(),
+                environment: step.environment.to_file(),
                 authority: step.authority.to_file(),
                 required_outputs: outputs_to_file(&step.required_outputs),
             },
             Self::SystemCommand(step) => ActionFile::SystemCommand {
                 command: step.command.as_str().to_owned(),
+                environment: step.environment.to_file(),
                 required_outputs: outputs_to_file(&step.required_outputs),
             },
         }
@@ -556,6 +697,35 @@ impl AgentAuthority {
     }
 }
 
+impl StepEnvironment {
+    fn from_file(file: StepEnvironmentFile) -> Result<Self, DefinitionError> {
+        match file {
+            StepEnvironmentFile::WorkflowDefault => Ok(Self::WorkflowDefault),
+            StepEnvironmentFile::Override { environment_id } => {
+                let environment_id =
+                    EnvironmentId::parse(&environment_id).ok_or(DefinitionError::Environment)?;
+                Ok(Self::Override { environment_id })
+            }
+        }
+    }
+
+    fn to_file(self) -> StepEnvironmentFile {
+        match self {
+            Self::WorkflowDefault => StepEnvironmentFile::WorkflowDefault,
+            Self::Override { environment_id } => StepEnvironmentFile::Override {
+                environment_id: environment_id.as_hex(),
+            },
+        }
+    }
+
+    fn normalised(self, default: EnvironmentId) -> Self {
+        match self {
+            Self::Override { environment_id } if environment_id == default => Self::WorkflowDefault,
+            other => other,
+        }
+    }
+}
+
 impl SuccessTransition {
     fn from_file(file: TransitionFile) -> Result<Self, DefinitionError> {
         match file {
@@ -591,6 +761,10 @@ impl OutputKind {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "assistant-reply" => Some(Self::AssistantReply),
+            "plan" => Some(Self::Plan),
+            "candidate-revision" => Some(Self::CandidateRevision),
+            "review-report" => Some(Self::ReviewReport),
+            "test-report" => Some(Self::TestReport),
             _ => None,
         }
     }
@@ -598,7 +772,46 @@ impl OutputKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::AssistantReply => "assistant-reply",
+            Self::Plan => "plan",
+            Self::CandidateRevision => "candidate-revision",
+            Self::ReviewReport => "review-report",
+            Self::TestReport => "test-report",
         }
+    }
+
+    pub(crate) fn as_artefact_kind(self) -> Option<ArtefactKind> {
+        match self {
+            Self::AssistantReply => None,
+            Self::Plan => Some(ArtefactKind::Plan),
+            Self::CandidateRevision => Some(ArtefactKind::CandidateRevision),
+            Self::ReviewReport => Some(ArtefactKind::ReviewReport),
+            Self::TestReport => Some(ArtefactKind::TestReport),
+        }
+    }
+}
+
+impl ArtefactKind {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "plan" => Some(Self::Plan),
+            "candidate-revision" => Some(Self::CandidateRevision),
+            "review-report" => Some(Self::ReviewReport),
+            "test-report" => Some(Self::TestReport),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::CandidateRevision => "candidate-revision",
+            Self::ReviewReport => "review-report",
+            Self::TestReport => "test-report",
+        }
+    }
+
+    pub(crate) fn is_assurance(self) -> bool {
+        matches!(self, Self::ReviewReport | Self::TestReport)
     }
 }
 
@@ -623,6 +836,16 @@ impl StepKey {
 }
 
 impl OutputKey {
+    pub(crate) fn parse(value: &str) -> Result<Self, DefinitionError> {
+        Ok(Self(parse_key(value)?))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl InputKey {
     pub(crate) fn parse(value: &str) -> Result<Self, DefinitionError> {
         Ok(Self(parse_key(value)?))
     }
@@ -684,6 +907,136 @@ impl PinnedWorkflowDefinition {
     }
 }
 
+fn assemble(
+    name: String,
+    default_environment: EnvironmentId,
+    roles: Vec<RoleDefinition>,
+    first_step: StepKey,
+    mut steps: Vec<StepDefinition>,
+) -> Result<WorkflowDefinition, DefinitionError> {
+    let name = normalise_name(&name)?;
+    if roles.len() > MAXIMUM_ROLES {
+        return Err(DefinitionError::RoleCount);
+    }
+    if steps.is_empty() || steps.len() > MAXIMUM_STEPS {
+        return Err(DefinitionError::StepCount);
+    }
+    for step in &mut steps {
+        match &mut step.action {
+            StepAction::Agent(action) => {
+                action.environment = action.environment.normalised(default_environment);
+            }
+            StepAction::SystemCommand(action) => {
+                action.environment = action.environment.normalised(default_environment);
+            }
+        }
+    }
+    reject_duplicate_roles(&roles)?;
+    reject_duplicate_steps(&steps)?;
+    reject_step_outputs(&steps)?;
+    reject_step_inputs(&steps)?;
+    reject_unsupported_outputs(&steps)?;
+    reject_secondary_writes(&steps)?;
+    reject_role_use(&roles, &steps)?;
+    validate_serial_chain(&first_step, &steps)?;
+    reject_handoff(&first_step, &steps)?;
+    Ok(WorkflowDefinition {
+        format_version: DEFINITION_FORMAT_VERSION,
+        name,
+        default_environment,
+        roles,
+        first_step,
+        steps,
+    })
+}
+
+fn from_current_file(file: DefinitionFile) -> Result<WorkflowDefinition, DefinitionError> {
+    let (name, default_environment, roles, first_step, steps) = parse_file_parts(file)?;
+    assemble(name, default_environment, roles, first_step, steps)
+}
+
+type FileParts = (
+    String,
+    EnvironmentId,
+    Vec<RoleDefinition>,
+    StepKey,
+    Vec<StepDefinition>,
+);
+
+fn parse_file_parts(file: DefinitionFile) -> Result<FileParts, DefinitionError> {
+    let name = normalise_name(&file.name)?;
+    if file.roles.len() > MAXIMUM_ROLES {
+        return Err(DefinitionError::RoleCount);
+    }
+    if file.steps.is_empty() || file.steps.len() > MAXIMUM_STEPS {
+        return Err(DefinitionError::StepCount);
+    }
+    let default_environment =
+        EnvironmentId::parse(&file.default_environment).ok_or(DefinitionError::Environment)?;
+    let roles = file
+        .roles
+        .into_iter()
+        .map(RoleDefinition::from_file)
+        .collect::<Result<Vec<_>, _>>()?;
+    let first_step = StepKey::parse(&file.first_step)?;
+    let steps = file
+        .steps
+        .into_iter()
+        .map(StepDefinition::from_file)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((name, default_environment, roles, first_step, steps))
+}
+
+fn has_secondary_write(step: &StepDefinition) -> bool {
+    let StepAction::Agent(action) = &step.action else {
+        return false;
+    };
+    action
+        .authority
+        .directories
+        .iter()
+        .any(|directory| directory.alias != PRIMARY_SOURCE_ALIAS && directory.access.is_writable())
+}
+
+fn serial_order(first: &StepKey, steps: &[StepDefinition]) -> Vec<StepKey> {
+    let mut order = Vec::new();
+    let mut current = Some(first.clone());
+    while let Some(key) = current {
+        let Some(step) = steps.iter().find(|item| item.key == key) else {
+            break;
+        };
+        order.push(key);
+        current = match &step.on_success {
+            SuccessTransition::Next(next) => Some(next.clone()),
+            SuccessTransition::CompleteRun => None,
+        };
+    }
+    order
+}
+
+fn parse_inputs(files: Vec<InputFile>) -> Result<Vec<RequiredInput>, DefinitionError> {
+    if files.len() > MAXIMUM_INPUTS {
+        return Err(DefinitionError::InputCount);
+    }
+    let mut inputs = Vec::with_capacity(files.len());
+    for file in files {
+        let key = InputKey::parse(&file.key)?;
+        if inputs.iter().any(|item: &RequiredInput| item.key == key) {
+            return Err(DefinitionError::DuplicateInput);
+        }
+        let kind = ArtefactKind::parse(&file.kind).ok_or(DefinitionError::Format)?;
+        let source = match file.source {
+            InputSourceFile::RunInitialCandidate => ArtefactSource::RunInitialCandidate,
+            InputSourceFile::StepOutput { step, output } => ArtefactSource::StepOutput {
+                step: StepKey::parse(&step)?,
+                output: OutputKey::parse(&output)?,
+            },
+        };
+        inputs.push(RequiredInput { key, kind, source });
+    }
+    Ok(inputs)
+}
+
 fn parse_outputs(files: Vec<OutputFile>) -> Result<Vec<RequiredOutput>, DefinitionError> {
     if files.len() > MAXIMUM_OUTPUTS {
         return Err(DefinitionError::OutputCount);
@@ -738,10 +1091,164 @@ fn reject_duplicate_steps(steps: &[StepDefinition]) -> Result<(), DefinitionErro
 
 fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
     for step in steps {
-        if let StepAction::SystemCommand(action) = &step.action
-            && !action.required_outputs.is_empty()
-        {
-            return Err(DefinitionError::UnsupportedOutput);
+        match &step.action {
+            StepAction::SystemCommand(action) if !action.required_outputs.is_empty() => {
+                return Err(DefinitionError::UnsupportedOutput);
+            }
+            StepAction::Agent(action) => {
+                let writes = step.writes_primary_source();
+                for output in &action.required_outputs {
+                    if output.kind == OutputKind::CandidateRevision && !writes {
+                        return Err(DefinitionError::CandidateOutput);
+                    }
+                }
+            }
+            StepAction::SystemCommand(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn reject_secondary_writes(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    for step in steps {
+        if has_secondary_write(step) {
+            return Err(DefinitionError::SecondaryWrite);
+        }
+    }
+    Ok(())
+}
+
+fn reject_step_inputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    for step in steps {
+        if step.inputs.len() > MAXIMUM_INPUTS {
+            return Err(DefinitionError::InputCount);
+        }
+        for (index, input) in step.inputs.iter().enumerate() {
+            if step
+                .inputs
+                .iter()
+                .skip(index + 1)
+                .any(|other| other.key == input.key)
+            {
+                return Err(DefinitionError::DuplicateInput);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_handoff(first: &StepKey, steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    let order = serial_order(first, steps);
+    let mut produced: Vec<(StepKey, OutputKey, ArtefactKind)> = Vec::new();
+    let mut latest_candidate: Option<(StepKey, OutputKey)> = None;
+    for key in &order {
+        let step = steps
+            .iter()
+            .find(|item| item.key == *key)
+            .ok_or(DefinitionError::UnknownStep)?;
+        let candidate_inputs: Vec<_> = step
+            .inputs
+            .iter()
+            .filter(|input| input.kind == ArtefactKind::CandidateRevision)
+            .collect();
+        let assurance = step.inputs.iter().any(|input| input.kind.is_assurance())
+            || step.required_outputs().iter().any(|output| {
+                matches!(
+                    output.kind,
+                    OutputKind::ReviewReport | OutputKind::TestReport
+                )
+            });
+        if step.is_sandbox_backed() || assurance {
+            if candidate_inputs.len() != 1 {
+                return Err(DefinitionError::CandidateInput);
+            }
+            let candidate = candidate_inputs[0];
+            match &candidate.source {
+                ArtefactSource::RunInitialCandidate => {
+                    if latest_candidate.is_some() {
+                        return Err(DefinitionError::CandidateInput);
+                    }
+                }
+                ArtefactSource::StepOutput {
+                    step: source_step,
+                    output,
+                } => {
+                    let Some((latest_step, latest_output)) = &latest_candidate else {
+                        return Err(DefinitionError::CandidateInput);
+                    };
+                    if source_step != latest_step || output != latest_output {
+                        return Err(DefinitionError::CandidateInput);
+                    }
+                }
+            }
+        } else if !candidate_inputs.is_empty() {
+            return Err(DefinitionError::CandidateInput);
+        }
+        for input in &step.inputs {
+            match &input.source {
+                ArtefactSource::RunInitialCandidate => {
+                    if input.kind != ArtefactKind::CandidateRevision {
+                        return Err(DefinitionError::InputKind);
+                    }
+                }
+                ArtefactSource::StepOutput {
+                    step: source_step,
+                    output,
+                } => {
+                    if source_step == &step.key {
+                        return Err(DefinitionError::SelfInput);
+                    }
+                    if let Some(produced_kind) =
+                        produced.iter().find_map(|(item_step, item_output, kind)| {
+                            (*item_step == *source_step && *item_output == *output).then_some(*kind)
+                        })
+                    {
+                        if produced_kind != input.kind {
+                            return Err(DefinitionError::InputKind);
+                        }
+                    } else {
+                        let Some(source) = steps.iter().find(|item| item.key == *source_step)
+                        else {
+                            return Err(DefinitionError::UnknownOutput);
+                        };
+                        if !order
+                            .iter()
+                            .take_while(|item| *item != &step.key)
+                            .any(|item| item == source_step)
+                        {
+                            return Err(DefinitionError::ForwardInput);
+                        }
+                        if source.required_outputs().iter().any(|item| {
+                            item.key == *output && item.kind == OutputKind::AssistantReply
+                        }) {
+                            return Err(DefinitionError::AssistantInput);
+                        }
+                        return Err(DefinitionError::UnknownOutput);
+                    }
+                }
+            }
+        }
+        if assurance && candidate_inputs.is_empty() {
+            return Err(DefinitionError::AssuranceInput);
+        }
+        let mut candidate_outputs = 0usize;
+        for output in step.required_outputs() {
+            if output.kind == OutputKind::CandidateRevision {
+                candidate_outputs += 1;
+            }
+            if let Some(kind) = output.kind.as_artefact_kind() {
+                produced.push((step.key.clone(), output.key.clone(), kind));
+                if kind == ArtefactKind::CandidateRevision {
+                    latest_candidate = Some((step.key.clone(), output.key.clone()));
+                }
+            }
+        }
+        if step.writes_primary_source() {
+            if candidate_outputs != 1 {
+                return Err(DefinitionError::CandidateOutput);
+            }
+        } else if candidate_outputs != 0 {
+            return Err(DefinitionError::CandidateOutput);
         }
     }
     Ok(())
@@ -892,6 +1399,70 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         _ => None,
     }
+}
+
+pub(crate) fn initial_candidate_input() -> RequiredInput {
+    RequiredInput {
+        key: InputKey::parse("candidate").expect("candidate input"),
+        kind: ArtefactKind::CandidateRevision,
+        source: ArtefactSource::RunInitialCandidate,
+    }
+}
+
+pub(crate) fn candidate_revision_output() -> RequiredOutput {
+    RequiredOutput {
+        key: OutputKey::parse(CANDIDATE_OUTPUT_KEY).expect("candidate output"),
+        kind: OutputKind::CandidateRevision,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_environment_id() -> EnvironmentId {
+    EnvironmentId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").expect("test env")
+}
+
+#[cfg(test)]
+pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
+    let role = RoleDefinition::new(
+        RoleKey::parse("agent").expect("role"),
+        "Coding agent".to_owned(),
+        String::new(),
+        String::new(),
+    )
+    .expect("role");
+    let authority = AgentAuthority::new(
+        vec![crate::agents::ToolId::List],
+        vec![GuestDirectoryAccess {
+            alias: PRIMARY_SOURCE_ALIAS.to_owned(),
+            access: crate::agents::AccessMode::ReadWrite,
+        }],
+    )
+    .expect("authority");
+    WorkflowDefinition::from_parts(
+        name.to_owned(),
+        test_environment_id(),
+        vec![role],
+        StepKey::parse("work").expect("first"),
+        vec![StepDefinition {
+            key: StepKey::parse("work").expect("step"),
+            name: "Work on task".to_owned(),
+            inputs: vec![initial_candidate_input()],
+            action: StepAction::Agent(AgentStep {
+                environment: StepEnvironment::WorkflowDefault,
+                role: RoleKey::parse("agent").expect("role"),
+                authority,
+                required_outputs: vec![
+                    RequiredOutput {
+                        key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                        kind: OutputKind::AssistantReply,
+                    },
+                    candidate_revision_output(),
+                ],
+            }),
+            on_success: SuccessTransition::CompleteRun,
+        }],
+    )
+    .expect("definition")
 }
 
 #[cfg(test)]

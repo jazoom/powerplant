@@ -136,6 +136,14 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
     let token = connected(&state);
     let id = session_id(&token);
     let dir = tempfile::tempdir().expect("project");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .expect("git")
+            .success()
+    );
     let record = state
         .agents
         .create(crate::agents::AgentDraft {
@@ -150,24 +158,34 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
             primary_directory: "project".to_owned(),
         })
         .expect("agent");
-    let sandbox = state.sandboxes.handle(record.id);
-    let policy = crate::agents::DirectoryPolicy::from_record(&record);
-    let access = crate::sandbox::GuestAccess::from_connection(
-        &state.vault.selected_connection().expect("connection"),
-    );
-    sandbox
-        .start_with(crate::sandbox::SandboxSpec::from_policy(&policy, access))
-        .await
-        .expect("start");
-    sandbox.complete_start();
     state
         .scratch
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
+    let (environment, preparation) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Alpine Git".to_owned(),
+            oci_image: "alpine/git".to_owned(),
+            setup_script: String::new(),
+        })
+        .expect("environment");
+    state.environments.claim_oldest_queued().expect("claim");
+    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+    state.environment_snapshots.mark(
+        snapshot.artifact_key.clone(),
+        crate::environments::SnapshotAvailability::Available,
+    );
+    state
+        .environments
+        .finish_ready(&preparation.id, snapshot, preparation.log)
+        .expect("ready");
     let workflow = state
         .workflows
-        .create(crate::workflows::seeds::one_agent_definition())
+        .create(crate::workflows::seeds::one_agent_definition(
+            environment.id,
+        ))
         .expect("workflow");
     let token_value = crate::workflows::WorkflowSelection {
         workflow_id: workflow.id,

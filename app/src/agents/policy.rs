@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use super::record::{
-    AccessMode, AgentError, AgentRecord, DirectoryGrant, GUEST_PROJECT, canonical_directory,
-    guest_path_for,
+    AccessMode, AgentError, AgentRecord, GUEST_PROJECT, canonical_directory, guest_path_for,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,15 +116,6 @@ impl DirectoryPolicy {
             path == grant.guest_path || path.starts_with(&format!("{}/", grant.guest_path))
         })
     }
-}
-
-pub(crate) fn grants_changed(
-    current: &[DirectoryGrant],
-    next: &[DirectoryGrant],
-    primary: &str,
-    next_primary: &str,
-) -> bool {
-    current != next || primary != next_primary
 }
 
 fn normalise_absolute(path: &str) -> Result<String, &'static str> {

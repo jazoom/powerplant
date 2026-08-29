@@ -5,6 +5,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
+use crate::environments::EnvironmentId;
+
 use super::definition::{
     DefinitionFile, DefinitionVersion, PinnedWorkflowDefinition, StepAction, WorkflowDefinition,
 };
@@ -147,8 +149,12 @@ impl WorkflowCatalogue {
         }
     }
 
-    pub(crate) fn open(path: PathBuf) -> Result<Self, CatalogueError> {
-        Self::open_with_seeds(path, &super::seeds::production_seeds())
+    #[cfg(test)]
+    pub(crate) fn open(
+        path: PathBuf,
+        default_environment: crate::environments::EnvironmentId,
+    ) -> Result<Self, CatalogueError> {
+        Self::open_with_seeds(path, &super::seeds::production_seeds(default_environment))
     }
 
     pub(crate) fn open_with_seeds(
@@ -184,6 +190,29 @@ impl WorkflowCatalogue {
             .iter()
             .find(|record| record.id == *id)
             .cloned()
+    }
+
+    pub(crate) fn referencing(&self, environment: &EnvironmentId) -> Vec<WorkflowRecord> {
+        let mut records: Vec<_> = self
+            .lock()
+            .workflows
+            .iter()
+            .filter(|record| {
+                record
+                    .definition
+                    .referenced_environments()
+                    .contains(environment)
+            })
+            .cloned()
+            .collect();
+        records.sort_by(|left, right| {
+            left.definition
+                .name()
+                .to_lowercase()
+                .cmp(&right.definition.name().to_lowercase())
+                .then(left.id.cmp(&right.id))
+        });
+        records
     }
 
     pub(crate) fn create(

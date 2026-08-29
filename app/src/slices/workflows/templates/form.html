@@ -73,6 +73,36 @@
             <p class="text-error text-sm">{{ name_error }}</p>
           {% endif %}
         </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-sm">Default environment</span>
+          {% if no_ready_environment %}
+            <p class="text-error text-sm">
+              Prepare an environment before you save this workflow.
+              <a href="/environments/new" data-graft class="link"
+                >New environment</a
+              >
+            </p>
+          {% else %}
+            <select
+              class="select select-bordered"
+              name="default-environment"
+              required
+            >
+              <option value="">Choose an environment</option>
+              {% for option in environment_options %}
+                <option
+                  value="{{ option.id }}"
+                  {% if option.selected || option.id == default_environment %}selected{% endif %}
+                >
+                  {{ option.name }} ({{ option.context }})
+                </option>
+              {% endfor %}
+            </select>
+          {% endif %}
+          {% if default_environment_error != "" %}
+            <p class="text-error text-sm">{{ default_environment_error }}</p>
+          {% endif %}
+        </label>
 
         <section class="space-y-3">
           <h2 class="text-base font-semibold">Roles</h2>
@@ -270,6 +300,34 @@
                   <p class="text-error text-sm">{{ step.action_error }}</p>
                 {% endif %}
               </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-sm">Environment</span>
+                <select
+                  class="select select-bordered"
+                  name="step_{{ step.index }}_environment"
+                >
+                  <option
+                    value=""
+                    {% if step.environment == "" %}selected{% endif %}
+                  >
+                    Use workflow default
+                  </option>
+                  {% for option in environment_options %}
+                    <option
+                      value="{{ option.id }}"
+                      {% if option.id == step.environment %}selected{% endif %}
+                    >
+                      {{ option.name }} ({{ option.context }})
+                    </option>
+                  {% endfor %}
+                </select>
+                {% if step.environment_hint != "" %}
+                  <p class="text-quiet text-xs">{{ step.environment_hint }}</p>
+                {% endif %}
+                {% if step.environment_error != "" %}
+                  <p class="text-error text-sm">{{ step.environment_error }}</p>
+                {% endif %}
+              </label>
               {% if step.is_agent %}
                 <label class="flex flex-col gap-1">
                   <span class="text-sm">Role</span>
@@ -374,6 +432,30 @@
                           >
                             Assistant reply
                           </option>
+                          <option
+                            value="plan"
+                            {% if output.kind == "plan" %}selected{% endif %}
+                          >
+                            Plan
+                          </option>
+                          <option
+                            value="candidate-revision"
+                            {% if output.kind == "candidate-revision" %}selected{% endif %}
+                          >
+                            Candidate revision
+                          </option>
+                          <option
+                            value="review-report"
+                            {% if output.kind == "review-report" %}selected{% endif %}
+                          >
+                            Review report
+                          </option>
+                          <option
+                            value="test-report"
+                            {% if output.kind == "test-report" %}selected{% endif %}
+                          >
+                            Test report
+                          </option>
                         </select>
                         {% if output.kind_error != "" %}
                           <p class="text-error text-sm">
@@ -449,6 +531,108 @@
                   {% endif %}
                 </label>
               {% endif %}
+              <fieldset class="space-y-3">
+                <legend class="text-sm">Inputs</legend>
+                {% for input in step.inputs %}
+                  <div
+                    class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-3"
+                  >
+                    <label class="flex flex-col gap-1">
+                      <span class="text-quiet text-xs">Key</span>
+                      <input
+                        class="input input-bordered input-sm font-mono"
+                        name="step_{{ step.index }}_input_{{ input.index }}_key"
+                        required
+                        maxlength="32"
+                        value="{{ input.key }}"
+                      />
+                      {% if input.key_error != "" %}
+                        <p class="text-error text-sm">{{ input.key_error }}</p>
+                      {% endif %}
+                    </label>
+                    <label class="flex flex-col gap-1">
+                      <span class="text-quiet text-xs">Kind</span>
+                      <select
+                        class="select select-bordered select-sm"
+                        name="step_{{ step.index }}_input_{{ input.index }}_kind"
+                      >
+                        <option
+                          value="candidate-revision"
+                          {% if input.kind == "candidate-revision" %}selected{% endif %}
+                        >
+                          Candidate revision
+                        </option>
+                        <option
+                          value="plan"
+                          {% if input.kind == "plan" %}selected{% endif %}
+                        >
+                          Plan
+                        </option>
+                        <option
+                          value="review-report"
+                          {% if input.kind == "review-report" %}selected{% endif %}
+                        >
+                          Review report
+                        </option>
+                        <option
+                          value="test-report"
+                          {% if input.kind == "test-report" %}selected{% endif %}
+                        >
+                          Test report
+                        </option>
+                      </select>
+                      {% if input.kind_error != "" %}
+                        <p class="text-error text-sm">{{ input.kind_error }}</p>
+                      {% endif %}
+                    </label>
+                    <label class="flex flex-col gap-1">
+                      <span class="text-quiet text-xs">Source</span>
+                      <select
+                        class="select select-bordered select-sm"
+                        name="step_{{ step.index }}_input_{{ input.index }}_source"
+                      >
+                        {% for option in input.sources %}
+                          <option
+                            value="{{ option.value }}"
+                            {% if option.selected %}selected{% endif %}
+                          >
+                            {{ option.label }}
+                          </option>
+                        {% endfor %}
+                      </select>
+                      {% if input.source_error != "" %}
+                        <p class="text-error text-sm">
+                          {{ input.source_error }}
+                        </p>
+                      {% endif %}
+                    </label>
+                    {% if input.can_remove %}
+                      <div class="sm:col-span-3">
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="remove-input:{{ step.index }}:{{ input.index }}"
+                        >
+                          Remove input
+                        </button>
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+                {% if step.can_add_input %}
+                  <button
+                    class="btn btn-outline btn-sm"
+                    type="submit"
+                    formnovalidate
+                    name="intent"
+                    value="add-input:{{ step.index }}"
+                  >
+                    Add input
+                  </button>
+                {% endif %}
+              </fieldset>
               <p class="text-quiet text-sm">{{ step.transition }}</p>
             </article>
           {% endfor %}
@@ -470,6 +654,7 @@
           type="submit"
           name="intent"
           value="save"
+          {% if no_ready_environment %}disabled{% endif %}
         >
           {{ submit }}
         </button>

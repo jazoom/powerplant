@@ -5,8 +5,6 @@ mod page;
 #[cfg(test)]
 mod tests;
 
-use std::time::Duration;
-
 use axum::{
     Form, Router,
     extract::{Path, Query, State},
@@ -20,7 +18,7 @@ use crate::{
     agents::{AgentId, AgentRecord, DirectoryPolicy},
     error::AppResult,
     responses,
-    sandbox::{GuestAccess, SandboxSpec},
+    sandbox::GuestAccess,
     sessions::{self, BeginTurnError, JobIdError, OptionalSession, SessionId, SessionSnapshot},
     state::AppState,
     workflows::{
@@ -30,7 +28,7 @@ use crate::{
 };
 
 use self::{
-    forms::{ChatForm, CursorError, ModelForm, ObserveQuery, SandboxAction, SandboxForm},
+    forms::{ChatForm, CursorError, ModelForm, ObserveQuery},
     job::{observe_response, user_transcript_patch},
     page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
@@ -41,19 +39,11 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/model", get(refresh_model_options).post(update_model))
         .route("/agents/{agent_id}", get(show).post(send))
-        .route(
-            "/agents/{agent_id}/sandbox",
-            get(show_sandbox).post(update_sandbox),
-        )
         .route("/agents/{agent_id}/jobs/{job_id}/cancel", post(cancel))
 }
 
 fn parse_agent(raw: &str) -> Option<AgentId> {
     AgentId::parse(raw)
-}
-
-fn agent_path(id: AgentId) -> String {
-    format!("/agents/{}", id.as_hex())
 }
 
 async fn require_chat(
@@ -96,11 +86,12 @@ async fn show(
         GraftRequest::Document => render_document(
             &state,
             PatchStatus::Ok,
-            view(&state, &record, &snapshot, "", "", "").await,
+            view(&state, &record, &snapshot, "", "", &query.workflow).await,
         ),
-        GraftRequest::Navigation => {
-            navigate_page(&state, &view(&state, &record, &snapshot, "", "", "").await)
-        }
+        GraftRequest::Navigation => navigate_page(
+            &state,
+            &view(&state, &record, &snapshot, "", "", &query.workflow).await,
+        ),
         GraftRequest::Patch => observe(&state, &session, &record, &snapshot, query).await,
     }
 }
@@ -186,16 +177,6 @@ async fn send(
         .await;
     }
     let record = latest;
-    let sandbox = state.sandboxes.handle(record.id);
-    let view_status = sandbox.view().await;
-    if view_status.status != crate::sandbox::GuestStatus::Running {
-        let message = if view_status.status.is_starting() {
-            "Wait until the sandbox finishes starting."
-        } else {
-            "Start the sandbox."
-        };
-        return reject_chat_input(&state, graft, &record, &snapshot, message, &form.message).await;
-    }
     let policy = DirectoryPolicy::from_record(&record);
     if policy.confirm_hosts().is_err() {
         return reject_chat_input(
@@ -209,22 +190,6 @@ async fn send(
         .await;
     }
     let access = GuestAccess::from_connection(&connection);
-    let spec = SandboxSpec::from_policy(&policy, access);
-    let matches = sandbox
-        .spec_matches(&spec)
-        .await
-        .map_err(|error| crate::error::AppError::new("inspect sandbox", error))?;
-    if !matches {
-        return reject_chat_input(
-            &state,
-            graft,
-            &record,
-            &snapshot,
-            "Stop and start the sandbox after you change the provider or directories.",
-            &form.message,
-        )
-        .await;
-    }
 
     let resolved = match state.workflows.resolve(&selection) {
         Ok(resolved) => resolved,
@@ -263,6 +228,26 @@ async fn send(
         )
         .await;
     }
+    let environments = match workflows::resolve_environments(
+        &resolved.pinned.definition,
+        &state.environments,
+        &state.environment_snapshots,
+    )
+    .await
+    {
+        Ok(environments) => environments,
+        Err(error) => {
+            return reject_chat_input(
+                &state,
+                graft,
+                &record,
+                &snapshot,
+                error.message(),
+                &form.message,
+            )
+            .await;
+        }
+    };
 
     let message = form.message.trim().to_owned();
     let run_id = workflows::RunId::generate()
@@ -296,7 +281,7 @@ async fn send(
             ));
         }
     };
-    let run = WorkflowRun::create(run_id, workflows::now_ms(), pinned);
+    let run = WorkflowRun::create(run_id, workflows::now_ms(), pinned, environments);
     if let Err(error) = state.workflow_runs.create(run) {
         let _ = state
             .sessions
@@ -315,10 +300,11 @@ async fn send(
             session_id: session,
             agent_id: record.id,
             connection,
-            sandbox,
+            sandbox: state.sandboxes.run_handle(run_id),
             host_policy: policy,
             turns: started.turns.clone(),
             job: started.job.clone(),
+            access,
         },
         lease,
         execution,
@@ -455,116 +441,6 @@ async fn cancel(
     }
 }
 
-const SANDBOX_HOLD: Duration = if cfg!(test) {
-    Duration::ZERO
-} else {
-    Duration::from_secs(1)
-};
-
-async fn show_sandbox(
-    State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
-    graft: GraftRequest,
-    Path(agent_id): Path<String>,
-) -> AppResult<Response> {
-    let (_, record, snapshot) = match require_chat(&state, session, &agent_id, graft).await {
-        Ok(value) => value,
-        Err(response) => return Ok(response),
-    };
-    match graft {
-        GraftRequest::Document | GraftRequest::Navigation => {
-            Ok(responses::graft_redirect(graft, &agent_path(record.id)))
-        }
-        GraftRequest::Patch => {
-            let sandbox = state.sandboxes.handle(record.id);
-            let previous = sandbox.view().await;
-            if previous.status.is_starting() {
-                sandbox.wait_until_changed(previous, SANDBOX_HOLD).await;
-            }
-            Ok(sandbox_and_composer(
-                PatchStatus::Ok,
-                &view(&state, &record, &snapshot, "", "", "").await,
-            )?)
-        }
-    }
-}
-
-async fn update_sandbox(
-    State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
-    graft: CommandGraft,
-    Path(agent_id): Path<String>,
-    Form(form): Form<SandboxForm>,
-) -> AppResult<Response> {
-    let (_, record, snapshot) = match require_chat(&state, session, &agent_id, graft).await {
-        Ok(value) => value,
-        Err(response) => return Ok(response),
-    };
-    if snapshot.session_busy {
-        return reject_sandbox(
-            &state,
-            graft,
-            &record,
-            &snapshot,
-            "Wait until this reply finishes.",
-        )
-        .await;
-    }
-    let Ok(_operation) = state.agent_leases.acquire(record.id) else {
-        return reject_sandbox(
-            &state,
-            graft,
-            &record,
-            &snapshot,
-            "Wait until this reply finishes.",
-        )
-        .await;
-    };
-    let action = match form.validate() {
-        Ok(action) => action,
-        Err(_) => {
-            return reject_sandbox(&state, graft, &record, &snapshot, "Choose start or stop.")
-                .await;
-        }
-    };
-    let sandbox = state.sandboxes.handle(record.id);
-    let result = match action {
-        SandboxAction::Start => {
-            let access = state
-                .vault
-                .selected_connection()
-                .as_ref()
-                .map(GuestAccess::from_connection)
-                .unwrap_or_default();
-            let policy = DirectoryPolicy::from_record(&record);
-            sandbox
-                .start_with(SandboxSpec::from_policy(&policy, access))
-                .await
-        }
-        SandboxAction::Stop => sandbox.stop().await,
-    };
-    let error = match result {
-        Ok(()) => "",
-        Err(error) => error.message(),
-    };
-    let status = if error.is_empty() {
-        PatchStatus::Ok
-    } else {
-        PatchStatus::UnprocessableEntity
-    };
-    match graft {
-        CommandGraft::Document => render_document(
-            &state,
-            status,
-            view(&state, &record, &snapshot, "", "", error).await,
-        ),
-        CommandGraft::Patch => Ok(sandbox_and_composer(
-            status,
-            &view(&state, &record, &snapshot, "", "", error).await,
-        )?),
-    }
-}
-
 async fn toggle_favourite(
     state: &AppState,
     graft: CommandGraft,
@@ -654,6 +530,15 @@ async fn observe(
         }
     };
     let Some(job_id) = query.job_id() else {
+        if !query.workflow.trim().is_empty() {
+            return Ok(hypergraft::outcome::children_patch(
+                PatchStatus::Ok,
+                "composer",
+                &view(state, record, snapshot, "", "", &query.workflow)
+                    .await
+                    .composer(),
+            )?);
+        }
         return refresh_composer(state, record, snapshot).await;
     };
     let Some(job) = state.sessions.job(session, &record.id, &job_id) else {
@@ -783,52 +668,83 @@ async fn reject_model_view(
     }
 }
 
-async fn reject_sandbox(
-    state: &AppState,
-    graft: CommandGraft,
-    record: &AgentRecord,
-    session: &SessionSnapshot,
-    message: &'static str,
-) -> AppResult<Response> {
-    match graft {
-        CommandGraft::Document => render_document(
-            state,
-            PatchStatus::UnprocessableEntity,
-            view(state, record, session, "", "", message).await,
-        ),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            PatchStatus::UnprocessableEntity,
-            "sandbox-status",
-            &view(state, record, session, "", "", message)
-                .await
-                .sandbox_status(),
-        )?),
-    }
-}
-
 async fn view(
     state: &AppState,
     record: &AgentRecord,
     session: &SessionSnapshot,
     error: &'static str,
     desk_error: &'static str,
-    sandbox_error: &'static str,
+    workflow_query: &str,
 ) -> ChatViewModel {
     let mut page = ChatViewModel::from_session(
         record,
         session,
         &state.vault,
         &state.models,
-        state.sandboxes.handle(record.id).view().await,
         error,
         desk_error,
-        sandbox_error,
     );
-    attach_workflow_ui(state, session, &mut page);
+    attach_workflow_ui(state, session, &mut page, workflow_query);
+    attach_environment_preview(state, &mut page).await;
     page
 }
 
-fn attach_workflow_ui(state: &AppState, session: &SessionSnapshot, page: &mut ChatViewModel) {
+async fn attach_environment_preview(state: &AppState, page: &mut ChatViewModel) {
+    page.preview_ready = false;
+    page.environment_preview.clear();
+    page.environment_preview_error = "";
+    let Some(option) = page.workflow_options.iter().find(|option| option.selected) else {
+        return;
+    };
+    let Some(selection) = WorkflowSelection::parse(&option.token) else {
+        page.environment_preview_error = "Choose a workflow.";
+        return;
+    };
+    let Ok(resolved) = state.workflows.resolve(&selection) else {
+        page.environment_preview_error = "That workflow is not valid. Choose another.";
+        return;
+    };
+    match workflows::preview_environments(
+        &resolved.pinned.definition,
+        &state.environments,
+        &state.environment_snapshots,
+    )
+    .await
+    {
+        Ok(preview) => {
+            for environment in &preview.environments {
+                page.environment_preview.push(page::PreviewLine {
+                    text: format!(
+                        "{} · preparation {} · {}",
+                        environment.name,
+                        environment.preparation_ordinal,
+                        environment.snapshot_short
+                    ),
+                });
+            }
+            for step in preview.steps {
+                page.environment_preview.push(page::PreviewLine {
+                    text: format!(
+                        "{} · {} · preparation {} · {}",
+                        step.step,
+                        step.environment_name,
+                        step.preparation_ordinal,
+                        step.snapshot_short
+                    ),
+                });
+            }
+            page.preview_ready = true;
+        }
+        Err(error) => page.environment_preview_error = error.message(),
+    }
+}
+
+fn attach_workflow_ui(
+    state: &AppState,
+    session: &SessionSnapshot,
+    page: &mut ChatViewModel,
+    workflow_query: &str,
+) {
     let records = state.workflows.list();
     if records.is_empty() {
         if session.preferred_workflow.is_some()
@@ -848,7 +764,8 @@ fn attach_workflow_ui(state: &AppState, session: &SessionSnapshot, page: &mut Ch
             }
             preferred = None;
         }
-        let selected = preferred.or_else(|| {
+        let queried = WorkflowSelection::parse(workflow_query.trim()).map(|item| item.workflow_id);
+        let selected = queried.or(preferred).or_else(|| {
             if records.len() == 1 {
                 Some(records[0].id)
             } else {
@@ -886,16 +803,6 @@ async fn desk_view(state: &AppState, session: SessionId) -> ChatViewModel {
         .snapshot(&session, &record.id)
         .expect("live session");
     view(state, &record, &snapshot, "", "", "").await
-}
-
-fn sandbox_and_composer(
-    status: PatchStatus,
-    view: &ChatViewModel,
-) -> Result<Response, hypergraft::PatchBuildError> {
-    let mut patches = PatchSet::new();
-    patches.children("sandbox-status", &view.sandbox_status())?;
-    patches.children("composer", &view.composer())?;
-    patches.respond(status)
 }
 
 fn navigate_page(state: &AppState, view: &ChatViewModel) -> AppResult<Response> {

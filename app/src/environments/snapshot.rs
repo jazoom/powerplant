@@ -85,6 +85,11 @@ impl SnapshotDigest {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn short_hex(&self) -> String {
+        let hex = self.0.strip_prefix(DIGEST_PREFIX).unwrap_or(&self.0);
+        hex[..8.min(hex.len())].to_owned()
+    }
 }
 
 impl OciManifestDigest {
@@ -173,7 +178,51 @@ impl EnvironmentSnapshotRepository {
         }
     }
 
+    pub(crate) fn restore_path(&self, key: &SnapshotArtifactKey) -> Result<PathBuf, SnapshotError> {
+        if self.root.is_none() {
+            return Ok(PathBuf::from(key.as_str()));
+        }
+        self.artifact_dir(key)
+    }
+
+    pub(crate) async fn matches_pin(
+        &self,
+        snapshot: &PreparedSnapshot,
+    ) -> Result<(), SnapshotError> {
+        #[cfg(test)]
+        {
+            match self.inspect(snapshot).await {
+                SnapshotAvailability::Available => Ok(()),
+                SnapshotAvailability::Missing => Err(SnapshotError::Missing),
+                SnapshotAvailability::Corrupt => Err(SnapshotError::Corrupt),
+            }
+        }
+        #[cfg(not(test))]
+        self.open_recorded(snapshot).await
+    }
+
     pub(crate) async fn verify(&self, snapshot: &PreparedSnapshot) -> Result<(), SnapshotError> {
+        #[cfg(test)]
+        {
+            let overrides = self
+                .overrides
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((_, availability)) = overrides
+                .iter()
+                .rev()
+                .find(|(key, _)| key == &snapshot.artifact_key)
+            {
+                return match availability {
+                    SnapshotAvailability::Available => Ok(()),
+                    SnapshotAvailability::Missing => Err(SnapshotError::Missing),
+                    SnapshotAvailability::Corrupt => Err(SnapshotError::Corrupt),
+                };
+            }
+            if self.root.is_none() {
+                return Err(SnapshotError::Missing);
+            }
+        }
         let path = self.artifact_dir(&snapshot.artifact_key)?;
         let opened = Snapshot::open(path.to_string_lossy().as_ref())
             .await

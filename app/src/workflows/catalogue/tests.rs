@@ -5,46 +5,14 @@ use super::{
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind,
-    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepKey,
+    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    candidate_revision_output, initial_candidate_input, test_environment_id, test_named_definition,
 };
 use crate::workflows::id::WorkflowId;
 
 fn named(name: &str) -> WorkflowDefinition {
-    let role = RoleDefinition::new(
-        RoleKey::parse("agent").expect("role"),
-        "Coding agent".to_owned(),
-        String::new(),
-        String::new(),
-    )
-    .expect("role");
-    let authority = AgentAuthority::new(
-        vec![ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority");
-    WorkflowDefinition::from_parts(
-        name.to_owned(),
-        vec![role],
-        StepKey::parse("work").expect("first"),
-        vec![StepDefinition {
-            key: StepKey::parse("work").expect("step"),
-            name: "Work on task".to_owned(),
-            action: StepAction::Agent(AgentStep {
-                role: RoleKey::parse("agent").expect("role"),
-                authority,
-                required_outputs: vec![RequiredOutput {
-                    key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                    kind: OutputKind::AssistantReply,
-                }],
-            }),
-            on_success: SuccessTransition::CompleteRun,
-        }],
-    )
-    .expect("definition")
+    test_named_definition(name)
 }
 
 fn write_catalogue(path: &std::path::Path, json: &str) {
@@ -353,13 +321,16 @@ fn command_steps_do_not_require_agent_authority() {
     .expect("authority");
     let definition = WorkflowDefinition::from_parts(
         "Mixed".to_owned(),
+        test_environment_id(),
         vec![role],
         StepKey::parse("status").expect("first"),
         vec![
             StepDefinition {
                 key: StepKey::parse("status").expect("step"),
                 name: "Status".to_owned(),
+                inputs: vec![initial_candidate_input()],
                 action: StepAction::SystemCommand(SystemCommandStep {
+                    environment: StepEnvironment::WorkflowDefault,
                     command: SystemCommandId::RepositoryStatus,
                     required_outputs: Vec::new(),
                 }),
@@ -368,13 +339,18 @@ fn command_steps_do_not_require_agent_authority() {
             StepDefinition {
                 key: StepKey::parse("work").expect("step"),
                 name: "Work".to_owned(),
+                inputs: vec![initial_candidate_input()],
                 action: StepAction::Agent(AgentStep {
+                    environment: StepEnvironment::WorkflowDefault,
                     role: RoleKey::parse("agent").expect("role"),
                     authority,
-                    required_outputs: vec![RequiredOutput {
-                        key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                        kind: OutputKind::AssistantReply,
-                    }],
+                    required_outputs: vec![
+                        RequiredOutput {
+                            key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                            kind: OutputKind::AssistantReply,
+                        },
+                        candidate_revision_output(),
+                    ],
                 }),
                 on_success: SuccessTransition::CompleteRun,
             },
@@ -386,4 +362,21 @@ fn command_steps_do_not_require_agent_authority() {
         &[ToolId::List],
         &[("project".to_owned(), AccessMode::ReadWrite)]
     ));
+}
+
+#[test]
+fn earlier_catalogue_file_versions_are_rejected() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("workflows.json");
+    let json = serde_json::json!({
+        "file-version": 0,
+        "applied-seeds": [],
+        "retired-workflow-ids": [],
+        "workflows": []
+    });
+    write_catalogue(&path, &json.to_string());
+    assert_eq!(
+        WorkflowCatalogue::open_with_seeds(path, &[]).err(),
+        Some(CatalogueError::Corrupt)
+    );
 }

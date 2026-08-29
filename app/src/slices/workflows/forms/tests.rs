@@ -8,6 +8,10 @@ fn valid_pairs() -> Vec<(String, String)> {
     vec![
         pair("intent", "save"),
         pair("name", "One step"),
+        pair(
+            "default-environment",
+            &crate::workflows::definition::test_environment_id().as_hex(),
+        ),
         pair("role_0_key", "coding-agent"),
         pair("role_0_name", "Coding agent"),
         pair("role_0_expertise", ""),
@@ -19,8 +23,13 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("step_0_tool_list", "on"),
         pair("step_0_dir_0_alias", "project"),
         pair("step_0_dir_0_access", "read-write"),
+        pair("step_0_input_0_key", "candidate"),
+        pair("step_0_input_0_kind", "candidate-revision"),
+        pair("step_0_input_0_source", "run-initial-candidate"),
         pair("step_0_output_0_key", "assistant-reply"),
         pair("step_0_output_0_kind", "assistant-reply"),
+        pair("step_0_output_1_key", "candidate"),
+        pair("step_0_output_1_kind", "candidate-revision"),
     ]
 }
 
@@ -104,6 +113,22 @@ fn system_command_rejects_arbitrary_command_values() {
     assert_eq!(
         errors.steps[0].command,
         "Choose a registered system command."
+    );
+}
+
+#[test]
+fn a_malformed_default_environment_is_rejected() {
+    let mut pairs = valid_pairs();
+    pairs
+        .iter_mut()
+        .find(|(key, _)| key == "default-environment")
+        .expect("default")
+        .1 = "not-an-id".to_owned();
+    let (form, _) = WorkflowFormState::parse(pairs).expect("parse");
+    let errors = form.to_definition().expect_err("invalid");
+    assert_eq!(
+        errors.default_environment,
+        "Enter a valid environment identifier."
     );
 }
 

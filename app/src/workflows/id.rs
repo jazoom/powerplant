@@ -73,6 +73,7 @@ macro_rules! opaque_id {
 opaque_id!(WorkflowId);
 opaque_id!(RunId);
 opaque_id!(AttemptId);
+opaque_id!(ArtefactId);
 
 impl WorkflowId {
     pub(crate) fn generate() -> Result<Self, IdError> {
@@ -87,6 +88,12 @@ impl RunId {
 }
 
 impl AttemptId {
+    pub(crate) fn generate() -> Result<Self, IdError> {
+        Ok(Self(HexId::generate()?))
+    }
+}
+
+impl ArtefactId {
     pub(crate) fn generate() -> Result<Self, IdError> {
         Ok(Self(HexId::generate()?))
     }

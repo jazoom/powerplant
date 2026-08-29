@@ -48,10 +48,13 @@ fn connected(state: &AppState) -> String {
 }
 
 fn stored_run(state: &AppState) -> RunId {
+    let definition = one_agent_definition(crate::workflows::definition::test_environment_id());
+    let environments = crate::workflows::test_environment_set(&definition);
     let run = WorkflowRun::create(
         RunId::generate().expect("run"),
         1,
-        PinnedWorkflowDefinition::pin(None, one_agent_definition()),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
     );
     let id = run.id;
     state.workflow_runs.create(run).expect("store");
@@ -210,6 +213,32 @@ async fn an_unknown_run_redirects_to_the_index() {
         .expect("missing");
     assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
     assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/runs");
+}
+
+#[tokio::test]
+async fn an_unknown_artefact_redirects_to_the_run() {
+    let state = test_state();
+    let token = connected(&state);
+    let id = stored_run(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/runs/{}/artefacts/{}",
+                    id.as_hex(),
+                    "a".repeat(32)
+                ))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("missing artefact");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        format!("/runs/{}", id.as_hex()).as_str()
+    );
 }
 
 #[tokio::test]

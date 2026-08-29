@@ -4,9 +4,11 @@ use super::{
 };
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind,
-    PinnedWorkflowDefinition, RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition,
-    StepKey, SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, GuestDirectoryAccess,
+    InputKey, OutputKey, OutputKind, PinnedWorkflowDefinition, RequiredInput, RequiredOutput,
+    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
+    SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    candidate_revision_output, initial_candidate_input, test_environment_id,
 };
 use crate::workflows::id::RunId;
 
@@ -33,13 +35,18 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
     let reply = StepDefinition {
         key: StepKey::parse("reply").expect("step"),
         name: "Reply".to_owned(),
+        inputs: vec![initial_candidate_input()],
         action: StepAction::Agent(AgentStep {
+            environment: StepEnvironment::WorkflowDefault,
             role: RoleKey::parse("agent").expect("role"),
             authority,
-            required_outputs: vec![RequiredOutput {
-                key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                kind: OutputKind::AssistantReply,
-            }],
+            required_outputs: vec![
+                RequiredOutput {
+                    key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                    kind: OutputKind::AssistantReply,
+                },
+                candidate_revision_output(),
+            ],
         }),
         on_success: if include_command {
             SuccessTransition::Next(StepKey::parse("status").expect("next"))
@@ -52,7 +59,16 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
         steps.push(StepDefinition {
             key: StepKey::parse("status").expect("step"),
             name: "Status".to_owned(),
+            inputs: vec![RequiredInput {
+                key: InputKey::parse("candidate").expect("input"),
+                kind: ArtefactKind::CandidateRevision,
+                source: ArtefactSource::StepOutput {
+                    step: StepKey::parse("reply").expect("step"),
+                    output: OutputKey::parse("candidate").expect("output"),
+                },
+            }],
             action: StepAction::SystemCommand(SystemCommandStep {
+                environment: StepEnvironment::WorkflowDefault,
                 command: SystemCommandId::RepositoryStatus,
                 required_outputs: Vec::new(),
             }),
@@ -60,15 +76,24 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
         });
     }
     let first = StepKey::parse("reply").expect("first");
-    WorkflowDefinition::from_parts("Maintainer".to_owned(), vec![role], first, steps)
-        .expect("definition")
+    WorkflowDefinition::from_parts(
+        "Maintainer".to_owned(),
+        test_environment_id(),
+        vec![role],
+        first,
+        steps,
+    )
+    .expect("definition")
 }
 
 fn new_run() -> WorkflowRun {
+    let definition = definition();
+    let environments = crate::workflows::test_environment_set(&definition);
     WorkflowRun::create(
         RunId::generate().expect("run"),
         10,
-        PinnedWorkflowDefinition::pin(None, definition()),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
     )
 }
 
@@ -102,22 +127,10 @@ fn stale_completions_are_rejected() {
     start(&mut run);
     let stale = AttemptId::generate().expect("attempt");
     assert_eq!(
-        run.complete_attempt(stale, vec![ASSISTANT_REPLY.to_owned()], 12),
+        run.complete_attempt(stale, 12),
         Err(TransitionError::Invalid)
     );
     assert!(matches!(run.state, RunState::Active { .. }));
-}
-
-#[test]
-fn completion_requires_the_declared_outputs() {
-    let mut run = new_run();
-    let attempt = start(&mut run);
-    assert_eq!(
-        run.complete_attempt(attempt, Vec::new(), 12),
-        Err(TransitionError::Invalid)
-    );
-    assert!(matches!(run.state, RunState::Active { .. }));
-    assert_eq!(run.attempts[0].state, AttemptState::Active);
 }
 
 #[test]
@@ -135,10 +148,9 @@ fn transition_times_cannot_move_backwards() {
 fn duplicate_terminal_results_are_rejected() {
     let mut run = new_run();
     let attempt = start(&mut run);
-    run.complete_attempt(attempt, vec![ASSISTANT_REPLY.to_owned()], 12)
-        .expect("complete");
+    run.complete_attempt(attempt, 12).expect("complete");
     assert_eq!(
-        run.complete_attempt(attempt, vec![ASSISTANT_REPLY.to_owned()], 13),
+        run.complete_attempt(attempt, 13),
         Err(TransitionError::Invalid)
     );
     assert_eq!(
@@ -163,20 +175,21 @@ fn transitions_after_a_terminal_state_are_rejected() {
 
 #[test]
 fn completed_attempts_follow_on_success() {
+    let definition = two_step(true);
+    let environments = crate::workflows::test_environment_set(&definition);
     let mut run = WorkflowRun::create(
         RunId::generate().expect("run"),
         10,
-        PinnedWorkflowDefinition::pin(None, two_step(true)),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
     );
     let first = AttemptId::generate().expect("attempt");
     run.start_attempt(first, 11).expect("start");
-    run.complete_attempt(first, vec![ASSISTANT_REPLY.to_owned()], 12)
-        .expect("complete");
+    run.complete_attempt(first, 12).expect("complete");
     assert!(matches!(run.state, RunState::Ready { ref step } if step.as_str() == "status"));
     let second = AttemptId::generate().expect("attempt");
     run.start_attempt(second, 13).expect("start");
-    run.complete_attempt(second, Vec::new(), 14)
-        .expect("complete");
+    run.complete_attempt(second, 14).expect("complete");
     assert_eq!(run.state, RunState::Completed);
 }
 
@@ -216,6 +229,8 @@ fn attempt_ordinals_count_repeated_step_attempts() {
         result: Some(AttemptResult::Failed {
             category: FailureCategory::Provider,
         }),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
     };
     let second = AttemptRecord {
         id: AttemptId::generate().expect("attempt"),
@@ -226,6 +241,8 @@ fn attempt_ordinals_count_repeated_step_attempts() {
         finished_at_ms: None,
         state: AttemptState::Active,
         result: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
     };
     assert_eq!(next_ordinal_for(&[], &step), 1);
     assert_eq!(next_ordinal_for(std::slice::from_ref(&first), &step), 2);

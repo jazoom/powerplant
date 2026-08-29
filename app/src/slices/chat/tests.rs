@@ -8,13 +8,12 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
-    agents::{AccessMode, AgentDraft, DirectoryGrant, DirectoryPolicy, ToolId},
+    agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
     config::RuntimeConfig,
     providers::{
         ChatBackend, ProviderConnection, ProviderError, ProviderKind, Role,
         scripted::ScriptedBackend,
     },
-    sandbox::{GuestAccess, SandboxSpec},
     sessions::{self, JobStatus},
     state::AppState,
 };
@@ -53,15 +52,18 @@ fn chat_path(state: &AppState) -> String {
     format!("/agents/{}", agent_hex(state))
 }
 
+fn git_init(path: &std::path::Path) {
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(path)
+            .status()
+            .expect("git")
+            .success()
+    );
+}
+
 async fn connected(state: &AppState) -> String {
-    connected_with(state, true).await
-}
-
-async fn connected_idle(state: &AppState) -> String {
-    connected_with(state, false).await
-}
-
-async fn connected_with(state: &AppState, start_guest: bool) -> String {
     let token = sessions::generate_session_token().expect("session token");
     state
         .vault
@@ -73,7 +75,8 @@ async fn connected_with(state: &AppState, start_guest: bool) -> String {
         .expect("vault");
     state.sessions.insert(token.id());
     let dir = tempfile::tempdir().expect("project");
-    let record = state
+    git_init(dir.path());
+    state
         .agents
         .create(AgentDraft {
             name: "Test agent".to_owned(),
@@ -87,33 +90,42 @@ async fn connected_with(state: &AppState, start_guest: bool) -> String {
             primary_directory: "project".to_owned(),
         })
         .expect("agent");
-    let sandbox = state.sandboxes.handle(record.id);
-    let policy = DirectoryPolicy::from_record(&record);
-    if start_guest {
-        let access = state
-            .vault
-            .selected_connection()
-            .as_ref()
-            .map(GuestAccess::from_connection)
-            .unwrap_or_default();
-        sandbox
-            .start_with(SandboxSpec::from_policy(&policy, access))
-            .await
-            .expect("start");
-        sandbox.complete_start();
-    }
     state
         .scratch
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
     if state.workflows.list().is_empty() {
-        state
-            .workflows
-            .create(crate::workflows::seeds::one_agent_definition())
-            .expect("workflow");
+        seed_ready_workflow(state).await;
     }
     token.raw().as_str().to_owned()
+}
+
+async fn seed_ready_workflow(state: &AppState) {
+    let (environment, preparation) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Alpine Git".to_owned(),
+            oci_image: "alpine/git".to_owned(),
+            setup_script: String::new(),
+        })
+        .expect("environment");
+    state.environments.claim_oldest_queued().expect("claim");
+    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+    state.environment_snapshots.mark(
+        snapshot.artifact_key.clone(),
+        crate::environments::SnapshotAvailability::Available,
+    );
+    state
+        .environments
+        .finish_ready(&preparation.id, snapshot, preparation.log)
+        .expect("ready");
+    state
+        .workflows
+        .create(crate::workflows::seeds::one_agent_definition(
+            environment.id,
+        ))
+        .expect("workflow");
 }
 
 fn workflow_token(state: &AppState) -> String {
@@ -1136,54 +1148,68 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
     );
 }
 
-fn sandbox_handle(state: &AppState) -> std::sync::Arc<crate::sandbox::GuestSandbox> {
-    state.sandboxes.handle(agent_id(state))
-}
-
-fn sandbox_patch(state: &AppState, token: &str, action: &str) -> Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri(format!("{}/sandbox", chat_path(state)))
-        .header(header::COOKIE, cookie(token))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(hypergraft::GRAFT_REQUEST, "patch")
-        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-        .body(Body::from(format!("command={action}")))
-        .unwrap()
-}
-
 #[tokio::test]
-async fn a_patch_sandbox_start_returns_starting_status() {
+async fn a_missing_environment_rejects_a_task_before_a_run_starts() {
     let state = test_state();
-    let token = connected_idle(&state).await;
+    let token = connected(&state).await;
+    let base = crate::workflows::seeds::one_agent_definition(
+        crate::workflows::definition::test_environment_id(),
+    );
+    let workflow = state
+        .workflows
+        .create(
+            crate::workflows::definition::WorkflowDefinition::from_parts(
+                "Missing environment".to_owned(),
+                crate::workflows::definition::test_environment_id(),
+                base.roles().to_vec(),
+                base.first_step().clone(),
+                base.steps().to_vec(),
+            )
+            .expect("definition"),
+        )
+        .expect("unresolved");
+    let selection = crate::workflows::WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
     let response = app(&state)
-        .oneshot(sandbox_patch(&state, &token, "start"))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(chat_path(&state))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!("message=ls&workflow={selection}")))
+                .unwrap(),
+        )
         .await
-        .expect("sandbox start");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert!(response.headers().get(hypergraft::GRAFT_TRANSFER).is_none());
+        .expect("send");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"sandbox-status\""));
-    assert!(text.contains("data-sandbox-status=\"starting\""));
-    assert!(text.contains("data-sandbox-active=\"true\""));
-    assert!(text.contains("Starting the virtual machine"));
-    assert!(!text.contains("phase=\""));
-    assert_eq!(
-        sandbox_handle(&state).view().await.status.as_str(),
-        "starting"
-    );
+    assert!(text.contains("That environment is no longer in the catalogue."));
+    assert!(session_snapshot(&state, &token).job.is_none());
 }
 
 #[tokio::test]
-async fn a_sandbox_observe_patch_settles_when_start_finishes() {
+async fn a_workflow_preview_patch_targets_composer() {
     let state = test_state();
     let token = connected(&state).await;
     let response = app(&state)
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("{}/sandbox", chat_path(&state)))
+                .uri(format!(
+                    "{}?workflow={}",
+                    chat_path(&state),
+                    workflow_token(&state)
+                ))
                 .header(header::COOKIE, cookie(&token))
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
@@ -1191,88 +1217,11 @@ async fn a_sandbox_observe_patch_settles_when_start_finishes() {
                 .unwrap(),
         )
         .await
-        .expect("sandbox observe");
+        .expect("preview");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"sandbox-status\""));
-    assert!(text.contains("data-sandbox-status=\"running\""));
-    assert!(!text.contains("data-sandbox-active=\"true\""));
-}
-
-#[tokio::test]
-async fn a_sandbox_document_get_redirects_to_chat() {
-    let state = test_state();
-    let token = connected(&state).await;
-    let expected = chat_path(&state);
-    let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(format!("{}/sandbox", chat_path(&state)))
-                .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("sandbox document");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        expected.as_str()
-    );
-}
-
-#[tokio::test]
-async fn a_patch_sandbox_stop_updates_sandbox_status() {
-    let state = test_state();
-    let token = connected(&state).await;
-    let response = app(&state)
-        .oneshot(sandbox_patch(&state, &token, "stop"))
-        .await
-        .expect("sandbox stop");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"sandbox-status\""));
-    assert!(text.contains("data-sandbox-status=\"stopped\""));
-}
-
-#[tokio::test]
-async fn an_unknown_sandbox_action_is_rejected() {
-    let state = test_state();
-    let token = connected(&state).await;
-    let response = app(&state)
-        .oneshot(sandbox_patch(&state, &token, "remove"))
-        .await
-        .expect("sandbox action");
-    assert_eq!(
-        response.status(),
-        axum::http::StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("Choose start or stop."));
-    assert!(text.contains("target=\"sandbox-status\""));
-}
-
-#[tokio::test]
-async fn a_project_without_a_running_sandbox_rejects_an_agent_turn() {
-    let state = test_state();
-    let token = connected_idle(&state).await;
-    let response = app(&state)
-        .oneshot(patch_send_message(&state, &token, "ls"))
-        .await
-        .expect("chat send");
-    assert_eq!(
-        response.status(),
-        axum::http::StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("Start the sandbox."));
     assert!(text.contains("target=\"composer\""));
-    assert!(!text.contains("target=\"transcript\""));
 }
 
 #[tokio::test]
@@ -1325,7 +1274,7 @@ async fn cancel_stops_a_running_command() {
         "done",
     ));
     let token = connected(&state).await;
-    sandbox_handle(&state).hang_next_command();
+    state.sandboxes.hang_next_command();
     let started = app(&state)
         .oneshot(patch_send_message(&state, &token, "sleep 30"))
         .await
@@ -1386,46 +1335,6 @@ async fn a_later_document_show_renders_a_tool_trace() {
 }
 
 #[tokio::test]
-async fn a_sandbox_stop_during_a_job_is_rejected() {
-    let state = state_with_backend(ScriptedBackend::hang());
-    let token = connected(&state).await;
-    let _ = app(&state)
-        .oneshot(patch_send(&state, &token))
-        .await
-        .expect("chat send");
-    let response = app(&state)
-        .oneshot(sandbox_patch(&state, &token, "stop"))
-        .await
-        .expect("sandbox stop");
-    assert_eq!(
-        response.status(),
-        axum::http::StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("Wait until this reply finishes."));
-    assert!(text.contains("target=\"sandbox-status\""));
-}
-
-#[tokio::test]
-async fn a_document_show_disables_sandbox_controls_during_a_job() {
-    let state = state_with_backend(ScriptedBackend::hang());
-    let token = connected(&state).await;
-    let _ = app(&state)
-        .oneshot(patch_send(&state, &token))
-        .await
-        .expect("chat send");
-    let response = app(&state)
-        .oneshot(document_show(&state, &token))
-        .await
-        .expect("chat document");
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    let start_at = text.find("Stop sandbox").expect("stop control");
-    assert!(text[start_at.saturating_sub(160)..start_at].contains("disabled"));
-}
-
-#[tokio::test]
 async fn two_agents_advertise_distinct_prompts_and_tools() {
     let backend = ScriptedBackend::accept();
     let state = state_with_backend(backend.clone());
@@ -1450,6 +1359,7 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
     assert!(first_tools.iter().any(|name| name == "write"));
 
     let dir = tempfile::tempdir().expect("second");
+    git_init(dir.path());
     let second = state
         .agents
         .create(AgentDraft {
@@ -1464,22 +1374,14 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
             primary_directory: "project".to_owned(),
         })
         .expect("second agent");
-    let sandbox = state.sandboxes.handle(second.id);
-    let policy = DirectoryPolicy::from_record(&second);
-    let access =
-        GuestAccess::from_connection(&state.vault.selected_connection().expect("connection"));
-    sandbox
-        .start_with(SandboxSpec::from_policy(&policy, access))
-        .await
-        .expect("start");
-    sandbox.complete_start();
     state
         .scratch
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
+    let environment_id = state.environments.list()[0].id;
     let reader = {
-        let base = crate::workflows::seeds::one_agent_definition();
+        let base = crate::workflows::seeds::one_agent_definition(environment_id);
         let mut steps = base.steps().to_vec();
         if let crate::workflows::definition::StepAction::Agent(action) = &mut steps[0].action {
             action.authority = crate::workflows::definition::AgentAuthority::new(
@@ -1490,6 +1392,7 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
         }
         crate::workflows::definition::WorkflowDefinition::from_parts(
             "Reader".to_owned(),
+            environment_id,
             base.roles().to_vec(),
             base.first_step().clone(),
             steps,
@@ -1610,6 +1513,7 @@ async fn a_stale_workflow_selection_is_a_conflict() {
             current.revision,
             crate::workflows::definition::WorkflowDefinition::from_parts(
                 "Edited agent".to_owned(),
+                crate::workflows::definition::test_environment_id(),
                 current.definition.roles().to_vec(),
                 current.definition.first_step().clone(),
                 current.definition.steps().to_vec(),
@@ -1655,6 +1559,7 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
             record.revision,
             crate::workflows::definition::WorkflowDefinition::from_parts(
                 "Later name".to_owned(),
+                crate::workflows::definition::test_environment_id(),
                 record.definition.roles().to_vec(),
                 record.definition.first_step().clone(),
                 record.definition.steps().to_vec(),
