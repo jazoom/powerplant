@@ -36,6 +36,10 @@ impl ProviderKind {
     }
 }
 
+pub(crate) fn public_network_policy() -> microsandbox::NetworkPolicy {
+    microsandbox::NetworkPolicy::from_profiles([microsandbox::NetworkProfile::Public])
+}
+
 pub(super) fn provider_policy(host: &str) -> microsandbox::NetworkPolicy {
     let host = host.trim();
     if host.is_empty() {

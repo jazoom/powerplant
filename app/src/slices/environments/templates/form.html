@@ -1,0 +1,143 @@
+<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
+  <div
+    class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+  >
+    <a
+      href="/agents"
+      data-graft
+      class="flex min-w-0 items-center gap-2 rounded-sm"
+    >
+      <img
+        src="/static/images/logo.svg"
+        alt=""
+        width="28"
+        height="28"
+        class="powerplant-mark"
+      />
+      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
+        >Power Plant</span
+      >
+    </a>
+    <nav class="ml-auto flex flex-wrap items-center gap-2">
+      <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
+      <a href="/workflows" data-graft class="btn btn-ghost btn-sm">Workflows</a>
+      <a href="/environments" data-graft class="btn btn-ghost btn-sm"
+        >Environments</a
+      >
+      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
+    </nav>
+  </div>
+</header>
+
+<main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
+  <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
+    {{ title }}
+  </h1>
+  <div id="environment-form">
+    {% block environment_form %}
+      <form
+        data-graft
+        method="post"
+        action="{{ action }}"
+        class="flex flex-col gap-6"
+      >
+        {% if summary_error != "" %}
+          <div class="alert alert-error" role="alert" tabindex="-1">
+            <p>{{ summary_error }}</p>
+          </div>
+        {% endif %}
+        {% if revision != "" %}
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <input
+            type="hidden"
+            name="recipe_version"
+            value="{{ recipe_version }}"
+          />
+        {% endif %}
+        <label class="flex flex-col gap-1">
+          <span class="text-sm">Name</span>
+          <input
+            class="input input-bordered"
+            name="name"
+            required
+            maxlength="80"
+            value="{{ name }}"
+          />
+          {% if name_error != "" %}
+            <p class="text-error text-sm">{{ name_error }}</p>
+          {% endif %}
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-sm">OCI base image</span>
+          <input
+            class="input input-bordered font-mono"
+            name="oci_image"
+            required
+            maxlength="512"
+            value="{{ image }}"
+          />
+          {% if image_error != "" %}
+            <p class="text-error text-sm">{{ image_error }}</p>
+          {% endif %}
+        </label>
+        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
+          <label class="flex flex-col gap-1">
+            <span class="text-sm">Setup script</span>
+            <textarea
+              class="textarea textarea-bordered min-h-64 font-mono"
+              name="setup_script"
+              spellcheck="false"
+              maxlength="65536"
+            >
+{{ script }}</textarea>
+            {% if script_error != "" %}
+              <p class="text-error text-sm">{{ script_error }}</p>
+            {% endif %}
+          </label>
+          <aside class="text-quiet space-y-2 text-sm">
+            <p>Setup uses a new guest.</p>
+            <p>Setup can reach the public internet.</p>
+            <p>Setup cannot access the user project or provider credentials.</p>
+            <p>The image must provide /bin/sh.</p>
+            {% if revision != "" %}
+              <p>A recipe change requests preparation.</p>
+              <p>A name change keeps the active snapshot.</p>
+            {% endif %}
+          </aside>
+        </div>
+        <button class="btn btn-primary self-start" type="submit">
+          {{ submit }}
+        </button>
+      </form>
+      {% if show_delete %}
+        <form
+          data-graft
+          method="post"
+          action="/environments/{{ environment_id }}/delete"
+          class="border-base-300 mt-8 space-y-3 border-t pt-6"
+        >
+          {% if delete_error != "" %}
+            <div class="alert alert-error" role="alert" tabindex="-1">
+              <p>{{ delete_error }}</p>
+            </div>
+          {% endif %}
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <label class="flex items-center gap-2">
+            <input
+              class="checkbox checkbox-sm"
+              type="checkbox"
+              name="confirm"
+            />
+            <span>Delete this environment</span>
+          </label>
+          <button class="btn btn-outline btn-sm" type="submit" formnovalidate>
+            Delete environment
+          </button>
+        </form>
+      {% endif %}
+    {% endblock %}
+  </div>
+  {% if show_status %}
+    <div id="environment-preparation">{{ status_html|safe }}</div>
+  {% endif %}
+</main>

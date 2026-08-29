@@ -32,33 +32,43 @@
 <main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
-      Workflows
+      Environments
     </h1>
-    <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
-      >New workflow</a
+    <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
+      >New environment</a
     >
   </div>
-  {% if workflows.is_empty() %}
+  {% if environments.is_empty() %}
     <div class="border-base-300 space-y-3 rounded-sm border px-4 py-6">
-      <p>Tasks need a workflow before you can send work.</p>
-      <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
-        >New workflow</a
+      <p>Workflows require a prepared environment.</p>
+      <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
+        >New environment</a
       >
     </div>
   {% else %}
     <ul class="space-y-2">
-      {% for workflow in workflows %}
+      {% for environment in environments %}
         <li class="border-base-300 rounded-sm border px-3 py-3">
           <a
-            href="/workflows/{{ workflow.id }}/configuration"
+            href="/environments/{{ environment.id }}/configuration"
             data-graft
             class="link link-hover font-medium"
-            >{{ workflow.name }}</a
+            >{{ environment.name }}</a
           >
-          <p class="text-quiet mt-1 text-xs">
-            {{ workflow.roles }} roles · {{ workflow.steps }} steps ·
-            <span class="font-mono">{{ workflow.version }}</span>
-            · {{ workflow.updated }}
+          <p
+            class="text-quiet mt-1 flex flex-col gap-1 text-xs sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2"
+          >
+            <span class="font-mono break-all">{{ environment.image }}</span>
+            <span
+              class="badge badge-sm {% if environment.readiness_tone == "success" %}badge-success{% else if environment.readiness_tone == "warning" %}badge-warning{% else if environment.readiness_tone == "info" %}badge-info{% else %}badge-ghost{% endif %}"
+              >{{ environment.readiness }}</span
+            >
+            {% if environment.snapshot != "" %}
+              <span class="font-mono break-all"
+                >{{ environment.snapshot }}</span
+              >
+            {% endif %}
+            <span>{{ environment.prepared }}</span>
           </p>
         </li>
       {% endfor %}

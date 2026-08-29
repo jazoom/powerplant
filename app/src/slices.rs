@@ -5,6 +5,7 @@ use crate::state::AppState;
 mod agents;
 mod chat;
 mod connect;
+mod environments;
 mod workflow_runs;
 mod workflows;
 
@@ -17,4 +18,5 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(chat::router())
         .merge(workflow_runs::router())
         .merge(workflows::router())
+        .merge(environments::router())
 }

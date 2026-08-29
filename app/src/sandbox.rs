@@ -14,14 +14,19 @@ mod command;
 mod tests;
 
 pub(crate) use crate::agents::GUEST_PROJECT;
-pub(crate) use access::GuestAccess;
+pub(crate) use access::{GuestAccess, public_network_policy};
 pub(crate) use command::{CommandEvent, CommandSession};
 
 const LEGACY_SANDBOX_NAME: &str = "powerplant";
 const SANDBOX_IMAGE: &str = "alpine/git";
-const SANDBOX_OWNER_LABEL: &str = "works.powerplant.owner";
-const SANDBOX_OWNER_VALUE: &str = "powerplant";
+pub(crate) const SANDBOX_OWNER_LABEL: &str = "works.powerplant.owner";
+pub(crate) const SANDBOX_OWNER_VALUE: &str = "powerplant";
 const SANDBOX_AGENT_LABEL: &str = "works.powerplant.agent";
+pub(crate) const SANDBOX_KIND_LABEL: &str = "works.powerplant.guest-kind";
+pub(crate) const GUEST_KIND_AGENT: &str = "agent";
+pub(crate) const GUEST_KIND_PREPARATION: &str = "preparation";
+pub(crate) const SANDBOX_ENVIRONMENT_LABEL: &str = "works.powerplant.environment";
+pub(crate) const SANDBOX_PREPARATION_LABEL: &str = "works.powerplant.preparation";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GuestStatus {
@@ -207,6 +212,7 @@ enum Overlay {
     Starting,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GuestExec {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
@@ -402,6 +408,7 @@ impl SandboxFleet {
             missing: Mutex::new(inspect_runtime()),
         });
         let orphans = if lock_mutex(&runtime.missing).is_none() {
+            recover_preparation_guests().await;
             collect_orphans(agents).await
         } else {
             Vec::new()
@@ -941,6 +948,7 @@ async fn create_detached(
     let mut builder = microsandbox::Sandbox::builder(name)
         .image(SANDBOX_IMAGE)
         .label(SANDBOX_OWNER_LABEL, SANDBOX_OWNER_VALUE)
+        .label(SANDBOX_KIND_LABEL, GUEST_KIND_AGENT)
         .label(SANDBOX_AGENT_LABEL, id.as_hex())
         .workdir(&spec.workdir)
         .network(|network| network.policy(access::provider_policy(&host)))
@@ -1199,6 +1207,16 @@ async fn collect_orphans(agents: &AgentStore) -> Vec<OrphanSandbox> {
             }
             continue;
         }
+        if config
+            .spec
+            .labels
+            .get(SANDBOX_KIND_LABEL)
+            .map(String::as_str)
+            == Some(GUEST_KIND_PREPARATION)
+        {
+            orphans.push(OrphanSandbox { name });
+            continue;
+        }
         let Some(agent) = config
             .spec
             .labels
@@ -1279,7 +1297,29 @@ fn owns_agent(labels: &BTreeMap<String, String>, id: AgentId) -> bool {
         && labels.get(SANDBOX_AGENT_LABEL).map(String::as_str) == Some(&id.as_hex())
 }
 
-pub(super) fn map_error(
+async fn recover_preparation_guests() {
+    let Ok(handles) = list_owned().await else {
+        return;
+    };
+    for handle in handles {
+        let Ok(config) = handle.config() else {
+            continue;
+        };
+        if config
+            .spec
+            .labels
+            .get(SANDBOX_KIND_LABEL)
+            .map(String::as_str)
+            != Some(GUEST_KIND_PREPARATION)
+        {
+            continue;
+        }
+        let name = handle.name().to_owned();
+        let _ = remove_named(&name).await;
+    }
+}
+
+pub(crate) fn map_error(
     error: microsandbox::MicrosandboxError,
     failed: SandboxError,
 ) -> SandboxError {
@@ -1339,7 +1379,7 @@ fn layer_phrase(index: usize, layers: usize) -> String {
     }
 }
 
-fn inspect_runtime() -> Option<MissingRuntime> {
+pub(crate) fn inspect_runtime() -> Option<MissingRuntime> {
     if microsandbox::setup::is_installed() {
         return None;
     }

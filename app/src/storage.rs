@@ -87,6 +87,141 @@ fn restrict_file_permissions(file: &File) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) const LOG_LIMIT_BYTES: u64 = 1024 * 1024;
+const LOG_PREFIX_BYTES: usize = 256 * 1024;
+const LOG_SUFFIX_BYTES: usize = 256 * 1024;
+pub(crate) const LOG_TRUNCATION_MARKER: &[u8] = b"\n--- log truncated ---\n";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LogState {
+    pub(crate) captured_bytes: u64,
+    pub(crate) truncated: bool,
+}
+
+pub(crate) fn confined_child(root: &Path, name: &str) -> Result<PathBuf, PersistError> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(PersistError);
+    }
+    if name
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'/' | b'\\' | 0))
+    {
+        return Err(PersistError);
+    }
+    let path = root.join(name);
+    if path.parent() != Some(root) {
+        return Err(PersistError);
+    }
+    Ok(path)
+}
+
+pub(crate) fn create_private_file(path: &Path) -> Result<(), PersistError> {
+    let dir = path.parent().ok_or(PersistError)?;
+    ensure_private_dir(dir)?;
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => restrict_file_permissions(&file).map_err(|_| PersistError),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(_) => Err(PersistError),
+    }
+}
+
+pub(crate) struct BoundedLogger {
+    path: PathBuf,
+    captured_bytes: u64,
+    truncated: bool,
+    prefix: Vec<u8>,
+    suffix: Vec<u8>,
+}
+
+impl BoundedLogger {
+    pub(crate) fn create(path: PathBuf) -> Result<Self, PersistError> {
+        create_private_file(&path)?;
+        Ok(Self {
+            path,
+            captured_bytes: 0,
+            truncated: false,
+            prefix: Vec::new(),
+            suffix: Vec::new(),
+        })
+    }
+
+    pub(crate) fn state(&self) -> LogState {
+        LogState {
+            captured_bytes: self.captured_bytes,
+            truncated: self.truncated,
+        }
+    }
+
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> Result<LogState, PersistError> {
+        if bytes.is_empty() {
+            return Ok(self.state());
+        }
+        let new_total = self
+            .captured_bytes
+            .checked_add(bytes.len() as u64)
+            .ok_or(PersistError)?;
+        if !self.truncated && new_total <= LOG_LIMIT_BYTES {
+            append_private(&self.path, bytes)?;
+            if self.prefix.len() < LOG_PREFIX_BYTES {
+                let take = (LOG_PREFIX_BYTES - self.prefix.len()).min(bytes.len());
+                self.prefix.extend_from_slice(&bytes[..take]);
+            }
+            self.suffix.extend_from_slice(bytes);
+            if self.suffix.len() > LOG_SUFFIX_BYTES {
+                let extra = self.suffix.len() - LOG_SUFFIX_BYTES;
+                self.suffix.drain(..extra);
+            }
+            self.captured_bytes = new_total;
+            return Ok(self.state());
+        }
+        if !self.truncated {
+            if self.prefix.is_empty() {
+                self.prefix = fs::read(&self.path).map_err(|_| PersistError)?;
+                if self.prefix.len() > LOG_PREFIX_BYTES {
+                    self.prefix.truncate(LOG_PREFIX_BYTES);
+                }
+            }
+            self.suffix.extend_from_slice(bytes);
+            if self.suffix.len() > LOG_SUFFIX_BYTES {
+                let extra = self.suffix.len() - LOG_SUFFIX_BYTES;
+                self.suffix.drain(..extra);
+            }
+            self.truncated = true;
+            self.captured_bytes = new_total;
+            self.rewrite_truncated()?;
+            return Ok(self.state());
+        }
+        self.suffix.extend_from_slice(bytes);
+        if self.suffix.len() > LOG_SUFFIX_BYTES {
+            let extra = self.suffix.len() - LOG_SUFFIX_BYTES;
+            self.suffix.drain(..extra);
+        }
+        self.captured_bytes = new_total;
+        self.rewrite_truncated()?;
+        Ok(self.state())
+    }
+
+    fn rewrite_truncated(&self) -> Result<(), PersistError> {
+        let mut bytes =
+            Vec::with_capacity(self.prefix.len() + LOG_TRUNCATION_MARKER.len() + self.suffix.len());
+        bytes.extend_from_slice(&self.prefix);
+        bytes.extend_from_slice(LOG_TRUNCATION_MARKER);
+        bytes.extend_from_slice(&self.suffix);
+        write_private(&self.path, &bytes)
+    }
+}
+
+fn append_private(path: &Path, bytes: &[u8]) -> Result<(), PersistError> {
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|_| PersistError)?;
+    restrict_file_permissions(&file).map_err(|_| PersistError)?;
+    file.write_all(bytes).map_err(|_| PersistError)?;
+    file.sync_all().map_err(|_| PersistError)
+}
+
 fn restrict_dir_permissions(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {

@@ -4,6 +4,9 @@ use crate::{
     agents::{AgentLeaseCoordinator, AgentStore},
     assets::AssetPaths,
     config::{RuntimeConfig, StartupConfig},
+    environments::{
+        EnvironmentCatalogue, EnvironmentPreparationScheduler, EnvironmentSnapshotRepository,
+    },
     models::ModelCatalogue,
     plan_login::PlanLogin,
     providers::ChatBackend,
@@ -28,6 +31,9 @@ pub(crate) struct AppState {
     pub(crate) workflows: Arc<WorkflowCatalogue>,
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
+    pub(crate) environments: Arc<EnvironmentCatalogue>,
+    pub(crate) environment_snapshots: Arc<EnvironmentSnapshotRepository>,
+    pub(crate) environment_preparations: Arc<EnvironmentPreparationScheduler>,
     #[cfg(test)]
     pub(crate) scratch: Arc<std::sync::Mutex<Vec<tempfile::TempDir>>>,
 }
@@ -42,7 +48,32 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         .map_err(|error| error.message().to_owned())?;
     let workflow_runs = WorkflowRunStore::open(config.data_dir.join("workflow-runs"))
         .map_err(|error| error.message().to_owned())?;
+    let environments = EnvironmentCatalogue::open(
+        config.data_dir.join("environments.json"),
+        config.data_dir.join("environment-preparation-logs"),
+    )
+    .map_err(|error| error.message().to_owned())?;
+    let environment_snapshots =
+        EnvironmentSnapshotRepository::open(config.data_dir.join("environment-snapshots"))
+            .map_err(|_| "The environment snapshot store is unreadable.".to_owned())?;
     let sandboxes = SandboxFleet::prepare(&agents).await;
+    for environment in environments.list() {
+        let Some(ready) = environment.ready_preparation else {
+            continue;
+        };
+        let Some(preparation) = environments.preparation(&ready) else {
+            continue;
+        };
+        let Some(snapshot) = preparation.snapshot else {
+            continue;
+        };
+        let _ = environment_snapshots.inspect(&snapshot).await;
+    }
+    let environments = Arc::new(environments);
+    let environment_snapshots = Arc::new(environment_snapshots);
+    let environment_preparations =
+        EnvironmentPreparationScheduler::start(environments.clone(), environment_snapshots.clone());
+    environment_preparations.wake();
     Ok(AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
@@ -57,6 +88,9 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         workflows: Arc::new(workflows),
         workflow_runs: Arc::new(workflow_runs),
         workflow_execution: Arc::new(WorkflowExecution::new()),
+        environments,
+        environment_snapshots,
+        environment_preparations,
         #[cfg(test)]
         scratch: Arc::new(std::sync::Mutex::new(Vec::new())),
     })
@@ -64,6 +98,10 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
 
 #[cfg(test)]
 pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
+    let environments = Arc::new(EnvironmentCatalogue::in_memory());
+    let environment_snapshots = Arc::new(EnvironmentSnapshotRepository::in_memory());
+    let environment_preparations =
+        EnvironmentPreparationScheduler::idle(environments.clone(), environment_snapshots.clone());
     AppState {
         config: Arc::new(config),
         assets: Arc::new(AssetPaths {
@@ -83,6 +121,9 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         workflows: Arc::new(WorkflowCatalogue::in_memory()),
         workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
         workflow_execution: Arc::new(WorkflowExecution::new()),
+        environments,
+        environment_snapshots,
+        environment_preparations,
         scratch: Arc::new(std::sync::Mutex::new(Vec::new())),
     }
 }

@@ -3,6 +3,7 @@
 mod agents;
 mod assets;
 mod config;
+mod environments;
 mod error;
 mod markdown;
 mod models;

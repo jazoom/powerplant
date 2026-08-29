@@ -80,3 +80,57 @@ fn a_read_only_parent_does_not_replace_the_destination() {
     assert!(failed.is_err());
     assert_eq!(fs::read(&path).expect("read"), b"keep");
 }
+
+#[test]
+fn confined_child_rejects_separators_and_dot_components() {
+    let dir = tempfile::tempdir().expect("dir");
+    let root = dir.path();
+    assert!(super::confined_child(root, "abc").is_ok());
+    assert!(super::confined_child(root, "").is_err());
+    assert!(super::confined_child(root, ".").is_err());
+    assert!(super::confined_child(root, "..").is_err());
+    assert!(super::confined_child(root, "a/b").is_err());
+    assert!(super::confined_child(root, "a\\b").is_err());
+    assert!(super::confined_child(root, "a\0b").is_err());
+}
+
+#[test]
+fn bounded_logger_appends_until_the_byte_limit_then_truncates() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("prep.log");
+    let mut logger = super::BoundedLogger::create(path.clone()).expect("create");
+    logger.append(b"hello\n").expect("append");
+    assert_eq!(fs::read(&path).expect("read"), b"hello\n");
+    assert!(!logger.state().truncated);
+    let chunk = vec![b'x'; super::LOG_LIMIT_BYTES as usize];
+    let state = logger.append(&chunk).expect("overflow");
+    assert!(state.truncated);
+    let bytes = fs::read(&path).expect("truncated");
+    assert!(bytes.starts_with(b"hello\n"));
+    assert!(
+        bytes
+            .windows(super::LOG_TRUNCATION_MARKER.len())
+            .any(|window| window == super::LOG_TRUNCATION_MARKER)
+    );
+    logger.append(b"tail-bytes").expect("later");
+    let later = fs::read(&path).expect("later read");
+    assert!(later.ends_with(b"tail-bytes"));
+    assert!(
+        later
+            .windows(super::LOG_TRUNCATION_MARKER.len())
+            .any(|window| window == super::LOG_TRUNCATION_MARKER)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_logger_uses_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("prep.log");
+    let mut logger = super::BoundedLogger::create(path.clone()).expect("create");
+    logger.append(b"secret").expect("append");
+    let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}

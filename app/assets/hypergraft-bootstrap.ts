@@ -8,6 +8,7 @@ import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initJobObserve } from "./job-observe";
+import { initEnvironmentPreparation } from "./environment-preparation";
 import { initSandboxStatus } from "./sandbox-status";
 import { initTranscript } from "./transcript";
 
@@ -26,6 +27,7 @@ startHypergraft({
         "connect-errors": initConnectErrors,
         "connect-plan": initConnectPlan,
         "desk-settings": initDeskSettings,
+        "environment-preparation": initEnvironmentPreparation,
         "job-observe": initJobObserve,
         "sandbox-status": initSandboxStatus,
         "shortcut-hint": initShortcutHint,

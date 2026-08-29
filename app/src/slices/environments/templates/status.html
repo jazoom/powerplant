@@ -1,0 +1,99 @@
+<section
+  class="space-y-4"
+  {% if active %}
+    data-island="environment-preparation" data-preparation-active="true"
+  {% endif %}
+>
+  <h2 class="text-base font-semibold">Preparation</h2>
+  <p
+    class="badge {% if readiness_tone == "success" %}badge-success{% else if readiness_tone == "warning" %}badge-warning{% else if readiness_tone == "info" %}badge-info{% else %}badge-ghost{% endif %}"
+  >
+    {{ readiness }}
+  </p>
+  {% if let Some(snapshot) = snapshot %}
+    <div class="border-base-300 space-y-1 rounded-sm border px-3 py-3">
+      <h3 class="text-sm font-semibold">Active snapshot</h3>
+      <p class="font-mono text-xs break-all">{{ snapshot.digest }}</p>
+      <p class="text-quiet font-mono text-xs break-all">{{ snapshot.image }}</p>
+      <p class="text-quiet font-mono text-xs break-all">
+        {{ snapshot.integrity }}
+      </p>
+      <p class="text-quiet text-xs">{{ snapshot.size }} bytes</p>
+    </div>
+  {% endif %}
+  <p class="text-quiet text-sm">
+    {% if phase != "" %}
+      {{ phase }}.
+    {% endif %}
+    Requested {{ requested }}
+    {% if started != "" %}
+      · started {{ started }}
+    {% endif %}
+    {% if finished != "" %}
+      · finished {{ finished }}
+    {% endif %}
+  </p>
+  {% if failure != "" %}
+    <div class="alert alert-error" role="alert" tabindex="-1">
+      <p>{{ failure }}</p>
+    </div>
+  {% endif %}
+  {% if log_truncated %}
+    <p class="text-quiet text-sm">The log reached its size bound.</p>
+  {% endif %}
+  <pre
+    class="border-base-300 bg-base-200 max-h-80 overflow-auto rounded-sm border p-3 font-mono text-xs whitespace-pre-wrap"
+  >
+{{ log_tail }}</pre>
+  <form
+    data-graft
+    method="get"
+    action="/environments/{{ environment_id }}/configuration"
+  >
+    <input type="hidden" name="cursor" value="{{ cursor }}" />
+    <button class="btn btn-outline btn-sm" type="submit">Refresh</button>
+  </form>
+  {% if can_retry %}
+    <form
+      data-graft
+      method="post"
+      action="/environments/{{ environment_id }}/prepare"
+    >
+      <input type="hidden" name="revision" value="{{ revision }}" />
+      <input type="hidden" name="recipe_version" value="{{ recipe_version }}" />
+      <button class="btn btn-outline btn-sm" type="submit">
+        Prepare again
+      </button>
+    </form>
+  {% endif %}
+  <h3 class="text-sm font-semibold">History</h3>
+  {% if omitted > 0 %}
+    <p class="text-quiet text-sm">
+      {{ omitted }} older preparations are omitted.
+    </p>
+  {% endif %}
+  <div class="overflow-x-auto">
+    <table class="table-sm table">
+      <thead>
+        <tr>
+          <th>Ordinal</th>
+          <th>Version</th>
+          <th>Status</th>
+          <th>Time</th>
+          <th>Digest</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in history %}
+          <tr>
+            <td>{{ item.ordinal }}</td>
+            <td class="font-mono">{{ item.version }}</td>
+            <td>{{ item.status }}</td>
+            <td>{{ item.timestamp }}</td>
+            <td class="font-mono">{{ item.digest }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>

@@ -62,6 +62,15 @@ fn provider_policy_denies_other_hosts() {
 }
 
 #[test]
+fn public_policy_allows_public_destinations_and_denies_host_and_private_groups() {
+    let policy = super::public_network_policy();
+    assert_eq!(policy.default_egress, microsandbox::NetworkAction::Deny);
+    let rules = format!("{:?}", policy.rules);
+    assert!(rules.contains("Public"));
+    assert!(!rules.contains("Group(Private)"));
+}
+
+#[test]
 fn empty_host_denies_all_traffic() {
     let policy = provider_policy("");
     assert!(policy.rules.is_empty());
