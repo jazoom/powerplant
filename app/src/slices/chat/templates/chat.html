@@ -392,6 +392,13 @@
               >Manage workflows</a
             >
           </form>
+          {% for option in workflow_options %}
+            {% if option.selected %}
+              <p class="text-quiet mb-3 text-sm">
+                Review policy: {{ option.policy }}
+              </p>
+            {% endif %}
+          {% endfor %}
           {% if environment_preview_error != "" %}
             <p class="text-error mb-3 text-sm">
               {{ environment_preview_error }}

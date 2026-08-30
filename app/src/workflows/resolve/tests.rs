@@ -1,11 +1,11 @@
 use super::{ResolveEnvironmentError, resolve_environments};
-use crate::agents::{AccessMode, ToolId};
+use crate::agents::ToolId;
 use crate::environments::snapshot::tests_support::sample_snapshot;
 use crate::environments::{
     EnvironmentCatalogue, EnvironmentDraft, EnvironmentSnapshotRepository, SnapshotAvailability,
 };
 use crate::workflows::definition::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind,
+    ASSISTANT_REPLY, AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind,
     RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
     test_environment_id,
@@ -27,14 +27,7 @@ fn definition(default: crate::environments::EnvironmentId) -> WorkflowDefinition
         String::new(),
     )
     .expect("role");
-    let authority = AgentAuthority::new(
-        vec![ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority");
+    let authority = AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority");
     WorkflowDefinition::from_parts(
         "One step".to_owned(),
         default,
@@ -47,6 +40,7 @@ fn definition(default: crate::environments::EnvironmentId) -> WorkflowDefinition
             action: StepAction::Agent(AgentStep {
                 environment: StepEnvironment::WorkflowDefault,
                 role: RoleKey::parse("agent").expect("role"),
+                candidate_authority: CandidateAuthority::Edit,
                 authority,
                 required_outputs: vec![
                     RequiredOutput {

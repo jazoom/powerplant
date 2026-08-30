@@ -8,7 +8,9 @@ use crate::sessions::{Job, JobStatus, SessionId};
 use crate::slices::{AgentOutcome, AgentRunSpec};
 use crate::state::AppState;
 
-use super::definition::{AgentAuthority, AgentStep, StepAction, StepDefinition, SystemCommandId};
+use super::definition::{
+    AgentAuthority, AgentStep, CandidateAuthority, StepAction, StepDefinition, SystemCommandId,
+};
 use super::execution::ExecutionGuard;
 use super::id::{AttemptId, RunId};
 use super::run::{FailureCategory, now_ms};
@@ -32,6 +34,7 @@ pub(crate) struct WorkflowJob {
     pub(crate) host_policy: DirectoryPolicy,
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Arc<Job>,
+    pub(crate) eligible_reply: Arc<std::sync::Mutex<String>>,
 }
 
 pub(crate) async fn execute_run(
@@ -230,13 +233,25 @@ pub(crate) async fn execute_run(
             }
             return;
         }
+        let atomic_agent_publication = matches!(step.action, StepAction::Agent(_))
+            && matches!(outcome, StepOutcome::Completed)
+            && cleanup == crate::workflows::run::AttemptCleanupRecord::Complete;
+        if atomic_agent_publication
+            && persist_cleanup(&state, &job.run_id, attempt_id, cleanup.clone()).is_err()
+        {
+            fail_operational(&state, &job);
+            return;
+        }
         let mut published = false;
         if matches!(outcome, StepOutcome::Completed) {
             match publish_success(
                 &state,
                 &job,
                 &step,
-                attempt_id,
+                SuccessAttempt {
+                    id: attempt_id,
+                    complete: atomic_agent_publication,
+                },
                 &inputs,
                 &drafts,
                 captured.as_ref(),
@@ -296,9 +311,20 @@ pub(crate) async fn execute_run(
                 };
             }
         }
-        if persist_cleanup(&state, &job.run_id, attempt_id, cleanup).is_err() {
+        if !atomic_agent_publication
+            && persist_cleanup(&state, &job.run_id, attempt_id, cleanup).is_err()
+        {
             fail_operational(&state, &job);
             return;
+        }
+        if atomic_agent_publication && published {
+            if let Some(run) = state.workflow_runs.get(&job.run_id)
+                && run.is_terminal()
+            {
+                settle_job(&state, &job, JobStatus::Completed, None);
+                return;
+            }
+            continue;
         }
         if let Err(error) = finalise_attempt(
             &state,
@@ -1220,7 +1246,11 @@ async fn run_agent_step(
             };
         }
     }
-    let policy = match intersect_authority(&action.authority, &job.host_policy) {
+    let policy = match intersect_authority(
+        action.candidate_authority,
+        &action.authority,
+        &job.host_policy,
+    ) {
         Ok(policy) => policy,
         Err(()) => {
             return StepOutcome::Failed {
@@ -1310,6 +1340,11 @@ async fn run_agent_step(
         job.job.clone(),
     )
     .await;
+    if ended.outcome == AgentOutcome::Completed {
+        *job.eligible_reply
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ended.reply.clone();
+    }
     match ended.outcome {
         AgentOutcome::Completed => StepOutcome::Completed,
         AgentOutcome::ProviderFailure => StepOutcome::Failed {
@@ -1496,10 +1531,24 @@ pub(crate) fn guest_command(command: SystemCommandId) -> GuestExec {
 }
 
 fn intersect_authority(
+    candidate_authority: CandidateAuthority,
     authority: &AgentAuthority,
     host: &DirectoryPolicy,
 ) -> Result<DirectoryPolicy, ()> {
-    let mut grants = Vec::new();
+    let primary = host
+        .grants()
+        .iter()
+        .find(|grant| grant.alias == host.primary_alias())
+        .ok_or(())?;
+    if candidate_authority.access().is_writable() && !primary.access.is_writable() {
+        return Err(());
+    }
+    let mut grants = vec![PolicyGrant {
+        alias: primary.alias.clone(),
+        guest_path: primary.guest_path.clone(),
+        host_path: primary.host_path.clone(),
+        access: candidate_authority.access(),
+    }];
     for directory in &authority.directories {
         let Some(host_grant) = host
             .grants()
@@ -1518,18 +1567,10 @@ fn intersect_authority(
             access: min_access(directory.access, host_grant.access),
         });
     }
-    if grants.is_empty() {
-        return Err(());
-    }
-    let primary = if grants
-        .iter()
-        .any(|grant| grant.alias == host.primary_alias())
-    {
-        host.primary_alias().to_owned()
-    } else {
-        grants[0].alias.clone()
-    };
-    Ok(DirectoryPolicy::from_grants(grants, primary))
+    Ok(DirectoryPolicy::from_grants(
+        grants,
+        host.primary_alias().to_owned(),
+    ))
 }
 
 fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
@@ -1630,7 +1671,6 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
         {
             "Plan"
         }
-        StepAction::Agent(_) if step.writes_primary_source() => "Implement",
         StepAction::Agent(action)
             if action.required_outputs.iter().any(|output| {
                 output.kind == crate::workflows::definition::OutputKind::ReviewReport
@@ -1638,6 +1678,7 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
         {
             "Review"
         }
+        StepAction::Agent(_) if step.writes_primary_source() => "Implement",
         _ => step.name.as_str(),
     };
     if position.is_empty() {
@@ -1988,15 +2029,24 @@ fn record_unknown_observed(
         .map(|_| ())
 }
 
+struct SuccessAttempt {
+    id: AttemptId,
+    complete: bool,
+}
+
 fn publish_success(
     state: &AppState,
     job: &WorkflowJob,
     step: &StepDefinition,
-    attempt_id: AttemptId,
+    attempt: SuccessAttempt,
     inputs: &[super::run::AttemptArtefactInput],
     drafts: &std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>,
     captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
 ) -> Result<(), &'static str> {
+    let SuccessAttempt {
+        id: attempt_id,
+        complete: complete_attempt,
+    } = attempt;
     let captured = captured.ok_or("Power Plant could not capture isolated outputs.")?;
     let writes = step.writes_primary_source();
     let produces_candidate = writes
@@ -2080,6 +2130,33 @@ fn publish_success(
         let Some(draft) = held.take(&output.key) else {
             return Err("A required output is missing.");
         };
+        let fixing_report_inputs;
+        let provenance_inputs = if output.kind
+            == crate::workflows::definition::OutputKind::ReviewReport
+            && step.writes_primary_source()
+        {
+            let produced = accepted
+                .clone()
+                .ok_or("A fixing review needs a produced candidate revision.")?;
+            fixing_report_inputs = std::iter::once(super::run::AttemptArtefactInput {
+                key: crate::workflows::definition::InputKey::parse("candidate")
+                    .map_err(|_| OPERATIONAL_STORE_ERROR)?,
+                artefact: produced,
+            })
+            .chain(
+                inputs
+                    .iter()
+                    .filter(|input| {
+                        input.artefact.kind
+                            != crate::workflows::definition::ArtefactKind::CandidateRevision
+                    })
+                    .cloned(),
+            )
+            .collect::<Vec<_>>();
+            fixing_report_inputs.as_slice()
+        } else {
+            inputs
+        };
         let record = publish_draft(
             state,
             job,
@@ -2088,7 +2165,7 @@ fn publish_success(
             output,
             draft,
             candidate_hash,
-            inputs,
+            provenance_inputs,
             secret.as_deref(),
         )?;
         outputs.push(super::run::AttemptArtefactOutput {
@@ -2105,7 +2182,11 @@ fn publish_success(
     state
         .workflow_runs
         .mutate(&job.run_id, |run| {
-            run.record_attempt_outputs(attempt_id, artefacts, outputs, accepted, observed)
+            run.record_attempt_outputs(attempt_id, artefacts, outputs, accepted, observed)?;
+            if complete_attempt {
+                run.complete_attempt(attempt_id, now_ms())?;
+            }
+            Ok(())
         })
         .map(|_| ())
         .map_err(|_| OPERATIONAL_STORE_ERROR)
@@ -2318,16 +2399,28 @@ fn fail_operational(state: &AppState, workflow: &WorkflowJob) {
 }
 
 fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error: Option<&str>) {
-    settle_transient_job(
+    let eligible = workflow
+        .eligible_reply
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let reply = if eligible.is_empty() {
+        workflow.job.snapshot().output
+    } else {
+        eligible
+    };
+    settle_with_reply(
         state,
         &workflow.session_id,
         &workflow.agent_id,
         &workflow.job,
         status,
         error,
+        &reply,
     );
 }
 
+#[cfg(test)]
 fn settle_transient_job(
     state: &AppState,
     session_id: &SessionId,
@@ -2336,9 +2429,32 @@ fn settle_transient_job(
     status: JobStatus,
     error: Option<&str>,
 ) {
-    let _ = state
-        .sessions
-        .fail_turn(session_id, agent_id, &job.id(), String::new());
+    let reply = job.snapshot().output;
+    settle_with_reply(state, session_id, agent_id, job, status, error, &reply);
+}
+
+fn settle_with_reply(
+    state: &AppState,
+    session_id: &SessionId,
+    agent_id: &crate::agents::AgentId,
+    job: &Job,
+    status: JobStatus,
+    error: Option<&str>,
+    reply: &str,
+) {
+    let reply = crate::slices::bound_reply(reply).to_owned();
+    match status {
+        JobStatus::Completed => {
+            let _ = state
+                .sessions
+                .finish_turn(session_id, agent_id, &job.id(), reply);
+        }
+        _ => {
+            let _ = state
+                .sessions
+                .fail_turn(session_id, agent_id, &job.id(), reply);
+        }
+    }
     let _ = job.finish(status, error);
 }
 

@@ -1,8 +1,8 @@
 use super::{
     ONE_AGENT_V1, SEQUENTIAL_TEAM_V1, SeedKey, WorkflowSeed, one_agent_definition,
-    sequential_team_definition,
+    review_with_fixes_definition, sequential_team_definition,
 };
-use crate::agents::{AccessMode, ToolId};
+use crate::agents::ToolId;
 use crate::workflows::catalogue::WorkflowCatalogue;
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 use crate::workflows::definition::{
@@ -39,13 +39,18 @@ fn first_open_seeds_ordinary_workflows_once() {
     let first = WorkflowCatalogue::open(path.clone(), test_environment_id()).expect("open");
     assert_eq!(
         names(&first),
-        vec!["One agent".to_owned(), "Sequential team".to_owned()]
+        vec![
+            "One agent".to_owned(),
+            "Read-only review".to_owned(),
+            "Review with fixes".to_owned(),
+            "Sequential team".to_owned(),
+        ]
     );
-    assert_eq!(first.applied_seed_count(), 2);
+    assert_eq!(first.applied_seed_count(), 4);
     let ids: Vec<_> = first.list().into_iter().map(|record| record.id).collect();
     let second = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
-    assert_eq!(second.list().len(), 2);
-    assert_eq!(second.applied_seed_count(), 2);
+    assert_eq!(second.list().len(), 4);
+    assert_eq!(second.applied_seed_count(), 4);
     let reopened: Vec<_> = second.list().into_iter().map(|record| record.id).collect();
     assert_eq!(reopened, ids);
 }
@@ -66,7 +71,7 @@ fn restart_preserves_an_edited_seeded_workflow() {
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     let loaded = reopened.get(&seeded.id).expect("loaded");
     assert_eq!(loaded.definition.name(), "Edited team");
-    assert_eq!(reopened.applied_seed_count(), 2);
+    assert_eq!(reopened.applied_seed_count(), 4);
 }
 
 #[test]
@@ -82,13 +87,18 @@ fn restart_does_not_restore_a_deleted_seeded_workflow() {
     catalogue
         .delete(&seeded.id, seeded.revision)
         .expect("delete");
-    assert_eq!(names(&catalogue), vec!["One agent".to_owned()]);
+    let remaining = vec![
+        "One agent".to_owned(),
+        "Read-only review".to_owned(),
+        "Review with fixes".to_owned(),
+    ];
+    assert_eq!(names(&catalogue), remaining);
     assert!(catalogue.retired_ids().contains(&seeded.id));
-    assert_eq!(catalogue.applied_seed_count(), 2);
+    assert_eq!(catalogue.applied_seed_count(), 4);
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
-    assert_eq!(names(&reopened), vec!["One agent".to_owned()]);
+    assert_eq!(names(&reopened), remaining);
     assert!(reopened.retired_ids().contains(&seeded.id));
-    assert_eq!(reopened.applied_seed_count(), 2);
+    assert_eq!(reopened.applied_seed_count(), 4);
 }
 
 #[test]
@@ -107,7 +117,12 @@ fn a_present_seed_key_is_not_reapplied_from_code() {
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("production reopen");
     assert_eq!(
         names(&reopened),
-        vec!["Custom".to_owned(), "Sequential team".to_owned()]
+        vec![
+            "Custom".to_owned(),
+            "Read-only review".to_owned(),
+            "Review with fixes".to_owned(),
+            "Sequential team".to_owned(),
+        ]
     );
 }
 
@@ -172,7 +187,11 @@ fn sequential_team_authority_and_handoff_match_the_validator() {
         action.authority.tools,
         vec![ToolId::List, ToolId::Read, ToolId::Run]
     );
-    assert_eq!(action.authority.directories[0].access, AccessMode::ReadOnly);
+    assert_eq!(
+        action.candidate_authority,
+        crate::workflows::definition::CandidateAuthority::ReadOnly
+    );
+    assert!(action.authority.directories.is_empty());
     assert_eq!(
         planner.inputs[0].source,
         ArtefactSource::RunInitialCandidate
@@ -192,9 +211,10 @@ fn sequential_team_authority_and_handoff_match_the_validator() {
     };
     assert_eq!(action.authority.tools, ToolId::ALL.to_vec());
     assert_eq!(
-        action.authority.directories[0].access,
-        AccessMode::ReadWrite
+        action.candidate_authority,
+        crate::workflows::definition::CandidateAuthority::Edit
     );
+    assert!(action.authority.directories.is_empty());
     assert!(implementer.inputs.iter().any(|input| {
         input.kind == ArtefactKind::Plan
             && matches!(
@@ -209,7 +229,11 @@ fn sequential_team_authority_and_handoff_match_the_validator() {
     let StepAction::Agent(action) = &reviewer.action else {
         panic!("reviewer");
     };
-    assert_eq!(action.authority.directories[0].access, AccessMode::ReadOnly);
+    assert_eq!(
+        action.candidate_authority,
+        crate::workflows::definition::CandidateAuthority::ReadOnly
+    );
+    assert!(action.authority.directories.is_empty());
     assert!(
         action
             .required_outputs
@@ -232,6 +256,49 @@ fn sequential_team_authority_and_handoff_match_the_validator() {
         action.required_outputs[0].key.as_str(),
         "committed-candidate"
     );
+}
+
+#[test]
+fn review_with_fixes_uses_exact_independent_review_edges() {
+    let definition = review_with_fixes_definition(test_environment_id());
+    let independent = definition
+        .step(&crate::workflows::definition::StepKey::parse("independent-reviewer").expect("key"))
+        .expect("independent reviewer");
+    assert!(independent.inputs.iter().any(|input| {
+        input.kind == ArtefactKind::CandidateRevision
+            && matches!(
+                &input.source,
+                ArtefactSource::StepOutput { step, output }
+                    if step.as_str() == "fixing-reviewer" && output.as_str() == "candidate"
+            )
+    }));
+    assert!(independent.inputs.iter().any(|input| {
+        input.kind == ArtefactKind::ReviewReport
+            && matches!(
+                &input.source,
+                ArtefactSource::StepOutput { step, output }
+                    if step.as_str() == "fixing-reviewer" && output.as_str() == "review"
+            )
+    }));
+    let commit = definition
+        .step(&crate::workflows::definition::StepKey::parse("commit").expect("key"))
+        .expect("commit");
+    assert!(commit.inputs.iter().any(|input| {
+        input.kind == ArtefactKind::CandidateRevision
+            && matches!(
+                &input.source,
+                ArtefactSource::StepOutput { step, output }
+                    if step.as_str() == "fixing-reviewer" && output.as_str() == "candidate"
+            )
+    }));
+    assert!(commit.inputs.iter().any(|input| {
+        input.kind == ArtefactKind::ReviewReport
+            && matches!(
+                &input.source,
+                ArtefactSource::StepOutput { step, output }
+                    if step.as_str() == "independent-reviewer" && output.as_str() == "review"
+            )
+    }));
 }
 
 #[test]

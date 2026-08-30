@@ -9,7 +9,7 @@ use super::id::WorkflowId;
 
 pub(crate) use super::commands::SystemCommandId;
 
-pub(crate) const DEFINITION_FORMAT_VERSION: u32 = 1;
+pub(crate) const DEFINITION_FORMAT_VERSION: u32 = 2;
 pub(crate) const MAXIMUM_NAME_BYTES: usize = 80;
 pub(crate) const MAXIMUM_EXPERTISE_BYTES: usize = 4_096;
 pub(crate) const MAXIMUM_PROMPT_DEFAULTS_BYTES: usize = 32_768;
@@ -60,8 +60,46 @@ pub(crate) enum StepAction {
 pub(crate) struct AgentStep {
     pub(crate) role: RoleKey,
     pub(crate) environment: StepEnvironment,
+    pub(crate) candidate_authority: CandidateAuthority,
     pub(crate) authority: AgentAuthority,
     pub(crate) required_outputs: Vec<RequiredOutput>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CandidateAuthority {
+    ReadOnly,
+    Edit,
+}
+
+impl CandidateAuthority {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "read-only" => Some(Self::ReadOnly),
+            "edit-candidate" => Some(Self::Edit),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Edit => "edit-candidate",
+        }
+    }
+
+    pub(crate) fn access(self) -> AccessMode {
+        match self {
+            Self::ReadOnly => AccessMode::ReadOnly,
+            Self::Edit => AccessMode::ReadWrite,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "Read-only",
+            Self::Edit => "Can edit candidate",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,7 +243,7 @@ impl DefinitionError {
             Self::RoleCount => "Add at most 16 roles.",
             Self::StepCount => "Add between one and 32 steps.",
             Self::OutputCount => "Add at most eight required outputs for each step.",
-            Self::DirectoryCount => "Add between one and eight directory grants.",
+            Self::DirectoryCount => "Add at most eight secondary directory grants.",
             Self::DuplicateRole => "Role keys must be unique.",
             Self::DuplicateStep => "Step keys must be unique.",
             Self::DuplicateOutput => "Output keys must be unique in a step.",
@@ -221,7 +259,7 @@ impl DefinitionError {
                 "Each sandbox-backed step needs exactly one latest candidate input."
             }
             Self::CandidateOutput => {
-                "A source-write step must produce exactly one candidate revision."
+                "Candidate access does not match the candidate revision outputs."
             }
             Self::AssuranceInput => {
                 "A step that uses an assurance artefact also needs a candidate input."
@@ -289,6 +327,8 @@ enum ActionFile {
     Agent {
         role: String,
         environment: StepEnvironmentFile,
+        #[serde(rename = "candidate-authority")]
+        candidate_authority: String,
         authority: AuthorityFile,
         #[serde(rename = "required-outputs")]
         required_outputs: Vec<OutputFile>,
@@ -514,12 +554,13 @@ impl StepDefinition {
     }
 
     pub(crate) fn writes_primary_source(&self) -> bool {
-        match &self.action {
-            StepAction::Agent(action) => action.authority.directories.iter().any(|directory| {
-                directory.alias == PRIMARY_SOURCE_ALIAS && directory.access.is_writable()
-            }),
-            StepAction::SystemCommand(_) => false,
-        }
+        matches!(
+            &self.action,
+            StepAction::Agent(AgentStep {
+                candidate_authority: CandidateAuthority::Edit,
+                ..
+            })
+        )
     }
 
     pub(crate) fn command_source_effect(&self) -> Option<CommandSourceEffect> {
@@ -562,11 +603,14 @@ impl StepAction {
             ActionFile::Agent {
                 role,
                 environment,
+                candidate_authority,
                 authority,
                 required_outputs,
             } => Ok(Self::Agent(AgentStep {
                 role: RoleKey::parse(&role)?,
                 environment: StepEnvironment::from_file(environment)?,
+                candidate_authority: CandidateAuthority::parse(&candidate_authority)
+                    .ok_or(DefinitionError::Format)?,
                 authority: AgentAuthority::from_file(authority)?,
                 required_outputs: parse_outputs(required_outputs)?,
             })),
@@ -587,6 +631,7 @@ impl StepAction {
             Self::Agent(step) => ActionFile::Agent {
                 role: step.role.as_str().to_owned(),
                 environment: step.environment.to_file(),
+                candidate_authority: step.candidate_authority.as_str().to_owned(),
                 authority: step.authority.to_file(),
                 required_outputs: outputs_to_file(&step.required_outputs),
             },
@@ -625,12 +670,18 @@ impl AgentAuthority {
             .into_iter()
             .filter(|tool| unique_tools.contains(tool))
             .collect();
-        if directories.is_empty() || directories.len() > MAXIMUM_DIRECTORIES {
+        if directories.len() > MAXIMUM_DIRECTORIES {
             return Err(DefinitionError::DirectoryCount);
         }
         let mut unique_dirs = Vec::new();
         for directory in directories {
             let alias = normalise_alias(&directory.alias)?;
+            if alias == PRIMARY_SOURCE_ALIAS {
+                return Err(DefinitionError::Alias);
+            }
+            if directory.access.is_writable() {
+                return Err(DefinitionError::SecondaryWrite);
+            }
             if unique_dirs
                 .iter()
                 .any(|seen: &GuestDirectoryAccess| seen.alias == alias)
@@ -990,7 +1041,7 @@ fn has_secondary_write(step: &StepDefinition) -> bool {
         .authority
         .directories
         .iter()
-        .any(|directory| directory.alias != PRIMARY_SOURCE_ALIAS && directory.access.is_writable())
+        .any(|directory| directory.access.is_writable())
 }
 
 fn serial_order(first: &StepKey, steps: &[StepDefinition]) -> Vec<StepKey> {
@@ -1088,11 +1139,27 @@ fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), Definition
     for step in steps {
         match &step.action {
             StepAction::Agent(action) => {
-                let writes = step.writes_primary_source();
-                for output in &action.required_outputs {
-                    if output.kind == OutputKind::CandidateRevision && !writes {
+                let candidate_outputs = action
+                    .required_outputs
+                    .iter()
+                    .filter(|output| output.kind == OutputKind::CandidateRevision)
+                    .count();
+                let review_outputs = action
+                    .required_outputs
+                    .iter()
+                    .filter(|output| output.kind == OutputKind::ReviewReport)
+                    .count();
+                match action.candidate_authority {
+                    CandidateAuthority::ReadOnly if candidate_outputs != 0 => {
                         return Err(DefinitionError::CandidateOutput);
                     }
+                    CandidateAuthority::Edit if candidate_outputs != 1 => {
+                        return Err(DefinitionError::CandidateOutput);
+                    }
+                    _ => {}
+                }
+                if candidate_outputs == 1 && review_outputs > 1 {
+                    return Err(DefinitionError::UnsupportedOutput);
                 }
             }
             StepAction::SystemCommand(action) => {
@@ -1435,14 +1502,8 @@ pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
         String::new(),
     )
     .expect("role");
-    let authority = AgentAuthority::new(
-        vec![crate::agents::ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: PRIMARY_SOURCE_ALIAS.to_owned(),
-            access: crate::agents::AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority");
+    let authority =
+        AgentAuthority::new(vec![crate::agents::ToolId::List], Vec::new()).expect("authority");
     WorkflowDefinition::from_parts(
         name.to_owned(),
         test_environment_id(),
@@ -1455,6 +1516,7 @@ pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
             action: StepAction::Agent(AgentStep {
                 environment: StepEnvironment::WorkflowDefault,
                 role: RoleKey::parse("agent").expect("role"),
+                candidate_authority: CandidateAuthority::Edit,
                 authority,
                 required_outputs: vec![
                     RequiredOutput {

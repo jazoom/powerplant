@@ -9,7 +9,7 @@ mod environments;
 mod workflow_runs;
 mod workflows;
 
-pub(crate) use chat::{AgentOutcome, AgentRunSpec, run_agent_action};
+pub(crate) use chat::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()

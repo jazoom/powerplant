@@ -651,14 +651,22 @@ pub(crate) fn definition_fits_agent(
     definition: &WorkflowDefinition,
     tools: &[crate::agents::ToolId],
     directories: &[(String, crate::agents::AccessMode)],
+    primary_directory: &str,
 ) -> bool {
     definition.steps().iter().all(|step| match &step.action {
-        StepAction::Agent(action) => action.authority.allowed_by(
-            tools,
-            directories
-                .iter()
-                .map(|(alias, access)| (alias.as_str(), *access)),
-        ),
+        StepAction::Agent(action) => {
+            let primary_fits = directories.iter().any(|(alias, access)| {
+                alias == primary_directory
+                    && (!action.candidate_authority.access().is_writable() || access.is_writable())
+            });
+            primary_fits
+                && action.authority.allowed_by(
+                    tools,
+                    directories
+                        .iter()
+                        .map(|(alias, access)| (alias.as_str(), *access)),
+                )
+        }
         StepAction::SystemCommand(_) => true,
     })
 }

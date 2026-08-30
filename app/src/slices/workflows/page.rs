@@ -62,7 +62,6 @@ pub(super) struct DirectoryRow {
     pub(super) index: usize,
     pub(super) alias: String,
     pub(super) alias_error: &'static str,
-    pub(super) read_write: bool,
 }
 
 pub(super) struct InputRow {
@@ -127,6 +126,8 @@ pub(super) struct StepRow {
     pub(super) action_error: &'static str,
     pub(super) role: String,
     pub(super) role_error: &'static str,
+    pub(super) candidate_access: String,
+    pub(super) candidate_access_error: &'static str,
     pub(super) command_choices: Vec<CommandChoice>,
     pub(super) command_error: &'static str,
     pub(super) command_consequence: &'static str,
@@ -405,6 +406,8 @@ fn step_row(
         action_error: errors.action,
         role: step.role.clone(),
         role_error: errors.role,
+        candidate_access: step.candidate_access.clone(),
+        candidate_access_error: errors.candidate_access,
         command_choices: crate::workflows::definition::SystemCommandId::all()
             .into_iter()
             .map(|command| CommandChoice {
@@ -438,7 +441,6 @@ fn step_row(
                     .get(dir_index)
                     .map(|item| item.alias)
                     .unwrap_or(""),
-                read_write: directory.access != "read-only",
             })
             .collect(),
         inputs: step

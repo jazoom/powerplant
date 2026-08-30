@@ -6,12 +6,16 @@ use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, ToolId};
 use crate::providers::{ProviderConnection, ProviderKind};
 use crate::tools::SUBMIT_WORKFLOW_OUTPUT;
 use crate::workflows::definition::{
-    AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind, RequiredOutput,
-    RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition,
-    SystemCommandId, SystemCommandStep,
+    AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind, RequiredOutput, RoleKey,
+    StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition, SystemCommandId,
+    SystemCommandStep,
 };
 
 fn agent(tools: Vec<ToolId>, writable: bool) -> AgentRecord {
+    agent_with_primary(tools, writable, "project")
+}
+
+fn agent_with_primary(tools: Vec<ToolId>, writable: bool, primary: &str) -> AgentRecord {
     AgentRecord {
         id: AgentId::generate().expect("id"),
         revision: 1,
@@ -19,7 +23,7 @@ fn agent(tools: Vec<ToolId>, writable: bool) -> AgentRecord {
         instructions: String::new(),
         tools,
         directories: vec![DirectoryGrant {
-            alias: "project".to_owned(),
+            alias: primary.to_owned(),
             host_path: "/tmp/project".into(),
             access: if writable {
                 AccessMode::ReadWrite
@@ -27,7 +31,7 @@ fn agent(tools: Vec<ToolId>, writable: bool) -> AgentRecord {
                 AccessMode::ReadOnly
             },
         }],
-        primary_directory: "project".to_owned(),
+        primary_directory: primary.to_owned(),
     }
 }
 
@@ -36,18 +40,7 @@ fn connection() -> ProviderConnection {
 }
 
 fn agent_step(tools: Vec<ToolId>, writable: bool) -> StepDefinition {
-    let authority = AgentAuthority::new(
-        tools,
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: if writable {
-                AccessMode::ReadWrite
-            } else {
-                AccessMode::ReadOnly
-            },
-        }],
-    )
-    .expect("authority");
+    let authority = AgentAuthority::new(tools, Vec::new()).expect("authority");
     StepDefinition {
         key: StepKey::parse("work").expect("step"),
         name: "Work".to_owned(),
@@ -55,6 +48,11 @@ fn agent_step(tools: Vec<ToolId>, writable: bool) -> StepDefinition {
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse("agent").expect("role"),
             environment: StepEnvironment::WorkflowDefault,
+            candidate_authority: if writable {
+                CandidateAuthority::Edit
+            } else {
+                CandidateAuthority::ReadOnly
+            },
             authority,
             required_outputs: Vec::new(),
         }),
@@ -121,15 +119,18 @@ fn capability_policy_table() {
     );
     assert_eq!(planner.network, NetworkCapability::ProviderHost);
 
+    let custom_primary = agent_with_primary(ToolId::ALL.to_vec(), true, "source");
     let implementer = AttemptCapabilities::derive(
         &agent_step(ToolId::ALL.to_vec(), true),
-        &ceiling,
+        &custom_primary,
         &connection,
     )
     .expect("implementer");
     assert_eq!(
-        implementer.primary().map(|directory| directory.access),
-        Some(AccessMode::ReadWrite)
+        implementer
+            .primary()
+            .map(|directory| (directory.alias.as_str(), directory.access)),
+        Some(("source", AccessMode::ReadWrite))
     );
     assert_eq!(
         implementer.source_location,

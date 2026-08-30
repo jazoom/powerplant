@@ -141,7 +141,7 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
                 output: Some(OutputKey::parse("review").expect("output")),
                 disposition: ProductionDisposition::RequiredOutput,
             },
-            inputs: Vec::new(),
+            inputs: vec![reference.clone()],
         },
         summary: ArtefactSummary::Review {
             candidate: captured.candidate_hash,

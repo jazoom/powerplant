@@ -4,7 +4,7 @@ use super::{
 };
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind,
+    ASSISTANT_REPLY, AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind,
     RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
     candidate_revision_output, initial_candidate_input, test_environment_id, test_named_definition,
@@ -283,22 +283,32 @@ fn definition_fits_agent_rejects_unknown_tools_and_stronger_access() {
     assert!(definition_fits_agent(
         &definition,
         &[ToolId::List, ToolId::Read],
-        &[("project".to_owned(), AccessMode::ReadWrite)]
+        &[("project".to_owned(), AccessMode::ReadWrite)],
+        "project"
     ));
     assert!(!definition_fits_agent(
         &definition,
         &[ToolId::Read],
-        &[("project".to_owned(), AccessMode::ReadWrite)]
+        &[("project".to_owned(), AccessMode::ReadWrite)],
+        "project"
     ));
     assert!(!definition_fits_agent(
         &definition,
         &[ToolId::List],
-        &[("project".to_owned(), AccessMode::ReadOnly)]
+        &[("project".to_owned(), AccessMode::ReadOnly)],
+        "project"
     ));
     assert!(!definition_fits_agent(
         &definition,
         &[ToolId::List],
-        &[("docs".to_owned(), AccessMode::ReadWrite)]
+        &[("docs".to_owned(), AccessMode::ReadWrite)],
+        "project"
+    ));
+    assert!(definition_fits_agent(
+        &definition,
+        &[ToolId::List, ToolId::Read],
+        &[("source".to_owned(), AccessMode::ReadWrite)],
+        "source"
     ));
 }
 
@@ -311,14 +321,7 @@ fn command_steps_do_not_require_agent_authority() {
         String::new(),
     )
     .expect("role");
-    let authority = AgentAuthority::new(
-        vec![ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority");
+    let authority = AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority");
     let definition = WorkflowDefinition::from_parts(
         "Mixed".to_owned(),
         test_environment_id(),
@@ -343,6 +346,7 @@ fn command_steps_do_not_require_agent_authority() {
                 action: StepAction::Agent(AgentStep {
                     environment: StepEnvironment::WorkflowDefault,
                     role: RoleKey::parse("agent").expect("role"),
+                    candidate_authority: CandidateAuthority::Edit,
                     authority,
                     required_outputs: vec![
                         RequiredOutput {
@@ -360,7 +364,8 @@ fn command_steps_do_not_require_agent_authority() {
     assert!(definition_fits_agent(
         &definition,
         &[ToolId::List],
-        &[("project".to_owned(), AccessMode::ReadWrite)]
+        &[("project".to_owned(), AccessMode::ReadWrite)],
+        "project"
     ));
 }
 

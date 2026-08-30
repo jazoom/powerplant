@@ -28,11 +28,15 @@ pub(super) struct StepArtefactView {
     pub(super) href: String,
     pub(super) key: String,
     pub(super) kind: &'static str,
+    pub(super) candidate_hash: String,
+    pub(super) status: &'static str,
+    pub(super) note: &'static str,
 }
 
 pub(super) struct StepView {
     pub(super) name: String,
     pub(super) action: &'static str,
+    pub(super) candidate_access: &'static str,
     pub(super) environment: String,
     pub(super) status: &'static str,
     pub(super) result: String,
@@ -159,6 +163,12 @@ impl RunDetailView {
                     StepView {
                         name: step.name.clone(),
                         action: step.action.kind_label(),
+                        candidate_access: match &step.action {
+                            crate::workflows::definition::StepAction::Agent(action) => {
+                                action.candidate_authority.label()
+                            }
+                            crate::workflows::definition::StepAction::SystemCommand(_) => "",
+                        },
                         environment: step_environment_label(run, step),
                         status: attempt.map_or("Waiting", |attempt| attempt.state.as_label()),
                         result: attempt
@@ -168,14 +178,58 @@ impl RunDetailView {
                         artefacts: attempt
                             .into_iter()
                             .flat_map(|attempt| &attempt.outputs)
-                            .map(|output| StepArtefactView {
-                                href: format!(
-                                    "/runs/{}/artefacts/{}",
-                                    run.id.as_hex(),
-                                    output.artefact.id.as_hex()
-                                ),
-                                key: output.key.as_str().to_owned(),
-                                kind: output.artefact.kind.as_str(),
+                            .map(|output| {
+                                let record = run.artefact(&output.artefact.id);
+                                let candidate_hash = record
+                                    .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
+                                    .map(|hash| hash.short())
+                                    .unwrap_or_default();
+                                let status = match output.artefact.kind {
+                                    crate::workflows::definition::ArtefactKind::ReviewReport => {
+                                        match (
+                                            record.and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash),
+                                            next_candidate_hash(run, step),
+                                        ) {
+                                            (Some(report), Some(next)) if report == next => "Current",
+                                            (Some(_), Some(_)) => "Superseded",
+                                            _ => "",
+                                        }
+                                    }
+                                    crate::workflows::definition::ArtefactKind::CandidateRevision => {
+                                        match (
+                                            record.and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash),
+                                            following_candidate_hash(run, step),
+                                        ) {
+                                            (Some(candidate), Some(following)) if candidate != following => {
+                                                "Superseded"
+                                            }
+                                            _ => "",
+                                        }
+                                    }
+                                    _ => "",
+                                };
+                                StepArtefactView {
+                                    href: format!(
+                                        "/runs/{}/artefacts/{}",
+                                        run.id.as_hex(),
+                                        output.artefact.id.as_hex()
+                                    ),
+                                    key: output.key.as_str().to_owned(),
+                                    kind: output.artefact.kind.as_str(),
+                                    candidate_hash,
+                                    status,
+                                    note: if output.artefact.kind
+                                        == crate::workflows::definition::ArtefactKind::ReviewReport
+                                        && step.inputs.iter().any(|input| {
+                                            input.kind
+                                                == crate::workflows::definition::ArtefactKind::ReviewReport
+                                        })
+                                    {
+                                        "Independent review"
+                                    } else {
+                                        ""
+                                    },
+                                }
                             })
                             .collect(),
                         commit: attempt
@@ -228,6 +282,73 @@ impl RunDetailView {
             artefacts: &self.artefacts,
         }
     }
+}
+
+fn following_candidate_hash(
+    run: &WorkflowRun,
+    step: &crate::workflows::definition::StepDefinition,
+) -> Option<crate::workflows::artefacts::CandidateHash> {
+    let mut next = match &step.on_success {
+        crate::workflows::definition::SuccessTransition::Next(next) => Some(next),
+        crate::workflows::definition::SuccessTransition::CompleteRun => None,
+    };
+    while let Some(key) = next {
+        if let Some(candidate) = run
+            .attempts
+            .iter()
+            .rev()
+            .find(|attempt| attempt.step == *key)
+            .and_then(|attempt| {
+                attempt.outputs.iter().find_map(|output| {
+                    (output.artefact.kind
+                        == crate::workflows::definition::ArtefactKind::CandidateRevision)
+                        .then(|| run.artefact(&output.artefact.id)?.candidate_hash())
+                        .flatten()
+                })
+            })
+        {
+            return Some(candidate);
+        }
+        next = run
+            .pinned
+            .definition
+            .step(key)
+            .and_then(|following| match &following.on_success {
+                crate::workflows::definition::SuccessTransition::Next(next) => Some(next),
+                crate::workflows::definition::SuccessTransition::CompleteRun => None,
+            });
+    }
+    None
+}
+
+fn next_candidate_hash(
+    run: &WorkflowRun,
+    step: &crate::workflows::definition::StepDefinition,
+) -> Option<crate::workflows::artefacts::CandidateHash> {
+    let crate::workflows::definition::SuccessTransition::Next(next) = &step.on_success else {
+        return None;
+    };
+    let next = run.pinned.definition.step(next)?;
+    let candidate = next.inputs.iter().find(|input| {
+        input.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+    })?;
+    let reference = match &candidate.source {
+        crate::workflows::definition::ArtefactSource::RunInitialCandidate => match &run.source {
+            crate::workflows::run::RunSource::Captured { source } => &source.initial,
+            crate::workflows::run::RunSource::Pending => return None,
+        },
+        crate::workflows::definition::ArtefactSource::StepOutput { step, output } => {
+            &run.attempts
+                .iter()
+                .rev()
+                .find(|attempt| attempt.step == *step)?
+                .outputs
+                .iter()
+                .find(|item| item.key == *output)?
+                .artefact
+        }
+    };
+    run.artefact(&reference.id)?.candidate_hash()
 }
 
 fn step_environment_label(

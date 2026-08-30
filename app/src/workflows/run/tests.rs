@@ -3,10 +3,10 @@ use super::{
     AttemptSandboxRecord, AttemptState, FailureCategory, RunState, TransitionCause,
     TransitionError, WorkflowRun, next_ordinal_for,
 };
-use crate::agents::{AccessMode, ToolId};
+use crate::agents::ToolId;
 use crate::workflows::capabilities::{test_agent_capabilities, test_command_capabilities};
 use crate::workflows::definition::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, GuestDirectoryAccess,
+    ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
     InputKey, OutputKey, OutputKind, PinnedWorkflowDefinition, RequiredInput, RequiredOutput,
     RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
@@ -26,14 +26,7 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
         String::new(),
     )
     .expect("role");
-    let authority = AgentAuthority::new(
-        vec![ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority");
+    let authority = AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority");
     let reply = StepDefinition {
         key: StepKey::parse("reply").expect("step"),
         name: "Reply".to_owned(),
@@ -41,6 +34,7 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
         action: StepAction::Agent(AgentStep {
             environment: StepEnvironment::WorkflowDefault,
             role: RoleKey::parse("agent").expect("role"),
+            candidate_authority: CandidateAuthority::Edit,
             authority,
             required_outputs: vec![
                 RequiredOutput {
@@ -136,6 +130,232 @@ fn fail(run: &mut WorkflowRun, attempt: AttemptId, category: FailureCategory, at
     run.record_cleanup(attempt, AttemptCleanupRecord::Complete)
         .expect("cleanup");
     run.fail_attempt(attempt, category, at_ms).expect("fail");
+}
+
+#[test]
+fn fixing_review_cross_run_and_cross_attempt_provenance_fails_load() {
+    enum Corruption {
+        CandidateRun,
+        ReportRun,
+        CandidateAttempt,
+        ReportAttempt,
+    }
+
+    for corruption in [
+        Corruption::CandidateRun,
+        Corruption::ReportRun,
+        Corruption::CandidateAttempt,
+        Corruption::ReportAttempt,
+    ] {
+        let run = completed_fixing_review_run();
+        let mut file = run.to_file();
+        let candidate = file
+            .artefacts
+            .iter()
+            .position(|record| {
+                matches!(record.summary, super::SummaryFile::Candidate { .. })
+                    && matches!(
+                        record.provenance.producer,
+                        super::ProducerFile::StepAttempt { .. }
+                    )
+            })
+            .expect("candidate");
+        let report = file
+            .artefacts
+            .iter()
+            .position(|record| matches!(record.summary, super::SummaryFile::Review { .. }))
+            .expect("report");
+        let record = match corruption {
+            Corruption::CandidateRun | Corruption::CandidateAttempt => {
+                &mut file.artefacts[candidate]
+            }
+            Corruption::ReportRun | Corruption::ReportAttempt => &mut file.artefacts[report],
+        };
+        match corruption {
+            Corruption::CandidateRun | Corruption::ReportRun => {
+                record.provenance.run_id = "a".repeat(32);
+            }
+            Corruption::CandidateAttempt | Corruption::ReportAttempt => {
+                let super::ProducerFile::StepAttempt { attempt_id, .. } =
+                    &mut record.provenance.producer
+                else {
+                    panic!("step producer")
+                };
+                *attempt_id = "b".repeat(32);
+            }
+        }
+        assert_eq!(
+            WorkflowRun::from_file(file).err(),
+            Some(super::RunRecordError::Corrupt)
+        );
+    }
+}
+
+fn completed_fixing_review_run() -> WorkflowRun {
+    let role_key = RoleKey::parse("reviewer").expect("role");
+    let step = StepDefinition {
+        key: StepKey::parse("fixing-reviewer").expect("step"),
+        name: "Fixing reviewer".to_owned(),
+        inputs: vec![initial_candidate_input()],
+        action: StepAction::Agent(AgentStep {
+            environment: StepEnvironment::WorkflowDefault,
+            role: role_key.clone(),
+            candidate_authority: CandidateAuthority::Edit,
+            authority: AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority"),
+            required_outputs: vec![
+                RequiredOutput {
+                    key: OutputKey::parse(ASSISTANT_REPLY).expect("reply"),
+                    kind: OutputKind::AssistantReply,
+                },
+                candidate_revision_output(),
+                RequiredOutput {
+                    key: OutputKey::parse("review").expect("review"),
+                    kind: OutputKind::ReviewReport,
+                },
+            ],
+        }),
+        on_success: SuccessTransition::CompleteRun,
+    };
+    let definition = WorkflowDefinition::from_parts(
+        "Fixing review".to_owned(),
+        test_environment_id(),
+        vec![
+            RoleDefinition::new(
+                role_key,
+                "Reviewer".to_owned(),
+                String::new(),
+                String::new(),
+            )
+            .expect("role"),
+        ],
+        step.key.clone(),
+        vec![step],
+    )
+    .expect("definition");
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut run = WorkflowRun::create(
+        RunId::generate().expect("run"),
+        10,
+        crate::agents::AgentId::generate().expect("agent"),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let initial = test_artefact_record(
+        run.id,
+        ArtefactKind::CandidateRevision,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+    );
+    let initial_reference = crate::workflows::artefacts::ArtefactReference {
+        id: initial.id,
+        kind: initial.kind,
+        artefact_hash: initial.artefact_hash,
+    };
+    run.record_initial_candidate(initial).expect("initial");
+    let attempt = AttemptId::generate().expect("attempt");
+    let inputs = vec![super::AttemptArtefactInput {
+        key: InputKey::parse("candidate").expect("input"),
+        artefact: initial_reference,
+    }];
+    run.start_attempt(
+        attempt,
+        inputs.clone(),
+        test_agent_capabilities(),
+        sandbox_record(&run),
+        11,
+    )
+    .expect("start");
+    let producer = |output: &str| crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+        attempt_id: attempt,
+        step: StepKey::parse("fixing-reviewer").expect("step"),
+        output: Some(OutputKey::parse(output).expect("output")),
+        disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+    };
+    let candidate = test_artefact_record(
+        run.id,
+        ArtefactKind::CandidateRevision,
+        producer("candidate"),
+        inputs.iter().map(|input| input.artefact.clone()).collect(),
+    );
+    let candidate_reference = crate::workflows::artefacts::ArtefactReference {
+        id: candidate.id,
+        kind: candidate.kind,
+        artefact_hash: candidate.artefact_hash,
+    };
+    let report = test_artefact_record(
+        run.id,
+        ArtefactKind::ReviewReport,
+        producer("review"),
+        vec![candidate_reference.clone()],
+    );
+    let report_reference = crate::workflows::artefacts::ArtefactReference {
+        id: report.id,
+        kind: report.kind,
+        artefact_hash: report.artefact_hash,
+    };
+    run.record_attempt_outputs(
+        attempt,
+        vec![candidate, report],
+        vec![
+            super::AttemptArtefactOutput {
+                key: OutputKey::parse("candidate").expect("output"),
+                artefact: candidate_reference.clone(),
+            },
+            super::AttemptArtefactOutput {
+                key: OutputKey::parse("review").expect("output"),
+                artefact: report_reference,
+            },
+        ],
+        Some(candidate_reference.clone()),
+        super::ObservedCandidate::Exact {
+            artefact: candidate_reference,
+        },
+    )
+    .expect("outputs");
+    run.record_cleanup(attempt, AttemptCleanupRecord::Complete)
+        .expect("cleanup");
+    run.complete_attempt(attempt, 12).expect("complete");
+    run
+}
+
+fn test_artefact_record(
+    run_id: RunId,
+    kind: ArtefactKind,
+    producer: crate::workflows::artefacts::ArtefactProducer,
+    inputs: Vec<crate::workflows::artefacts::ArtefactReference>,
+) -> crate::workflows::artefacts::ArtefactRecord {
+    let candidate = crate::workflows::artefacts::CandidateHash::of(b"candidate");
+    crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().expect("artefact"),
+        kind,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::of(
+            b"test",
+            kind.as_str().as_bytes(),
+        ),
+        object_hash: crate::workflows::artefacts::ObjectHash::of(kind.as_str().as_bytes()),
+        payload_bytes: 1,
+        created_at_ms: 11,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id,
+            producer,
+            inputs,
+        },
+        summary: match kind {
+            ArtefactKind::CandidateRevision => {
+                crate::workflows::artefacts::ArtefactSummary::Candidate {
+                    candidate,
+                    entries: 0,
+                    bytes: 0,
+                    disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+                }
+            }
+            ArtefactKind::ReviewReport => crate::workflows::artefacts::ArtefactSummary::Review {
+                candidate,
+                verdict: crate::workflows::artefacts::ReviewVerdict::Approved,
+            },
+            _ => panic!("test artefact kind"),
+        },
+    }
 }
 
 #[test]

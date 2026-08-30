@@ -26,6 +26,8 @@ impl ArtefactStoreError {
 pub(crate) struct WorkflowArtefactRepository {
     root: Option<PathBuf>,
     inner: Mutex<MemoryObjects>,
+    #[cfg(test)]
+    fail_publish_after: Mutex<Option<usize>>,
 }
 
 struct MemoryObjects {
@@ -40,6 +42,7 @@ impl WorkflowArtefactRepository {
             inner: Mutex::new(MemoryObjects {
                 objects: Vec::new(),
             }),
+            fail_publish_after: Mutex::new(None),
         }
     }
 
@@ -54,10 +57,26 @@ impl WorkflowArtefactRepository {
             inner: Mutex::new(MemoryObjects {
                 objects: Vec::new(),
             }),
+            #[cfg(test)]
+            fail_publish_after: Mutex::new(None),
         })
     }
 
     pub(crate) fn publish(&self, bytes: &[u8]) -> Result<ObjectHash, ArtefactStoreError> {
+        #[cfg(test)]
+        {
+            let mut failure = self
+                .fail_publish_after
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(remaining) = failure.as_mut() {
+                if *remaining == 0 {
+                    *failure = None;
+                    return Err(ArtefactStoreError::Persist);
+                }
+                *remaining -= 1;
+            }
+        }
         let hash = ObjectHash::of(bytes);
         if let Some(root) = &self.root {
             publish_disk(root, hash, bytes)?;
@@ -75,6 +94,14 @@ impl WorkflowArtefactRepository {
             }
         }
         Ok(hash)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_publish_after(&self, successful_publications: usize) {
+        *self
+            .fail_publish_after
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(successful_publications);
     }
 
     pub(crate) fn get(&self, hash: &ObjectHash) -> Result<Vec<u8>, ArtefactStoreError> {

@@ -213,6 +213,7 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
         steps: vec![super::page::StepView {
             name: "Commit".to_owned(),
             action: "System command",
+            candidate_access: "",
             environment: "Alpine Git".to_owned(),
             status: "Completed",
             result: "Completed".to_owned(),
@@ -220,6 +221,9 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
                 href: "/runs/run/artefacts/candidate".to_owned(),
                 key: "committed-candidate".to_owned(),
                 kind: "candidate-revision",
+                candidate_hash: String::new(),
+                status: "",
+                note: "",
             }],
             commit: "01234567".to_owned(),
         }],

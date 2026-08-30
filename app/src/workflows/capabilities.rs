@@ -2,7 +2,9 @@ use crate::agents::{AccessMode, AgentRecord, ToolId, guest_path_for};
 use crate::providers::ProviderConnection;
 use crate::sandbox::GuestAccess;
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
-use crate::workflows::definition::{PRIMARY_SOURCE_ALIAS, StepAction, StepDefinition};
+#[cfg(test)]
+use crate::workflows::definition::PRIMARY_SOURCE_ALIAS;
+use crate::workflows::definition::{StepAction, StepDefinition};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AttemptCapabilities {
@@ -64,14 +66,26 @@ impl AttemptCapabilities {
                     .iter()
                     .map(|grant| (grant.alias.as_str(), grant.access))
                     .collect();
-                if !action
-                    .authority
-                    .allowed_by(&agent.tools, ceiling_dirs.iter().copied())
+                let primary_access = action.candidate_authority.access();
+                let primary_ceiling = agent
+                    .directories
+                    .iter()
+                    .find(|grant| grant.alias == agent.primary_directory)
+                    .map(|grant| grant.access);
+                if primary_ceiling
+                    .is_none_or(|access| primary_access.is_writable() && !access.is_writable())
+                    || !action
+                        .authority
+                        .allowed_by(&agent.tools, ceiling_dirs.iter().copied())
                 {
                     return Err(CapabilityError::Authority);
                 }
-                let mut directories = Vec::new();
-                let mut saw_primary = false;
+                let mut directories = vec![CapabilityDirectory {
+                    alias: agent.primary_directory.clone(),
+                    guest_path: guest_path_for(&agent.primary_directory, &agent.primary_directory),
+                    access: primary_access,
+                    role: DirectoryRole::PrimarySource,
+                }];
                 for directory in &action.authority.directories {
                     let Some(grant) = agent
                         .directories
@@ -80,25 +94,12 @@ impl AttemptCapabilities {
                     else {
                         return Err(CapabilityError::Authority);
                     };
-                    let role = if directory.alias == PRIMARY_SOURCE_ALIAS {
-                        saw_primary = true;
-                        DirectoryRole::PrimarySource
-                    } else {
-                        DirectoryRole::SecondaryContext
-                    };
-                    let access = match role {
-                        DirectoryRole::PrimarySource => min_access(directory.access, grant.access),
-                        DirectoryRole::SecondaryContext => AccessMode::ReadOnly,
-                    };
                     directories.push(CapabilityDirectory {
                         alias: directory.alias.clone(),
                         guest_path: guest_path_for(&directory.alias, &agent.primary_directory),
-                        access,
-                        role,
+                        access: min_access(AccessMode::ReadOnly, grant.access),
+                        role: DirectoryRole::SecondaryContext,
                     });
-                }
-                if !saw_primary {
-                    return Err(CapabilityError::Authority);
                 }
                 Ok(Self {
                     tools: action.authority.tools.clone(),
@@ -236,8 +237,8 @@ fn commit_or_read_only(command: SystemCommandId, agent: &AgentRecord) -> Attempt
         AttemptCapabilities {
             tools: Vec::new(),
             directories: vec![CapabilityDirectory {
-                alias: PRIMARY_SOURCE_ALIAS.to_owned(),
-                guest_path: guest_path_for(PRIMARY_SOURCE_ALIAS, &agent.primary_directory),
+                alias: agent.primary_directory.clone(),
+                guest_path: guest_path_for(&agent.primary_directory, &agent.primary_directory),
                 access: AccessMode::ReadWrite,
                 role: DirectoryRole::PrimarySource,
             }],
@@ -260,8 +261,8 @@ fn commit_or_read_only(command: SystemCommandId, agent: &AgentRecord) -> Attempt
 
 fn primary_read_only(agent: &AgentRecord) -> CapabilityDirectory {
     CapabilityDirectory {
-        alias: PRIMARY_SOURCE_ALIAS.to_owned(),
-        guest_path: guest_path_for(PRIMARY_SOURCE_ALIAS, &agent.primary_directory),
+        alias: agent.primary_directory.clone(),
+        guest_path: guest_path_for(&agent.primary_directory, &agent.primary_directory),
         access: AccessMode::ReadOnly,
         role: DirectoryRole::PrimarySource,
     }

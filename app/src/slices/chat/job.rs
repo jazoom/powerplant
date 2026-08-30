@@ -96,6 +96,7 @@ pub(crate) enum AgentOutcome {
 pub(crate) struct AgentActionEnd {
     pub(crate) outcome: AgentOutcome,
     pub(crate) error: Option<String>,
+    pub(crate) reply: String,
 }
 
 pub(crate) async fn run_agent_action(
@@ -145,6 +146,7 @@ pub(crate) async fn run_agent_action(
                     return AgentActionEnd {
                         outcome: AgentOutcome::ProviderFailure,
                         error: Some(error.message().to_owned()),
+                        reply: reply.clone(),
                     };
                 }
             },
@@ -178,6 +180,7 @@ pub(crate) async fn run_agent_action(
                         return AgentActionEnd {
                             outcome: AgentOutcome::ProviderFailure,
                             error: Some(ProviderError::ReplyTooLong.message().to_owned()),
+                            reply: reply.clone(),
                         };
                     }
                 }
@@ -192,6 +195,7 @@ pub(crate) async fn run_agent_action(
                     return AgentActionEnd {
                         outcome: AgentOutcome::ProviderFailure,
                         error: Some(error.message().to_owned()),
+                        reply: reply.clone(),
                     };
                 }
             }
@@ -208,12 +212,14 @@ pub(crate) async fn run_agent_action(
                 return AgentActionEnd {
                     outcome: AgentOutcome::ProviderFailure,
                     error: Some(ProviderError::EmptyReply.message().to_owned()),
+                    reply: reply.clone(),
                 };
             }
             persist_success(state, &session_id, &agent_id, &job, &reply);
             return AgentActionEnd {
                 outcome: AgentOutcome::Completed,
                 error: None,
+                reply: reply.clone(),
             };
         }
 
@@ -245,6 +251,7 @@ pub(crate) async fn run_agent_action(
                 return AgentActionEnd {
                     outcome: AgentOutcome::ProviderFailure,
                     error: Some(ProviderError::ReplyTooLong.message().to_owned()),
+                    reply: reply.clone(),
                 };
             }
             extra.push(Message::tool_result(id, name, output));
@@ -256,6 +263,7 @@ pub(crate) async fn run_agent_action(
     AgentActionEnd {
         outcome: AgentOutcome::ToolFailure,
         error: Some(TOOL_LOOP_LIMIT.to_owned()),
+        reply,
     }
 }
 
@@ -383,7 +391,7 @@ pub(super) async fn run_job(
     job.finish(JobStatus::Completed, None);
 }
 
-pub(super) fn bound_reply(text: &str) -> &str {
+pub(crate) fn bound_reply(text: &str) -> &str {
     if text.len() <= MAXIMUM_REPLY_BYTES {
         return text;
     }
@@ -408,16 +416,12 @@ fn append_bounded(reply: &mut String, piece: &str) -> bool {
     true
 }
 
-fn persist_success(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job, reply: &str) {
-    let _ = state
-        .sessions
-        .finish_turn(id, agent, &job.id(), bound_reply(reply).to_owned());
+fn persist_success(_state: &AppState, _id: &SessionId, _agent: &AgentId, _job: &Job, _reply: &str) {
+    // Workflow execution settles the active turn after all durable outputs are visible.
 }
 
-fn persist_failure(state: &AppState, id: &SessionId, agent: &AgentId, job: &Job, reply: &str) {
-    let _ = state
-        .sessions
-        .fail_turn(id, agent, &job.id(), bound_reply(reply).to_owned());
+fn persist_failure(_state: &AppState, _id: &SessionId, _agent: &AgentId, _job: &Job, _reply: &str) {
+    // Workflow execution owns the single terminal settlement.
 }
 
 fn cancel_action(
@@ -432,6 +436,7 @@ fn cancel_action(
     AgentActionEnd {
         outcome: AgentOutcome::Cancelled,
         error: None,
+        reply: reply.to_owned(),
     }
 }
 

@@ -25,6 +25,8 @@ pub(crate) struct RunSummary {
 pub(crate) struct WorkflowRunStore {
     dir: Option<PathBuf>,
     inner: Mutex<BTreeMap<RunId, WorkflowRun>>,
+    #[cfg(test)]
+    fail_next_mutation: Mutex<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +62,7 @@ impl WorkflowRunStore {
         Self {
             dir: None,
             inner: Mutex::new(BTreeMap::new()),
+            fail_next_mutation: Mutex::new(false),
         }
     }
 
@@ -69,6 +72,8 @@ impl WorkflowRunStore {
         Ok(Self {
             dir: Some(dir),
             inner: Mutex::new(runs),
+            #[cfg(test)]
+            fail_next_mutation: Mutex::new(false),
         })
     }
 
@@ -129,6 +134,17 @@ impl WorkflowRunStore {
     where
         F: FnOnce(&mut WorkflowRun) -> Result<(), super::run::TransitionError>,
     {
+        #[cfg(test)]
+        {
+            let mut failure = self
+                .fail_next_mutation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *failure {
+                *failure = false;
+                return Err(StoreError::Persist);
+            }
+        }
         let mut runs = self.lock();
         let Some(current) = runs.get(id).cloned() else {
             return Err(StoreError::Missing);
@@ -138,6 +154,14 @@ impl WorkflowRunStore {
         persist(self.dir.as_deref(), &next)?;
         runs.insert(*id, next.clone());
         Ok(next)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_mutation(&self) {
+        *self
+            .fail_next_mutation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<RunId, WorkflowRun>> {

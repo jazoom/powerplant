@@ -66,6 +66,7 @@ pub(super) struct PreviewLine {
 pub(super) struct WorkflowOption {
     pub(super) token: String,
     pub(super) label: String,
+    pub(super) policy: String,
     pub(super) selected: bool,
 }
 

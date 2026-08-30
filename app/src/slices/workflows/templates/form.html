@@ -342,6 +342,35 @@
                     <p class="text-error text-sm">{{ step.role_error }}</p>
                   {% endif %}
                 </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Candidate access</span>
+                  <select
+                    class="select select-bordered"
+                    name="step_{{ step.index }}_candidate-access"
+                  >
+                    <option
+                      value="read-only"
+                      {% if step.candidate_access == "read-only" %}selected{% endif %}
+                    >
+                      Read-only
+                    </option>
+                    <option
+                      value="edit-candidate"
+                      {% if step.candidate_access == "edit-candidate" %}selected{% endif %}
+                    >
+                      Edit candidate
+                    </option>
+                  </select>
+                  <p class="text-quiet text-xs">
+                    Edits stay inside an isolated attempt until an explicit
+                    commit step.
+                  </p>
+                  {% if step.candidate_access_error != "" %}
+                    <p class="text-error text-sm">
+                      {{ step.candidate_access_error }}
+                    </p>
+                  {% endif %}
+                </label>
                 <fieldset class="space-y-2">
                   <legend class="text-sm">Tools</legend>
                   {% for tool in step.tools %}
@@ -359,8 +388,8 @@
                 <fieldset class="space-y-3">
                   <legend class="text-sm">Guest access</legend>
                   <p class="text-quiet text-xs">
-                    Write access applies to an isolated sandbox. It does not
-                    change the project on this machine.
+                    Add optional read-only directories. Candidate access owns
+                    the primary project permission.
                   </p>
                   {% for directory in step.directories %}
                     <div
@@ -380,26 +409,15 @@
                           </p>
                         {% endif %}
                       </label>
-                      <label class="flex flex-col gap-1">
+                      <div class="flex flex-col gap-1">
                         <span class="text-quiet text-xs">Access</span>
-                        <select
-                          class="select select-bordered select-sm"
+                        <p class="text-sm">Read-only</p>
+                        <input
+                          type="hidden"
                           name="step_{{ step.index }}_dir_{{ directory.index }}_access"
-                        >
-                          <option
-                            value="read-write"
-                            {% if directory.read_write %}selected{% endif %}
-                          >
-                            Read-write
-                          </option>
-                          <option
-                            value="read-only"
-                            {% if !directory.read_write %}selected{% endif %}
-                          >
-                            Read-only
-                          </option>
-                        </select>
-                      </label>
+                          value="read-only"
+                        />
+                      </div>
                     </div>
                   {% endfor %}
                 </fieldset>

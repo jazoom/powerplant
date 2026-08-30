@@ -1,7 +1,7 @@
 use super::{
-    ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, DefinitionError,
-    GuestDirectoryAccess, InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput,
-    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
+    ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
+    DefinitionError, GuestDirectoryAccess, InputKey, OutputKey, OutputKind, RequiredInput,
+    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
     candidate_revision_output, initial_candidate_input, test_environment_id,
 };
@@ -19,14 +19,7 @@ fn role() -> RoleDefinition {
 }
 
 fn authority() -> AgentAuthority {
-    AgentAuthority::new(
-        vec![ToolId::List],
-        vec![GuestDirectoryAccess {
-            alias: "project".to_owned(),
-            access: AccessMode::ReadWrite,
-        }],
-    )
-    .expect("authority")
+    AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority")
 }
 
 fn agent_step(key: &str, next: SuccessTransition) -> StepDefinition {
@@ -61,6 +54,7 @@ fn write_agent_step(
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse("agent").expect("role"),
             environment: StepEnvironment::WorkflowDefault,
+            candidate_authority: CandidateAuthority::Edit,
             authority: authority(),
             required_outputs: outputs,
         }),
@@ -265,7 +259,7 @@ fn unreachable_steps_are_rejected() {
 fn arbitrary_command_values_are_rejected() {
     let json = format!(
         r#"{{
-        "format-version": 1,
+        "format-version": 2,
         "name": "Status",
         "default-environment": "{}",
         "roles": [],
@@ -607,6 +601,80 @@ fn sandbox_steps_without_candidate_inputs_are_rejected() {
 }
 
 #[test]
+fn candidate_authority_rejects_conflicting_outputs() {
+    let mut read_only = agent_step("reply", SuccessTransition::CompleteRun);
+    let StepAction::Agent(action) = &mut read_only.action else {
+        panic!("agent step");
+    };
+    action.candidate_authority = CandidateAuthority::ReadOnly;
+    assert_eq!(
+        WorkflowDefinition::from_parts(
+            "Read-only".to_owned(),
+            test_environment_id(),
+            vec![role()],
+            StepKey::parse("reply").expect("first"),
+            vec![read_only],
+        )
+        .err(),
+        Some(DefinitionError::CandidateOutput)
+    );
+
+    let mut duplicate_reviews = agent_step("reply", SuccessTransition::CompleteRun);
+    let StepAction::Agent(action) = &mut duplicate_reviews.action else {
+        panic!("agent step");
+    };
+    action.required_outputs.extend([
+        RequiredOutput {
+            key: OutputKey::parse("review-one").expect("output"),
+            kind: OutputKind::ReviewReport,
+        },
+        RequiredOutput {
+            key: OutputKey::parse("review-two").expect("output"),
+            kind: OutputKind::ReviewReport,
+        },
+    ]);
+    assert_eq!(
+        WorkflowDefinition::from_parts(
+            "Fixing review".to_owned(),
+            test_environment_id(),
+            vec![role()],
+            StepKey::parse("reply").expect("first"),
+            vec![duplicate_reviews],
+        )
+        .err(),
+        Some(DefinitionError::UnsupportedOutput)
+    );
+}
+
+#[test]
+fn unknown_or_absent_candidate_authority_is_rejected() {
+    let definition = one_agent();
+    let value = serde_json::to_value(definition.to_file()).expect("definition json");
+    for replacement in [None, Some("unknown")] {
+        let mut candidate = value.clone();
+        let action = candidate["steps"][0]["action"]
+            .as_object_mut()
+            .expect("agent action");
+        match replacement {
+            Some(value) => {
+                action.insert(
+                    "candidate-authority".to_owned(),
+                    serde_json::Value::String(value.to_owned()),
+                );
+            }
+            None => {
+                action.remove("candidate-authority");
+            }
+        }
+        let bytes = serde_json::to_vec(&candidate).expect("bytes");
+        assert_eq!(
+            WorkflowDefinition::from_file_bytes(&bytes).err(),
+            Some(DefinitionError::Format)
+        );
+    }
+}
+
+#[test]
 fn write_steps_without_candidate_outputs_are_rejected() {
     let mut step = agent_step("reply", SuccessTransition::CompleteRun);
     if let StepAction::Agent(action) = &mut step.action {
@@ -627,29 +695,12 @@ fn write_steps_without_candidate_outputs_are_rejected() {
 
 #[test]
 fn secondary_write_grants_are_rejected() {
-    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
-    if let StepAction::Agent(action) = &mut step.action {
-        action.authority = AgentAuthority::new(
-            vec![ToolId::List],
-            vec![
-                GuestDirectoryAccess {
-                    alias: "project".to_owned(),
-                    access: AccessMode::ReadWrite,
-                },
-                GuestDirectoryAccess {
-                    alias: "docs".to_owned(),
-                    access: AccessMode::ReadWrite,
-                },
-            ],
-        )
-        .expect("authority");
-    }
-    let error = WorkflowDefinition::from_parts(
-        "Team".to_owned(),
-        test_environment_id(),
-        vec![role()],
-        StepKey::parse("reply").expect("first"),
-        vec![step],
+    let error = AgentAuthority::new(
+        vec![ToolId::List],
+        vec![GuestDirectoryAccess {
+            alias: "docs".to_owned(),
+            access: AccessMode::ReadWrite,
+        }],
     )
     .err();
     assert_eq!(error, Some(DefinitionError::SecondaryWrite));

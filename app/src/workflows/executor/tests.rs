@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 
-use super::super::definition::{AgentAuthority, GuestDirectoryAccess, SystemCommandId};
+use super::super::definition::{
+    AgentAuthority, CandidateAuthority, GuestDirectoryAccess, SystemCommandId,
+};
 use super::{
-    StepOutcome, attempt_spec, cleanup_after_start_failure, guest_command, intersect_authority,
-    record_unknown_observed, settle_transient_job,
+    StepOutcome, SuccessAttempt, active_step_label, attempt_spec, cleanup_after_start_failure,
+    guest_command, intersect_authority, publish_success, record_unknown_observed,
+    settle_transient_job,
 };
 use crate::agents::{AccessMode, AgentId, DirectoryPolicy, PolicyGrant};
 use crate::sandbox::GUEST_PROJECT;
@@ -22,7 +25,7 @@ fn repository_status_uses_the_fixed_guest_command() {
 }
 
 #[test]
-fn a_secondary_authority_does_not_expose_the_project_mount() {
+fn candidate_authority_keeps_the_project_mount_read_only() {
     let host = DirectoryPolicy::from_grants(
         vec![
             PolicyGrant {
@@ -48,13 +51,212 @@ fn a_secondary_authority_does_not_expose_the_project_mount() {
         }],
     )
     .expect("authority");
-    let policy = intersect_authority(&authority, &host).expect("intersection");
-    assert_eq!(policy.primary_guest(), "/access/docs");
+    let policy =
+        intersect_authority(CandidateAuthority::ReadOnly, &authority, &host).expect("intersection");
+    assert_eq!(policy.primary_guest(), GUEST_PROJECT);
     assert_eq!(
         policy.resolve(""),
+        Ok((GUEST_PROJECT.to_owned(), AccessMode::ReadOnly))
+    );
+    assert_eq!(
+        policy.resolve("/access/docs"),
         Ok(("/access/docs".to_owned(), AccessMode::ReadOnly))
     );
-    assert!(policy.resolve(GUEST_PROJECT).is_err());
+}
+
+#[test]
+fn fixing_review_publication_is_atomic_across_failures() {
+    enum Failure {
+        CandidatePublication,
+        ReportPublication,
+        RunMutation,
+    }
+
+    for failure in [
+        Failure::CandidatePublication,
+        Failure::ReportPublication,
+        Failure::RunMutation,
+    ] {
+        let (state, job, step, attempt, inputs, captured, drafts) = fixing_publication_fixture();
+        assert!(
+            active_step_label(&state.workflow_runs.get(&job.run_id).expect("run"), &step,)
+                .starts_with("Review ·")
+        );
+        match failure {
+            Failure::CandidatePublication => state.workflow_artefacts.fail_publish_after(0),
+            Failure::ReportPublication => state.workflow_artefacts.fail_publish_after(1),
+            Failure::RunMutation => state.workflow_runs.fail_next_mutation(),
+        }
+
+        assert!(
+            publish_success(
+                &state,
+                &job,
+                &step,
+                SuccessAttempt {
+                    id: attempt,
+                    complete: true,
+                },
+                &inputs,
+                &drafts,
+                Some(&captured),
+            )
+            .is_err()
+        );
+        let run = state.workflow_runs.get(&job.run_id).expect("run");
+        assert!(run.attempts[0].outputs.is_empty());
+        assert_eq!(run.artefacts.len(), 1);
+    }
+}
+
+fn fixing_publication_fixture() -> (
+    crate::state::AppState,
+    crate::workflows::WorkflowJob,
+    crate::workflows::definition::StepDefinition,
+    crate::workflows::AttemptId,
+    Vec<crate::workflows::run::AttemptArtefactInput>,
+    crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+    std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>,
+) {
+    use crate::workflows::definition::{
+        AgentStep, ArtefactKind, OutputKey, OutputKind, RequiredOutput, RoleDefinition, RoleKey,
+        StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition,
+        WorkflowDefinition, candidate_revision_output, initial_candidate_input,
+    };
+
+    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let project = tempfile::tempdir().expect("project");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(project.path())
+            .status()
+            .expect("init")
+            .success()
+    );
+    std::fs::write(project.path().join("file.txt"), b"candidate\n").expect("source");
+    let captured = crate::workflows::artefacts::CandidateCapture::capture_host(
+        project.path(),
+        &state.workflow_artefacts,
+    )
+    .expect("capture");
+    let role_key = RoleKey::parse("reviewer").expect("role key");
+    let step = StepDefinition {
+        key: StepKey::parse("fixing-reviewer").expect("step key"),
+        name: "Fixing reviewer".to_owned(),
+        inputs: vec![initial_candidate_input()],
+        action: StepAction::Agent(AgentStep {
+            environment: StepEnvironment::WorkflowDefault,
+            role: role_key.clone(),
+            candidate_authority: CandidateAuthority::Edit,
+            authority: AgentAuthority::new(vec![crate::agents::ToolId::List], Vec::new())
+                .expect("authority"),
+            required_outputs: vec![
+                RequiredOutput {
+                    key: OutputKey::parse("assistant-reply").expect("reply"),
+                    kind: OutputKind::AssistantReply,
+                },
+                candidate_revision_output(),
+                RequiredOutput {
+                    key: OutputKey::parse("review").expect("review"),
+                    kind: OutputKind::ReviewReport,
+                },
+            ],
+        }),
+        on_success: SuccessTransition::CompleteRun,
+    };
+    let definition = WorkflowDefinition::from_parts(
+        "Fixing".to_owned(),
+        crate::workflows::definition::test_environment_id(),
+        vec![
+            RoleDefinition::new(
+                role_key,
+                "Reviewer".to_owned(),
+                String::new(),
+                String::new(),
+            )
+            .expect("role"),
+        ],
+        step.key.clone(),
+        vec![step.clone()],
+    )
+    .expect("definition");
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut run = crate::workflows::WorkflowRun::create(
+        crate::workflows::RunId::generate().expect("run"),
+        1,
+        AgentId::generate().expect("agent"),
+        crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let initial = candidate_record(&run, &captured, &state.workflow_artefacts, true);
+    let initial_reference = crate::workflows::artefacts::ArtefactReference {
+        id: initial.id,
+        kind: ArtefactKind::CandidateRevision,
+        artefact_hash: initial.artefact_hash,
+    };
+    run.record_initial_candidate(initial)
+        .expect("initial candidate");
+    let inputs = vec![crate::workflows::run::AttemptArtefactInput {
+        key: crate::workflows::definition::InputKey::parse("candidate").expect("input"),
+        artefact: initial_reference,
+    }];
+    let attempt = crate::workflows::AttemptId::generate().expect("attempt");
+    run.start_attempt(
+        attempt,
+        inputs.clone(),
+        crate::workflows::capabilities::test_agent_capabilities(),
+        crate::workflows::run::AttemptSandboxRecord {
+            kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
+        },
+        2,
+    )
+    .expect("start");
+    run.record_cleanup(
+        attempt,
+        crate::workflows::run::AttemptCleanupRecord::Complete,
+    )
+    .expect("cleanup");
+    let run_id = run.id;
+    state.workflow_runs.create(run).expect("store run");
+    let mut output_drafts = crate::workflows::artefacts::output::OutputDrafts::default();
+    output_drafts
+        .submit(
+            step.required_outputs(),
+            "review",
+            OutputKind::ReviewReport,
+            Some("Approved".to_owned()),
+            Some("approved"),
+            None,
+            false,
+            false,
+        )
+        .expect("review draft");
+    let token = crate::sessions::generate_session_token().expect("session");
+    let job = crate::workflows::WorkflowJob {
+        run_id,
+        session_id: token.id(),
+        agent_id: AgentId::generate().expect("agent"),
+        connection: crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "key",
+            "model",
+        ),
+        host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
+        turns: Vec::new(),
+        job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
+        eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+    };
+    (
+        state,
+        job,
+        step,
+        attempt,
+        inputs,
+        captured,
+        std::sync::Mutex::new(output_drafts),
+    )
 }
 
 #[test]

@@ -217,6 +217,7 @@ async fn update_configuration(
             .await;
         }
     };
+    form.maintain_candidate_outputs_from(&WorkflowFormState::from_record(&record));
     if intent != FormIntent::Save {
         if let Err(error) = form.apply(intent) {
             return render_form_command(

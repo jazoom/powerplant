@@ -102,6 +102,12 @@ pub(crate) fn require_approved_review(
         .ok_or(CommitError::Assurance)?;
     if candidate_record.artefact_hash != candidate_input.artefact.artefact_hash
         || review_record.artefact_hash != review_input.artefact.artefact_hash
+        || review_record.provenance.run_id != run.id
+        || !review_record
+            .provenance
+            .inputs
+            .iter()
+            .any(|input| input == &candidate_input.artefact)
     {
         return Err(CommitError::Assurance);
     }

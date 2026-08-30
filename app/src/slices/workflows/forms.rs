@@ -1,10 +1,11 @@
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
-    AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, GuestDirectoryAccess, InputKey,
-    MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey,
-    OutputKind, RequiredInput, RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition,
-    StepEnvironment, StepKey, SuccessTransition, SystemCommandId, SystemCommandStep,
-    WorkflowDefinition, candidate_revision_output, initial_candidate_input,
+    AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
+    GuestDirectoryAccess, InputKey, MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS,
+    MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind, RequiredInput, RequiredOutput,
+    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
+    SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    candidate_revision_output, initial_candidate_input,
 };
 use crate::workflows::{CatalogueError, WorkflowRecord};
 
@@ -74,6 +75,7 @@ pub(super) struct StepDraft {
     pub(super) action: String,
     pub(super) environment: String,
     pub(super) role: String,
+    pub(super) candidate_access: String,
     pub(super) command: String,
     pub(super) tools: Vec<ToolId>,
     pub(super) directories: Vec<DirectoryDraft>,
@@ -123,6 +125,7 @@ pub(super) struct StepErrors {
     pub(super) action: &'static str,
     pub(super) environment: &'static str,
     pub(super) role: &'static str,
+    pub(super) candidate_access: &'static str,
     pub(super) command: &'static str,
     pub(super) directories: Vec<DirectoryErrors>,
     pub(super) inputs: Vec<InputErrors>,
@@ -197,6 +200,7 @@ impl FormErrors {
                     || !step.action.is_empty()
                     || !step.environment.is_empty()
                     || !step.role.is_empty()
+                    || !step.candidate_access.is_empty()
                     || !step.command.is_empty()
                     || step
                         .directories
@@ -256,6 +260,57 @@ impl WorkflowFormState {
             revision: Some(record.revision),
             roles,
             steps,
+        }
+    }
+
+    pub(super) fn maintain_candidate_outputs_from(&mut self, previous: &Self) {
+        let mut changed = false;
+        for step in &mut self.steps {
+            let Some(previous_step) = previous
+                .steps
+                .iter()
+                .find(|previous_step| previous_step.key == step.key)
+            else {
+                continue;
+            };
+            if step.action != "agent"
+                || previous_step.candidate_access == CandidateAuthority::Edit.as_str()
+                || step.candidate_access != CandidateAuthority::Edit.as_str()
+                || step.outputs.iter().any(|output| {
+                    OutputKind::parse(&output.kind) == Some(OutputKind::CandidateRevision)
+                })
+            {
+                continue;
+            }
+            let key = next_key(
+                "candidate",
+                &step
+                    .outputs
+                    .iter()
+                    .map(|output| output.key.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            step.outputs.push(OutputDraft {
+                key,
+                kind: OutputKind::CandidateRevision.as_str().to_owned(),
+            });
+            changed = true;
+        }
+        if !changed {
+            return;
+        }
+        let mut latest = "run-initial-candidate".to_owned();
+        for step in &mut self.steps {
+            for input in &mut step.inputs {
+                if ArtefactKind::parse(&input.kind) == Some(ArtefactKind::CandidateRevision) {
+                    input.source = latest.clone();
+                }
+            }
+            if let Some(output) = step.outputs.iter().find(|output| {
+                OutputKind::parse(&output.kind) == Some(OutputKind::CandidateRevision)
+            }) {
+                latest = format!("step-output:{}:{}", step.key, output.key);
+            }
         }
     }
 
@@ -536,6 +591,7 @@ enum StepPart {
     Action,
     Environment,
     Role,
+    CandidateAccess,
     Command,
     Tool(ToolId),
     Dir { index: usize, part: DirPart },
@@ -598,6 +654,7 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("action") => StepPart::Action,
                 Some("environment") => StepPart::Environment,
                 Some("role") => StepPart::Role,
+                Some("candidate-access") => StepPart::CandidateAccess,
                 Some("command") => StepPart::Command,
                 Some("tool") => {
                     let tool = parts.next().ok_or(FormError::UnknownField)?;
@@ -798,6 +855,7 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             StepPart::Action => step.action = value,
             StepPart::Environment => step.environment = value,
             StepPart::Role => step.role = value,
+            StepPart::CandidateAccess => step.candidate_access = value,
             StepPart::Command => step.command = value,
             StepPart::Tool(tool) => {
                 if is_checked(&value) && !step.tools.contains(&tool) {
@@ -810,7 +868,7 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             } => {
                 ensure_row(&mut step.directories, dir, || DirectoryDraft {
                     alias: String::new(),
-                    access: AccessMode::ReadWrite.as_str().to_owned(),
+                    access: AccessMode::ReadOnly.as_str().to_owned(),
                 })?;
                 dir_seen[index].push(dir);
                 match dir_part {
@@ -915,6 +973,7 @@ fn ensure_command_defaults(steps: &mut [StepDraft]) {
             continue;
         };
         steps[index].role.clear();
+        steps[index].candidate_access.clear();
         steps[index].tools.clear();
         steps[index].directories.clear();
         let contract = command.contract();
@@ -971,6 +1030,7 @@ fn empty_step() -> StepDraft {
         action: "agent".to_owned(),
         environment: String::new(),
         role: String::new(),
+        candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: Vec::new(),
         directories: Vec::new(),
@@ -980,10 +1040,7 @@ fn empty_step() -> StepDraft {
 }
 
 fn blank_agent_step(key: &str, role: &str) -> StepDraft {
-    let mut directories = vec![DirectoryDraft {
-        alias: "project".to_owned(),
-        access: AccessMode::ReadWrite.as_str().to_owned(),
-    }];
+    let mut directories = Vec::new();
     pad_directories(&mut directories);
     StepDraft {
         key: key.to_owned(),
@@ -991,6 +1048,7 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         action: "agent".to_owned(),
         environment: String::new(),
         role: role.to_owned(),
+        candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: ToolId::ALL.to_vec(),
         directories,
@@ -1065,7 +1123,7 @@ fn pad_directories(directories: &mut Vec<DirectoryDraft>) {
     while directories.len() < MAXIMUM_DIRECTORIES {
         directories.push(DirectoryDraft {
             alias: String::new(),
-            access: AccessMode::ReadWrite.as_str().to_owned(),
+            access: AccessMode::ReadOnly.as_str().to_owned(),
         });
     }
 }
@@ -1089,6 +1147,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 action: "agent".to_owned(),
                 environment: step_environment_token(action.environment),
                 role: action.role.as_str().to_owned(),
+                candidate_access: action.candidate_authority.as_str().to_owned(),
                 command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
                 tools: action.authority.tools.clone(),
                 directories,
@@ -1106,6 +1165,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             action: "system-command".to_owned(),
             environment: step_environment_token(action.environment),
             role: String::new(),
+            candidate_access: String::new(),
             command: action.command.as_str().to_owned(),
             tools: Vec::new(),
             directories: Vec::new(),
@@ -1183,19 +1243,21 @@ fn build_agent_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepA
             return None;
         }
     };
+    let candidate_authority = match CandidateAuthority::parse(&step.candidate_access) {
+        Some(authority) => authority,
+        None => {
+            errors.candidate_access = "Choose candidate access.";
+            return None;
+        }
+    };
     let mut directories = Vec::new();
-    for (index, directory) in step.directories.iter().enumerate() {
+    for directory in &step.directories {
         if directory.alias.trim().is_empty() {
             continue;
         }
-        let Some(access) = AccessMode::parse(&directory.access) else {
-            errors.directories[index].alias =
-                crate::workflows::definition::DefinitionError::Format.message();
-            return None;
-        };
         directories.push(GuestDirectoryAccess {
             alias: directory.alias.clone(),
-            access,
+            access: AccessMode::ReadOnly,
         });
     }
     let authority = match AgentAuthority::new(step.tools.clone(), directories) {
@@ -1221,9 +1283,25 @@ fn build_agent_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepA
         };
         outputs.push(RequiredOutput { key, kind });
     }
+    let candidate_outputs = outputs
+        .iter()
+        .filter(|output| output.kind == OutputKind::CandidateRevision)
+        .count();
+    match candidate_authority {
+        CandidateAuthority::ReadOnly if candidate_outputs != 0 => {
+            errors.candidate_access = "A read-only step cannot produce a candidate revision.";
+            return None;
+        }
+        CandidateAuthority::Edit if candidate_outputs != 1 => {
+            errors.candidate_access = "An edit step needs one candidate revision output.";
+            return None;
+        }
+        _ => {}
+    }
     Some(StepAction::Agent(AgentStep {
         environment: parse_step_environment(&step.environment, errors)?,
         role,
+        candidate_authority,
         authority,
         required_outputs: outputs,
     }))

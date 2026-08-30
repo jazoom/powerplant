@@ -20,9 +20,8 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("step_0_name", "Work on task"),
         pair("step_0_action", "agent"),
         pair("step_0_role", "coding-agent"),
+        pair("step_0_candidate-access", "edit-candidate"),
         pair("step_0_tool_list", "on"),
-        pair("step_0_dir_0_alias", "project"),
-        pair("step_0_dir_0_access", "read-write"),
         pair("step_0_input_0_key", "candidate"),
         pair("step_0_input_0_kind", "candidate-revision"),
         pair("step_0_input_0_source", "run-initial-candidate"),
@@ -141,6 +140,54 @@ fn a_row_action_normalises_a_step_after_a_system_command_switch() {
     );
     assert_eq!(form.steps[0].outputs.len(), 1);
     assert_eq!(form.steps[0].outputs[0].kind, "candidate-revision");
+}
+
+#[test]
+fn candidate_access_conflicts_have_field_errors() {
+    let mut read_only = valid_pairs();
+    read_only
+        .iter_mut()
+        .find(|(key, _)| key == "step_0_candidate-access")
+        .expect("access")
+        .1 = "read-only".to_owned();
+    let (form, _) = WorkflowFormState::parse(read_only).expect("parse read-only");
+    assert_eq!(
+        form.to_definition().expect_err("candidate conflict").steps[0].candidate_access,
+        "A read-only step cannot produce a candidate revision."
+    );
+
+    let mut edit = valid_pairs();
+    edit.retain(|(key, _)| !key.starts_with("step_0_output_1_"));
+    let (form, _) = WorkflowFormState::parse(edit).expect("parse edit");
+    assert_eq!(
+        form.to_definition().expect_err("missing candidate").steps[0].candidate_access,
+        "An edit step needs one candidate revision output."
+    );
+}
+
+#[test]
+fn changing_to_edit_access_adds_a_candidate_output() {
+    let mut previous_pairs = valid_pairs();
+    previous_pairs
+        .iter_mut()
+        .find(|(key, _)| key == "step_0_candidate-access")
+        .expect("access")
+        .1 = "read-only".to_owned();
+    previous_pairs.retain(|(key, _)| !key.starts_with("step_0_output_1_"));
+    let (previous, _) = WorkflowFormState::parse(previous_pairs).expect("previous");
+
+    let mut changed = previous.clone();
+    changed.steps[0].candidate_access = "edit-candidate".to_owned();
+    changed.maintain_candidate_outputs_from(&previous);
+
+    assert_eq!(
+        changed.steps[0]
+            .outputs
+            .iter()
+            .filter(|output| output.kind == "candidate-revision")
+            .count(),
+        1
+    );
 }
 
 #[test]

@@ -32,7 +32,7 @@ use self::{
     page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
 
-pub(crate) use job::{AgentOutcome, AgentRunSpec, run_agent_action};
+pub(crate) use job::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action};
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -214,7 +214,12 @@ async fn send(
         .iter()
         .map(|grant| (grant.alias.clone(), grant.access))
         .collect();
-    if !definition_fits_agent(&resolved.pinned.definition, &record.tools, &directories) {
+    if !definition_fits_agent(
+        &resolved.pinned.definition,
+        &record.tools,
+        &directories,
+        &record.primary_directory,
+    ) {
         return reject_chat_input(
             &state,
             graft,
@@ -294,6 +299,7 @@ async fn send(
             host_policy: policy,
             turns: started.turns.clone(),
             job: started.job.clone(),
+            eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
         },
         lease,
         execution,
@@ -771,9 +777,82 @@ fn attach_workflow_ui(
                 }
                 .as_token(),
                 label: record.definition.name().to_owned(),
+                policy: workflow_policy(&record.definition),
                 selected: selected == Some(record.id),
             })
             .collect();
+    }
+}
+
+fn workflow_policy(definition: &crate::workflows::definition::WorkflowDefinition) -> String {
+    use crate::workflows::definition::{
+        ArtefactKind, ArtefactSource, CandidateAuthority, StepAction,
+    };
+
+    let Some(commit) = definition.steps().iter().find(|step| {
+        matches!(
+            &step.action,
+            StepAction::SystemCommand(action)
+                if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
+        )
+    }) else {
+        return "No review policy".to_owned();
+    };
+    let source_step = |kind| {
+        commit
+            .inputs
+            .iter()
+            .find(|input| input.kind == kind)
+            .and_then(|input| match &input.source {
+                ArtefactSource::StepOutput { step, .. } => definition.step(step),
+                ArtefactSource::RunInitialCandidate => None,
+            })
+    };
+    let (Some(candidate_step), Some(report_step)) = (
+        source_step(ArtefactKind::CandidateRevision),
+        source_step(ArtefactKind::ReviewReport),
+    ) else {
+        return "No review policy".to_owned();
+    };
+    let StepAction::Agent(report_action) = &report_step.action else {
+        return "No review policy".to_owned();
+    };
+    match report_action.candidate_authority {
+        CandidateAuthority::Edit if candidate_step.key == report_step.key => {
+            "Fixing review with direct commit policy".to_owned()
+        }
+        CandidateAuthority::ReadOnly => {
+            let reviewed_candidate = report_step.inputs.iter().find_map(|input| {
+                if input.kind != ArtefactKind::CandidateRevision {
+                    return None;
+                }
+                match &input.source {
+                    ArtefactSource::StepOutput { step, .. } => Some(step),
+                    ArtefactSource::RunInitialCandidate => None,
+                }
+            });
+            let fixing_candidate = reviewed_candidate
+                .and_then(|step| definition.step(step))
+                .is_some_and(|step| {
+                    matches!(
+                        &step.action,
+                        StepAction::Agent(action)
+                            if action.candidate_authority == CandidateAuthority::Edit
+                                && action.required_outputs.iter().any(|output| {
+                                    output.kind
+                                        == crate::workflows::definition::OutputKind::ReviewReport
+                                })
+                    )
+                });
+            if candidate_step.key == report_step.key {
+                "No review policy".to_owned()
+            } else if fixing_candidate {
+                "Fixing review with independent read-only review".to_owned()
+            } else {
+                "Read-only review before commit".to_owned()
+            }
+        }
+        CandidateAuthority::Edit => "No review policy".to_owned(),
     }
 }
 

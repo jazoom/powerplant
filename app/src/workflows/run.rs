@@ -1098,6 +1098,7 @@ impl WorkflowRun {
             }
             validate_attempt_result(attempt, step)?;
             validate_attempt_isolation(attempt, step, self)?;
+            validate_report_binding(attempt, step, self)?;
         }
         validate_transitions(
             self.created_at_ms,
@@ -1897,11 +1898,16 @@ fn validate_attempt_result(
 }
 
 fn durable_outputs_match(attempt: &AttemptRecord, step: &StepDefinition) -> bool {
-    if !matches!(
-        &step.action,
-        StepAction::SystemCommand(action)
-            if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
-    ) {
+    let fixes_or_commits = step
+        .required_outputs()
+        .iter()
+        .any(|output| output.kind == crate::workflows::definition::OutputKind::ReviewReport)
+        || matches!(
+            &step.action,
+            StepAction::SystemCommand(action)
+                if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
+        );
+    if !fixes_or_commits {
         return true;
     }
     let durable: Vec<_> = step
@@ -1921,6 +1927,91 @@ fn durable_outputs_match(attempt: &AttemptRecord, step: &StepDefinition) -> bool
                 .iter()
                 .any(|output| output.key == **key && output.artefact.kind == *kind)
         })
+}
+
+fn validate_report_binding(
+    attempt: &AttemptRecord,
+    step: &StepDefinition,
+    run: &WorkflowRun,
+) -> Result<(), RunRecordError> {
+    let StepAction::Agent(action) = &step.action else {
+        return Ok(());
+    };
+    let reports: Vec<_> = attempt
+        .outputs
+        .iter()
+        .filter(|output| {
+            output.artefact.kind == crate::workflows::definition::ArtefactKind::ReviewReport
+        })
+        .collect();
+    if reports.is_empty() {
+        return Ok(());
+    }
+    let candidate_reference = match action.candidate_authority {
+        crate::workflows::definition::CandidateAuthority::ReadOnly => attempt
+            .inputs
+            .iter()
+            .find(|input| {
+                input.artefact.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+            })
+            .map(|input| &input.artefact),
+        crate::workflows::definition::CandidateAuthority::Edit => attempt
+            .outputs
+            .iter()
+            .find(|output| {
+                output.artefact.kind
+                    == crate::workflows::definition::ArtefactKind::CandidateRevision
+            })
+            .map(|output| &output.artefact),
+    }
+    .ok_or(RunRecordError::Corrupt)?;
+    let candidate_record = run
+        .artefact(&candidate_reference.id)
+        .ok_or(RunRecordError::Corrupt)?;
+    let candidate = candidate_record
+        .candidate_hash()
+        .ok_or(RunRecordError::Corrupt)?;
+    if candidate_record.provenance.run_id != run.id {
+        return Err(RunRecordError::Corrupt);
+    }
+    if action.candidate_authority == crate::workflows::definition::CandidateAuthority::Edit
+        && !required_output_from_attempt(candidate_record, attempt)
+    {
+        return Err(RunRecordError::Corrupt);
+    }
+    for report in reports {
+        let record = run
+            .artefact(&report.artefact.id)
+            .ok_or(RunRecordError::Corrupt)?;
+        let bound = record.candidate_hash().ok_or(RunRecordError::Corrupt)?;
+        if bound != candidate
+            || record.provenance.run_id != run.id
+            || !required_output_from_attempt(record, attempt)
+            || !record
+                .provenance
+                .inputs
+                .iter()
+                .any(|input| input == candidate_reference)
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+    }
+    Ok(())
+}
+
+fn required_output_from_attempt(
+    record: &crate::workflows::artefacts::ArtefactRecord,
+    attempt: &AttemptRecord,
+) -> bool {
+    matches!(
+        &record.provenance.producer,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id,
+            step,
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+            ..
+        } if *attempt_id == attempt.id && *step == attempt.step
+    )
 }
 
 fn validate_attempt_isolation(
@@ -2064,14 +2155,28 @@ fn valid_git_object_id(value: &str) -> bool {
 fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefinition) -> bool {
     match &step.action {
         StepAction::Agent(action) => {
+            let primary = capabilities
+                .directories
+                .iter()
+                .filter(|directory| directory.role == DirectoryRole::PrimarySource);
+            let primary: Vec<_> = primary.collect();
+            let secondary: Vec<_> = capabilities
+                .directories
+                .iter()
+                .filter(|directory| directory.role == DirectoryRole::SecondaryContext)
+                .collect();
             capabilities.git_admin == AccessMode::ReadOnly
                 && capabilities.source_location == PrimarySourceLocation::AttemptWorkspace
+                && primary.len() == 1
+                && primary[0].access == action.candidate_authority.access()
                 && capabilities
                     .tools
                     .iter()
                     .all(|tool| action.authority.tools.contains(tool))
-                && capabilities.directories.iter().all(|directory| {
+                && secondary.len() == action.authority.directories.len()
+                && secondary.iter().all(|directory| {
                     valid_guest_path(&directory.guest_path)
+                        && directory.access == AccessMode::ReadOnly
                         && action
                             .authority
                             .directories

@@ -72,6 +72,11 @@
                 <span>{{ step.name }} ({{ step.action }})</span>
                 <span class="badge badge-outline">{{ step.status }}</span>
               </div>
+              {% if step.candidate_access != "" %}
+                <p class="text-sm">
+                  Candidate access: {{ step.candidate_access }}
+                </p>
+              {% endif %}
               {% if step.environment != "" %}
                 <p class="text-quiet text-xs">{{ step.environment }}</p>
               {% endif %}
@@ -82,11 +87,24 @@
                 <p class="font-mono text-sm">Commit {{ step.commit }}</p>
               {% endif %}
               {% for artefact in step.artefacts %}
-                <p class="text-sm">
+                <div class="flex flex-wrap items-center gap-2 text-sm">
                   <a href="{{ artefact.href }}" data-graft class="link"
                     >{{ artefact.key }} · {{ artefact.kind }}</a
                   >
-                </p>
+                  {% if artefact.candidate_hash != "" %}
+                    <span class="font-mono text-xs"
+                      >{{ artefact.candidate_hash }}</span
+                    >
+                  {% endif %}
+                  {% if artefact.note != "" %}
+                    <span>{{ artefact.note }}</span>
+                  {% endif %}
+                  {% if artefact.status != "" %}
+                    <span class="badge badge-outline badge-sm"
+                      >{{ artefact.status }}</span
+                    >
+                  {% endif %}
+                </div>
               {% endfor %}
             </li>
           {% endfor %}

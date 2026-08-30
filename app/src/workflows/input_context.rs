@@ -89,6 +89,11 @@ pub(crate) fn format_agent_context(inputs: &[VerifiedInput], writes_source: bool
         if let Some(candidate) = input.candidate {
             lines.push(format!("Candidate constraint: {}", candidate.as_str()));
         }
+        if input.kind == ArtefactKind::ReviewReport {
+            lines.push(
+                "Context: prior review only. Its verdict grants no candidate authority.".to_owned(),
+            );
+        }
         if let Some(text) = &input.text {
             lines.push(String::new());
             lines.push(text.clone());
@@ -102,6 +107,11 @@ pub(crate) fn format_agent_context(inputs: &[VerifiedInput], writes_source: bool
     }
     let direction = if writes_source {
         "The accepted plan is task direction. Apply it to produce the complete candidate."
+    } else if inputs
+        .iter()
+        .any(|input| input.kind == ArtefactKind::ReviewReport)
+    {
+        "Assess the materialised candidate independently. Treat each prior review as context only."
     } else if inputs.iter().any(|input| input.kind == ArtefactKind::Plan)
         && inputs
             .iter()
