@@ -13,6 +13,8 @@ pub(crate) const ONE_AGENT_V1: &str = "one-agent-v1";
 pub(crate) const SEQUENTIAL_TEAM_V1: &str = "sequential-team-v1";
 pub(crate) const READ_ONLY_REVIEW_V1: &str = "read-only-review-v1";
 pub(crate) const REVIEW_WITH_FIXES_V1: &str = "review-with-fixes-v1";
+pub(crate) const REVIEW_UNTIL_APPROVED_V1: &str = "review-until-approved-v1";
+pub(crate) const CORRECTNESS_SECURITY_REVIEW_V1: &str = "correctness-security-v1";
 
 const SEED_KEY_BYTES: usize = 32;
 
@@ -63,6 +65,14 @@ pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<Workfl
         (
             REVIEW_WITH_FIXES_V1,
             review_with_fixes_definition(default_environment),
+        ),
+        (
+            REVIEW_UNTIL_APPROVED_V1,
+            review_until_approved_definition(default_environment),
+        ),
+        (
+            CORRECTNESS_SECURITY_REVIEW_V1,
+            correctness_security_definition(default_environment),
         ),
     ]
     .into_iter()
@@ -308,6 +318,173 @@ pub(crate) fn review_with_fixes_definition(
             commit_step("fixing-reviewer", "independent-reviewer"),
         ],
     )
+}
+
+pub(crate) fn review_until_approved_definition(
+    default_environment: EnvironmentId,
+) -> WorkflowDefinition {
+    let roles = vec![
+        role(
+            "implementer",
+            "Implementer",
+            "Implements requested changes.",
+            "Implement the task and address each review.",
+        ),
+        role(
+            "reviewer",
+            "Reviewer",
+            "Checks correctness and regressions.",
+            "Submit a structured review verdict for this candidate.",
+        ),
+    ];
+    let implementer = agent_step(
+        "implementer",
+        "Implementer",
+        "implementer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), candidate_revision_output()],
+        next("reviewer"),
+    );
+    let reviewer = agent_step(
+        "reviewer",
+        "Reviewer",
+        "reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), review_output()],
+        review_gate("review", "commit", "implementer", 3),
+    );
+    definition(
+        "Review until approved",
+        default_environment,
+        roles,
+        "implementer",
+        vec![
+            implementer,
+            reviewer,
+            commit_step_current(&[("review", "reviewer")]),
+        ],
+    )
+}
+
+pub(crate) fn correctness_security_definition(
+    default_environment: EnvironmentId,
+) -> WorkflowDefinition {
+    let roles = vec![
+        role(
+            "implementer",
+            "Implementer",
+            "Implements requested changes.",
+            "Implement the task and address each review.",
+        ),
+        role(
+            "correctness-reviewer",
+            "Correctness reviewer",
+            "Checks behaviour and regressions.",
+            "Submit a structured correctness verdict.",
+        ),
+        role(
+            "security-reviewer",
+            "Security reviewer",
+            "Checks security boundaries and unsafe input.",
+            "Submit a structured security verdict.",
+        ),
+    ];
+    let implementer = agent_step(
+        "implementer",
+        "Implementer",
+        "implementer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), candidate_revision_output()],
+        next("correctness-review"),
+    );
+    let correctness = agent_step(
+        "correctness-review",
+        "Correctness review",
+        "correctness-reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), review_output()],
+        review_gate("review", "security-review", "implementer", 3),
+    );
+    let security = agent_step(
+        "security-review",
+        "Security review",
+        "security-reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![
+            current_candidate_input(),
+            input(
+                "correctness-review",
+                ArtefactKind::ReviewReport,
+                "correctness-review",
+                "review",
+            ),
+        ],
+        vec![assistant_output(), review_output()],
+        review_gate("review", "commit", "implementer", 3),
+    );
+    definition(
+        "Correctness and security review",
+        default_environment,
+        roles,
+        "implementer",
+        vec![
+            implementer,
+            correctness,
+            security,
+            commit_step_current(&[
+                ("correctness-review", "correctness-review"),
+                ("security-review", "security-review"),
+            ]),
+        ],
+    )
+}
+
+fn current_candidate_input() -> RequiredInput {
+    RequiredInput {
+        key: InputKey::parse("candidate").expect("input"),
+        kind: ArtefactKind::CandidateRevision,
+        source: ArtefactSource::RunCurrentCandidate,
+    }
+}
+
+fn review_gate(output: &str, approved: &str, revision: &str, limit: u8) -> SuccessTransition {
+    SuccessTransition::ReviewVerdictGate(super::definition::ReviewVerdictGate {
+        report_output: OutputKey::parse(output).expect("output"),
+        approved_target: super::definition::ApprovedTarget::Next(
+            StepKey::parse(approved).expect("approved"),
+        ),
+        revision_target: StepKey::parse(revision).expect("revision"),
+        attempt_limit: limit,
+    })
+}
+
+fn commit_step_current(reviews: &[(&str, &str)]) -> StepDefinition {
+    let mut inputs = vec![current_candidate_input()];
+    inputs.extend(
+        reviews
+            .iter()
+            .map(|(key, step)| input(key, ArtefactKind::ReviewReport, step, "review")),
+    );
+    StepDefinition {
+        key: StepKey::parse("commit").expect("step"),
+        name: "Commit".to_owned(),
+        inputs,
+        action: StepAction::SystemCommand(SystemCommandStep {
+            command: SystemCommandId::CommitCandidate,
+            environment: StepEnvironment::WorkflowDefault,
+            required_outputs: vec![output("committed-candidate", OutputKind::CandidateRevision)],
+        }),
+        on_success: SuccessTransition::CompleteRun,
+    }
 }
 
 fn definition(

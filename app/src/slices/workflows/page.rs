@@ -6,7 +6,7 @@ use crate::agents::ToolId;
 use crate::workflows::WorkflowRecord;
 use crate::workflows::definition::{MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS};
 
-use super::forms::{FormErrors, RoleDraft, StepDraft, WorkflowFormState};
+use super::forms::{FormErrors, RoleDraft, StepDraft, WorkflowFormState, can_move_step};
 
 pub(super) struct EnvironmentOption {
     pub(super) id: String,
@@ -140,6 +140,17 @@ pub(super) struct StepRow {
     pub(super) outputs: Vec<OutputRow>,
     pub(super) can_add_output: bool,
     pub(super) transition: &'static str,
+    pub(super) exit: String,
+    pub(super) exit_error: &'static str,
+    pub(super) report_output: String,
+    pub(super) report_output_error: &'static str,
+    pub(super) revision_target: String,
+    pub(super) revision_target_error: &'static str,
+    pub(super) attempt_limit: String,
+    pub(super) attempt_limit_error: &'static str,
+    pub(super) revision_options: Vec<SourceOption>,
+    pub(super) can_review_gate: bool,
+    pub(super) phase: usize,
     pub(super) can_move_up: bool,
     pub(super) can_move_down: bool,
     pub(super) can_remove: bool,
@@ -285,7 +296,7 @@ impl WorkflowFormView {
                         index,
                         step_count,
                         step,
-                        &state.steps[..index],
+                        &state.steps,
                         errors.steps.get(index),
                     )
                 })
@@ -383,10 +394,11 @@ fn step_row(
     index: usize,
     count: usize,
     step: &StepDraft,
-    earlier: &[StepDraft],
+    steps: &[StepDraft],
     errors: Option<&super::forms::StepErrors>,
 ) -> StepRow {
     let errors = errors.cloned().unwrap_or_default();
+    let earlier = &steps[..index];
     let output_count = step.outputs.len();
     let input_count = step.inputs.len();
     let is_agent = step.action == "agent";
@@ -504,8 +516,30 @@ fn step_row(
         } else {
             "Complete run"
         },
-        can_move_up: index > 0,
-        can_move_down: index + 1 < count,
+        exit: step.exit.clone(),
+        exit_error: errors.exit,
+        report_output: step.report_output.clone(),
+        report_output_error: errors.report_output,
+        revision_target: step.revision_target.clone(),
+        revision_target_error: errors.revision_target,
+        attempt_limit: step.attempt_limit.clone(),
+        attempt_limit_error: errors.attempt_limit,
+        revision_options: earlier
+            .iter()
+            .map(|item| SourceOption {
+                value: item.key.clone(),
+                label: item.name.clone(),
+                selected: item.key == step.revision_target,
+            })
+            .collect(),
+        can_review_gate: is_agent && !earlier.is_empty(),
+        phase: earlier
+            .iter()
+            .filter(|item| item.exit == "review-verdict")
+            .count()
+            + 1,
+        can_move_up: can_move_step(steps, index, true),
+        can_move_down: can_move_step(steps, index, false),
         can_remove: count > 1,
     }
 }
@@ -517,6 +551,11 @@ fn source_options(earlier: &[StepDraft], kind: &str, current: &str) -> Vec<Sourc
             value: "run-initial-candidate".to_owned(),
             label: "Task source candidate".to_owned(),
             selected: current == "run-initial-candidate",
+        });
+        options.push(SourceOption {
+            value: "run-current-candidate".to_owned(),
+            label: "Current candidate".to_owned(),
+            selected: current == "run-current-candidate",
         });
     }
     for step in earlier {

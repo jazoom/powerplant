@@ -200,6 +200,25 @@ async fn a_detail_patch_targets_run_detail() {
 }
 
 #[test]
+fn review_verdict_skips_candidate_outputs_from_fixing_reviews() {
+    let candidate = crate::workflows::artefacts::ArtefactSummary::Candidate {
+        candidate: crate::workflows::artefacts::CandidateHash::of(b"candidate"),
+        entries: 1,
+        bytes: 1,
+        disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+    };
+    let review = crate::workflows::artefacts::ArtefactSummary::Review {
+        candidate: crate::workflows::artefacts::CandidateHash::of(b"candidate"),
+        verdict: crate::workflows::artefacts::ReviewVerdict::Approved,
+    };
+
+    assert_eq!(
+        super::page::review_verdict_label([&candidate, &review].into_iter()),
+        "Approved"
+    );
+}
+
+#[test]
 fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
     let view = super::page::RunDetailView {
         run_id: "run".to_owned(),
@@ -227,6 +246,11 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
             }],
             commit: "01234567".to_owned(),
             gate_href: String::new(),
+            review_phase: String::new(),
+            attempt_limit: String::new(),
+            latest_verdict: String::new(),
+            selected_route: String::new(),
+            role: String::new(),
         }],
         environments: Vec::new(),
         attempts: Vec::new(),

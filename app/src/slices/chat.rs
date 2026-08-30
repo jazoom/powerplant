@@ -805,7 +805,7 @@ fn workflow_policy(definition: &crate::workflows::definition::WorkflowDefinition
             .find(|input| input.kind == kind)
             .and_then(|input| match &input.source {
                 ArtefactSource::StepOutput { step, .. } => definition.step(step),
-                ArtefactSource::RunInitialCandidate => None,
+                ArtefactSource::RunInitialCandidate | ArtefactSource::RunCurrentCandidate => None,
             })
     };
     let (Some(candidate_step), Some(report_step)) = (
@@ -828,7 +828,9 @@ fn workflow_policy(definition: &crate::workflows::definition::WorkflowDefinition
                 }
                 match &input.source {
                     ArtefactSource::StepOutput { step, .. } => Some(step),
-                    ArtefactSource::RunInitialCandidate => None,
+                    ArtefactSource::RunInitialCandidate | ArtefactSource::RunCurrentCandidate => {
+                        None
+                    }
                 }
             });
             let fixing_candidate = reviewed_candidate

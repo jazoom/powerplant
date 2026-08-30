@@ -1,13 +1,14 @@
 use super::{
-    ONE_AGENT_V1, SEQUENTIAL_TEAM_V1, SeedKey, WorkflowSeed, one_agent_definition,
-    review_with_fixes_definition, sequential_team_definition,
+    ONE_AGENT_V1, SEQUENTIAL_TEAM_V1, SeedKey, WorkflowSeed, correctness_security_definition,
+    one_agent_definition, review_until_approved_definition, review_with_fixes_definition,
+    sequential_team_definition,
 };
 use crate::agents::ToolId;
 use crate::workflows::catalogue::WorkflowCatalogue;
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 use crate::workflows::definition::{
-    ArtefactKind, ArtefactSource, OutputKind, StepAction, StepEnvironment, WorkflowDefinition,
-    test_environment_id,
+    ApprovedTarget, ArtefactKind, ArtefactSource, OutputKind, StepAction, StepEnvironment,
+    SuccessTransition, WorkflowDefinition, test_environment_id,
 };
 
 fn named(name: &str) -> WorkflowDefinition {
@@ -40,17 +41,19 @@ fn first_open_seeds_ordinary_workflows_once() {
     assert_eq!(
         names(&first),
         vec![
+            "Correctness and security review".to_owned(),
             "One agent".to_owned(),
             "Read-only review".to_owned(),
+            "Review until approved".to_owned(),
             "Review with fixes".to_owned(),
             "Sequential team".to_owned(),
         ]
     );
-    assert_eq!(first.applied_seed_count(), 4);
+    assert_eq!(first.applied_seed_count(), 6);
     let ids: Vec<_> = first.list().into_iter().map(|record| record.id).collect();
     let second = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
-    assert_eq!(second.list().len(), 4);
-    assert_eq!(second.applied_seed_count(), 4);
+    assert_eq!(second.list().len(), 6);
+    assert_eq!(second.applied_seed_count(), 6);
     let reopened: Vec<_> = second.list().into_iter().map(|record| record.id).collect();
     assert_eq!(reopened, ids);
 }
@@ -71,7 +74,7 @@ fn restart_preserves_an_edited_seeded_workflow() {
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     let loaded = reopened.get(&seeded.id).expect("loaded");
     assert_eq!(loaded.definition.name(), "Edited team");
-    assert_eq!(reopened.applied_seed_count(), 4);
+    assert_eq!(reopened.applied_seed_count(), 6);
 }
 
 #[test]
@@ -88,17 +91,19 @@ fn restart_does_not_restore_a_deleted_seeded_workflow() {
         .delete(&seeded.id, seeded.revision)
         .expect("delete");
     let remaining = vec![
+        "Correctness and security review".to_owned(),
         "One agent".to_owned(),
         "Read-only review".to_owned(),
+        "Review until approved".to_owned(),
         "Review with fixes".to_owned(),
     ];
     assert_eq!(names(&catalogue), remaining);
     assert!(catalogue.retired_ids().contains(&seeded.id));
-    assert_eq!(catalogue.applied_seed_count(), 4);
+    assert_eq!(catalogue.applied_seed_count(), 6);
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     assert_eq!(names(&reopened), remaining);
     assert!(reopened.retired_ids().contains(&seeded.id));
-    assert_eq!(reopened.applied_seed_count(), 4);
+    assert_eq!(reopened.applied_seed_count(), 6);
 }
 
 #[test]
@@ -118,8 +123,10 @@ fn a_present_seed_key_is_not_reapplied_from_code() {
     assert_eq!(
         names(&reopened),
         vec![
+            "Correctness and security review".to_owned(),
             "Custom".to_owned(),
             "Read-only review".to_owned(),
+            "Review until approved".to_owned(),
             "Review with fixes".to_owned(),
             "Sequential team".to_owned(),
         ]
@@ -299,6 +306,72 @@ fn review_with_fixes_uses_exact_independent_review_edges() {
                     if step.as_str() == "independent-reviewer" && output.as_str() == "review"
             )
     }));
+}
+
+#[test]
+fn review_until_approved_loops_to_the_implementer_and_hands_off_its_report() {
+    let definition = review_until_approved_definition(test_environment_id());
+    let reviewer = definition
+        .step(&crate::workflows::definition::StepKey::parse("reviewer").expect("key"))
+        .expect("reviewer");
+    let SuccessTransition::ReviewVerdictGate(gate) = &reviewer.on_success else {
+        panic!("review gate")
+    };
+    assert_eq!(gate.revision_target.as_str(), "implementer");
+    assert!(
+        matches!(&gate.approved_target, ApprovedTarget::Next(step) if step.as_str() == "commit")
+    );
+    assert_eq!(gate.attempt_limit, 3);
+    assert!(reviewer.inputs.iter().any(|input| {
+        input.kind == ArtefactKind::CandidateRevision
+            && input.source == ArtefactSource::RunCurrentCandidate
+    }));
+    let commit = definition
+        .step(&crate::workflows::definition::StepKey::parse("commit").expect("key"))
+        .expect("commit");
+    assert!(commit.inputs.iter().any(|input| {
+        input.kind == ArtefactKind::ReviewReport
+            && matches!(&input.source, ArtefactSource::StepOutput { step, output } if step.as_str() == "reviewer" && output.as_str() == "review")
+    }));
+}
+
+#[test]
+fn correctness_and_security_review_hands_both_current_reports_to_commit() {
+    let definition = correctness_security_definition(test_environment_id());
+    for (step_key, phase, approved) in [
+        ("correctness-review", 1, "security-review"),
+        ("security-review", 2, "commit"),
+    ] {
+        let key = crate::workflows::definition::StepKey::parse(step_key).expect("key");
+        let step = definition.step(&key).expect("review step");
+        let SuccessTransition::ReviewVerdictGate(gate) = &step.on_success else {
+            panic!("review gate")
+        };
+        assert_eq!(definition.review_phase(&key), Some(phase));
+        assert_eq!(gate.revision_target.as_str(), "implementer");
+        assert!(
+            matches!(&gate.approved_target, ApprovedTarget::Next(target) if target.as_str() == approved)
+        );
+    }
+    let commit = definition
+        .step(&crate::workflows::definition::StepKey::parse("commit").expect("key"))
+        .expect("commit");
+    let report_sources: Vec<_> = commit
+        .inputs
+        .iter()
+        .filter(|input| input.kind == ArtefactKind::ReviewReport)
+        .filter_map(|input| match &input.source {
+            ArtefactSource::StepOutput { step, output } => Some((step.as_str(), output.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        report_sources,
+        [
+            ("correctness-review", "review"),
+            ("security-review", "review")
+        ]
+    );
 }
 
 #[test]

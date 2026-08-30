@@ -72,10 +72,25 @@
                 <span>{{ step.name }} ({{ step.action }})</span>
                 <span class="badge badge-outline">{{ step.status }}</span>
               </div>
+              {% if step.role != "" %}<p class="text-sm">
+                Role: {{ step.role }}
+              </p>{% endif %}
               {% if step.candidate_access != "" %}
                 <p class="text-sm">
                   Candidate access: {{ step.candidate_access }}
                 </p>
+              {% endif %}
+              {% if step.review_phase != "" %}
+                <p class="text-sm">
+                  Review phase {{ step.review_phase }} · attempt limit
+                  {{ step.attempt_limit }}
+                </p>
+                {% if step.latest_verdict != "" %}<p class="text-sm">
+                  Latest verdict: {{ step.latest_verdict }}
+                </p>{% endif %}
+                {% if step.selected_route != "" %}<p class="text-sm">
+                  Selected route: {{ step.selected_route }}
+                </p>{% endif %}
               {% endif %}
               {% if step.environment != "" %}
                 <p class="text-quiet text-xs">{{ step.environment }}</p>
@@ -172,6 +187,22 @@
                   Git administrative access: {{ attempt.git_admin }}
                 </p>
                 <p class="text-quiet text-xs">Network: {{ attempt.network }}</p>
+                {% if attempt.route != "" %}<p class="text-sm">
+                  Route: {{ attempt.route }}
+                </p>{% endif %}
+                {% for report in attempt.reports %}
+                  <div class="flex flex-wrap items-center gap-2 text-sm">
+                    <a href="{{ report.href }}" data-graft class="link"
+                      >{{ report.key }} · {{ report.kind }}</a
+                    >
+                    <span class="font-mono text-xs"
+                      >{{ report.candidate_hash }}</span
+                    >
+                    <span class="badge badge-outline badge-sm"
+                      >{{ report.status }}</span
+                    >
+                  </div>
+                {% endfor %}
               </li>
             {% endfor %}
           </ul>

@@ -271,6 +271,7 @@ pub(crate) async fn execute_run(
         let commit_precondition = if commit_step {
             crate::workflows::commit::require_approved_review(
                 &run,
+                &step,
                 &inputs,
                 &state.workflow_artefacts,
             )
@@ -487,7 +488,7 @@ pub(crate) async fn execute_run(
             if let Some(run) = state.workflow_runs.get(&job.run_id)
                 && run.is_terminal()
             {
-                settle_job(&state, &job, JobStatus::Completed, None);
+                settle_terminal_job(&state, &job, &run);
                 return;
             }
             continue;
@@ -513,7 +514,7 @@ pub(crate) async fn execute_run(
                 if let Some(run) = state.workflow_runs.get(&job.run_id)
                     && run.is_terminal()
                 {
-                    settle_job(&state, &job, JobStatus::Completed, None);
+                    settle_terminal_job(&state, &job, &run);
                     return;
                 }
             }
@@ -526,6 +527,23 @@ pub(crate) async fn execute_run(
                 return;
             }
         }
+    }
+}
+
+fn settle_terminal_job(state: &AppState, job: &WorkflowJob, run: &crate::workflows::WorkflowRun) {
+    match &run.state {
+        crate::workflows::run::RunState::Escalated { reason, .. } => {
+            let message = match reason {
+                crate::workflows::run::EscalationReason::Blocked => {
+                    "The review blocked this workflow run."
+                }
+                crate::workflows::run::EscalationReason::AttemptLimit => {
+                    "The review attempt limit escalated this workflow run."
+                }
+            };
+            settle_job(state, job, JobStatus::Failed, Some(message));
+        }
+        _ => settle_job(state, job, JobStatus::Completed, None),
     }
 }
 
@@ -1056,13 +1074,16 @@ async fn execute_commit_transaction(
         })
         .map(|input| input.artefact.clone())
         .ok_or(CommitError::Assurance)?;
-    let review = inputs
+    let reviews: Vec<_> = inputs
         .iter()
-        .find(|input| {
+        .filter(|input| {
             input.artefact.kind == crate::workflows::definition::ArtefactKind::ReviewReport
         })
         .map(|input| input.artefact.clone())
-        .ok_or(CommitError::Assurance)?;
+        .collect();
+    if reviews.is_empty() {
+        return Err(CommitError::Assurance);
+    }
     let approval = inputs
         .iter()
         .find(|input| {
@@ -1073,7 +1094,7 @@ async fn execute_commit_transaction(
     let mut transaction = CommitTransaction {
         state: CommitTransactionState::Prepared,
         candidate,
-        review,
+        reviews,
         approval,
         expected_reference,
         old_object: initial
@@ -1858,8 +1879,25 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
         StepAction::Agent(_) if step.writes_primary_source() => "Implement",
         _ => step.name.as_str(),
     };
-    if position.is_empty() {
+    let action = if let crate::workflows::definition::SuccessTransition::ReviewVerdictGate(gate) =
+        &step.on_success
+    {
+        let phase = run.pinned.definition.review_phase(&step.key).unwrap_or(1);
+        let ordinal = run
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.step == step.key)
+            .count()
+            + 1;
+        format!(
+            "{action} phase {phase} · attempt {ordinal} of {}",
+            gate.attempt_limit
+        )
+    } else {
         action.to_owned()
+    };
+    if position.is_empty() {
+        action
     } else {
         format!("{action} · {position}")
     }
@@ -2025,6 +2063,12 @@ fn resolve_inputs(
                     return Err("Source capture has not finished.");
                 };
                 source.initial.clone()
+            }
+            crate::workflows::definition::ArtefactSource::RunCurrentCandidate => {
+                let crate::workflows::RunSource::Captured { source } = &run.source else {
+                    return Err("Source capture has not finished.");
+                };
+                source.accepted.clone()
             }
             crate::workflows::definition::ArtefactSource::StepOutput {
                 step: source_step,

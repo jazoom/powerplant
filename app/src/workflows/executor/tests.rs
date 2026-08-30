@@ -553,6 +553,102 @@ fn unregistered_command_text_cannot_become_a_system_command() {
     );
 }
 
+fn resolver_reference(
+    kind: crate::workflows::definition::ArtefactKind,
+    marker: &[u8],
+) -> crate::workflows::artefacts::ArtefactReference {
+    crate::workflows::artefacts::ArtefactReference {
+        id: crate::workflows::ArtefactId::generate().expect("artefact"),
+        kind,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::of(
+            marker,
+            kind.as_str().as_bytes(),
+        ),
+    }
+}
+
+fn completed_output_attempt(
+    step: &str,
+    ordinal: u32,
+    output: &str,
+    artefact: crate::workflows::artefacts::ArtefactReference,
+) -> crate::workflows::run::AttemptRecord {
+    crate::workflows::run::AttemptRecord {
+        id: crate::workflows::AttemptId::generate().expect("attempt"),
+        step: crate::workflows::definition::StepKey::parse(step).expect("step"),
+        ordinal,
+        action_kind: crate::workflows::run::ActionKind::Agent,
+        started_at_ms: u64::from(ordinal),
+        finished_at_ms: Some(u64::from(ordinal) + 1),
+        state: crate::workflows::run::AttemptState::Completed,
+        result: Some(crate::workflows::run::AttemptResult::Completed {
+            outputs: vec![output.to_owned()],
+        }),
+        inputs: Vec::new(),
+        outputs: vec![crate::workflows::run::AttemptArtefactOutput {
+            key: crate::workflows::definition::OutputKey::parse(output).expect("output"),
+            artefact,
+        }],
+        capabilities: crate::workflows::capabilities::test_agent_capabilities(),
+        sandbox: crate::workflows::run::AttemptSandboxRecord {
+            kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: crate::environments::SnapshotDigest::parse(&format!(
+                "sha256:{}",
+                "a".repeat(64)
+            ))
+            .expect("digest"),
+        },
+        cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+        commit_transaction: None,
+        commit_result: None,
+    }
+}
+
+#[test]
+fn step_output_resolution_uses_the_latest_completed_producer_attempt() {
+    use crate::workflows::definition::ArtefactKind;
+
+    let definition = crate::workflows::seeds::sequential_team_definition(
+        crate::workflows::definition::test_environment_id(),
+    );
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut run = crate::workflows::WorkflowRun::create(
+        crate::workflows::RunId::generate().expect("run"),
+        1,
+        AgentId::generate().expect("agent"),
+        crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let old_candidate = resolver_reference(ArtefactKind::CandidateRevision, b"old candidate");
+    let current_candidate =
+        resolver_reference(ArtefactKind::CandidateRevision, b"current candidate");
+    let incomplete_candidate =
+        resolver_reference(ArtefactKind::CandidateRevision, b"incomplete candidate");
+    let old_review = resolver_reference(ArtefactKind::ReviewReport, b"old review");
+    let current_review = resolver_reference(ArtefactKind::ReviewReport, b"current review");
+    run.attempts = vec![
+        completed_output_attempt("implementer", 1, "candidate", old_candidate),
+        completed_output_attempt("reviewer", 1, "review", old_review),
+        completed_output_attempt("implementer", 2, "candidate", current_candidate.clone()),
+        completed_output_attempt("reviewer", 2, "review", current_review.clone()),
+    ];
+    let mut incomplete =
+        completed_output_attempt("implementer", 3, "candidate", incomplete_candidate);
+    incomplete.state = crate::workflows::run::AttemptState::Active;
+    incomplete.finished_at_ms = None;
+    incomplete.result = None;
+    run.attempts.push(incomplete);
+    let commit = run
+        .pinned
+        .definition
+        .step(&crate::workflows::definition::StepKey::parse("commit").expect("step"))
+        .expect("commit");
+
+    let inputs = super::resolve_inputs(&run, commit).expect("resolve inputs");
+    assert_eq!(inputs[0].artefact, current_candidate);
+    assert_eq!(inputs[1].artefact, current_review);
+}
+
 #[test]
 fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
     for reference_updated in [false, true] {
@@ -655,7 +751,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
                 primary_directory: "project".to_owned(),
             })
             .expect("agent");
-        let definition = crate::workflows::seeds::sequential_team_definition(
+        let definition = crate::workflows::seeds::correctness_security_definition(
             crate::workflows::definition::test_environment_id(),
         );
         let environments = crate::workflows::test_environment_set(&definition);
@@ -675,13 +771,21 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
             kind: target_record.kind,
             artefact_hash: target_record.artefact_hash,
         };
-        let review_record = review_record(&run, target.candidate_hash, store);
-        let review_reference = crate::workflows::artefacts::ArtefactReference {
-            id: review_record.id,
-            kind: review_record.kind,
-            artefact_hash: review_record.artefact_hash,
+        let correctness_record =
+            review_record(&run, target.candidate_hash, "correctness-review", store);
+        let correctness_reference = crate::workflows::artefacts::ArtefactReference {
+            id: correctness_record.id,
+            kind: correctness_record.kind,
+            artefact_hash: correctness_record.artefact_hash,
         };
-        run.artefacts.extend([target_record, review_record]);
+        let security_record = review_record(&run, target.candidate_hash, "security-review", store);
+        let security_reference = crate::workflows::artefacts::ArtefactReference {
+            id: security_record.id,
+            kind: security_record.kind,
+            artefact_hash: security_record.artefact_hash,
+        };
+        run.artefacts
+            .extend([target_record, correctness_record, security_record]);
         let crate::workflows::RunSource::Captured { source } = &mut run.source else {
             panic!("source")
         };
@@ -717,8 +821,13 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
                 artefact: target_reference.clone(),
             },
             crate::workflows::run::AttemptArtefactInput {
-                key: crate::workflows::definition::InputKey::parse("review").expect("key"),
-                artefact: review_reference.clone(),
+                key: crate::workflows::definition::InputKey::parse("correctness-review")
+                    .expect("key"),
+                artefact: correctness_reference.clone(),
+            },
+            crate::workflows::run::AttemptArtefactInput {
+                key: crate::workflows::definition::InputKey::parse("security-review").expect("key"),
+                artefact: security_reference.clone(),
             },
         ];
         let sandbox = crate::workflows::run::AttemptSandboxRecord {
@@ -774,7 +883,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
                 crate::workflows::commit::CommitTransactionState::WorktreeApplied
             },
             candidate: target_reference,
-            review: review_reference,
+            reviews: vec![correctness_reference, security_reference],
             approval: None,
             expected_reference: reference,
             old_object: Some(old.clone()),
@@ -964,6 +1073,7 @@ fn candidate_record(
 fn review_record(
     run: &crate::workflows::WorkflowRun,
     candidate: crate::workflows::artefacts::CandidateHash,
+    step: &str,
     store: &crate::workflows::WorkflowArtefactRepository,
 ) -> crate::workflows::artefacts::ArtefactRecord {
     let (bytes, object, hash) = crate::workflows::artefacts::payload::encode_review(
@@ -985,7 +1095,7 @@ fn review_record(
             run_id: run.id,
             producer: crate::workflows::artefacts::ArtefactProducer::StepAttempt {
                 attempt_id: crate::workflows::AttemptId::generate().expect("producer"),
-                step: crate::workflows::definition::StepKey::parse("reviewer").expect("step"),
+                step: crate::workflows::definition::StepKey::parse(step).expect("step"),
                 output: Some(
                     crate::workflows::definition::OutputKey::parse("review").expect("output"),
                 ),

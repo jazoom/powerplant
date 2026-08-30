@@ -441,6 +441,12 @@ fn decision_record(
                     _ => return None,
                 }
             }
+            crate::workflows::definition::ArtefactSource::RunCurrentCandidate => {
+                match &run.source {
+                    crate::workflows::RunSource::Captured { source } => source.accepted.clone(),
+                    _ => return None,
+                }
+            }
             crate::workflows::definition::ArtefactSource::StepOutput { step, output } => run
                 .attempts
                 .iter()

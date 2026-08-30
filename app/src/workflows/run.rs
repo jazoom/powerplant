@@ -20,7 +20,7 @@ use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
 use super::id::{AttemptId, GateId, RunId, WorkflowId};
 use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
-pub(crate) const RUN_RECORD_VERSION: u32 = 2;
+pub(crate) const RUN_RECORD_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowRun {
@@ -54,6 +54,11 @@ pub(crate) enum RunState {
     RevisionRequested {
         step: StepKey,
         decision: ArtefactReference,
+    },
+    Escalated {
+        step: StepKey,
+        report: ArtefactReference,
+        reason: EscalationReason,
     },
     Completed,
     Failed,
@@ -102,6 +107,12 @@ pub(crate) enum AttemptState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EscalationReason {
+    Blocked,
+    AttemptLimit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TransitionCause {
     InitialSourceCaptureStarted,
     InitialSourceCaptured,
@@ -109,6 +120,10 @@ pub(crate) enum TransitionCause {
     SourceDriftDetected,
     AttemptStarted,
     AttemptCompleted,
+    ReviewApproved,
+    ReviewRevision,
+    ReviewBlockedEscalation,
+    ReviewAttemptLimitEscalation,
     AttemptFailed,
     CancellationRequested,
     ProcessRestarted,
@@ -244,6 +259,11 @@ enum RunStateFile {
         step: String,
         decision: ArtefactRefFile,
     },
+    Escalated {
+        step: String,
+        report: ArtefactRefFile,
+        reason: String,
+    },
     Completed,
     Failed,
     Cancelled,
@@ -291,7 +311,7 @@ struct AttemptFile {
 struct CommitTransactionFile {
     state: String,
     candidate: ArtefactRefFile,
-    review: ArtefactRefFile,
+    reviews: Vec<ArtefactRefFile>,
     approval: Option<ArtefactRefFile>,
     expected_reference: String,
     old_object: Option<String>,
@@ -697,6 +717,9 @@ impl WorkflowRun {
                 let to = match &definition.on_success {
                     SuccessTransition::Next(next) => RunState::Ready { step: next.clone() },
                     SuccessTransition::CompleteRun => RunState::Completed,
+                    SuccessTransition::ReviewVerdictGate(_) => {
+                        return Err(TransitionError::Invalid);
+                    }
                 };
                 self.push_transition(at_ms, TransitionCause::GateApproved, from, to);
             }
@@ -966,11 +989,87 @@ impl WorkflowRun {
             },
         )?;
         let from = self.state.clone();
-        let to = match on_success {
-            SuccessTransition::Next(next) => RunState::Ready { step: next },
-            SuccessTransition::CompleteRun => RunState::Completed,
-        };
-        self.push_transition(at_ms, TransitionCause::AttemptCompleted, from, to);
+        match on_success {
+            SuccessTransition::Next(next) => self.push_transition(
+                at_ms,
+                TransitionCause::AttemptCompleted,
+                from,
+                RunState::Ready { step: next },
+            ),
+            SuccessTransition::CompleteRun => self.push_transition(
+                at_ms,
+                TransitionCause::AttemptCompleted,
+                from,
+                RunState::Completed,
+            ),
+            SuccessTransition::ReviewVerdictGate(gate) => {
+                let attempt = self
+                    .attempts
+                    .iter()
+                    .find(|item| item.id == attempt_id)
+                    .ok_or(TransitionError::Invalid)?;
+                let report = attempt
+                    .outputs
+                    .iter()
+                    .find(|output| output.key == gate.report_output)
+                    .map(|output| output.artefact.clone())
+                    .ok_or(TransitionError::Invalid)?;
+                let verdict = match &self
+                    .artefact(&report.id)
+                    .ok_or(TransitionError::Invalid)?
+                    .summary
+                {
+                    crate::workflows::artefacts::ArtefactSummary::Review { verdict, .. } => {
+                        *verdict
+                    }
+                    _ => return Err(TransitionError::Invalid),
+                };
+                match verdict {
+                    crate::workflows::artefacts::ReviewVerdict::Approved => {
+                        let to = match gate.approved_target {
+                            super::definition::ApprovedTarget::Next(next) => {
+                                RunState::Ready { step: next }
+                            }
+                            super::definition::ApprovedTarget::CompleteRun => RunState::Completed,
+                        };
+                        self.push_transition(at_ms, TransitionCause::ReviewApproved, from, to);
+                    }
+                    crate::workflows::artefacts::ReviewVerdict::RevisionRequired
+                        if attempt.ordinal < u32::from(gate.attempt_limit) =>
+                    {
+                        self.push_transition(
+                            at_ms,
+                            TransitionCause::ReviewRevision,
+                            from,
+                            RunState::Ready {
+                                step: gate.revision_target,
+                            },
+                        )
+                    }
+                    crate::workflows::artefacts::ReviewVerdict::RevisionRequired => self
+                        .push_transition(
+                            at_ms,
+                            TransitionCause::ReviewAttemptLimitEscalation,
+                            from,
+                            RunState::Escalated {
+                                step,
+                                report,
+                                reason: EscalationReason::AttemptLimit,
+                            },
+                        ),
+                    crate::workflows::artefacts::ReviewVerdict::Blocked => self.push_transition(
+                        at_ms,
+                        TransitionCause::ReviewBlockedEscalation,
+                        from,
+                        RunState::Escalated {
+                            step,
+                            report,
+                            reason: EscalationReason::Blocked,
+                        },
+                    ),
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1088,6 +1187,7 @@ impl WorkflowRun {
             }
             RunState::Completed
             | RunState::RevisionRequested { .. }
+            | RunState::Escalated { .. }
             | RunState::Failed
             | RunState::Cancelled
             | RunState::Interrupted => Err(TransitionError::Invalid),
@@ -1173,6 +1273,7 @@ impl WorkflowRun {
             self.state,
             RunState::Completed
                 | RunState::RevisionRequested { .. }
+                | RunState::Escalated { .. }
                 | RunState::Failed
                 | RunState::Cancelled
                 | RunState::Interrupted
@@ -1184,7 +1285,8 @@ impl WorkflowRun {
             RunState::Ready { step }
             | RunState::Active { step, .. }
             | RunState::AwaitingHuman { step, .. }
-            | RunState::RevisionRequested { step, .. } => step,
+            | RunState::RevisionRequested { step, .. }
+            | RunState::Escalated { step, .. } => step,
             _ => self.attempts.last().map(|attempt| &attempt.step)?,
         };
         self.pinned
@@ -1336,8 +1438,8 @@ impl WorkflowRun {
     }
 
     fn validate_loaded(&self) -> Result<(), RunRecordError> {
-        if self.attempts.len() > self.pinned.definition.steps().len()
-            || self.transitions.len() > self.pinned.definition.steps().len() * 2 + 1
+        if self.attempts.len() > self.pinned.definition.attempt_bound()
+            || self.transitions.len() > self.pinned.definition.transition_bound()
         {
             return Err(RunRecordError::Corrupt);
         }
@@ -1368,6 +1470,7 @@ impl WorkflowRun {
             self.created_at_ms,
             &self.pinned.definition,
             &self.attempts,
+            &self.artefacts,
             &self.gates,
             &self.transitions,
             &self.state,
@@ -1384,6 +1487,10 @@ impl RunState {
             Self::Active { .. } => "Active",
             Self::AwaitingHuman { .. } => "Awaiting decision",
             Self::RevisionRequested { .. } => "Revision requested",
+            Self::Escalated { reason, .. } => match reason {
+                EscalationReason::Blocked => "Escalated (blocked)",
+                EscalationReason::AttemptLimit => "Escalated (attempt limit)",
+            },
             Self::Completed => "Completed",
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
@@ -1408,6 +1515,15 @@ impl RunState {
             RunStateFile::RevisionRequested { step, decision } => Self::RevisionRequested {
                 step: StepKey::parse(&step).map_err(|_| RunRecordError::Corrupt)?,
                 decision: ref_from_file(decision)?,
+            },
+            RunStateFile::Escalated {
+                step,
+                report,
+                reason,
+            } => Self::Escalated {
+                step: StepKey::parse(&step).map_err(|_| RunRecordError::Corrupt)?,
+                report: ref_from_file(report)?,
+                reason: EscalationReason::parse(&reason).ok_or(RunRecordError::Corrupt)?,
             },
             RunStateFile::Completed => Self::Completed,
             RunStateFile::Failed => Self::Failed,
@@ -1435,6 +1551,15 @@ impl RunStateFile {
             RunState::RevisionRequested { step, decision } => Self::RevisionRequested {
                 step: step.as_str().to_owned(),
                 decision: ref_to_file(decision),
+            },
+            RunState::Escalated {
+                step,
+                report,
+                reason,
+            } => Self::Escalated {
+                step: step.as_str().to_owned(),
+                report: ref_to_file(report),
+                reason: reason.as_str().to_owned(),
             },
             RunState::Completed => Self::Completed,
             RunState::Failed => Self::Failed,
@@ -1699,6 +1824,23 @@ impl TransitionRecord {
     }
 }
 
+impl EscalationReason {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "blocked" => Some(Self::Blocked),
+            "attempt-limit" => Some(Self::AttemptLimit),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::AttemptLimit => "attempt-limit",
+        }
+    }
+}
+
 impl TransitionCause {
     fn parse(value: &str) -> Option<Self> {
         match value {
@@ -1708,6 +1850,10 @@ impl TransitionCause {
             "source-drift-detected" => Some(Self::SourceDriftDetected),
             "attempt-started" => Some(Self::AttemptStarted),
             "attempt-completed" => Some(Self::AttemptCompleted),
+            "review-approved" => Some(Self::ReviewApproved),
+            "review-revision" => Some(Self::ReviewRevision),
+            "review-blocked-escalation" => Some(Self::ReviewBlockedEscalation),
+            "review-attempt-limit-escalation" => Some(Self::ReviewAttemptLimitEscalation),
             "attempt-failed" => Some(Self::AttemptFailed),
             "cancellation-requested" => Some(Self::CancellationRequested),
             "process-restarted" => Some(Self::ProcessRestarted),
@@ -1726,6 +1872,10 @@ impl TransitionCause {
             Self::SourceDriftDetected => "source-drift-detected",
             Self::AttemptStarted => "attempt-started",
             Self::AttemptCompleted => "attempt-completed",
+            Self::ReviewApproved => "review-approved",
+            Self::ReviewRevision => "review-revision",
+            Self::ReviewBlockedEscalation => "review-blocked-escalation",
+            Self::ReviewAttemptLimitEscalation => "review-attempt-limit-escalation",
             Self::AttemptFailed => "attempt-failed",
             Self::CancellationRequested => "cancellation-requested",
             Self::ProcessRestarted => "process-restarted",
@@ -2302,7 +2452,7 @@ fn commit_transaction_to_file(transaction: &CommitTransaction) -> CommitTransact
     CommitTransactionFile {
         state: transaction.state.encode(),
         candidate: ref_to_file(&transaction.candidate),
-        review: ref_to_file(&transaction.review),
+        reviews: transaction.reviews.iter().map(ref_to_file).collect(),
         approval: transaction.approval.as_ref().map(ref_to_file),
         expected_reference: transaction.expected_reference.clone(),
         old_object: transaction.old_object.clone(),
@@ -2318,7 +2468,11 @@ fn commit_transaction_from_file(
     Ok(CommitTransaction {
         state: CommitTransactionState::parse(&file.state).ok_or(RunRecordError::Corrupt)?,
         candidate: ref_from_file(file.candidate)?,
-        review: ref_from_file(file.review)?,
+        reviews: file
+            .reviews
+            .into_iter()
+            .map(ref_from_file)
+            .collect::<Result<_, _>>()?,
         approval: file.approval.map(ref_from_file).transpose()?,
         expected_reference: file.expected_reference,
         old_object: file.old_object,
@@ -2566,7 +2720,11 @@ fn validate_attempt_isolation(
 
 fn valid_commit_transaction(attempt: &AttemptRecord, transaction: &CommitTransaction) -> bool {
     if transaction.candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
-        || transaction.review.kind != crate::workflows::definition::ArtefactKind::ReviewReport
+        || transaction.reviews.is_empty()
+        || transaction
+            .reviews
+            .iter()
+            .any(|review| review.kind != crate::workflows::definition::ArtefactKind::ReviewReport)
         || transaction.approval.as_ref().is_some_and(|approval| {
             approval.kind != crate::workflows::definition::ArtefactKind::HumanDecision
                 || !attempt
@@ -2578,10 +2736,22 @@ fn valid_commit_transaction(attempt: &AttemptRecord, transaction: &CommitTransac
             .inputs
             .iter()
             .any(|input| input.artefact == transaction.candidate)
-        || !attempt
-            .inputs
-            .iter()
-            .any(|input| input.artefact == transaction.review)
+        || {
+            let expected_reviews: Vec<_> = attempt
+                .inputs
+                .iter()
+                .filter(|input| {
+                    input.artefact.kind == crate::workflows::definition::ArtefactKind::ReviewReport
+                })
+                .map(|input| &input.artefact)
+                .collect();
+            transaction.reviews.len() != expected_reviews.len()
+                || transaction
+                    .reviews
+                    .iter()
+                    .zip(expected_reviews)
+                    .any(|(stored, expected)| stored != expected)
+        }
         || transaction.expected_reference.is_empty()
         || transaction.timestamp.split_once(' ').is_none()
         || transaction
@@ -2802,6 +2972,7 @@ fn validate_transitions(
     created_at_ms: u64,
     definition: &WorkflowDefinition,
     attempts: &[AttemptRecord],
+    artefacts: &[ArtefactRecord],
     gates: &[HumanGateRecord],
     transitions: &[TransitionRecord],
     state: &RunState,
@@ -2886,10 +3057,83 @@ fn validate_transitions(
                 let expected_to = match &definition_step.on_success {
                     SuccessTransition::Next(next) => RunState::Ready { step: next.clone() },
                     SuccessTransition::CompleteRun => RunState::Completed,
+                    SuccessTransition::ReviewVerdictGate(_) => return Err(RunRecordError::Corrupt),
                 };
                 if record.state != AttemptState::Completed
                     || record.finished_at_ms != Some(transition.occurred_at_ms)
                     || transition.to != expected_to
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
+            TransitionCause::ReviewApproved
+            | TransitionCause::ReviewRevision
+            | TransitionCause::ReviewBlockedEscalation
+            | TransitionCause::ReviewAttemptLimitEscalation => {
+                let RunState::Active { step, attempt } = &transition.from else {
+                    return Err(RunRecordError::Corrupt);
+                };
+                let record = attempts
+                    .iter()
+                    .find(|record| record.id == *attempt)
+                    .ok_or(RunRecordError::Corrupt)?;
+                let definition_step = definition.step(step).ok_or(RunRecordError::Corrupt)?;
+                let SuccessTransition::ReviewVerdictGate(gate) = &definition_step.on_success else {
+                    return Err(RunRecordError::Corrupt);
+                };
+                let report = record
+                    .outputs
+                    .iter()
+                    .find(|output| output.key == gate.report_output)
+                    .map(|output| &output.artefact)
+                    .ok_or(RunRecordError::Corrupt)?;
+                let verdict = artefacts
+                    .iter()
+                    .find(|artefact| artefact.id == report.id)
+                    .and_then(|artefact| match artefact.summary {
+                        crate::workflows::artefacts::ArtefactSummary::Review {
+                            verdict, ..
+                        } => Some(verdict),
+                        _ => None,
+                    })
+                    .ok_or(RunRecordError::Corrupt)?;
+                let expected = match (verdict, transition.cause) {
+                    (
+                        crate::workflows::artefacts::ReviewVerdict::Approved,
+                        TransitionCause::ReviewApproved,
+                    ) => match &gate.approved_target {
+                        super::definition::ApprovedTarget::Next(next) => {
+                            RunState::Ready { step: next.clone() }
+                        }
+                        super::definition::ApprovedTarget::CompleteRun => RunState::Completed,
+                    },
+                    (
+                        crate::workflows::artefacts::ReviewVerdict::RevisionRequired,
+                        TransitionCause::ReviewRevision,
+                    ) if record.ordinal < u32::from(gate.attempt_limit) => RunState::Ready {
+                        step: gate.revision_target.clone(),
+                    },
+                    (
+                        crate::workflows::artefacts::ReviewVerdict::RevisionRequired,
+                        TransitionCause::ReviewAttemptLimitEscalation,
+                    ) if record.ordinal >= u32::from(gate.attempt_limit) => RunState::Escalated {
+                        step: step.clone(),
+                        report: report.clone(),
+                        reason: EscalationReason::AttemptLimit,
+                    },
+                    (
+                        crate::workflows::artefacts::ReviewVerdict::Blocked,
+                        TransitionCause::ReviewBlockedEscalation,
+                    ) => RunState::Escalated {
+                        step: step.clone(),
+                        report: report.clone(),
+                        reason: EscalationReason::Blocked,
+                    },
+                    _ => return Err(RunRecordError::Corrupt),
+                };
+                if record.state != AttemptState::Completed
+                    || record.finished_at_ms != Some(transition.occurred_at_ms)
+                    || transition.to != expected
                 {
                     return Err(RunRecordError::Corrupt);
                 }
@@ -2944,6 +3188,7 @@ fn validate_transitions(
                 let expected_to = match &definition_step.on_success {
                     SuccessTransition::Next(next) => RunState::Ready { step: next.clone() },
                     SuccessTransition::CompleteRun => RunState::Completed,
+                    SuccessTransition::ReviewVerdictGate(_) => return Err(RunRecordError::Corrupt),
                 };
                 if record.state != HumanGateState::Approved
                     || record.closed_at_ms != Some(transition.occurred_at_ms)

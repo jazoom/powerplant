@@ -31,7 +31,7 @@ pub(crate) enum CommitTransactionState {
 pub(crate) struct CommitTransaction {
     pub(crate) state: CommitTransactionState,
     pub(crate) candidate: ArtefactReference,
-    pub(crate) review: ArtefactReference,
+    pub(crate) reviews: Vec<ArtefactReference>,
     pub(crate) approval: Option<ArtefactReference>,
     pub(crate) expected_reference: String,
     pub(crate) old_object: Option<String>,
@@ -76,9 +76,17 @@ impl CommitError {
 
 pub(crate) fn require_approved_review(
     run: &WorkflowRun,
+    commit_step: &crate::workflows::definition::StepDefinition,
     inputs: &[AttemptArtefactInput],
     store: &WorkflowArtefactRepository,
-) -> Result<(ArtefactRecord, ArtefactRecord, CandidateRevisionArtefact), CommitError> {
+) -> Result<
+    (
+        ArtefactRecord,
+        Vec<ArtefactRecord>,
+        CandidateRevisionArtefact,
+    ),
+    CommitError,
+> {
     let mut candidates = inputs
         .iter()
         .filter(|input| input.artefact.kind == ArtefactKind::CandidateRevision);
@@ -86,31 +94,39 @@ pub(crate) fn require_approved_review(
     if candidates.next().is_some() {
         return Err(CommitError::Assurance);
     }
-    let mut reviews = inputs
+    let review_inputs: Vec<_> = inputs
         .iter()
-        .filter(|input| input.artefact.kind == ArtefactKind::ReviewReport);
-    let review_input = reviews.next().ok_or(CommitError::Assurance)?;
-    if reviews.next().is_some() {
+        .filter(|input| input.artefact.kind == ArtefactKind::ReviewReport)
+        .collect();
+    if review_inputs.is_empty() {
         return Err(CommitError::Assurance);
     }
     let candidate_record = run
         .artefact(&candidate_input.artefact.id)
         .cloned()
         .ok_or(CommitError::Assurance)?;
-    let review_record = run
-        .artefact(&review_input.artefact.id)
-        .cloned()
-        .ok_or(CommitError::Assurance)?;
-    if candidate_record.artefact_hash != candidate_input.artefact.artefact_hash
-        || review_record.artefact_hash != review_input.artefact.artefact_hash
-        || review_record.provenance.run_id != run.id
-        || !review_record
-            .provenance
-            .inputs
-            .iter()
-            .any(|input| input == &candidate_input.artefact)
-    {
+    let review_records: Vec<_> = review_inputs
+        .iter()
+        .map(|input| {
+            run.artefact(&input.artefact.id)
+                .cloned()
+                .ok_or(CommitError::Assurance)
+        })
+        .collect::<Result<_, _>>()?;
+    if candidate_record.artefact_hash != candidate_input.artefact.artefact_hash {
         return Err(CommitError::Assurance);
+    }
+    for (review_input, review_record) in review_inputs.iter().zip(&review_records) {
+        if review_record.artefact_hash != review_input.artefact.artefact_hash
+            || review_record.provenance.run_id != run.id
+            || !review_record
+                .provenance
+                .inputs
+                .iter()
+                .any(|input| input == &candidate_input.artefact)
+        {
+            return Err(CommitError::Assurance);
+        }
     }
     let crate::workflows::RunSource::Captured { source } = &run.source else {
         return Err(CommitError::Assurance);
@@ -121,17 +137,6 @@ pub(crate) fn require_approved_review(
     if artefact.id != candidate_record.id || source.accepted.id != candidate_record.id {
         return Err(CommitError::Assurance);
     }
-    let review_bytes = store
-        .get(&review_record.object_hash)
-        .map_err(|_| CommitError::Assurance)?;
-    if crate::workflows::artefacts::ObjectHash::of(&review_bytes) != review_record.object_hash {
-        return Err(CommitError::Assurance);
-    }
-    let payload = parse_typed_payload(ArtefactKind::ReviewReport, &review_bytes)
-        .map_err(|_| CommitError::Assurance)?;
-    let TypedPayload::Review(report) = payload else {
-        return Err(CommitError::Assurance);
-    };
     let candidate_bytes = store
         .get(&candidate_record.object_hash)
         .map_err(|_| CommitError::Assurance)?;
@@ -149,38 +154,43 @@ pub(crate) fn require_approved_review(
     if artefact_hash != candidate_record.artefact_hash {
         return Err(CommitError::Assurance);
     }
-    let bound = crate::workflows::artefacts::CandidateHash::parse(&report.candidate)
-        .ok_or(CommitError::Assurance)?;
-    if report.verdict != ReviewVerdict::Approved || bound != candidate.candidate_hash {
-        return Err(CommitError::Assurance);
-    }
-    let declared_source = run
-        .pinned
-        .definition
-        .steps()
-        .iter()
-        .find(|step| {
-            matches!(
-                &step.action,
-                crate::workflows::definition::StepAction::SystemCommand(action)
-                    if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
-            )
-        })
-        .and_then(|step| step.inputs.iter().find(|input| input.key == review_input.key))
-        .map(|input| &input.source);
-    match (&review_record.provenance.producer, declared_source) {
-        (
-            ArtefactProducer::StepAttempt {
-                step,
-                output: Some(output),
-                ..
-            },
-            Some(crate::workflows::definition::ArtefactSource::StepOutput {
-                step: declared_step,
-                output: declared_output,
-            }),
-        ) if step == declared_step && output == declared_output => {}
-        _ => return Err(CommitError::Assurance),
+    for (review_input, review_record) in review_inputs.iter().zip(&review_records) {
+        let review_bytes = store
+            .get(&review_record.object_hash)
+            .map_err(|_| CommitError::Assurance)?;
+        if crate::workflows::artefacts::ObjectHash::of(&review_bytes) != review_record.object_hash {
+            return Err(CommitError::Assurance);
+        }
+        let TypedPayload::Review(report) =
+            parse_typed_payload(ArtefactKind::ReviewReport, &review_bytes)
+                .map_err(|_| CommitError::Assurance)?
+        else {
+            return Err(CommitError::Assurance);
+        };
+        let bound = crate::workflows::artefacts::CandidateHash::parse(&report.candidate)
+            .ok_or(CommitError::Assurance)?;
+        if report.verdict != ReviewVerdict::Approved || bound != candidate.candidate_hash {
+            return Err(CommitError::Assurance);
+        }
+        let declared_source = commit_step
+            .inputs
+            .iter()
+            .find(|input| input.key == review_input.key)
+            .map(|input| &input.source);
+        match (&review_record.provenance.producer, declared_source) {
+            (
+                ArtefactProducer::StepAttempt {
+                    step,
+                    output: Some(output),
+                    ..
+                },
+                Some(crate::workflows::definition::ArtefactSource::StepOutput {
+                    step: declared_step,
+                    output: declared_output,
+                }),
+            ) if step == declared_step && output == declared_output => {}
+            _ => return Err(CommitError::Assurance),
+        }
     }
     let decisions: Vec<_> = inputs
         .iter()
@@ -225,7 +235,7 @@ pub(crate) fn require_approved_review(
             return Err(CommitError::Assurance);
         }
     }
-    Ok((candidate_record, review_record, candidate))
+    Ok((candidate_record, review_records, candidate))
 }
 
 impl CommitTransactionState {
@@ -256,7 +266,7 @@ impl CommitTransactionState {
 impl CommitTransaction {
     pub(crate) fn can_advance_to(&self, next: &Self) -> bool {
         if self.candidate != next.candidate
-            || self.review != next.review
+            || self.reviews != next.reviews
             || self.approval != next.approval
             || self.expected_reference != next.expected_reference
             || self.old_object != next.old_object

@@ -259,7 +259,7 @@ fn unreachable_steps_are_rejected() {
 fn arbitrary_command_values_are_rejected() {
     let json = format!(
         r#"{{
-        "format-version": 3,
+        "format-version": 1,
         "name": "Status",
         "default-environment": "{}",
         "roles": [],
@@ -704,4 +704,141 @@ fn secondary_write_grants_are_rejected() {
     )
     .err();
     assert_eq!(error, Some(DefinitionError::SecondaryWrite));
+}
+
+fn rebuild_review_definition(
+    steps: Vec<StepDefinition>,
+) -> Result<WorkflowDefinition, DefinitionError> {
+    let source = crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    WorkflowDefinition::from_parts(
+        source.name().to_owned(),
+        source.default_environment(),
+        source.roles().to_vec(),
+        source.first_step().clone(),
+        steps,
+    )
+}
+
+#[test]
+fn review_gate_shape_and_attempt_limits_are_validated() {
+    enum InvalidGate {
+        MissingReport,
+        ForwardTarget,
+        UnknownTarget,
+        AttemptLimit(u8),
+    }
+
+    for (invalid, expected) in [
+        (InvalidGate::MissingReport, DefinitionError::ReviewGate),
+        (InvalidGate::ForwardTarget, DefinitionError::ReviewGate),
+        (InvalidGate::UnknownTarget, DefinitionError::UnknownStep),
+        (InvalidGate::AttemptLimit(0), DefinitionError::AttemptLimit),
+        (InvalidGate::AttemptLimit(9), DefinitionError::AttemptLimit),
+    ] {
+        let source =
+            crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+        let mut steps = source.steps().to_vec();
+        let reviewer = steps
+            .iter_mut()
+            .find(|step| step.key.as_str() == "reviewer")
+            .expect("reviewer");
+        let SuccessTransition::ReviewVerdictGate(gate) = &mut reviewer.on_success else {
+            panic!("review gate")
+        };
+        match invalid {
+            InvalidGate::MissingReport => {
+                gate.report_output = OutputKey::parse("missing").expect("output")
+            }
+            InvalidGate::ForwardTarget => {
+                gate.revision_target = StepKey::parse("commit").expect("step")
+            }
+            InvalidGate::UnknownTarget => {
+                gate.revision_target = StepKey::parse("missing").expect("step")
+            }
+            InvalidGate::AttemptLimit(limit) => gate.attempt_limit = limit,
+        }
+        assert_eq!(rebuild_review_definition(steps).err(), Some(expected));
+    }
+}
+
+#[test]
+fn repeatable_steps_require_the_current_candidate() {
+    let source = crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    let mut steps = source.steps().to_vec();
+    let reviewer = steps
+        .iter_mut()
+        .find(|step| step.key.as_str() == "reviewer")
+        .expect("reviewer");
+    reviewer
+        .inputs
+        .iter_mut()
+        .find(|input| input.kind == ArtefactKind::CandidateRevision)
+        .expect("candidate")
+        .source = from_step("implementer", "candidate");
+    assert_eq!(
+        rebuild_review_definition(steps).err(),
+        Some(DefinitionError::CandidateInput)
+    );
+}
+
+#[test]
+fn review_loops_respect_the_conservative_run_bound() {
+    let mut steps = Vec::new();
+    for index in 0..10 {
+        let key = StepKey::parse(&format!("step-{index}")).expect("step");
+        let next =
+            (index + 1 < 10).then(|| StepKey::parse(&format!("step-{}", index + 1)).expect("next"));
+        let mut outputs = vec![
+            RequiredOutput {
+                key: OutputKey::parse(ASSISTANT_REPLY).expect("reply"),
+                kind: OutputKind::AssistantReply,
+            },
+            candidate_revision_output(),
+        ];
+        let on_success = if index == 0 {
+            SuccessTransition::Next(next.expect("next"))
+        } else {
+            outputs.push(RequiredOutput {
+                key: OutputKey::parse("review").expect("review"),
+                kind: OutputKind::ReviewReport,
+            });
+            SuccessTransition::ReviewVerdictGate(super::ReviewVerdictGate {
+                report_output: OutputKey::parse("review").expect("review"),
+                approved_target: next.map_or(
+                    super::ApprovedTarget::CompleteRun,
+                    super::ApprovedTarget::Next,
+                ),
+                revision_target: StepKey::parse("step-0").expect("target"),
+                attempt_limit: 8,
+            })
+        };
+        steps.push(write_agent_step(
+            key.as_str(),
+            on_success,
+            ArtefactSource::RunCurrentCandidate,
+            outputs,
+        ));
+    }
+    assert_eq!(
+        WorkflowDefinition::from_parts(
+            "Bounded".to_owned(),
+            test_environment_id(),
+            vec![role()],
+            StepKey::parse("step-0").expect("first"),
+            steps,
+        )
+        .err(),
+        Some(DefinitionError::RunBound)
+    );
+}
+
+#[test]
+fn review_gates_and_current_candidates_round_trip() {
+    let definition =
+        crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    let bytes = serde_json::to_vec(&definition.to_file()).expect("json");
+    assert_eq!(
+        WorkflowDefinition::from_file_bytes(&bytes).expect("round trip"),
+        definition
+    );
 }

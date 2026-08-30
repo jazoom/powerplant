@@ -306,6 +306,130 @@
                   <p class="text-error text-sm">{{ step.action_error }}</p>
                 {% endif %}
               </label>
+              {% if step.can_review_gate %}
+                <fieldset
+                  class="border-base-300 space-y-3 rounded-sm border p-3"
+                >
+                  <legend class="text-sm">Exit</legend>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-sm">Exit type</span>
+                    <select
+                      class="select select-bordered"
+                      name="step_{{ step.index }}_exit"
+                    >
+                      <option
+                        value="normal"
+                        {% if step.exit == "normal" %}selected{% endif %}
+                      >
+                        Normal success
+                      </option>
+                      <option
+                        value="review-verdict"
+                        {% if step.exit == "review-verdict" %}selected{% endif %}
+                      >
+                        Review verdict gate
+                      </option>
+                    </select>
+                  </label>
+                  {% if step.exit_error != "" %}
+                    <p class="text-error text-sm">{{ step.exit_error }}</p>
+                  {% endif %}
+                  {% if step.exit == "review-verdict" %}
+                    <p class="text-sm">Review phase {{ step.phase }}</p>
+                    <label class="flex flex-col gap-1">
+                      <span class="text-sm">Report output key</span>
+                      <input
+                        class="input input-bordered font-mono"
+                        name="step_{{ step.index }}_report-output"
+                        maxlength="32"
+                        value="{{ step.report_output }}"
+                      />
+                    </label>
+                    {% if step.report_output_error != "" %}
+                      <p class="text-error text-sm">
+                        {{ step.report_output_error }}
+                      </p>
+                    {% endif %}
+                    <label class="flex flex-col gap-1">
+                      <span class="text-sm">Revision target</span>
+                      <select
+                        class="select select-bordered"
+                        name="step_{{ step.index }}_revision-target"
+                      >
+                        {% for option in step.revision_options %}
+                          <option
+                            value="{{ option.value }}"
+                            {% if option.selected %}selected{% endif %}
+                          >
+                            {{ option.label }}
+                          </option>
+                        {% endfor %}
+                      </select>
+                    </label>
+                    {% if step.revision_target_error != "" %}
+                      <p class="text-error text-sm">
+                        {{ step.revision_target_error }}
+                      </p>
+                    {% endif %}
+                    <label class="flex flex-col gap-1">
+                      <span class="text-sm">Attempt limit</span>
+                      <input
+                        class="input input-bordered"
+                        type="number"
+                        min="1"
+                        max="8"
+                        name="step_{{ step.index }}_attempt-limit"
+                        value="{{ step.attempt_limit }}"
+                      />
+                    </label>
+                    {% if step.attempt_limit_error != "" %}
+                      <p class="text-error text-sm">
+                        {{ step.attempt_limit_error }}
+                      </p>
+                    {% endif %}
+                    <p class="text-quiet text-xs">
+                      Blocked or exhausted reviews end in escalation.
+                    </p>
+                  {% else %}
+                    <input
+                      type="hidden"
+                      name="step_{{ step.index }}_report-output"
+                      value="{{ step.report_output }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="step_{{ step.index }}_revision-target"
+                      value="{{ step.revision_target }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="step_{{ step.index }}_attempt-limit"
+                      value="{{ step.attempt_limit }}"
+                    />
+                  {% endif %}
+                </fieldset>
+              {% else %}
+                <input
+                  type="hidden"
+                  name="step_{{ step.index }}_exit"
+                  value="{{ step.exit }}"
+                />
+                <input
+                  type="hidden"
+                  name="step_{{ step.index }}_report-output"
+                  value="{{ step.report_output }}"
+                />
+                <input
+                  type="hidden"
+                  name="step_{{ step.index }}_revision-target"
+                  value="{{ step.revision_target }}"
+                />
+                <input
+                  type="hidden"
+                  name="step_{{ step.index }}_attempt-limit"
+                  value="{{ step.attempt_limit }}"
+                />
+              {% endif %}
               {% if !step.is_gate %}
                 <label class="flex flex-col gap-1">
                   <span class="text-sm">Environment</span>

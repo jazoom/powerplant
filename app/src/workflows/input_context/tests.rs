@@ -7,7 +7,9 @@ use crate::workflows::definition::{
     ArtefactKind, OutputKey, PinnedWorkflowDefinition, StepKey, test_environment_id,
 };
 use crate::workflows::id::{ArtefactId, AttemptId, RunId};
-use crate::workflows::run::{AttemptArtefactInput, WorkflowRun};
+use crate::workflows::run::{
+    AttemptArtefactInput, ObservedCandidate, RunSource, RunSourceState, WorkflowRun,
+};
 use crate::workflows::seeds::sequential_team_definition;
 
 fn store() -> WorkflowArtefactRepository {
@@ -243,6 +245,58 @@ fn handoff_table_pins_identifiers_and_excludes_candidate_bytes() {
     .expect("commit");
     assert_eq!(verified[1].kind, ArtefactKind::ReviewReport);
     assert_eq!(verified[1].candidate, produced.candidate_hash());
+}
+
+#[test]
+fn current_candidate_inputs_match_the_exact_accepted_reference() {
+    let store = store();
+    let definition =
+        crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut run = WorkflowRun::create(
+        RunId::generate().expect("run"),
+        1,
+        crate::agents::AgentId::generate().expect("agent"),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let initial = publish_candidate(&mut run, &store);
+    let mut current = initial.clone();
+    current.id = ArtefactId::generate().expect("current");
+    current.provenance.producer = implementer_candidate_producer();
+    run.artefacts.push(current.clone());
+    let initial_reference = input_of("candidate", &initial).artefact;
+    let current_reference = input_of("candidate", &current).artefact;
+    run.source = RunSource::Captured {
+        source: RunSourceState {
+            initial: initial_reference.clone(),
+            accepted: current_reference.clone(),
+            observed: ObservedCandidate::Exact {
+                artefact: current_reference,
+            },
+        },
+    };
+    let reviewer = run
+        .pinned
+        .definition
+        .step(&StepKey::parse("reviewer").expect("step"))
+        .cloned()
+        .expect("reviewer");
+
+    assert!(verify_inputs(&run, &reviewer, &[input_of("candidate", &current)], &store,).is_ok());
+    assert_eq!(
+        verify_inputs(
+            &run,
+            &reviewer,
+            &[AttemptArtefactInput {
+                key: crate::workflows::definition::InputKey::parse("candidate").expect("input"),
+                artefact: initial_reference,
+            }],
+            &store,
+        )
+        .err(),
+        Some(InputContextError::Source)
+    );
 }
 
 #[test]

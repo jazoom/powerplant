@@ -26,15 +26,22 @@ impl SystemCommandContract {
             return false;
         }
         if self.id == SystemCommandId::CommitCandidate {
-            return kinds_match(inputs, self.required_inputs)
-                || kinds_match(
-                    inputs,
-                    &[
-                        ArtefactKind::CandidateRevision,
-                        ArtefactKind::ReviewReport,
-                        ArtefactKind::HumanDecision,
-                    ],
-                );
+            let candidates = inputs
+                .iter()
+                .filter(|kind| **kind == ArtefactKind::CandidateRevision)
+                .count();
+            let reviews = inputs
+                .iter()
+                .filter(|kind| **kind == ArtefactKind::ReviewReport)
+                .count();
+            let decisions = inputs
+                .iter()
+                .filter(|kind| **kind == ArtefactKind::HumanDecision)
+                .count();
+            return candidates == 1
+                && reviews >= 1
+                && decisions <= 1
+                && candidates + reviews + decisions == inputs.len();
         }
         kinds_match(inputs, self.required_inputs)
     }

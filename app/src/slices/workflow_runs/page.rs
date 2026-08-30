@@ -22,6 +22,8 @@ pub(super) struct AttemptView {
     pub(super) source_location: &'static str,
     pub(super) git_admin: &'static str,
     pub(super) network: &'static str,
+    pub(super) reports: Vec<StepArtefactView>,
+    pub(super) route: String,
 }
 
 pub(super) struct StepArtefactView {
@@ -43,6 +45,11 @@ pub(super) struct StepView {
     pub(super) artefacts: Vec<StepArtefactView>,
     pub(super) commit: String,
     pub(super) gate_href: String,
+    pub(super) review_phase: String,
+    pub(super) attempt_limit: String,
+    pub(super) latest_verdict: String,
+    pub(super) selected_route: String,
+    pub(super) role: String,
 }
 
 pub(super) struct PinnedEnvironmentView {
@@ -246,6 +253,17 @@ impl RunDetailView {
                             .map(|result| result.commit.chars().take(8).collect())
                             .unwrap_or_default(),
                         gate_href: gate.map(|gate| format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex())).unwrap_or_default(),
+                        review_phase: run.pinned.definition.review_phase(&step.key).map(|phase| phase.to_string()).unwrap_or_default(),
+                        attempt_limit: match &step.on_success {
+                            crate::workflows::definition::SuccessTransition::ReviewVerdictGate(gate) => gate.attempt_limit.to_string(),
+                            _ => String::new(),
+                        },
+                        latest_verdict: latest_review_verdict(run, attempt),
+                        selected_route: review_route(run, step, attempt),
+                        role: match &step.action {
+                            crate::workflows::definition::StepAction::Agent(action) => run.pinned.definition.role(&action.role).map(|role| role.name.clone()).unwrap_or_default(),
+                            _ => String::new(),
+                        },
                     }
                 })
                 .collect(),
@@ -270,6 +288,22 @@ impl RunDetailView {
                     source_location: attempt.capabilities.source_location.label(),
                     git_admin: attempt.capabilities.git_admin.as_str(),
                     network: attempt.capabilities.network_label(),
+                    reports: attempt.outputs.iter().filter(|output| output.artefact.kind == crate::workflows::definition::ArtefactKind::ReviewReport).map(|output| {
+                        let record = run.artefact(&output.artefact.id);
+                        let current = match (&run.source, record.and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)) {
+                            (crate::workflows::run::RunSource::Captured { source }, Some(hash)) => run.artefact(&source.accepted.id).and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash) == Some(hash),
+                            _ => false,
+                        };
+                        StepArtefactView {
+                            href: format!("/runs/{}/artefacts/{}", run.id.as_hex(), output.artefact.id.as_hex()),
+                            key: output.key.as_str().to_owned(),
+                            kind: output.artefact.kind.as_str(),
+                            candidate_hash: record.and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash).map(|hash| hash.short()).unwrap_or_default(),
+                            status: if current { "Current" } else { "Superseded" },
+                            note: "",
+                        }
+                    }).collect(),
+                    route: run.pinned.definition.step(&attempt.step).map(|step| review_route(run, step, Some(attempt))).unwrap_or_default(),
                 })
                 .collect(),
             artefacts: artefact_rows(run),
@@ -294,14 +328,69 @@ impl RunDetailView {
     }
 }
 
+fn latest_review_verdict(
+    run: &WorkflowRun,
+    attempt: Option<&crate::workflows::run::AttemptRecord>,
+) -> String {
+    review_verdict_label(
+        attempt
+            .into_iter()
+            .flat_map(|attempt| &attempt.outputs)
+            .filter_map(|output| run.artefact(&output.artefact.id))
+            .map(|record| &record.summary),
+    )
+}
+
+pub(super) fn review_verdict_label<'a>(
+    mut summaries: impl Iterator<Item = &'a crate::workflows::artefacts::ArtefactSummary>,
+) -> String {
+    summaries
+        .find_map(|summary| match summary {
+            crate::workflows::artefacts::ArtefactSummary::Review { verdict, .. } => {
+                Some(verdict.as_label().to_owned())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn review_route(
+    run: &WorkflowRun,
+    step: &crate::workflows::definition::StepDefinition,
+    attempt: Option<&crate::workflows::run::AttemptRecord>,
+) -> String {
+    let Some(attempt) = attempt else {
+        return String::new();
+    };
+    run.transitions.iter().rev().find(|transition| matches!(&transition.from, crate::workflows::run::RunState::Active { step: route_step, attempt: route_attempt } if route_step == &step.key && route_attempt == &attempt.id)).map(|transition| match transition.cause {
+        crate::workflows::run::TransitionCause::ReviewApproved => "Approved route",
+        crate::workflows::run::TransitionCause::ReviewRevision => "Revision route",
+        crate::workflows::run::TransitionCause::ReviewBlockedEscalation => "Blocked escalation",
+        crate::workflows::run::TransitionCause::ReviewAttemptLimitEscalation => "Attempt-limit escalation",
+        _ => "",
+    }.to_owned()).unwrap_or_default()
+}
+
+fn approved_next(
+    transition: &crate::workflows::definition::SuccessTransition,
+) -> Option<&crate::workflows::definition::StepKey> {
+    match transition {
+        crate::workflows::definition::SuccessTransition::Next(next) => Some(next),
+        crate::workflows::definition::SuccessTransition::ReviewVerdictGate(gate) => {
+            match &gate.approved_target {
+                crate::workflows::definition::ApprovedTarget::Next(next) => Some(next),
+                crate::workflows::definition::ApprovedTarget::CompleteRun => None,
+            }
+        }
+        crate::workflows::definition::SuccessTransition::CompleteRun => None,
+    }
+}
+
 fn following_candidate_hash(
     run: &WorkflowRun,
     step: &crate::workflows::definition::StepDefinition,
 ) -> Option<crate::workflows::artefacts::CandidateHash> {
-    let mut next = match &step.on_success {
-        crate::workflows::definition::SuccessTransition::Next(next) => Some(next),
-        crate::workflows::definition::SuccessTransition::CompleteRun => None,
-    };
+    let mut next = approved_next(&step.on_success);
     while let Some(key) = next {
         if let Some(candidate) = run
             .attempts
@@ -323,10 +412,7 @@ fn following_candidate_hash(
             .pinned
             .definition
             .step(key)
-            .and_then(|following| match &following.on_success {
-                crate::workflows::definition::SuccessTransition::Next(next) => Some(next),
-                crate::workflows::definition::SuccessTransition::CompleteRun => None,
-            });
+            .and_then(|following| approved_next(&following.on_success));
     }
     None
 }
@@ -345,6 +431,10 @@ fn next_candidate_hash(
     let reference = match &candidate.source {
         crate::workflows::definition::ArtefactSource::RunInitialCandidate => match &run.source {
             crate::workflows::run::RunSource::Captured { source } => &source.initial,
+            crate::workflows::run::RunSource::Pending => return None,
+        },
+        crate::workflows::definition::ArtefactSource::RunCurrentCandidate => match &run.source {
+            crate::workflows::run::RunSource::Captured { source } => &source.accepted,
             crate::workflows::run::RunSource::Pending => return None,
         },
         crate::workflows::definition::ArtefactSource::StepOutput { step, output } => {

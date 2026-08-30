@@ -1,4 +1,4 @@
-use super::{FormError, WorkflowFormState};
+use super::{FormError, FormIntent, WorkflowFormState, can_move_step};
 
 fn pair(key: &str, value: &str) -> (String, String) {
     (key.to_owned(), value.to_owned())
@@ -19,6 +19,10 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("step_0_key", "work-on-task"),
         pair("step_0_name", "Work on task"),
         pair("step_0_action", "agent"),
+        pair("step_0_exit", "normal"),
+        pair("step_0_report-output", ""),
+        pair("step_0_revision-target", ""),
+        pair("step_0_attempt-limit", "3"),
         pair("step_0_role", "coding-agent"),
         pair("step_0_candidate-access", "edit-candidate"),
         pair("step_0_tool_list", "on"),
@@ -30,6 +34,39 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("step_0_output_1_key", "candidate"),
         pair("step_0_output_1_kind", "candidate-revision"),
     ]
+}
+
+fn review_pairs() -> Vec<(String, String)> {
+    let mut pairs = valid_pairs();
+    pairs
+        .iter_mut()
+        .find(|(key, _)| key == "step_0_input_0_source")
+        .expect("candidate source")
+        .1 = "run-current-candidate".to_owned();
+    pairs.extend([
+        pair("role_1_key", "reviewer"),
+        pair("role_1_name", "Reviewer"),
+        pair("role_1_expertise", ""),
+        pair("role_1_prompt", ""),
+        pair("step_1_key", "review"),
+        pair("step_1_name", "Review"),
+        pair("step_1_action", "agent"),
+        pair("step_1_exit", "review-verdict"),
+        pair("step_1_report-output", "review"),
+        pair("step_1_revision-target", "work-on-task"),
+        pair("step_1_attempt-limit", "3"),
+        pair("step_1_role", "reviewer"),
+        pair("step_1_candidate-access", "read-only"),
+        pair("step_1_tool_list", "on"),
+        pair("step_1_input_0_key", "candidate"),
+        pair("step_1_input_0_kind", "candidate-revision"),
+        pair("step_1_input_0_source", "run-current-candidate"),
+        pair("step_1_output_0_key", "assistant-reply"),
+        pair("step_1_output_0_kind", "assistant-reply"),
+        pair("step_1_output_1_key", "review"),
+        pair("step_1_output_1_kind", "review-report"),
+    ]);
+    pairs
 }
 
 #[test]
@@ -219,4 +256,92 @@ fn add_role_preserves_incomplete_fields() {
     form.apply(intent).expect("apply");
     assert_eq!(form.roles.len(), 2);
     assert!(form.name.is_empty());
+}
+
+#[test]
+fn review_fields_are_required_and_bounded() {
+    for missing in [
+        "step_0_exit",
+        "step_0_report-output",
+        "step_0_revision-target",
+        "step_0_attempt-limit",
+    ] {
+        let mut pairs = valid_pairs();
+        pairs.retain(|(key, _)| key != missing);
+        assert_eq!(
+            WorkflowFormState::parse(pairs).err(),
+            Some(FormError::MissingField)
+        );
+    }
+
+    for limit in ["0", "9", "-1", "many"] {
+        let mut pairs = review_pairs();
+        pairs
+            .iter_mut()
+            .find(|(key, _)| key == "step_1_attempt-limit")
+            .expect("attempt limit")
+            .1 = limit.to_owned();
+        let (form, _) = WorkflowFormState::parse(pairs).expect("parse");
+        assert!(
+            !form.to_definition().expect_err("limit").steps[1]
+                .attempt_limit
+                .is_empty()
+        );
+    }
+
+    let mut unknown_exit = valid_pairs();
+    unknown_exit
+        .iter_mut()
+        .find(|(key, _)| key == "step_0_exit")
+        .expect("exit")
+        .1 = "conditional".to_owned();
+    let (form, _) = WorkflowFormState::parse(unknown_exit).expect("parse");
+    assert!(
+        !form.to_definition().expect_err("exit").steps[0]
+            .exit
+            .is_empty()
+    );
+
+    let mut stale_target = review_pairs();
+    stale_target
+        .iter_mut()
+        .find(|(key, _)| key == "step_1_revision-target")
+        .expect("revision target")
+        .1 = "deleted-step".to_owned();
+    let (form, _) = WorkflowFormState::parse(stale_target).expect("parse");
+    assert_eq!(
+        form.to_definition().expect_err("stale target").summary,
+        "A step names an unknown successor."
+    );
+}
+
+#[test]
+fn step_moves_preserve_review_targets_or_fail() {
+    let (mut form, _) = WorkflowFormState::parse(review_pairs()).expect("parse");
+    form.to_definition().expect("valid review loop");
+    let original_keys: Vec<_> = form.steps.iter().map(|step| step.key.clone()).collect();
+    let revision_target = form.steps[1].revision_target.clone();
+
+    assert!(!can_move_step(&form.steps, 1, true));
+    assert_eq!(
+        form.apply(FormIntent::MoveStepUp(1)),
+        Err(FormError::ReviewTarget)
+    );
+    assert_eq!(
+        form.steps
+            .iter()
+            .map(|step| step.key.clone())
+            .collect::<Vec<_>>(),
+        original_keys
+    );
+    assert_eq!(form.steps[1].exit, "review-verdict");
+    assert_eq!(form.steps[1].revision_target, revision_target);
+
+    let mut trailing = form.steps[0].clone();
+    trailing.key = "trailing".to_owned();
+    form.steps.push(trailing);
+    assert!(can_move_step(&form.steps, 1, false));
+    form.apply(FormIntent::MoveStepDown(1)).expect("valid move");
+    assert_eq!(form.steps[2].exit, "review-verdict");
+    assert_eq!(form.steps[2].revision_target, "work-on-task");
 }

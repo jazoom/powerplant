@@ -17,9 +17,11 @@ pub(super) enum FormError {
     Index,
     UnknownField,
     DuplicateField,
+    MissingField,
     Sparse,
     Excessive,
     Revision,
+    ReviewTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,6 +83,10 @@ pub(super) struct StepDraft {
     pub(super) directories: Vec<DirectoryDraft>,
     pub(super) inputs: Vec<InputDraft>,
     pub(super) outputs: Vec<OutputDraft>,
+    pub(super) exit: String,
+    pub(super) report_output: String,
+    pub(super) revision_target: String,
+    pub(super) attempt_limit: String,
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +133,10 @@ pub(super) struct StepErrors {
     pub(super) role: &'static str,
     pub(super) candidate_access: &'static str,
     pub(super) command: &'static str,
+    pub(super) exit: &'static str,
+    pub(super) report_output: &'static str,
+    pub(super) revision_target: &'static str,
+    pub(super) attempt_limit: &'static str,
     pub(super) directories: Vec<DirectoryErrors>,
     pub(super) inputs: Vec<InputErrors>,
     pub(super) outputs: Vec<OutputErrors>,
@@ -148,9 +158,11 @@ impl FormError {
             Self::Index => "That form row is not valid.",
             Self::UnknownField => "That form includes an unknown field.",
             Self::DuplicateField => "That form includes a duplicate field.",
+            Self::MissingField => "That form omits a required field.",
             Self::Sparse => "That form row is not valid.",
             Self::Excessive => "That form has too many rows.",
             Self::Revision => "Reload the workflow and try again.",
+            Self::ReviewTarget => "That move would invalidate a review revision target.",
         }
     }
 }
@@ -202,6 +214,10 @@ impl FormErrors {
                     || !step.role.is_empty()
                     || !step.candidate_access.is_empty()
                     || !step.command.is_empty()
+                    || !step.exit.is_empty()
+                    || !step.report_output.is_empty()
+                    || !step.revision_target.is_empty()
+                    || !step.attempt_limit.is_empty()
                     || step
                         .directories
                         .iter()
@@ -251,6 +267,12 @@ impl WorkflowFormState {
             steps.push(step_from_definition(step));
             match &step.on_success {
                 SuccessTransition::Next(next) => current = next.clone(),
+                SuccessTransition::ReviewVerdictGate(gate) => match &gate.approved_target {
+                    crate::workflows::definition::ApprovedTarget::Next(next) => {
+                        current = next.clone()
+                    }
+                    crate::workflows::definition::ApprovedTarget::CompleteRun => break,
+                },
                 SuccessTransition::CompleteRun => break,
             }
         }
@@ -302,7 +324,9 @@ impl WorkflowFormState {
         let mut latest = "run-initial-candidate".to_owned();
         for step in &mut self.steps {
             for input in &mut step.inputs {
-                if ArtefactKind::parse(&input.kind) == Some(ArtefactKind::CandidateRevision) {
+                if ArtefactKind::parse(&input.kind) == Some(ArtefactKind::CandidateRevision)
+                    && input.source != "run-current-candidate"
+                {
                     input.source = latest.clone();
                 }
             }
@@ -422,8 +446,8 @@ impl WorkflowFormState {
                 self.steps.remove(index);
                 Ok(())
             }
-            FormIntent::MoveStepUp(index) => move_item(&mut self.steps, index, true),
-            FormIntent::MoveStepDown(index) => move_item(&mut self.steps, index, false),
+            FormIntent::MoveStepUp(index) => move_step(&mut self.steps, index, true),
+            FormIntent::MoveStepDown(index) => move_step(&mut self.steps, index, false),
             FormIntent::AddInput(step) => {
                 if step >= self.steps.len() {
                     return Err(FormError::Index);
@@ -523,10 +547,67 @@ impl WorkflowFormState {
         }
         let first = steps[0].key.clone();
         let last = steps.len() - 1;
-        for index in 0..last {
-            steps[index].on_success = SuccessTransition::Next(steps[index + 1].key.clone());
+        for index in 0..=last {
+            let approved_target = if index < last {
+                crate::workflows::definition::ApprovedTarget::Next(steps[index + 1].key.clone())
+            } else {
+                crate::workflows::definition::ApprovedTarget::CompleteRun
+            };
+            steps[index].on_success = if self.steps[index].exit == "review-verdict" {
+                let report_output = match OutputKey::parse(&self.steps[index].report_output) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        errors.steps[index].report_output = error.message();
+                        errors.summary = "Fix the highlighted fields.";
+                        return Err(errors);
+                    }
+                };
+                let revision_target = match StepKey::parse(&self.steps[index].revision_target) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        errors.steps[index].revision_target = error.message();
+                        errors.summary = "Fix the highlighted fields.";
+                        return Err(errors);
+                    }
+                };
+                let attempt_limit = match self.steps[index].attempt_limit.parse::<u8>() {
+                    Ok(limit)
+                        if (crate::workflows::definition::MINIMUM_REVIEW_ATTEMPTS
+                            ..=crate::workflows::definition::MAXIMUM_REVIEW_ATTEMPTS)
+                            .contains(&limit) =>
+                    {
+                        limit
+                    }
+                    _ => {
+                        errors.steps[index].attempt_limit =
+                            crate::workflows::definition::DefinitionError::AttemptLimit.message();
+                        errors.summary = "Fix the highlighted fields.";
+                        return Err(errors);
+                    }
+                };
+                SuccessTransition::ReviewVerdictGate(
+                    crate::workflows::definition::ReviewVerdictGate {
+                        report_output,
+                        approved_target,
+                        revision_target,
+                        attempt_limit,
+                    },
+                )
+            } else if self.steps[index].exit == "normal" {
+                match approved_target {
+                    crate::workflows::definition::ApprovedTarget::Next(next) => {
+                        SuccessTransition::Next(next)
+                    }
+                    crate::workflows::definition::ApprovedTarget::CompleteRun => {
+                        SuccessTransition::CompleteRun
+                    }
+                }
+            } else {
+                errors.steps[index].exit = "Choose an exit type.";
+                errors.summary = "Fix the highlighted fields.";
+                return Err(errors);
+            };
         }
-        steps[last].on_success = SuccessTransition::CompleteRun;
         let default_environment =
             match crate::environments::EnvironmentId::parse(self.default_environment.trim()) {
                 Some(id) => id,
@@ -593,6 +674,10 @@ enum StepPart {
     Role,
     CandidateAccess,
     Command,
+    Exit,
+    ReportOutput,
+    RevisionTarget,
+    AttemptLimit,
     Tool(ToolId),
     Dir { index: usize, part: DirPart },
     Input { index: usize, part: InputPart },
@@ -656,6 +741,10 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("role") => StepPart::Role,
                 Some("candidate-access") => StepPart::CandidateAccess,
                 Some("command") => StepPart::Command,
+                Some("exit") => StepPart::Exit,
+                Some("report-output") => StepPart::ReportOutput,
+                Some("revision-target") => StepPart::RevisionTarget,
+                Some("attempt-limit") => StepPart::AttemptLimit,
                 Some("tool") => {
                     let tool = parts.next().ok_or(FormError::UnknownField)?;
                     let tool = ToolId::parse(tool).ok_or(FormError::UnknownField)?;
@@ -847,6 +936,7 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
     let mut dir_seen = vec![Vec::<usize>::new(); count];
     let mut input_seen = vec![Vec::<usize>::new(); count];
     let mut output_seen = vec![Vec::<usize>::new(); count];
+    let mut review_fields_seen = vec![[false; 4]; count];
     for (index, part, value) in fields {
         let step = &mut steps[index];
         match part {
@@ -857,6 +947,22 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             StepPart::Role => step.role = value,
             StepPart::CandidateAccess => step.candidate_access = value,
             StepPart::Command => step.command = value,
+            StepPart::Exit => {
+                step.exit = value;
+                review_fields_seen[index][0] = true;
+            }
+            StepPart::ReportOutput => {
+                step.report_output = value;
+                review_fields_seen[index][1] = true;
+            }
+            StepPart::RevisionTarget => {
+                step.revision_target = value;
+                review_fields_seen[index][2] = true;
+            }
+            StepPart::AttemptLimit => {
+                step.attempt_limit = value;
+                review_fields_seen[index][3] = true;
+            }
             StepPart::Tool(tool) => {
                 if is_checked(&value) && !step.tools.contains(&tool) {
                     step.tools.push(tool);
@@ -909,6 +1015,9 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
         }
     }
     for (index, step) in steps.iter().enumerate() {
+        if review_fields_seen[index].iter().any(|seen| !seen) {
+            return Err(FormError::MissingField);
+        }
         if !dir_seen[index].is_empty() {
             dense_count(dir_seen[index].iter().copied())?;
             if step.directories.len() > MAXIMUM_DIRECTORIES {
@@ -1008,12 +1117,24 @@ fn ensure_action_defaults(steps: &mut [StepDraft]) {
         let candidate_source = latest_candidate_source(&steps[..index]);
         let existing_inputs = std::mem::take(&mut steps[index].inputs);
         let mut required_inputs = contract.required_inputs.to_vec();
-        if command == SystemCommandId::CommitCandidate
-            && existing_inputs
+        if command == SystemCommandId::CommitCandidate {
+            let extra_reviews = existing_inputs
+                .iter()
+                .filter(|input| {
+                    ArtefactKind::parse(&input.kind) == Some(ArtefactKind::ReviewReport)
+                })
+                .count()
+                .saturating_sub(1);
+            required_inputs.extend(std::iter::repeat_n(
+                ArtefactKind::ReviewReport,
+                extra_reviews,
+            ));
+            if existing_inputs
                 .iter()
                 .any(|input| ArtefactKind::parse(&input.kind) == Some(ArtefactKind::HumanDecision))
-        {
-            required_inputs.push(ArtefactKind::HumanDecision);
+            {
+                required_inputs.push(ArtefactKind::HumanDecision);
+            }
         }
         steps[index].inputs = required_inputs
             .iter()
@@ -1021,7 +1142,13 @@ fn ensure_action_defaults(steps: &mut [StepDraft]) {
             .map(|(position, kind)| {
                 existing_inputs
                     .iter()
-                    .find(|input| ArtefactKind::parse(&input.kind) == Some(*kind))
+                    .filter(|input| ArtefactKind::parse(&input.kind) == Some(*kind))
+                    .nth(
+                        required_inputs[..position]
+                            .iter()
+                            .filter(|prior| **prior == *kind)
+                            .count(),
+                    )
                     .cloned()
                     .unwrap_or_else(|| InputDraft {
                         key: match kind {
@@ -1072,6 +1199,10 @@ fn empty_step() -> StepDraft {
         directories: Vec::new(),
         inputs: Vec::new(),
         outputs: Vec::new(),
+        exit: "normal".to_owned(),
+        report_output: String::new(),
+        revision_target: String::new(),
+        attempt_limit: "3".to_owned(),
     }
 }
 
@@ -1089,6 +1220,10 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         tools: ToolId::ALL.to_vec(),
         directories,
         inputs: vec![input_from_required(&initial_candidate_input())],
+        exit: "normal".to_owned(),
+        report_output: String::new(),
+        revision_target: String::new(),
+        attempt_limit: "3".to_owned(),
         outputs: vec![
             OutputDraft {
                 key: "assistant-reply".to_owned(),
@@ -1131,6 +1266,7 @@ fn output_from_required(output: &RequiredOutput) -> OutputDraft {
 fn source_token(source: &ArtefactSource) -> String {
     match source {
         ArtefactSource::RunInitialCandidate => "run-initial-candidate".to_owned(),
+        ArtefactSource::RunCurrentCandidate => "run-current-candidate".to_owned(),
         ArtefactSource::StepOutput { step, output } => {
             format!("step-output:{}:{}", step.as_str(), output.as_str())
         }
@@ -1142,6 +1278,9 @@ fn parse_source(
 ) -> Result<ArtefactSource, crate::workflows::definition::DefinitionError> {
     if raw == "run-initial-candidate" {
         return Ok(ArtefactSource::RunInitialCandidate);
+    }
+    if raw == "run-current-candidate" {
+        return Ok(ArtefactSource::RunCurrentCandidate);
     }
     let Some(rest) = raw.strip_prefix("step-output:") else {
         return Err(crate::workflows::definition::DefinitionError::Format);
@@ -1165,6 +1304,20 @@ fn pad_directories(directories: &mut Vec<DirectoryDraft>) {
 }
 
 fn step_from_definition(step: &StepDefinition) -> StepDraft {
+    let (exit, report_output, revision_target, attempt_limit) = match &step.on_success {
+        SuccessTransition::ReviewVerdictGate(gate) => (
+            "review-verdict".to_owned(),
+            gate.report_output.as_str().to_owned(),
+            gate.revision_target.as_str().to_owned(),
+            gate.attempt_limit.to_string(),
+        ),
+        _ => (
+            "normal".to_owned(),
+            String::new(),
+            String::new(),
+            "3".to_owned(),
+        ),
+    };
     match &step.action {
         StepAction::Agent(action) => {
             let mut directories: Vec<DirectoryDraft> = action
@@ -1193,6 +1346,10 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                     .iter()
                     .map(output_from_required)
                     .collect(),
+                exit: exit.clone(),
+                report_output: report_output.clone(),
+                revision_target: revision_target.clone(),
+                attempt_limit: attempt_limit.clone(),
             }
         }
         StepAction::SystemCommand(action) => StepDraft {
@@ -1211,6 +1368,10 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 .iter()
                 .map(output_from_required)
                 .collect(),
+            exit: exit.clone(),
+            report_output: report_output.clone(),
+            revision_target: revision_target.clone(),
+            attempt_limit: attempt_limit.clone(),
         },
         StepAction::HumanGate(action) => StepDraft {
             key: step.key.as_str().to_owned(),
@@ -1224,6 +1385,10 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             directories: Vec::new(),
             inputs: step.inputs.iter().map(input_from_required).collect(),
             outputs: vec![output_from_required(&action.required_output)],
+            exit,
+            report_output,
+            revision_target,
+            attempt_limit,
         },
     }
 }
@@ -1574,21 +1739,48 @@ fn next_key(prefix: &str, existing: &[&str]) -> String {
     format!("{prefix}-x")
 }
 
-fn move_item<T>(items: &mut [T], index: usize, up: bool) -> Result<(), FormError> {
-    if index >= items.len() {
-        return Err(FormError::Index);
-    }
-    let target = if up {
-        index.checked_sub(1).ok_or(FormError::Index)?
-    } else {
-        let next = index.checked_add(1).ok_or(FormError::Index)?;
-        if next >= items.len() {
-            return Err(FormError::Index);
-        }
-        next
+pub(super) fn can_move_step(steps: &[StepDraft], index: usize, up: bool) -> bool {
+    let Ok(target) = move_target(steps.len(), index, up) else {
+        return false;
     };
+    let mut moved = steps.to_vec();
+    moved.swap(index, target);
+    review_targets_are_earlier(&moved)
+}
+
+fn move_step(steps: &mut [StepDraft], index: usize, up: bool) -> Result<(), FormError> {
+    let target = move_target(steps.len(), index, up)?;
+    if !can_move_step(steps, index, up) {
+        return Err(FormError::ReviewTarget);
+    }
+    steps.swap(index, target);
+    Ok(())
+}
+
+fn review_targets_are_earlier(steps: &[StepDraft]) -> bool {
+    steps.iter().enumerate().all(|(index, step)| {
+        step.exit != "review-verdict"
+            || steps[..index]
+                .iter()
+                .any(|candidate| candidate.key == step.revision_target)
+    })
+}
+
+fn move_item<T>(items: &mut [T], index: usize, up: bool) -> Result<(), FormError> {
+    let target = move_target(items.len(), index, up)?;
     items.swap(index, target);
     Ok(())
+}
+
+fn move_target(len: usize, index: usize, up: bool) -> Result<usize, FormError> {
+    if index >= len {
+        return Err(FormError::Index);
+    }
+    if up {
+        return index.checked_sub(1).ok_or(FormError::Index);
+    }
+    let target = index.checked_add(1).ok_or(FormError::Index)?;
+    (target < len).then_some(target).ok_or(FormError::Index)
 }
 
 pub(super) fn parse_delete(pairs: &[(String, String)]) -> Result<(u64, bool), FormError> {

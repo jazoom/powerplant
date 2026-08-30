@@ -1,7 +1,7 @@
 use super::{
     ActionKind, AttemptCleanupRecord, AttemptId, AttemptRecord, AttemptResult, AttemptSandboxKind,
-    AttemptSandboxRecord, AttemptState, FailureCategory, RunState, TransitionCause,
-    TransitionError, WorkflowRun, next_ordinal_for,
+    AttemptSandboxRecord, AttemptState, EscalationReason, FailureCategory, RunState,
+    TransitionCause, TransitionError, WorkflowRun, next_ordinal_for,
 };
 use crate::agents::ToolId;
 use crate::workflows::capabilities::{test_agent_capabilities, test_command_capabilities};
@@ -556,4 +556,380 @@ fn attempt_ordinals_count_repeated_step_attempts() {
     assert_eq!(next_ordinal_for(&[], &step), 1);
     assert_eq!(next_ordinal_for(std::slice::from_ref(&first), &step), 2);
     assert_eq!(next_ordinal_for(&[first, second], &step), 3);
+}
+
+fn artefact_reference(
+    record: &crate::workflows::artefacts::ArtefactRecord,
+) -> crate::workflows::artefacts::ArtefactReference {
+    crate::workflows::artefacts::ArtefactReference {
+        id: record.id,
+        kind: record.kind,
+        artefact_hash: record.artefact_hash,
+    }
+}
+
+fn review_loop_run() -> WorkflowRun {
+    let definition =
+        crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut run = WorkflowRun::create(
+        RunId::generate().expect("run"),
+        10,
+        crate::agents::AgentId::generate().expect("agent"),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let initial = test_artefact_record(
+        run.id,
+        ArtefactKind::CandidateRevision,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+    );
+    run.record_initial_candidate(initial).expect("initial");
+    run
+}
+
+fn step_sandbox(run: &WorkflowRun, step: &StepKey) -> AttemptSandboxRecord {
+    AttemptSandboxRecord {
+        kind: AttemptSandboxKind::IsolatedAttempt,
+        snapshot_digest: run
+            .environments
+            .steps
+            .iter()
+            .find(|binding| &binding.step == step)
+            .expect("step environment")
+            .snapshot_digest
+            .clone(),
+    }
+}
+
+fn current_candidate(run: &WorkflowRun) -> crate::workflows::artefacts::ArtefactReference {
+    let super::RunSource::Captured { source } = &run.source else {
+        panic!("captured source")
+    };
+    source.accepted.clone()
+}
+
+fn complete_implementation(
+    run: &mut WorkflowRun,
+    at_ms: u64,
+) -> (AttemptId, crate::workflows::artefacts::ArtefactReference) {
+    let step = StepKey::parse("implementer").expect("step");
+    assert_eq!(run.ready_step(), Some(&step));
+    let input = current_candidate(run);
+    let inputs = vec![super::AttemptArtefactInput {
+        key: InputKey::parse("candidate").expect("input"),
+        artefact: input.clone(),
+    }];
+    let attempt = AttemptId::generate().expect("attempt");
+    run.start_attempt(
+        attempt,
+        inputs.clone(),
+        test_agent_capabilities(),
+        step_sandbox(run, &step),
+        at_ms,
+    )
+    .expect("start implementation");
+    let candidate = test_artefact_record(
+        run.id,
+        ArtefactKind::CandidateRevision,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: attempt,
+            step,
+            output: Some(OutputKey::parse("candidate").expect("output")),
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+        vec![input],
+    );
+    let reference = artefact_reference(&candidate);
+    run.record_attempt_outputs(
+        attempt,
+        vec![candidate],
+        vec![super::AttemptArtefactOutput {
+            key: OutputKey::parse("candidate").expect("output"),
+            artefact: reference.clone(),
+        }],
+        Some(reference.clone()),
+        super::ObservedCandidate::Exact {
+            artefact: reference.clone(),
+        },
+    )
+    .expect("implementation output");
+    run.record_cleanup(attempt, AttemptCleanupRecord::Complete)
+        .expect("cleanup");
+    run.complete_attempt(attempt, at_ms + 1)
+        .expect("complete implementation");
+    (attempt, reference)
+}
+
+fn complete_review(
+    run: &mut WorkflowRun,
+    verdict: crate::workflows::artefacts::ReviewVerdict,
+    at_ms: u64,
+) -> crate::workflows::artefacts::ArtefactReference {
+    let step = StepKey::parse("reviewer").expect("step");
+    assert_eq!(run.ready_step(), Some(&step));
+    let input = current_candidate(run);
+    let inputs = vec![super::AttemptArtefactInput {
+        key: InputKey::parse("candidate").expect("input"),
+        artefact: input.clone(),
+    }];
+    let attempt = AttemptId::generate().expect("attempt");
+    let mut capabilities = test_agent_capabilities();
+    capabilities.directories[0].access = crate::agents::AccessMode::ReadOnly;
+    run.start_attempt(
+        attempt,
+        inputs,
+        capabilities,
+        step_sandbox(run, &step),
+        at_ms,
+    )
+    .expect("start review");
+    let mut report = test_artefact_record(
+        run.id,
+        ArtefactKind::ReviewReport,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: attempt,
+            step,
+            output: Some(OutputKey::parse("review").expect("output")),
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+        vec![input.clone()],
+    );
+    let crate::workflows::artefacts::ArtefactSummary::Review {
+        verdict: report_verdict,
+        ..
+    } = &mut report.summary
+    else {
+        panic!("review summary")
+    };
+    *report_verdict = verdict;
+    let reference = artefact_reference(&report);
+    run.record_attempt_outputs(
+        attempt,
+        vec![report],
+        vec![super::AttemptArtefactOutput {
+            key: OutputKey::parse("review").expect("output"),
+            artefact: reference.clone(),
+        }],
+        None,
+        super::ObservedCandidate::Exact { artefact: input },
+    )
+    .expect("review output");
+    run.record_cleanup(attempt, AttemptCleanupRecord::Complete)
+        .expect("cleanup");
+    run.complete_attempt(attempt, at_ms + 1)
+        .expect("complete review");
+    reference
+}
+
+#[test]
+fn review_verdicts_select_all_four_routes() {
+    use crate::workflows::artefacts::ReviewVerdict;
+
+    enum ExpectedRoute {
+        Approved,
+        Revision,
+        Blocked,
+        AttemptLimit,
+    }
+
+    for (verdict, prior_revisions, expected) in [
+        (ReviewVerdict::Approved, 0, ExpectedRoute::Approved),
+        (ReviewVerdict::RevisionRequired, 0, ExpectedRoute::Revision),
+        (ReviewVerdict::Blocked, 0, ExpectedRoute::Blocked),
+        (
+            ReviewVerdict::RevisionRequired,
+            2,
+            ExpectedRoute::AttemptLimit,
+        ),
+    ] {
+        let mut run = review_loop_run();
+        let mut time = 11;
+        complete_implementation(&mut run, time);
+        time += 2;
+        for _ in 0..prior_revisions {
+            complete_review(&mut run, ReviewVerdict::RevisionRequired, time);
+            time += 2;
+            complete_implementation(&mut run, time);
+            time += 2;
+        }
+        let report = complete_review(&mut run, verdict, time);
+        match expected {
+            ExpectedRoute::Approved => {
+                assert!(
+                    matches!(&run.state, RunState::Ready { step } if step.as_str() == "commit")
+                );
+                assert_eq!(
+                    run.transitions.last().map(|transition| transition.cause),
+                    Some(TransitionCause::ReviewApproved)
+                );
+            }
+            ExpectedRoute::Revision => {
+                assert!(
+                    matches!(&run.state, RunState::Ready { step } if step.as_str() == "implementer")
+                );
+                assert_eq!(
+                    run.transitions.last().map(|transition| transition.cause),
+                    Some(TransitionCause::ReviewRevision)
+                );
+            }
+            ExpectedRoute::Blocked => assert_eq!(
+                run.state,
+                RunState::Escalated {
+                    step: StepKey::parse("reviewer").expect("step"),
+                    report,
+                    reason: EscalationReason::Blocked,
+                }
+            ),
+            ExpectedRoute::AttemptLimit => assert_eq!(
+                run.state,
+                RunState::Escalated {
+                    step: StepKey::parse("reviewer").expect("step"),
+                    report,
+                    reason: EscalationReason::AttemptLimit,
+                }
+            ),
+        }
+    }
+}
+
+#[test]
+fn repeated_steps_pin_the_current_candidate_and_increment_ordinals() {
+    let mut run = review_loop_run();
+    let (first_attempt, first_candidate) = complete_implementation(&mut run, 11);
+    complete_review(
+        &mut run,
+        crate::workflows::artefacts::ReviewVerdict::RevisionRequired,
+        13,
+    );
+    let input_candidate = current_candidate(&run);
+    let (second_attempt, second_candidate) = complete_implementation(&mut run, 15);
+    let repeated = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id == second_attempt)
+        .expect("repeated attempt");
+
+    assert_eq!(repeated.ordinal, 2);
+    assert_eq!(repeated.inputs[0].artefact, input_candidate);
+    assert_eq!(input_candidate, first_candidate);
+    assert_ne!(second_candidate.id, first_candidate.id);
+    assert_ne!(second_attempt, first_attempt);
+}
+
+#[test]
+fn durable_review_routes_reject_altered_transition_and_escalation_facts() {
+    let mut approved = review_loop_run();
+    complete_implementation(&mut approved, 11);
+    complete_review(
+        &mut approved,
+        crate::workflows::artefacts::ReviewVerdict::Approved,
+        13,
+    );
+    let mut altered_transition = approved.to_file();
+    altered_transition
+        .transitions
+        .last_mut()
+        .expect("transition")
+        .cause = "review-revision".to_owned();
+    assert_eq!(
+        WorkflowRun::from_file(altered_transition).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let mut blocked = review_loop_run();
+    complete_implementation(&mut blocked, 11);
+    complete_review(
+        &mut blocked,
+        crate::workflows::artefacts::ReviewVerdict::Blocked,
+        13,
+    );
+    let mut altered_escalation = blocked.to_file();
+    let super::RunStateFile::Escalated { reason, .. } = &mut altered_escalation.state else {
+        panic!("escalated state")
+    };
+    *reason = "attempt-limit".to_owned();
+    assert_eq!(
+        WorkflowRun::from_file(altered_escalation).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+fn reference_for(
+    kind: ArtefactKind,
+    marker: &[u8],
+) -> crate::workflows::artefacts::ArtefactReference {
+    crate::workflows::artefacts::ArtefactReference {
+        id: crate::workflows::ArtefactId::generate().expect("artefact"),
+        kind,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::of(
+            marker,
+            kind.as_str().as_bytes(),
+        ),
+    }
+}
+
+#[test]
+fn durable_commit_transactions_preserve_every_review_reference() {
+    let candidate = reference_for(ArtefactKind::CandidateRevision, b"candidate");
+    let first_review = reference_for(ArtefactKind::ReviewReport, b"first");
+    let second_review = reference_for(ArtefactKind::ReviewReport, b"second");
+    let attempt = AttemptRecord {
+        id: AttemptId::generate().expect("attempt"),
+        step: StepKey::parse("commit").expect("step"),
+        ordinal: 1,
+        action_kind: ActionKind::SystemCommand,
+        started_at_ms: 1,
+        finished_at_ms: None,
+        state: AttemptState::Active,
+        result: None,
+        inputs: vec![
+            super::AttemptArtefactInput {
+                key: InputKey::parse("candidate").expect("input"),
+                artefact: candidate.clone(),
+            },
+            super::AttemptArtefactInput {
+                key: InputKey::parse("correctness").expect("input"),
+                artefact: first_review.clone(),
+            },
+            super::AttemptArtefactInput {
+                key: InputKey::parse("security").expect("input"),
+                artefact: second_review.clone(),
+            },
+        ],
+        outputs: Vec::new(),
+        capabilities: test_command_capabilities(),
+        sandbox: AttemptSandboxRecord {
+            kind: AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: crate::environments::SnapshotDigest::parse(&format!(
+                "sha256:{}",
+                "a".repeat(64)
+            ))
+            .expect("digest"),
+        },
+        cleanup: AttemptCleanupRecord::Pending,
+        commit_transaction: None,
+        commit_result: None,
+    };
+    let transaction = crate::workflows::commit::CommitTransaction {
+        state: crate::workflows::commit::CommitTransactionState::Prepared,
+        candidate,
+        reviews: vec![first_review.clone(), second_review.clone()],
+        approval: None,
+        expected_reference: "refs/heads/main".to_owned(),
+        old_object: None,
+        target_tree: None,
+        expected_commit: None,
+        timestamp: "1700000000 +0000".to_owned(),
+    };
+    assert!(super::valid_commit_transaction(&attempt, &transaction));
+
+    let mut missing = transaction.clone();
+    missing.reviews.pop();
+    assert!(!super::valid_commit_transaction(&attempt, &missing));
+
+    let mut duplicate = transaction;
+    duplicate.reviews = vec![first_review.clone(), first_review];
+    assert!(!super::valid_commit_transaction(&attempt, &duplicate));
 }

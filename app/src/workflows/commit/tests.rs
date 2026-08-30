@@ -15,7 +15,7 @@ use crate::workflows::id::{ArtefactId, AttemptId, RunId};
 use crate::workflows::run::{
     AttemptArtefactInput, ObservedCandidate, RunSource, RunSourceState, WorkflowRun,
 };
-use crate::workflows::seeds::sequential_team_definition;
+use crate::workflows::seeds::correctness_security_definition;
 
 fn store() -> WorkflowArtefactRepository {
     WorkflowArtefactRepository::in_memory()
@@ -52,7 +52,7 @@ fn journal_paths_are_derived_from_identifiers() {
 #[test]
 fn command_contract_rejects_non_approved_and_stale_reviews() {
     let store = store();
-    let definition = sequential_team_definition(test_environment_id());
+    let definition = correctness_security_definition(test_environment_id());
     let environments = crate::workflows::test_environment_set(&definition);
     let mut run = WorkflowRun::create(
         RunId::generate().expect("run"),
@@ -137,7 +137,7 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
             run_id: run.id,
             producer: ArtefactProducer::StepAttempt {
                 attempt_id: AttemptId::generate().expect("attempt"),
-                step: StepKey::parse("reviewer").expect("step"),
+                step: StepKey::parse("correctness-review").expect("step"),
                 output: Some(OutputKey::parse("review").expect("output")),
                 disposition: ProductionDisposition::RequiredOutput,
             },
@@ -148,23 +148,41 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
             verdict: ReviewVerdict::RevisionRequired,
         },
     };
-    run.artefacts.push(review.clone());
+    let mut security_review = review.clone();
+    security_review.id = ArtefactId::generate().expect("id");
+    security_review.provenance.producer = ArtefactProducer::StepAttempt {
+        attempt_id: AttemptId::generate().expect("attempt"),
+        step: StepKey::parse("security-review").expect("step"),
+        output: Some(OutputKey::parse("review").expect("output")),
+        disposition: ProductionDisposition::RequiredOutput,
+    };
+    run.artefacts
+        .extend([review.clone(), security_review.clone()]);
     let mut inputs = vec![
         AttemptArtefactInput {
             key: crate::workflows::definition::InputKey::parse("candidate").expect("key"),
             artefact: reference,
         },
         AttemptArtefactInput {
-            key: crate::workflows::definition::InputKey::parse("review").expect("key"),
+            key: crate::workflows::definition::InputKey::parse("correctness-review").expect("key"),
             artefact: ArtefactReference {
                 id: review.id,
                 kind: review.kind,
                 artefact_hash: review.artefact_hash,
             },
         },
+        AttemptArtefactInput {
+            key: crate::workflows::definition::InputKey::parse("security-review").expect("key"),
+            artefact: ArtefactReference {
+                id: security_review.id,
+                kind: security_review.kind,
+                artefact_hash: security_review.artefact_hash,
+            },
+        },
     ];
+    let commit_step = run.pinned.definition.steps().iter().find(|step| matches!(&step.action, crate::workflows::definition::StepAction::SystemCommand(action) if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate)).expect("commit step");
     assert_eq!(
-        require_approved_review(&run, &inputs, &store).err(),
+        require_approved_review(&run, commit_step, &inputs, &store).err(),
         Some(CommitError::Assurance)
     );
     assert_eq!(CommitError::Assurance.message(), NON_APPROVED_MESSAGE);
@@ -180,16 +198,23 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
             payload::encode_review(bound, ReviewVerdict::Approved, "approved", None)
                 .expect("approved review");
         store.publish(&bytes).expect("store approved review");
-        let stored_review = run.artefacts.last_mut().expect("review record");
-        stored_review.object_hash = object;
-        stored_review.artefact_hash = hash;
-        stored_review.summary = ArtefactSummary::Review {
-            candidate: bound,
-            verdict: ReviewVerdict::Approved,
-        };
-        inputs[1].artefact.artefact_hash = hash;
+        for stored_review in run
+            .artefacts
+            .iter_mut()
+            .filter(|record| record.kind == ArtefactKind::ReviewReport)
+        {
+            stored_review.object_hash = object;
+            stored_review.artefact_hash = hash;
+            stored_review.summary = ArtefactSummary::Review {
+                candidate: bound,
+                verdict: ReviewVerdict::Approved,
+            };
+        }
+        for input in &mut inputs[1..] {
+            input.artefact.artefact_hash = hash;
+        }
         assert_eq!(
-            require_approved_review(&run, &inputs, &store).is_ok(),
+            require_approved_review(&run, commit_step, &inputs, &store).is_ok(),
             accepted
         );
     }

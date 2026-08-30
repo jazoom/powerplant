@@ -179,6 +179,14 @@ fn verify_one(
     }
     match (&declared.source, &record.provenance.producer) {
         (ArtefactSource::RunInitialCandidate, ArtefactProducer::RunSourceCapture) => {}
+        (ArtefactSource::RunCurrentCandidate, _) => {
+            let super::run::RunSource::Captured { source } = &run.source else {
+                return Err(InputContextError::Source);
+            };
+            if source.accepted != resolved.artefact {
+                return Err(InputContextError::Source);
+            }
+        }
         (
             ArtefactSource::StepOutput { step, output },
             ArtefactProducer::StepAttempt {
