@@ -203,6 +203,7 @@ pub(crate) struct GuestExec {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
     pub(crate) stdin: Option<Vec<u8>>,
+    pub(crate) env: Vec<(String, String)>,
     pub(crate) cwd: String,
 }
 
@@ -212,6 +213,7 @@ impl GuestExec {
             program: "sh".to_owned(),
             args: vec!["-c".to_owned(), command.to_owned()],
             stdin: None,
+            env: Vec::new(),
             cwd: GUEST_PROJECT.to_owned(),
         }
     }
@@ -221,6 +223,7 @@ impl GuestExec {
             program: program.into(),
             args,
             stdin: None,
+            env: Vec::new(),
             cwd: GUEST_PROJECT.to_owned(),
         }
     }
@@ -232,6 +235,11 @@ impl GuestExec {
 
     pub(crate) fn in_dir(mut self, cwd: impl Into<String>) -> Self {
         self.cwd = cwd.into();
+        self
+    }
+
+    pub(crate) fn with_env(mut self, env: Vec<(String, String)>) -> Self {
+        self.env = env;
         self
     }
 
@@ -285,6 +293,7 @@ struct ScriptedGuest {
     fail_remove: Mutex<bool>,
     start_count: Mutex<usize>,
     last_exec: Mutex<Option<String>>,
+    exec_log: Mutex<Vec<GuestExec>>,
     lock: Arc<AsyncMutex<()>>,
 }
 
@@ -534,6 +543,7 @@ impl SandboxFleet {
                     fail_remove: Mutex::new(false),
                     start_count: Mutex::new(0),
                     last_exec: Mutex::new(None),
+                    exec_log: Mutex::new(Vec::new()),
                     lock: Arc::new(AsyncMutex::new(())),
                 })
             }
@@ -599,6 +609,14 @@ impl GuestSandbox {
         match &self.inner {
             Inner::Microsandbox(_) => None,
             Inner::Scripted(guest) => lock_mutex(&guest.last_exec).clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exec_log(&self) -> Vec<GuestExec> {
+        match &self.inner {
+            Inner::Microsandbox(_) => Vec::new(),
+            Inner::Scripted(guest) => lock_mutex(&guest.exec_log).clone(),
         }
     }
 
@@ -858,6 +876,7 @@ impl ScriptedGuest {
             .try_lock_owned()
             .map_err(|_| SandboxError::Active)?;
         *lock_mutex(&self.last_exec) = Some(request.display());
+        lock_mutex(&self.exec_log).push(request.clone());
         let session = if *lock_mutex(&self.hang_command) {
             *lock_mutex(&self.hang_command) = false;
             command::ScriptedCommand::hang()
@@ -1029,9 +1048,10 @@ async fn exec_command(
     let program = request.program;
     let args = request.args;
     let stdin = request.stdin;
+    let env = request.env;
     match sandbox
         .exec_stream_with(program, |options| {
-            let options = options.args(args).cwd(cwd);
+            let options = options.args(args).cwd(cwd).envs(env);
             match stdin {
                 Some(bytes) => options.stdin_bytes(bytes),
                 None => options,

@@ -1,3 +1,4 @@
+pub(crate) mod apply;
 pub(crate) mod assurance;
 pub(crate) mod candidate;
 mod confine;
@@ -7,6 +8,7 @@ pub(crate) mod output;
 pub(crate) mod payload;
 mod store;
 
+pub(crate) use apply::CandidateApply;
 pub(crate) use assurance::status_against;
 pub(crate) use candidate::{CANDIDATE_SCHEMA, CandidateCapture, CandidateEntryKind};
 pub(crate) use id::{ArtefactHash, CandidateHash, ObjectHash};

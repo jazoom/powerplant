@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::environments::EnvironmentId;
 
 use super::definition::{
-    DefinitionFile, DefinitionVersion, PinnedWorkflowDefinition, StepAction, WorkflowDefinition,
+    DefinitionFile, DefinitionVersion, MAXIMUM_NAME_BYTES, PinnedWorkflowDefinition, StepAction,
+    WorkflowDefinition,
 };
 use super::id::{IdError, WorkflowId};
 use super::run::now_ms;
@@ -511,14 +512,14 @@ fn apply_absent_seeds(
         {
             return Err(CatalogueError::Full);
         }
-        reject_duplicate_name(&state.workflows, None, seed.definition.name())?;
+        let definition = named_seed_definition(&state.workflows, &seed.definition)?;
         let id = unused_identifier(state)?;
         let now = now_ms();
         state.workflows.push(WorkflowRecord {
             id,
             revision: 1,
-            definition_version: seed.definition.version(),
-            definition: seed.definition.clone(),
+            definition_version: definition.version(),
+            definition,
             created_at_ms: now,
             updated_at_ms: now,
         });
@@ -557,12 +558,52 @@ fn reject_duplicate_name(
     current: Option<WorkflowId>,
     name: &str,
 ) -> Result<(), CatalogueError> {
-    if workflows.iter().any(|record| {
-        current != Some(record.id) && record.definition.name().eq_ignore_ascii_case(name)
-    }) {
+    if name_taken(workflows, current, name) {
         return Err(CatalogueError::DuplicateName);
     }
     Ok(())
+}
+
+fn name_taken(workflows: &[WorkflowRecord], current: Option<WorkflowId>, name: &str) -> bool {
+    workflows.iter().any(|record| {
+        current != Some(record.id) && record.definition.name().eq_ignore_ascii_case(name)
+    })
+}
+
+const MAXIMUM_SEED_NAME_SUFFIX: u32 = 99;
+
+fn named_seed_definition(
+    workflows: &[WorkflowRecord],
+    definition: &WorkflowDefinition,
+) -> Result<WorkflowDefinition, CatalogueError> {
+    let name = unique_seed_name(workflows, definition.name())?;
+    if name == definition.name() {
+        return Ok(definition.clone());
+    }
+    WorkflowDefinition::from_parts(
+        name,
+        definition.default_environment(),
+        definition.roles().to_vec(),
+        definition.first_step().clone(),
+        definition.steps().to_vec(),
+    )
+    .map_err(|_| CatalogueError::Corrupt)
+}
+
+fn unique_seed_name(workflows: &[WorkflowRecord], base: &str) -> Result<String, CatalogueError> {
+    if !name_taken(workflows, None, base) {
+        return Ok(base.to_owned());
+    }
+    for suffix in 2..=MAXIMUM_SEED_NAME_SUFFIX {
+        let name = format!("{base} {suffix}");
+        if name.len() > MAXIMUM_NAME_BYTES {
+            break;
+        }
+        if !name_taken(workflows, None, &name) {
+            return Ok(name);
+        }
+    }
+    Err(CatalogueError::DuplicateName)
 }
 
 fn persist(path: Option<&Path>, state: &CatalogueState) -> Result<(), CatalogueError> {

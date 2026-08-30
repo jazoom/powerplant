@@ -108,6 +108,12 @@ pub(super) struct RoleRow {
     pub(super) can_remove: bool,
 }
 
+pub(super) struct CommandChoice {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+    pub(super) selected: bool,
+}
+
 pub(super) struct StepRow {
     pub(super) index: usize,
     pub(super) key: String,
@@ -121,8 +127,10 @@ pub(super) struct StepRow {
     pub(super) action_error: &'static str,
     pub(super) role: String,
     pub(super) role_error: &'static str,
-    pub(super) command: String,
+    pub(super) command_choices: Vec<CommandChoice>,
     pub(super) command_error: &'static str,
+    pub(super) command_consequence: &'static str,
+    pub(super) show_outputs: bool,
     pub(super) tools: Vec<ToolChoice>,
     pub(super) directories: Vec<DirectoryRow>,
     pub(super) inputs: Vec<InputRow>,
@@ -380,6 +388,10 @@ fn step_row(
     let output_count = step.outputs.len();
     let input_count = step.inputs.len();
     let is_agent = step.action != "system-command";
+    let command_id = crate::workflows::definition::SystemCommandId::parse(&step.command);
+    let show_outputs = is_agent
+        || command_id.is_some_and(|command| !command.contract().required_outputs.is_empty());
+    let lock_outputs = !is_agent;
     StepRow {
         index,
         key: step.key.clone(),
@@ -393,8 +405,19 @@ fn step_row(
         action_error: errors.action,
         role: step.role.clone(),
         role_error: errors.role,
-        command: step.command.clone(),
+        command_choices: crate::workflows::definition::SystemCommandId::all()
+            .into_iter()
+            .map(|command| CommandChoice {
+                value: command.as_str(),
+                label: command.label(),
+                selected: command_id == Some(command),
+            })
+            .collect(),
         command_error: errors.command,
+        command_consequence: command_id
+            .map(crate::workflows::definition::SystemCommandId::consequence)
+            .unwrap_or(""),
+        show_outputs,
         tools: ToolId::ALL
             .into_iter()
             .map(|tool| ToolChoice {
@@ -464,12 +487,12 @@ fn step_row(
                     .get(output_index)
                     .map(|item| item.kind)
                     .unwrap_or(""),
-                can_move_up: output_index > 0,
-                can_move_down: output_index + 1 < output_count,
-                can_remove: output_count > 1,
+                can_move_up: !lock_outputs && output_index > 0,
+                can_move_down: !lock_outputs && output_index + 1 < output_count,
+                can_remove: !lock_outputs && output_count > 1,
             })
             .collect(),
-        can_add_output: output_count < MAXIMUM_OUTPUTS,
+        can_add_output: !lock_outputs && output_count < MAXIMUM_OUTPUTS,
         transition: if index + 1 < count {
             "Then"
         } else {

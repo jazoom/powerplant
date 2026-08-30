@@ -67,6 +67,7 @@ async fn a_failed_command_records_the_guest_program() {
         sandbox.last_exec().as_deref(),
         Some("git status --porcelain=v1")
     );
+    assert_eq!(sandbox.exec_log().len(), 1);
     let mut code = None;
     while let Some(event) = session.recv().await {
         if let super::CommandEvent::Exited(value) = event {
@@ -105,6 +106,26 @@ fn writable_user_project_mounts_are_rejected() {
     let spec = spec(project.path());
     assert!(matches!(
         super::reject_user_project_write(&spec, &spec.mounts[0].host),
+        Err(SandboxError::UserProjectWrite)
+    ));
+    let commit = SandboxSpec {
+        mounts: vec![
+            MountSpec {
+                guest: "/project".to_owned(),
+                host: spec.mounts[0].host.clone(),
+                read_only: false,
+            },
+            MountSpec {
+                guest: "/project/.git".to_owned(),
+                host: spec.mounts[0].host.join(".git"),
+                read_only: false,
+            },
+        ],
+        workdir: "/project".to_owned(),
+        access: GuestAccess::default(),
+    };
+    assert!(matches!(
+        super::reject_user_project_write(&commit, &spec.mounts[0].host),
         Err(SandboxError::UserProjectWrite)
     ));
 }

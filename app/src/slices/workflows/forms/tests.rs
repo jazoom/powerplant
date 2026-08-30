@@ -117,6 +117,33 @@ fn system_command_rejects_arbitrary_command_values() {
 }
 
 #[test]
+fn a_row_action_normalises_a_step_after_a_system_command_switch() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "add-role");
+    pairs
+        .iter_mut()
+        .find(|(key, _)| key == "step_0_action")
+        .expect("action")
+        .1 = "system-command".to_owned();
+    pairs.push(pair("step_0_command", "commit-candidate"));
+
+    let (form, _) = WorkflowFormState::parse(pairs).expect("parse");
+
+    assert!(form.steps[0].tools.is_empty());
+    assert!(form.steps[0].directories.is_empty());
+    assert_eq!(
+        form.steps[0]
+            .inputs
+            .iter()
+            .map(|input| input.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["candidate-revision", "review-report"]
+    );
+    assert_eq!(form.steps[0].outputs.len(), 1);
+    assert_eq!(form.steps[0].outputs[0].kind, "candidate-revision");
+}
+
+#[test]
 fn a_malformed_default_environment_is_rejected() {
     let mut pairs = valid_pairs();
     pairs

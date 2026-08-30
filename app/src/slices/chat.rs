@@ -272,7 +272,7 @@ async fn send(
             ));
         }
     };
-    let run = WorkflowRun::create(run_id, workflows::now_ms(), pinned, environments);
+    let run = WorkflowRun::create(run_id, workflows::now_ms(), record.id, pinned, environments);
     if let Err(error) = state.workflow_runs.create(run) {
         let _ = state
             .sessions

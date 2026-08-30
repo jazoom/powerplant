@@ -1,15 +1,23 @@
 use crate::agents::{AccessMode, AgentRecord, ToolId, guest_path_for};
 use crate::providers::ProviderConnection;
 use crate::sandbox::GuestAccess;
+use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 use crate::workflows::definition::{PRIMARY_SOURCE_ALIAS, StepAction, StepDefinition};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AttemptCapabilities {
     pub(crate) tools: Vec<ToolId>,
     pub(crate) directories: Vec<CapabilityDirectory>,
+    pub(crate) source_location: PrimarySourceLocation,
     pub(crate) git_admin: AccessMode,
     pub(crate) network: NetworkCapability,
     pub(crate) secret: SecretPresence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PrimarySourceLocation {
+    AttemptWorkspace,
+    UserProject,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,18 +103,13 @@ impl AttemptCapabilities {
                 Ok(Self {
                     tools: action.authority.tools.clone(),
                     directories,
+                    source_location: PrimarySourceLocation::AttemptWorkspace,
                     git_admin: AccessMode::ReadOnly,
                     network: NetworkCapability::ProviderHost,
                     secret: SecretPresence::ProviderPlaceholder,
                 })
             }
-            StepAction::SystemCommand(_) => Ok(Self {
-                tools: Vec::new(),
-                directories: vec![primary_read_only(agent)],
-                git_admin: AccessMode::ReadOnly,
-                network: NetworkCapability::None,
-                secret: SecretPresence::None,
-            }),
+            StepAction::SystemCommand(action) => Ok(commit_or_read_only(action.command, agent)),
         }
     }
 
@@ -149,6 +152,30 @@ impl AttemptCapabilities {
         match self.network {
             NetworkCapability::None => "none",
             NetworkCapability::ProviderHost => "provider",
+        }
+    }
+}
+
+impl PrimarySourceLocation {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::AttemptWorkspace => "attempt-workspace",
+            Self::UserProject => "user-project",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "attempt-workspace" => Some(Self::AttemptWorkspace),
+            "user-project" => Some(Self::UserProject),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::AttemptWorkspace => "Attempt workspace",
+            Self::UserProject => "User project",
         }
     }
 }
@@ -204,6 +231,33 @@ impl SecretPresence {
     }
 }
 
+fn commit_or_read_only(command: SystemCommandId, agent: &AgentRecord) -> AttemptCapabilities {
+    if command.contract().source_effect == CommandSourceEffect::Commit {
+        AttemptCapabilities {
+            tools: Vec::new(),
+            directories: vec![CapabilityDirectory {
+                alias: PRIMARY_SOURCE_ALIAS.to_owned(),
+                guest_path: guest_path_for(PRIMARY_SOURCE_ALIAS, &agent.primary_directory),
+                access: AccessMode::ReadWrite,
+                role: DirectoryRole::PrimarySource,
+            }],
+            source_location: PrimarySourceLocation::UserProject,
+            git_admin: AccessMode::ReadWrite,
+            network: NetworkCapability::None,
+            secret: SecretPresence::None,
+        }
+    } else {
+        AttemptCapabilities {
+            tools: Vec::new(),
+            directories: vec![primary_read_only(agent)],
+            source_location: PrimarySourceLocation::AttemptWorkspace,
+            git_admin: AccessMode::ReadOnly,
+            network: NetworkCapability::None,
+            secret: SecretPresence::None,
+        }
+    }
+}
+
 fn primary_read_only(agent: &AgentRecord) -> CapabilityDirectory {
     CapabilityDirectory {
         alias: PRIMARY_SOURCE_ALIAS.to_owned(),
@@ -248,6 +302,7 @@ pub(crate) fn test_agent_capabilities() -> AttemptCapabilities {
             access: AccessMode::ReadWrite,
             role: DirectoryRole::PrimarySource,
         }],
+        source_location: PrimarySourceLocation::AttemptWorkspace,
         git_admin: AccessMode::ReadOnly,
         network: NetworkCapability::ProviderHost,
         secret: SecretPresence::ProviderPlaceholder,
@@ -264,6 +319,7 @@ pub(crate) fn test_command_capabilities() -> AttemptCapabilities {
             access: AccessMode::ReadOnly,
             role: DirectoryRole::PrimarySource,
         }],
+        source_location: PrimarySourceLocation::AttemptWorkspace,
         git_admin: AccessMode::ReadOnly,
         network: NetworkCapability::None,
         secret: SecretPresence::None,

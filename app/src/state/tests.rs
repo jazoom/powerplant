@@ -26,6 +26,7 @@ fn startup_recovery_records_each_remaining_resource() {
         AttemptCleanupRecord::Orphaned {
             sandbox: false,
             workspace: true,
+            journal: false,
         }
     );
     guests.insert(attempt);
@@ -34,6 +35,7 @@ fn startup_recovery_records_each_remaining_resource() {
         AttemptCleanupRecord::Orphaned {
             sandbox: true,
             workspace: true,
+            journal: false,
         }
     );
     remaining_runs.insert(run);
@@ -42,6 +44,7 @@ fn startup_recovery_records_each_remaining_resource() {
         AttemptCleanupRecord::Orphaned {
             sandbox: true,
             workspace: false,
+            journal: false,
         }
     );
     assert_eq!(
@@ -49,6 +52,7 @@ fn startup_recovery_records_each_remaining_resource() {
         AttemptCleanupRecord::Orphaned {
             sandbox: true,
             workspace: false,
+            journal: false,
         }
     );
 }

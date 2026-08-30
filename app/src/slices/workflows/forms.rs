@@ -287,10 +287,11 @@ impl WorkflowFormState {
         }
         let intent = intent.ok_or(FormError::Intent)?;
         let roles = collect_roles(role_fields)?;
-        let steps = collect_steps(step_fields)?;
+        let mut steps = collect_steps(step_fields)?;
         if roles.len() > MAXIMUM_ROLES || steps.len() > MAXIMUM_STEPS {
             return Err(FormError::Excessive);
         }
+        ensure_command_defaults(&mut steps);
         Ok((
             Self {
                 name,
@@ -905,6 +906,64 @@ fn is_checked(value: &str) -> bool {
     matches!(value, "on" | "true" | "1")
 }
 
+fn ensure_command_defaults(steps: &mut [StepDraft]) {
+    for index in 0..steps.len() {
+        if steps[index].action != "system-command" {
+            continue;
+        }
+        let Some(command) = SystemCommandId::parse(&steps[index].command) else {
+            continue;
+        };
+        steps[index].role.clear();
+        steps[index].tools.clear();
+        steps[index].directories.clear();
+        let contract = command.contract();
+        let candidate_source = latest_candidate_source(&steps[..index]);
+        let existing_inputs = std::mem::take(&mut steps[index].inputs);
+        steps[index].inputs = contract
+            .required_inputs
+            .iter()
+            .enumerate()
+            .map(|(position, kind)| {
+                existing_inputs
+                    .iter()
+                    .find(|input| ArtefactKind::parse(&input.kind) == Some(*kind))
+                    .cloned()
+                    .unwrap_or_else(|| InputDraft {
+                        key: match kind {
+                            ArtefactKind::CandidateRevision => "candidate",
+                            ArtefactKind::ReviewReport => "review",
+                            ArtefactKind::Plan => "plan",
+                            ArtefactKind::TestReport => "test",
+                        }
+                        .to_owned(),
+                        kind: kind.as_str().to_owned(),
+                        source: if position == 0 && *kind == ArtefactKind::CandidateRevision {
+                            candidate_source.clone()
+                        } else {
+                            String::new()
+                        },
+                    })
+            })
+            .collect();
+        let existing_outputs = std::mem::take(&mut steps[index].outputs);
+        steps[index].outputs = contract
+            .required_outputs
+            .iter()
+            .map(|kind| {
+                existing_outputs
+                    .iter()
+                    .find(|output| OutputKind::parse(&output.kind) == Some(*kind))
+                    .cloned()
+                    .unwrap_or_else(|| OutputDraft {
+                        key: "committed-candidate".to_owned(),
+                        kind: kind.as_str().to_owned(),
+                    })
+            })
+            .collect();
+    }
+}
+
 fn empty_step() -> StepDraft {
     StepDraft {
         key: String::new(),
@@ -1051,7 +1110,11 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             tools: Vec::new(),
             directories: Vec::new(),
             inputs: step.inputs.iter().map(input_from_required).collect(),
-            outputs: Vec::new(),
+            outputs: action
+                .required_outputs
+                .iter()
+                .map(output_from_required)
+                .collect(),
         },
     }
 }
@@ -1171,10 +1234,43 @@ fn build_command_action(step: &StepDraft, errors: &mut StepErrors) -> Option<Ste
         errors.command = crate::workflows::definition::DefinitionError::Command.message();
         return None;
     };
+    let mut outputs = Vec::new();
+    for (index, output) in step.outputs.iter().enumerate() {
+        let key = match OutputKey::parse(&output.key) {
+            Ok(key) => key,
+            Err(error) => {
+                errors.outputs[index].key = error.message();
+                return None;
+            }
+        };
+        let Some(kind) = OutputKind::parse(&output.kind) else {
+            errors.outputs[index].kind =
+                crate::workflows::definition::DefinitionError::Format.message();
+            return None;
+        };
+        outputs.push(RequiredOutput { key, kind });
+    }
+    let contract = command.contract();
+    let output_kinds: Vec<_> = outputs.iter().map(|output| output.kind).collect();
+    if !crate::workflows::commands::kinds_match(&output_kinds, contract.required_outputs) {
+        if let Some(index) = (0..outputs.len()).find(|index| {
+            contract
+                .required_outputs
+                .get(*index)
+                .is_none_or(|kind| outputs[*index].kind != *kind)
+        }) {
+            errors.outputs[index].kind =
+                crate::workflows::definition::DefinitionError::UnsupportedOutput.message();
+        } else {
+            errors.command =
+                crate::workflows::definition::DefinitionError::UnsupportedOutput.message();
+        }
+        return None;
+    }
     Some(StepAction::SystemCommand(SystemCommandStep {
         environment: parse_step_environment(&step.environment, errors)?,
         command,
-        required_outputs: Vec::new(),
+        required_outputs: outputs,
     }))
 }
 
@@ -1230,7 +1326,87 @@ fn relate_definition_error(
                 }
             }
         }
+        DefinitionError::UnsupportedOutput => {
+            for (index, step) in state.steps.iter().enumerate() {
+                if step.action != "system-command" {
+                    continue;
+                }
+                let Some(command) = SystemCommandId::parse(&step.command) else {
+                    continue;
+                };
+                let contract = command.contract();
+                let input_kinds: Vec<_> = step
+                    .inputs
+                    .iter()
+                    .filter_map(|input| ArtefactKind::parse(&input.kind))
+                    .collect();
+                if !crate::workflows::commands::kinds_match(&input_kinds, contract.required_inputs)
+                {
+                    mark_command_input_errors(
+                        &mut errors.steps[index],
+                        step,
+                        contract.required_inputs,
+                    );
+                }
+                let output_kinds: Vec<_> = step
+                    .outputs
+                    .iter()
+                    .filter_map(|output| OutputKind::parse(&output.kind))
+                    .collect();
+                if !crate::workflows::commands::kinds_match(
+                    &output_kinds,
+                    contract.required_outputs,
+                ) {
+                    mark_command_output_errors(
+                        &mut errors.steps[index],
+                        step,
+                        contract.required_outputs,
+                    );
+                }
+            }
+        }
         _ => {}
+    }
+}
+
+fn mark_command_input_errors(errors: &mut StepErrors, step: &StepDraft, required: &[ArtefactKind]) {
+    let missing_candidate = !required.contains(&ArtefactKind::CandidateRevision)
+        || !step
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::CandidateRevision.as_str());
+    if missing_candidate && let Some(error) = errors.inputs.first_mut() {
+        error.kind = "Add one candidate input.";
+    }
+    if required.contains(&ArtefactKind::ReviewReport)
+        && !step
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::ReviewReport.as_str())
+    {
+        if let Some(error) = errors.inputs.get_mut(1) {
+            error.kind = "Add one review report input.";
+        } else if let Some(error) = errors.inputs.first_mut() {
+            error.kind = "Add one review report input.";
+        }
+    }
+    for (index, input) in step.inputs.iter().enumerate() {
+        if ArtefactKind::parse(&input.kind).is_some_and(|kind| !required.contains(&kind)) {
+            errors.inputs[index].kind =
+                crate::workflows::definition::DefinitionError::InputKind.message();
+        }
+    }
+}
+
+fn mark_command_output_errors(errors: &mut StepErrors, step: &StepDraft, required: &[OutputKind]) {
+    for (index, output) in step.outputs.iter().enumerate() {
+        if OutputKind::parse(&output.kind).is_some_and(|kind| !required.contains(&kind)) {
+            errors.outputs[index].kind =
+                crate::workflows::definition::DefinitionError::UnsupportedOutput.message();
+        }
+    }
+    if step.outputs.is_empty() && !required.is_empty() {
+        errors.command = crate::workflows::definition::DefinitionError::UnsupportedOutput.message();
     }
 }
 

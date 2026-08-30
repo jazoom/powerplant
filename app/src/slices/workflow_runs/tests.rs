@@ -1,3 +1,4 @@
+use askama::Template;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, header},
@@ -53,6 +54,7 @@ fn stored_run(state: &AppState) -> RunId {
     let run = WorkflowRun::create(
         RunId::generate().expect("run"),
         1,
+        crate::agents::AgentId::generate().expect("agent"),
         PinnedWorkflowDefinition::pin(None, definition),
         environments,
     );
@@ -195,6 +197,42 @@ async fn a_detail_patch_targets_run_detail() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("operation=\"children\" target=\"run-detail\""));
     assert!(!text.contains("id=\"run-detail\""));
+}
+
+#[test]
+fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
+    let view = super::page::RunDetailView {
+        run_id: "run".to_owned(),
+        name: "Sequential team".to_owned(),
+        name_href: String::new(),
+        catalogue_note: String::new(),
+        version: "version".to_owned(),
+        state: "Completed",
+        created: "now".to_owned(),
+        current_step: "Commit".to_owned(),
+        steps: vec![super::page::StepView {
+            name: "Commit".to_owned(),
+            action: "System command",
+            environment: "Alpine Git".to_owned(),
+            status: "Completed",
+            result: "Completed".to_owned(),
+            artefacts: vec![super::page::StepArtefactView {
+                href: "/runs/run/artefacts/candidate".to_owned(),
+                key: "committed-candidate".to_owned(),
+                kind: "candidate-revision",
+            }],
+            commit: "01234567".to_owned(),
+        }],
+        environments: Vec::new(),
+        attempts: Vec::new(),
+        artefacts: Vec::new(),
+    };
+
+    let rendered = view.render().expect("render timeline");
+
+    assert!(rendered.contains("Completed"));
+    assert!(rendered.contains("Commit 01234567"));
+    assert!(rendered.contains("href=\"/runs/run/artefacts/candidate\" data-graft"));
 }
 
 #[tokio::test]

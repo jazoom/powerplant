@@ -30,6 +30,7 @@ fn run_named(name: &str, created_at_ms: u64) -> WorkflowRun {
     WorkflowRun::create(
         RunId::generate().expect("run"),
         created_at_ms,
+        crate::agents::AgentId::generate().expect("agent"),
         PinnedWorkflowDefinition::pin(None, definition),
         environments,
     )
@@ -46,6 +47,7 @@ fn a_source_definition_edit_cannot_alter_an_earlier_run() {
         .create(WorkflowRun::create(
             RunId::generate().expect("run"),
             1,
+            crate::agents::AgentId::generate().expect("agent"),
             PinnedWorkflowDefinition::pin(None, first),
             environments,
         ))
@@ -80,6 +82,8 @@ fn recovery_marks_active_work_as_interrupted() {
         .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
         .expect("start");
     let reopened = WorkflowRunStore::open(dir.path().to_path_buf()).expect("reopen");
+    assert!(reopened.get(&run.id).expect("active run").is_active());
+    reopened.interrupt_active().expect("interrupt");
     let loaded = reopened.get(&run.id).expect("run");
     assert_eq!(loaded.state, RunState::Interrupted);
     assert_eq!(

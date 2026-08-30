@@ -4,7 +4,10 @@ use sha2::{Digest, Sha256};
 use crate::agents::{AccessMode, ToolId};
 use crate::environments::EnvironmentId;
 
+use super::commands::{CommandSourceEffect, kinds_match};
 use super::id::WorkflowId;
+
+pub(crate) use super::commands::SystemCommandId;
 
 pub(crate) const DEFINITION_FORMAT_VERSION: u32 = 1;
 pub(crate) const MAXIMUM_NAME_BYTES: usize = 80;
@@ -126,11 +129,6 @@ pub(crate) enum ArtefactKind {
 pub(crate) enum SuccessTransition {
     Next(StepKey),
     CompleteRun,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SystemCommandId {
-    RepositoryStatus,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -524,6 +522,13 @@ impl StepDefinition {
         }
     }
 
+    pub(crate) fn command_source_effect(&self) -> Option<CommandSourceEffect> {
+        match &self.action {
+            StepAction::SystemCommand(action) => Some(action.command.contract().source_effect),
+            StepAction::Agent(_) => None,
+        }
+    }
+
     fn to_file(&self) -> StepFile {
         StepFile {
             key: self.key.as_str().to_owned(),
@@ -738,21 +743,6 @@ impl SuccessTransition {
         match self {
             Self::Next(step) => TransitionFile::Next(step.as_str().to_owned()),
             Self::CompleteRun => TransitionFile::CompleteRun,
-        }
-    }
-}
-
-impl SystemCommandId {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "repository-status" => Some(Self::RepositoryStatus),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::RepositoryStatus => "repository-status",
         }
     }
 }
@@ -987,6 +977,11 @@ fn parse_file_parts(file: DefinitionFile) -> Result<FileParts, DefinitionError> 
     Ok((name, default_environment, roles, first_step, steps))
 }
 
+fn produces_candidate_revision(step: &StepDefinition) -> bool {
+    step.writes_primary_source()
+        || step.command_source_effect() == Some(CommandSourceEffect::Commit)
+}
+
 fn has_secondary_write(step: &StepDefinition) -> bool {
     let StepAction::Agent(action) = &step.action else {
         return false;
@@ -1092,9 +1087,6 @@ fn reject_duplicate_steps(steps: &[StepDefinition]) -> Result<(), DefinitionErro
 fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
     for step in steps {
         match &step.action {
-            StepAction::SystemCommand(action) if !action.required_outputs.is_empty() => {
-                return Err(DefinitionError::UnsupportedOutput);
-            }
             StepAction::Agent(action) => {
                 let writes = step.writes_primary_source();
                 for output in &action.required_outputs {
@@ -1103,7 +1095,20 @@ fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), Definition
                     }
                 }
             }
-            StepAction::SystemCommand(_) => {}
+            StepAction::SystemCommand(action) => {
+                let contract = action.command.contract();
+                let input_kinds: Vec<_> = step.inputs.iter().map(|input| input.kind).collect();
+                let output_kinds: Vec<_> = action
+                    .required_outputs
+                    .iter()
+                    .map(|output| output.kind)
+                    .collect();
+                if !kinds_match(&input_kinds, contract.required_inputs)
+                    || !kinds_match(&output_kinds, contract.required_outputs)
+                {
+                    return Err(DefinitionError::UnsupportedOutput);
+                }
+            }
         }
     }
     Ok(())
@@ -1243,7 +1248,7 @@ fn reject_handoff(first: &StepKey, steps: &[StepDefinition]) -> Result<(), Defin
                 }
             }
         }
-        if step.writes_primary_source() {
+        if produces_candidate_revision(step) {
             if candidate_outputs != 1 {
                 return Err(DefinitionError::CandidateOutput);
             }

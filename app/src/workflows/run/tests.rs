@@ -94,6 +94,7 @@ fn new_run() -> WorkflowRun {
     WorkflowRun::create(
         RunId::generate().expect("run"),
         10,
+        crate::agents::AgentId::generate().expect("agent"),
         PinnedWorkflowDefinition::pin(None, definition),
         environments,
     )
@@ -228,6 +229,7 @@ fn completed_attempts_follow_on_success() {
     let mut run = WorkflowRun::create(
         RunId::generate().expect("run"),
         10,
+        crate::agents::AgentId::generate().expect("agent"),
         PinnedWorkflowDefinition::pin(None, definition),
         environments,
     );
@@ -304,6 +306,8 @@ fn attempt_ordinals_count_repeated_step_attempts() {
             .expect("digest"),
         },
         cleanup: AttemptCleanupRecord::Complete,
+        commit_transaction: None,
+        commit_result: None,
     };
     let second = AttemptRecord {
         id: AttemptId::generate().expect("attempt"),
@@ -326,6 +330,8 @@ fn attempt_ordinals_count_repeated_step_attempts() {
             .expect("digest"),
         },
         cleanup: AttemptCleanupRecord::Pending,
+        commit_transaction: None,
+        commit_result: None,
     };
     assert_eq!(next_ordinal_for(&[], &step), 1);
     assert_eq!(next_ordinal_for(std::slice::from_ref(&first), &step), 2);

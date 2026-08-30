@@ -523,17 +523,69 @@
                     class="select select-bordered"
                     name="step_{{ step.index }}_command"
                   >
-                    <option
-                      value="repository-status"
-                      {% if step.command == "repository-status" %}selected{% endif %}
-                    >
-                      Repository status
-                    </option>
+                    {% for command in step.command_choices %}
+                      <option
+                        value="{{ command.value }}"
+                        {% if command.selected %}selected{% endif %}
+                      >
+                        {{ command.label }}
+                      </option>
+                    {% endfor %}
                   </select>
+                  {% if step.command_consequence != "" %}
+                    <p class="text-quiet text-xs">
+                      {{ step.command_consequence }}
+                    </p>
+                  {% endif %}
                   {% if step.command_error != "" %}
                     <p class="text-error text-sm">{{ step.command_error }}</p>
                   {% endif %}
                 </label>
+                {% if step.show_outputs %}
+                  <fieldset class="space-y-3">
+                    <legend class="text-sm">Required outputs</legend>
+                    {% for output in step.outputs %}
+                      <div
+                        class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-2"
+                      >
+                        <label class="flex flex-col gap-1">
+                          <span class="text-quiet text-xs">Key</span>
+                          <input
+                            class="input input-bordered input-sm font-mono"
+                            name="step_{{ step.index }}_output_{{ output.index }}_key"
+                            required
+                            maxlength="32"
+                            value="{{ output.key }}"
+                          />
+                          {% if output.key_error != "" %}
+                            <p class="text-error text-sm">
+                              {{ output.key_error }}
+                            </p>
+                          {% endif %}
+                        </label>
+                        <label class="flex flex-col gap-1">
+                          <span class="text-quiet text-xs">Kind</span>
+                          <select
+                            class="select select-bordered select-sm"
+                            name="step_{{ step.index }}_output_{{ output.index }}_kind"
+                          >
+                            <option
+                              value="candidate-revision"
+                              {% if output.kind == "candidate-revision" %}selected{% endif %}
+                            >
+                              Candidate revision
+                            </option>
+                          </select>
+                          {% if output.kind_error != "" %}
+                            <p class="text-error text-sm">
+                              {{ output.kind_error }}
+                            </p>
+                          {% endif %}
+                        </label>
+                      </div>
+                    {% endfor %}
+                  </fieldset>
+                {% endif %}
               {% endif %}
               <fieldset class="space-y-3">
                 <legend class="text-sm">Inputs</legend>

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AccessMode, ToolId};
+use crate::agents::{AccessMode, AgentId, ToolId};
 use crate::environments::snapshot::{OciManifestDigest, RecordedIntegrity, SnapshotArtifactKey};
 use crate::environments::{
     EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
@@ -8,8 +8,10 @@ use crate::environments::{
 
 use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::capabilities::{
-    AttemptCapabilities, CapabilityDirectory, DirectoryRole, NetworkCapability, SecretPresence,
+    AttemptCapabilities, CapabilityDirectory, DirectoryRole, NetworkCapability,
+    PrimarySourceLocation, SecretPresence,
 };
+use super::commit::{CommitResult, CommitTransaction, CommitTransactionState};
 use super::definition::{
     DefinitionFile, DefinitionVersion, InputKey, OutputKey, PinnedWorkflowDefinition, StepAction,
     StepDefinition, StepKey, SuccessTransition, WorkflowDefinition,
@@ -23,6 +25,7 @@ pub(crate) const RUN_RECORD_VERSION: u32 = 1;
 pub(crate) struct WorkflowRun {
     pub(crate) id: RunId,
     pub(crate) created_at_ms: u64,
+    pub(crate) agent_id: AgentId,
     pub(crate) pinned: PinnedWorkflowDefinition,
     pub(crate) environments: ResolvedEnvironmentSet,
     pub(crate) state: RunState,
@@ -120,6 +123,8 @@ pub(crate) struct AttemptRecord {
     pub(crate) capabilities: AttemptCapabilities,
     pub(crate) sandbox: AttemptSandboxRecord,
     pub(crate) cleanup: AttemptCleanupRecord,
+    pub(crate) commit_transaction: Option<CommitTransaction>,
+    pub(crate) commit_result: Option<CommitResult>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +150,8 @@ pub(crate) enum FailureCategory {
     Operational,
     Definition,
     Cleanup,
+    Assurance,
+    Commit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,7 +170,11 @@ pub(crate) enum AttemptSandboxKind {
 pub(crate) enum AttemptCleanupRecord {
     Pending,
     Complete,
-    Orphaned { sandbox: bool, workspace: bool },
+    Orphaned {
+        sandbox: bool,
+        workspace: bool,
+        journal: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,6 +193,7 @@ pub(super) struct RunFile {
     record_version: u32,
     id: String,
     created_at_ms: u64,
+    agent_id: String,
     workflow_id: Option<String>,
     version: String,
     definition: DefinitionFile,
@@ -221,6 +233,27 @@ struct AttemptFile {
     capabilities: AttemptCapabilitiesFile,
     sandbox: AttemptSandboxFile,
     cleanup: AttemptCleanupFile,
+    commit_transaction: Option<CommitTransactionFile>,
+    commit_result: Option<CommitResultFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct CommitTransactionFile {
+    state: String,
+    candidate: ArtefactRefFile,
+    review: ArtefactRefFile,
+    expected_reference: String,
+    old_object: Option<String>,
+    target_tree: Option<String>,
+    expected_commit: Option<String>,
+    timestamp: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct CommitResultFile {
+    commit: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -229,6 +262,7 @@ struct AttemptCapabilitiesFile {
     tools: Vec<String>,
     directories: Vec<CapabilityDirectoryFile>,
     git_admin: String,
+    source_location: String,
     network: String,
     secret: String,
 }
@@ -254,7 +288,11 @@ struct AttemptSandboxFile {
 enum AttemptCleanupFile {
     Pending,
     Complete,
-    Orphaned { sandbox: bool, workspace: bool },
+    Orphaned {
+        sandbox: bool,
+        workspace: bool,
+        journal: bool,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -424,6 +462,7 @@ impl WorkflowRun {
     pub(crate) fn create(
         id: RunId,
         created_at_ms: u64,
+        agent_id: AgentId,
         pinned: PinnedWorkflowDefinition,
         environments: ResolvedEnvironmentSet,
     ) -> Self {
@@ -431,6 +470,7 @@ impl WorkflowRun {
         Self {
             id,
             created_at_ms,
+            agent_id,
             pinned,
             environments,
             state: RunState::Ready { step },
@@ -548,6 +588,8 @@ impl WorkflowRun {
             capabilities,
             sandbox,
             cleanup: AttemptCleanupRecord::Pending,
+            commit_transaction: None,
+            commit_result: None,
         });
         let from = self.state.clone();
         let to = RunState::Active {
@@ -555,6 +597,56 @@ impl WorkflowRun {
             attempt: attempt_id,
         };
         self.push_transition(at_ms, TransitionCause::AttemptStarted, from, to);
+        Ok(())
+    }
+
+    pub(crate) fn record_commit_transaction(
+        &mut self,
+        attempt_id: AttemptId,
+        transaction: CommitTransaction,
+    ) -> Result<(), TransitionError> {
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id && attempt.state == AttemptState::Active)
+        else {
+            return Err(TransitionError::Invalid);
+        };
+        if let Some(current) = &attempt.commit_transaction
+            && !current.can_advance_to(&transaction)
+        {
+            return Err(TransitionError::Invalid);
+        }
+        attempt.commit_transaction = Some(transaction);
+        Ok(())
+    }
+
+    pub(crate) fn record_commit_result(
+        &mut self,
+        attempt_id: AttemptId,
+        result: CommitResult,
+    ) -> Result<(), TransitionError> {
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id && attempt.state == AttemptState::Active)
+        else {
+            return Err(TransitionError::Invalid);
+        };
+        if let Some(current) = &attempt.commit_result {
+            return if current == &result {
+                Ok(())
+            } else {
+                Err(TransitionError::Invalid)
+            };
+        }
+        let Some(transaction) = &attempt.commit_transaction else {
+            return Err(TransitionError::Invalid);
+        };
+        if transaction.verified_commit() != Some(result.commit.as_str()) {
+            return Err(TransitionError::Invalid);
+        }
+        attempt.commit_result = Some(result);
         Ok(())
     }
 
@@ -570,10 +662,12 @@ impl WorkflowRun {
         else {
             return Err(TransitionError::Invalid);
         };
-        if !matches!(attempt.cleanup, AttemptCleanupRecord::Pending) {
-            return Err(TransitionError::Invalid);
+        if attempt.cleanup == cleanup && !matches!(cleanup, AttemptCleanupRecord::Pending) {
+            return Ok(());
         }
-        if matches!(cleanup, AttemptCleanupRecord::Pending) {
+        if !matches!(attempt.cleanup, AttemptCleanupRecord::Pending)
+            || matches!(cleanup, AttemptCleanupRecord::Pending)
+        {
             return Err(TransitionError::Invalid);
         }
         attempt.cleanup = cleanup;
@@ -642,7 +736,9 @@ impl WorkflowRun {
         let Some(attempt) = self.attempts.iter().find(|item| item.id == attempt_id) else {
             return Err(TransitionError::Invalid);
         };
-        if attempt.cleanup != AttemptCleanupRecord::Complete {
+        if attempt.cleanup != AttemptCleanupRecord::Complete
+            || !durable_outputs_match(attempt, definition_step)
+        {
             return Err(TransitionError::Invalid);
         }
         self.finish_attempt(
@@ -903,6 +999,7 @@ impl WorkflowRun {
             record_version: RUN_RECORD_VERSION,
             id: self.id.as_hex(),
             created_at_ms: self.created_at_ms,
+            agent_id: self.agent_id.as_hex(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
             version: self.pinned.version.as_hex(),
             definition: self.pinned.definition.to_file(),
@@ -924,6 +1021,7 @@ impl WorkflowRun {
             return Err(RunRecordError::Corrupt);
         }
         let id = RunId::parse(&file.id).ok_or(RunRecordError::Corrupt)?;
+        let agent_id = AgentId::parse(&file.agent_id).ok_or(RunRecordError::Corrupt)?;
         let workflow_id = match file.workflow_id {
             Some(value) => Some(WorkflowId::parse(&value).ok_or(RunRecordError::Corrupt)?),
             None => None,
@@ -957,6 +1055,7 @@ impl WorkflowRun {
         let run = Self {
             id,
             created_at_ms: file.created_at_ms,
+            agent_id,
             pinned: PinnedWorkflowDefinition {
                 workflow_id,
                 version,
@@ -1094,6 +1193,13 @@ impl AttemptRecord {
                 snapshot_digest: self.sandbox.snapshot_digest.as_str().to_owned(),
             },
             cleanup: cleanup_to_file(&self.cleanup),
+            commit_transaction: self
+                .commit_transaction
+                .as_ref()
+                .map(commit_transaction_to_file),
+            commit_result: self.commit_result.as_ref().map(|result| CommitResultFile {
+                commit: result.commit.clone(),
+            }),
         }
     }
 
@@ -1128,6 +1234,13 @@ impl AttemptRecord {
                     .ok_or(RunRecordError::Corrupt)?,
             },
             cleanup: cleanup_from_file(file.cleanup)?,
+            commit_transaction: file
+                .commit_transaction
+                .map(commit_transaction_from_file)
+                .transpose()?,
+            commit_result: file.commit_result.map(|result| CommitResult {
+                commit: result.commit,
+            }),
         })
     }
 }
@@ -1210,6 +1323,8 @@ impl FailureCategory {
             "operational" => Some(Self::Operational),
             "definition" => Some(Self::Definition),
             "cleanup" => Some(Self::Cleanup),
+            "assurance" => Some(Self::Assurance),
+            "commit" => Some(Self::Commit),
             _ => None,
         }
     }
@@ -1223,6 +1338,8 @@ impl FailureCategory {
             Self::Operational => "operational",
             Self::Definition => "definition",
             Self::Cleanup => "cleanup",
+            Self::Assurance => "assurance",
+            Self::Commit => "commit",
         }
     }
 
@@ -1235,6 +1352,8 @@ impl FailureCategory {
             Self::Operational => "operational",
             Self::Definition => "definition",
             Self::Cleanup => "cleanup",
+            Self::Assurance => "assurance",
+            Self::Commit => "commit",
         }
     }
 }
@@ -1720,6 +1839,34 @@ fn next_ordinal(attempts: &[AttemptRecord], step: &StepKey) -> u32 {
         + 1
 }
 
+fn commit_transaction_to_file(transaction: &CommitTransaction) -> CommitTransactionFile {
+    CommitTransactionFile {
+        state: transaction.state.encode(),
+        candidate: ref_to_file(&transaction.candidate),
+        review: ref_to_file(&transaction.review),
+        expected_reference: transaction.expected_reference.clone(),
+        old_object: transaction.old_object.clone(),
+        target_tree: transaction.target_tree.clone(),
+        expected_commit: transaction.expected_commit.clone(),
+        timestamp: transaction.timestamp.clone(),
+    }
+}
+
+fn commit_transaction_from_file(
+    file: CommitTransactionFile,
+) -> Result<CommitTransaction, RunRecordError> {
+    Ok(CommitTransaction {
+        state: CommitTransactionState::parse(&file.state).ok_or(RunRecordError::Corrupt)?,
+        candidate: ref_from_file(file.candidate)?,
+        review: ref_from_file(file.review)?,
+        expected_reference: file.expected_reference,
+        old_object: file.old_object,
+        target_tree: file.target_tree,
+        expected_commit: file.expected_commit,
+        timestamp: file.timestamp,
+    })
+}
+
 fn validate_attempt_result(
     attempt: &AttemptRecord,
     action: &StepDefinition,
@@ -1730,7 +1877,9 @@ fn validate_attempt_result(
     match (&attempt.state, &attempt.finished_at_ms, &attempt.result) {
         (AttemptState::Active, None, None) => Ok(()),
         (AttemptState::Completed, Some(_), Some(AttemptResult::Completed { outputs }))
-            if valid_finish && *outputs == required_output_keys(&action.action) =>
+            if valid_finish
+                && *outputs == required_output_keys(&action.action)
+                && durable_outputs_match(attempt, action) =>
         {
             Ok(())
         }
@@ -1745,6 +1894,33 @@ fn validate_attempt_result(
         }
         _ => Err(RunRecordError::Corrupt),
     }
+}
+
+fn durable_outputs_match(attempt: &AttemptRecord, step: &StepDefinition) -> bool {
+    if !matches!(
+        &step.action,
+        StepAction::SystemCommand(action)
+            if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
+    ) {
+        return true;
+    }
+    let durable: Vec<_> = step
+        .required_outputs()
+        .iter()
+        .filter_map(|output| {
+            output
+                .kind
+                .as_artefact_kind()
+                .map(|kind| (&output.key, kind))
+        })
+        .collect();
+    attempt.outputs.len() == durable.len()
+        && durable.iter().all(|(key, kind)| {
+            attempt
+                .outputs
+                .iter()
+                .any(|output| output.key == **key && output.artefact.kind == *kind)
+        })
 }
 
 fn validate_attempt_isolation(
@@ -1766,7 +1942,42 @@ fn validate_attempt_isolation(
     if attempt.sandbox.snapshot_digest != binding.snapshot_digest {
         return Err(RunRecordError::Corrupt);
     }
-    if attempt.capabilities.git_admin != AccessMode::ReadOnly {
+    let commit = matches!(
+        &step.action,
+        StepAction::SystemCommand(action)
+            if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
+    );
+    if commit {
+        if attempt.capabilities.git_admin != AccessMode::ReadWrite
+            || attempt.capabilities.source_location != PrimarySourceLocation::UserProject
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        if let Some(transaction) = &attempt.commit_transaction
+            && !valid_commit_transaction(attempt, transaction)
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        if let Some(result) = &attempt.commit_result {
+            let Some(transaction) = &attempt.commit_transaction else {
+                return Err(RunRecordError::Corrupt);
+            };
+            if transaction.verified_commit() != Some(result.commit.as_str())
+                || !valid_git_object_id(&result.commit)
+            {
+                return Err(RunRecordError::Corrupt);
+            }
+        }
+        if attempt.state == AttemptState::Completed
+            && (attempt.commit_result.is_none() || attempt.commit_transaction.is_none())
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+    } else if attempt.commit_transaction.is_some()
+        || attempt.commit_result.is_some()
+        || attempt.capabilities.git_admin != AccessMode::ReadOnly
+        || attempt.capabilities.source_location != PrimarySourceLocation::AttemptWorkspace
+    {
         return Err(RunRecordError::Corrupt);
     }
     match attempt.action_kind {
@@ -1801,16 +2012,64 @@ fn validate_attempt_isolation(
     Ok(())
 }
 
-fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefinition) -> bool {
-    if capabilities.git_admin != AccessMode::ReadOnly {
+fn valid_commit_transaction(attempt: &AttemptRecord, transaction: &CommitTransaction) -> bool {
+    if transaction.candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+        || transaction.review.kind != crate::workflows::definition::ArtefactKind::ReviewReport
+        || !attempt
+            .inputs
+            .iter()
+            .any(|input| input.artefact == transaction.candidate)
+        || !attempt
+            .inputs
+            .iter()
+            .any(|input| input.artefact == transaction.review)
+        || transaction.expected_reference.is_empty()
+        || transaction.timestamp.split_once(' ').is_none()
+        || transaction
+            .old_object
+            .as_deref()
+            .is_some_and(|object| !valid_git_object_id(object))
+        || transaction
+            .target_tree
+            .as_deref()
+            .is_some_and(|object| !valid_git_object_id(object))
+        || transaction
+            .expected_commit
+            .as_deref()
+            .is_some_and(|object| !valid_git_object_id(object))
+    {
         return false;
     }
+    match &transaction.state {
+        CommitTransactionState::Prepared => true,
+        CommitTransactionState::WorktreeApplied => {
+            transaction.target_tree.is_some() && transaction.expected_commit.is_some()
+        }
+        CommitTransactionState::ReferenceUpdated { commit }
+        | CommitTransactionState::Verified { commit } => {
+            transaction.target_tree.is_some()
+                && transaction.expected_commit.as_deref() == Some(commit)
+                && valid_git_object_id(commit)
+        }
+    }
+}
+
+fn valid_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefinition) -> bool {
     match &step.action {
         StepAction::Agent(action) => {
-            capabilities
-                .tools
-                .iter()
-                .all(|tool| action.authority.tools.contains(tool))
+            capabilities.git_admin == AccessMode::ReadOnly
+                && capabilities.source_location == PrimarySourceLocation::AttemptWorkspace
+                && capabilities
+                    .tools
+                    .iter()
+                    .all(|tool| action.authority.tools.contains(tool))
                 && capabilities.directories.iter().all(|directory| {
                     valid_guest_path(&directory.guest_path)
                         && action
@@ -1820,14 +2079,27 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                             .any(|item| item.alias == directory.alias)
                 })
         }
-        StepAction::SystemCommand(_) => {
+        StepAction::SystemCommand(action) => {
+            let commit =
+                action.command == crate::workflows::commands::SystemCommandId::CommitCandidate;
             capabilities.tools.is_empty()
                 && capabilities.network == NetworkCapability::None
                 && capabilities.secret == SecretPresence::None
                 && capabilities.directories.iter().all(|directory| {
                     valid_guest_path(&directory.guest_path)
-                        && directory.access == AccessMode::ReadOnly
+                        && if commit {
+                            directory.access == AccessMode::ReadWrite
+                        } else {
+                            directory.access == AccessMode::ReadOnly
+                        }
                 })
+                && if commit {
+                    capabilities.git_admin == AccessMode::ReadWrite
+                        && capabilities.source_location == PrimarySourceLocation::UserProject
+                } else {
+                    capabilities.git_admin == AccessMode::ReadOnly
+                        && capabilities.source_location == PrimarySourceLocation::AttemptWorkspace
+                }
         }
     }
 }
@@ -1858,6 +2130,7 @@ fn capabilities_to_file(capabilities: &AttemptCapabilities) -> AttemptCapabiliti
             })
             .collect(),
         git_admin: capabilities.git_admin.as_str().to_owned(),
+        source_location: capabilities.source_location.as_str().to_owned(),
         network: capabilities.network.as_str().to_owned(),
         secret: capabilities.secret.as_str().to_owned(),
     }
@@ -1867,8 +2140,12 @@ fn capabilities_from_file(
     file: AttemptCapabilitiesFile,
 ) -> Result<AttemptCapabilities, RunRecordError> {
     let git_admin = AccessMode::parse(&file.git_admin).ok_or(RunRecordError::Corrupt)?;
-    if git_admin != AccessMode::ReadOnly {
-        return Err(RunRecordError::Corrupt);
+    let source_location =
+        PrimarySourceLocation::parse(&file.source_location).ok_or(RunRecordError::Corrupt)?;
+    match (git_admin, source_location) {
+        (AccessMode::ReadOnly, PrimarySourceLocation::AttemptWorkspace)
+        | (AccessMode::ReadWrite, PrimarySourceLocation::UserProject) => {}
+        _ => return Err(RunRecordError::Corrupt),
     }
     let mut tools = Vec::new();
     for name in file.tools {
@@ -1893,6 +2170,7 @@ fn capabilities_from_file(
     Ok(AttemptCapabilities {
         tools,
         directories,
+        source_location,
         git_admin,
         network: NetworkCapability::parse(&file.network).ok_or(RunRecordError::Corrupt)?,
         secret: SecretPresence::parse(&file.secret).ok_or(RunRecordError::Corrupt)?,
@@ -1903,9 +2181,14 @@ fn cleanup_to_file(cleanup: &AttemptCleanupRecord) -> AttemptCleanupFile {
     match cleanup {
         AttemptCleanupRecord::Pending => AttemptCleanupFile::Pending,
         AttemptCleanupRecord::Complete => AttemptCleanupFile::Complete,
-        AttemptCleanupRecord::Orphaned { sandbox, workspace } => AttemptCleanupFile::Orphaned {
+        AttemptCleanupRecord::Orphaned {
+            sandbox,
+            workspace,
+            journal,
+        } => AttemptCleanupFile::Orphaned {
             sandbox: *sandbox,
             workspace: *workspace,
+            journal: *journal,
         },
     }
 }
@@ -1914,9 +2197,15 @@ fn cleanup_from_file(file: AttemptCleanupFile) -> Result<AttemptCleanupRecord, R
     Ok(match file {
         AttemptCleanupFile::Pending => AttemptCleanupRecord::Pending,
         AttemptCleanupFile::Complete => AttemptCleanupRecord::Complete,
-        AttemptCleanupFile::Orphaned { sandbox, workspace } => {
-            AttemptCleanupRecord::Orphaned { sandbox, workspace }
-        }
+        AttemptCleanupFile::Orphaned {
+            sandbox,
+            workspace,
+            journal,
+        } => AttemptCleanupRecord::Orphaned {
+            sandbox,
+            workspace,
+            journal,
+        },
     })
 }
 

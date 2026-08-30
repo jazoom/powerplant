@@ -19,14 +19,25 @@ pub(super) struct AttemptView {
     pub(super) result: String,
     pub(super) tools: String,
     pub(super) primary_access: &'static str,
+    pub(super) source_location: &'static str,
     pub(super) git_admin: &'static str,
     pub(super) network: &'static str,
+}
+
+pub(super) struct StepArtefactView {
+    pub(super) href: String,
+    pub(super) key: String,
+    pub(super) kind: &'static str,
 }
 
 pub(super) struct StepView {
     pub(super) name: String,
     pub(super) action: &'static str,
     pub(super) environment: String,
+    pub(super) status: &'static str,
+    pub(super) result: String,
+    pub(super) artefacts: Vec<StepArtefactView>,
+    pub(super) commit: String,
 }
 
 pub(super) struct PinnedEnvironmentView {
@@ -139,10 +150,39 @@ impl RunDetailView {
                 .definition
                 .steps()
                 .iter()
-                .map(|step| StepView {
-                    name: step.name.clone(),
-                    action: step.action.kind_label(),
-                    environment: step_environment_label(run, step),
+                .map(|step| {
+                    let attempt = run
+                        .attempts
+                        .iter()
+                        .rev()
+                        .find(|attempt| attempt.step == step.key);
+                    StepView {
+                        name: step.name.clone(),
+                        action: step.action.kind_label(),
+                        environment: step_environment_label(run, step),
+                        status: attempt.map_or("Waiting", |attempt| attempt.state.as_label()),
+                        result: attempt
+                            .and_then(|attempt| attempt.result.as_ref())
+                            .map(|result| result.as_label())
+                            .unwrap_or_default(),
+                        artefacts: attempt
+                            .into_iter()
+                            .flat_map(|attempt| &attempt.outputs)
+                            .map(|output| StepArtefactView {
+                                href: format!(
+                                    "/runs/{}/artefacts/{}",
+                                    run.id.as_hex(),
+                                    output.artefact.id.as_hex()
+                                ),
+                                key: output.key.as_str().to_owned(),
+                                kind: output.artefact.kind.as_str(),
+                            })
+                            .collect(),
+                        commit: attempt
+                            .and_then(|attempt| attempt.commit_result.as_ref())
+                            .map(|result| result.commit.chars().take(8).collect())
+                            .unwrap_or_default(),
+                    }
                 })
                 .collect(),
             environments: pinned_environments(run, environments),
@@ -163,7 +203,8 @@ impl RunDetailView {
                         .unwrap_or_default(),
                     tools: attempt.capabilities.tools_label(),
                     primary_access: attempt.capabilities.primary_access_label(),
-                    git_admin: "read-only",
+                    source_location: attempt.capabilities.source_location.label(),
+                    git_admin: attempt.capabilities.git_admin.as_str(),
                     network: attempt.capabilities.network_label(),
                 })
                 .collect(),

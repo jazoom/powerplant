@@ -557,6 +557,7 @@ fn setup_exec(script: &str) -> GuestExec {
         program: "/bin/sh".to_owned(),
         args: vec!["-eu".to_owned()],
         stdin: Some(script.as_bytes().to_vec()),
+        env: Vec::new(),
         cwd: "/".to_owned(),
     }
 }

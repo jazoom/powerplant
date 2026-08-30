@@ -517,7 +517,7 @@ fn unknown_step_outputs_are_rejected() {
         vec![later, status],
     )
     .err();
-    assert_eq!(error, Some(DefinitionError::UnknownOutput));
+    assert_eq!(error, Some(DefinitionError::UnsupportedOutput));
 }
 
 #[test]

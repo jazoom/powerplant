@@ -3,6 +3,8 @@ use std::path::{Component, Path, PathBuf};
 
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
+use rand::rand_core::TryRng;
+use rand::rngs::SysRng;
 
 use super::candidate::CaptureError;
 
@@ -131,6 +133,65 @@ impl WorkspaceDir {
             .map_err(|_| CaptureError::ArtefactWrite)
     }
 
+    pub(crate) fn replace_file(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        executable: bool,
+    ) -> Result<(), CaptureError> {
+        self.ensure_parents(relative)?;
+        let parent = Path::new(relative).parent().unwrap_or(Path::new(""));
+        let dir = if parent.as_os_str().is_empty() {
+            self.dir
+                .try_clone()
+                .map_err(|_| CaptureError::ArtefactWrite)?
+        } else {
+            self.dir
+                .open_dir(parent)
+                .map_err(|_| CaptureError::ArtefactWrite)?
+        };
+        let tmp_name = temporary_name();
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        apply_nofollow(&mut options);
+        let mut file = dir
+            .open_with(&tmp_name, &options)
+            .map_err(|_| CaptureError::ArtefactWrite)?;
+        file.write_all(bytes)
+            .map_err(|_| CaptureError::ArtefactWrite)?;
+        file.flush().map_err(|_| CaptureError::ArtefactWrite)?;
+        file.sync_all().map_err(|_| CaptureError::ArtefactWrite)?;
+        set_executable(&file, executable)?;
+        drop(file);
+        let dest = Path::new(relative)
+            .file_name()
+            .ok_or(CaptureError::SourceUnsupported)?;
+        if let Err(error) = dir.rename(&tmp_name, &dir, dest) {
+            let _ = dir.remove_file(&tmp_name);
+            return Err(if error.kind() == std::io::ErrorKind::NotFound {
+                CaptureError::SourceRead
+            } else {
+                CaptureError::ArtefactWrite
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn remove_leaf(&self, relative: &str) -> Result<(), CaptureError> {
+        match self.kind(relative) {
+            Ok(WorkspaceKind::Directory) => self
+                .dir
+                .remove_dir(relative)
+                .map_err(|_| CaptureError::ArtefactWrite),
+            Ok(_) => self
+                .dir
+                .remove_file(relative)
+                .map_err(|_| CaptureError::ArtefactWrite),
+            Err(CaptureError::SourceRead) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) fn create_placeholder_dir(&self, relative: &str) -> Result<(), CaptureError> {
         self.ensure_parents(relative)?;
         self.dir
@@ -217,6 +278,19 @@ fn collect_leaves(dir: &Dir, prefix: &Path, paths: &mut Vec<String>) -> Result<(
         }
     }
     Ok(())
+}
+
+fn temporary_name() -> String {
+    let mut bytes = [0u8; 8];
+    let _ = SysRng.try_fill_bytes(&mut bytes);
+    let mut name = String::from(".pp-");
+    for byte in bytes {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        name.push(HEX[(byte >> 4) as usize] as char);
+        name.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    name.push_str(".tmp");
+    name
 }
 
 fn apply_nofollow(options: &mut OpenOptions) {

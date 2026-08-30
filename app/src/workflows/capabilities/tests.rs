@@ -1,12 +1,14 @@
 use super::{
-    AttemptCapabilities, CapabilityError, DirectoryRole, NetworkCapability, SecretPresence,
+    AttemptCapabilities, CapabilityError, DirectoryRole, NetworkCapability, PrimarySourceLocation,
+    SecretPresence,
 };
 use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, ToolId};
 use crate::providers::{ProviderConnection, ProviderKind};
 use crate::tools::SUBMIT_WORKFLOW_OUTPUT;
 use crate::workflows::definition::{
-    AgentAuthority, AgentStep, GuestDirectoryAccess, RoleKey, StepAction, StepDefinition,
-    StepEnvironment, StepKey, SuccessTransition, SystemCommandId, SystemCommandStep,
+    AgentAuthority, AgentStep, GuestDirectoryAccess, OutputKey, OutputKind, RequiredOutput,
+    RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition,
+    SystemCommandId, SystemCommandStep,
 };
 
 fn agent(tools: Vec<ToolId>, writable: bool) -> AgentRecord {
@@ -74,45 +76,113 @@ fn status_step() -> StepDefinition {
     }
 }
 
+fn commit_step() -> StepDefinition {
+    StepDefinition {
+        key: StepKey::parse("commit").expect("step"),
+        name: "Commit".to_owned(),
+        inputs: Vec::new(),
+        action: StepAction::SystemCommand(SystemCommandStep {
+            command: SystemCommandId::CommitCandidate,
+            environment: StepEnvironment::WorkflowDefault,
+            required_outputs: vec![RequiredOutput {
+                key: OutputKey::parse("committed-candidate").expect("output"),
+                kind: OutputKind::CandidateRevision,
+            }],
+        }),
+        on_success: SuccessTransition::CompleteRun,
+    }
+}
+
 #[test]
 fn capability_policy_table() {
     let connection = connection();
+    let ceiling = agent(ToolId::ALL.to_vec(), true);
 
-    let ceiling = agent(vec![ToolId::List], true);
     let over = agent_step(vec![ToolId::List, ToolId::Write], true);
     assert_eq!(
-        AttemptCapabilities::derive(&over, &ceiling, &connection),
+        AttemptCapabilities::derive(&over, &agent(vec![ToolId::List], true), &connection),
         Err(CapabilityError::Authority)
     );
 
-    let agent_caps = AttemptCapabilities::derive(
-        &agent_step(vec![ToolId::List], true),
-        &agent(vec![ToolId::List, ToolId::Read], true),
+    let planner = AttemptCapabilities::derive(
+        &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
+        &ceiling,
         &connection,
     )
-    .expect("agent");
-    assert_eq!(agent_caps.git_admin, AccessMode::ReadOnly);
+    .expect("planner");
+    assert_eq!(
+        planner.primary().map(|directory| directory.access),
+        Some(AccessMode::ReadOnly)
+    );
+    assert_eq!(planner.git_admin, AccessMode::ReadOnly);
+    assert_eq!(
+        planner.source_location,
+        PrimarySourceLocation::AttemptWorkspace
+    );
+    assert_eq!(planner.network, NetworkCapability::ProviderHost);
+
+    let implementer = AttemptCapabilities::derive(
+        &agent_step(ToolId::ALL.to_vec(), true),
+        &ceiling,
+        &connection,
+    )
+    .expect("implementer");
+    assert_eq!(
+        implementer.primary().map(|directory| directory.access),
+        Some(AccessMode::ReadWrite)
+    );
+    assert_eq!(
+        implementer.source_location,
+        PrimarySourceLocation::AttemptWorkspace
+    );
+    assert_eq!(implementer.git_admin, AccessMode::ReadOnly);
     assert!(
-        !agent_caps
+        !implementer
             .tools
             .iter()
             .any(|tool| tool.as_str() == SUBMIT_WORKFLOW_OUTPUT)
     );
-    assert_eq!(agent_caps.network, NetworkCapability::ProviderHost);
-    assert_eq!(agent_caps.secret, SecretPresence::ProviderPlaceholder);
-    assert_eq!(
-        agent_caps.primary().map(|directory| directory.role),
-        Some(DirectoryRole::PrimarySource)
-    );
 
-    let command_caps = AttemptCapabilities::derive(
-        &status_step(),
-        &agent(ToolId::ALL.to_vec(), true),
+    let reviewer = AttemptCapabilities::derive(
+        &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
+        &ceiling,
         &connection,
     )
-    .expect("command");
-    assert_eq!(command_caps.git_admin, AccessMode::ReadOnly);
-    assert_eq!(command_caps.network, NetworkCapability::None);
-    assert_eq!(command_caps.secret, SecretPresence::None);
-    assert!(command_caps.tools.is_empty());
+    .expect("reviewer");
+    assert_eq!(
+        reviewer.primary().map(|directory| directory.access),
+        Some(AccessMode::ReadOnly)
+    );
+    assert_eq!(reviewer.git_admin, AccessMode::ReadOnly);
+
+    let status =
+        AttemptCapabilities::derive(&status_step(), &ceiling, &connection).expect("status");
+    assert!(status.tools.is_empty());
+    assert_eq!(status.network, NetworkCapability::None);
+    assert_eq!(status.secret, SecretPresence::None);
+    assert_eq!(status.git_admin, AccessMode::ReadOnly);
+    assert_eq!(
+        status.source_location,
+        PrimarySourceLocation::AttemptWorkspace
+    );
+    assert_eq!(
+        status.primary().map(|directory| directory.access),
+        Some(AccessMode::ReadOnly)
+    );
+
+    let commit =
+        AttemptCapabilities::derive(&commit_step(), &ceiling, &connection).expect("commit");
+    assert!(commit.tools.is_empty());
+    assert_eq!(commit.network, NetworkCapability::None);
+    assert_eq!(commit.secret, SecretPresence::None);
+    assert_eq!(commit.git_admin, AccessMode::ReadWrite);
+    assert_eq!(commit.source_location, PrimarySourceLocation::UserProject);
+    assert_eq!(
+        commit.primary().map(|directory| directory.access),
+        Some(AccessMode::ReadWrite)
+    );
+    assert_eq!(
+        commit.primary().map(|directory| directory.role),
+        Some(DirectoryRole::PrimarySource)
+    );
 }

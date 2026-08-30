@@ -60,18 +60,34 @@
       {% endif %}
       <p class="text-quiet text-xs">{{ created }}</p>
       <p class="text-quiet text-sm">
-        Each step ran in a new isolated sandbox. Project files on this machine
-        stay unchanged until a later commit step.
+        Each agent step uses a new isolated sandbox. Only an explicit commit
+        step can change project files on this machine.
       </p>
       <section class="space-y-2">
         <h2 class="text-base font-semibold">Steps</h2>
         <ol class="list-decimal space-y-1 pl-5">
           {% for step in steps %}
-            <li>
-              {{ step.name }} ({{ step.action }})
+            <li class="border-base-300 rounded-sm border px-3 py-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span>{{ step.name }} ({{ step.action }})</span>
+                <span class="badge badge-outline">{{ step.status }}</span>
+              </div>
               {% if step.environment != "" %}
-                <span class="text-quiet text-xs">{{ step.environment }}</span>
+                <p class="text-quiet text-xs">{{ step.environment }}</p>
               {% endif %}
+              {% if step.result != "" %}
+                <p class="text-sm">{{ step.result }}</p>
+              {% endif %}
+              {% if step.commit != "" %}
+                <p class="font-mono text-sm">Commit {{ step.commit }}</p>
+              {% endif %}
+              {% for artefact in step.artefacts %}
+                <p class="text-sm">
+                  <a href="{{ artefact.href }}" data-graft class="link"
+                    >{{ artefact.key }} · {{ artefact.kind }}</a
+                  >
+                </p>
+              {% endfor %}
             </li>
           {% endfor %}
         </ol>
@@ -125,6 +141,9 @@
                 <p class="text-quiet text-xs">Tools: {{ attempt.tools }}</p>
                 <p class="text-quiet text-xs">
                   Primary source: {{ attempt.primary_access }}
+                </p>
+                <p class="text-quiet text-xs">
+                  Source location: {{ attempt.source_location }}
                 </p>
                 <p class="text-quiet text-xs">
                   Git administrative access: {{ attempt.git_admin }}

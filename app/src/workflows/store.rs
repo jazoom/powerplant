@@ -65,8 +65,7 @@ impl WorkflowRunStore {
 
     pub(crate) fn open(dir: PathBuf) -> Result<Self, StoreError> {
         crate::storage::ensure_private_dir(&dir).map_err(|_| StoreError::Persist)?;
-        let mut runs = load_dir(&dir)?;
-        interrupt_active(&mut runs, &dir)?;
+        let runs = load_dir(&dir)?;
         Ok(Self {
             dir: Some(dir),
             inner: Mutex::new(runs),
@@ -85,6 +84,19 @@ impl WorkflowRunStore {
 
     pub(crate) fn get(&self, id: &RunId) -> Option<WorkflowRun> {
         self.lock().get(id).cloned()
+    }
+
+    pub(crate) fn active_runs(&self) -> Vec<WorkflowRun> {
+        self.lock()
+            .values()
+            .filter(|run| run.is_active())
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn interrupt_active(&self) -> Result<(), StoreError> {
+        let mut runs = self.lock();
+        interrupt_active(&mut runs, self.dir.as_deref())
     }
 
     pub(crate) fn pending_cleanup_attempts(&self) -> Vec<(RunId, super::id::AttemptId)> {
@@ -201,14 +213,17 @@ fn load_dir(dir: &Path) -> Result<BTreeMap<RunId, WorkflowRun>, StoreError> {
     Ok(runs)
 }
 
-fn interrupt_active(runs: &mut BTreeMap<RunId, WorkflowRun>, dir: &Path) -> Result<(), StoreError> {
+fn interrupt_active(
+    runs: &mut BTreeMap<RunId, WorkflowRun>,
+    dir: Option<&Path>,
+) -> Result<(), StoreError> {
     let at_ms = now_ms();
     for run in runs.values_mut() {
         if !run.is_active() {
             continue;
         }
         run.interrupt(at_ms).map_err(|_| StoreError::Corrupt)?;
-        persist(Some(dir), run)?;
+        persist(dir, run)?;
     }
     Ok(())
 }
