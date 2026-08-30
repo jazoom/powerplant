@@ -14,8 +14,9 @@ use crate::{
     sessions::SessionStore,
     vault::ProviderVault,
     workflows::{
-        CommitJournals, WorkflowArtefactRepository, WorkflowCatalogue, WorkflowExecution,
-        WorkflowRunStore, workspace::WorkflowWorkspaces,
+        CommitJournals, WorkflowArtefactRepository, WorkflowCatalogue,
+        WorkflowContinuationRegistry, WorkflowExecution, WorkflowRunStore,
+        workspace::WorkflowWorkspaces,
     },
 };
 
@@ -35,6 +36,7 @@ pub(crate) struct AppState {
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
     pub(crate) workflow_artefacts: Arc<WorkflowArtefactRepository>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
+    pub(crate) gate_continuations: Arc<WorkflowContinuationRegistry>,
     pub(crate) workflow_workspaces: Arc<WorkflowWorkspaces>,
     pub(crate) commit_journals: Arc<CommitJournals>,
     pub(crate) environments: Arc<EnvironmentCatalogue>,
@@ -108,6 +110,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         workflow_runs: Arc::new(workflow_runs),
         workflow_artefacts: Arc::new(workflow_artefacts),
         workflow_execution: Arc::new(WorkflowExecution::new()),
+        gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),
         workflow_workspaces: Arc::new(workflow_workspaces),
         commit_journals: Arc::new(commit_journals),
         environments,
@@ -225,6 +228,7 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
         workflow_artefacts: Arc::new(WorkflowArtefactRepository::in_memory()),
         workflow_execution: Arc::new(WorkflowExecution::new()),
+        gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),
         workflow_workspaces: Arc::new(WorkflowWorkspaces::in_memory()),
         commit_journals: Arc::new(CommitJournals::in_memory()),
         environments,

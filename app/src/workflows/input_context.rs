@@ -64,6 +64,37 @@ pub(crate) fn verify_inputs(
         }
         verified.push(verify_one(run, declared, resolved, store, &mut imported)?);
     }
+    let decisions: Vec<_> = verified
+        .iter()
+        .filter(|input| input.kind == ArtefactKind::HumanDecision)
+        .collect();
+    if !decisions.is_empty()
+        && let Some(candidate) = verified
+            .iter()
+            .find(|input| input.kind == ArtefactKind::CandidateRevision)
+            .and_then(|input| input.candidate)
+    {
+        let initial = match &run.source {
+            super::run::RunSource::Captured { source } => run
+                .artefact(&source.initial.id)
+                .and_then(super::artefacts::ArtefactRecord::candidate_hash),
+            super::run::RunSource::Pending => None,
+        }
+        .ok_or(InputContextError::Changed)?;
+        for input in decisions {
+            let record = run
+                .artefact(&input.artefact_id)
+                .ok_or(InputContextError::Missing)?;
+            match &record.summary {
+                ArtefactSummary::HumanDecision {
+                    candidate: bound,
+                    diff_base,
+                    ..
+                } if *bound == candidate && *diff_base == initial => {}
+                _ => return Err(InputContextError::Changed),
+            }
+        }
+    }
     Ok(verified)
 }
 
@@ -156,6 +187,14 @@ fn verify_one(
                 ..
             },
         ) if producer_step == step && producer_output == output => {}
+        (
+            ArtefactSource::StepOutput { step, output },
+            ArtefactProducer::HumanGate {
+                step: producer_step,
+                output: producer_output,
+                ..
+            },
+        ) if producer_step == step && producer_output == output => {}
         (ArtefactSource::StepOutput { .. }, ArtefactProducer::StepAttempt { output: None, .. }) => {
             return Err(InputContextError::Source);
         }
@@ -182,13 +221,17 @@ fn verify_one(
             }
             (None, Some(artefact.candidate_hash))
         }
-        ArtefactKind::Plan | ArtefactKind::ReviewReport | ArtefactKind::TestReport => {
+        ArtefactKind::Plan
+        | ArtefactKind::ReviewReport
+        | ArtefactKind::TestReport
+        | ArtefactKind::HumanDecision => {
             let payload = parse_typed_payload(record.kind, &bytes).map_err(map_payload)?;
-            let hash = super::artefacts::artefact_hash_for(
-                record.kind,
-                super::artefacts::payload::PLAN_SCHEMA,
-                &bytes,
-            );
+            let schema = if record.kind == ArtefactKind::HumanDecision {
+                super::artefacts::payload::HUMAN_DECISION_SCHEMA
+            } else {
+                super::artefacts::payload::PLAN_SCHEMA
+            };
+            let hash = super::artefacts::artefact_hash_for(record.kind, schema, &bytes);
             if hash != record.artefact_hash {
                 return Err(InputContextError::Changed);
             }
@@ -205,6 +248,13 @@ fn verify_one(
                     report.markdown,
                     Some(
                         CandidateHash::parse(&report.candidate)
+                            .ok_or(InputContextError::Changed)?,
+                    ),
+                ),
+                TypedPayload::HumanDecision(decision) => (
+                    format!("Decision: {}", decision.decision.as_label()),
+                    Some(
+                        CandidateHash::parse(&decision.candidate)
                             .ok_or(InputContextError::Changed)?,
                     ),
                 ),
@@ -235,11 +285,13 @@ fn verify_one(
         artefact_hash: record.artefact_hash,
         object_hash: record.object_hash,
         producer_step: match &record.provenance.producer {
-            ArtefactProducer::StepAttempt { step, .. } => Some(step.clone()),
+            ArtefactProducer::StepAttempt { step, .. }
+            | ArtefactProducer::HumanGate { step, .. } => Some(step.clone()),
             ArtefactProducer::RunSourceCapture => None,
         },
         producer_output: match &record.provenance.producer {
             ArtefactProducer::StepAttempt { output, .. } => output.clone(),
+            ArtefactProducer::HumanGate { output, .. } => Some(output.clone()),
             ArtefactProducer::RunSourceCapture => None,
         },
         candidate,

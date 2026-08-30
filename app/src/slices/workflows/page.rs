@@ -120,6 +120,7 @@ pub(super) struct StepRow {
     pub(super) name: String,
     pub(super) name_error: &'static str,
     pub(super) is_agent: bool,
+    pub(super) is_gate: bool,
     pub(super) environment: String,
     pub(super) environment_error: &'static str,
     pub(super) environment_hint: String,
@@ -388,9 +389,11 @@ fn step_row(
     let errors = errors.cloned().unwrap_or_default();
     let output_count = step.outputs.len();
     let input_count = step.inputs.len();
-    let is_agent = step.action != "system-command";
+    let is_agent = step.action == "agent";
+    let is_gate = step.action == "human-gate";
     let command_id = crate::workflows::definition::SystemCommandId::parse(&step.command);
     let show_outputs = is_agent
+        || is_gate
         || command_id.is_some_and(|command| !command.contract().required_outputs.is_empty());
     let lock_outputs = !is_agent;
     StepRow {
@@ -400,6 +403,7 @@ fn step_row(
         name: step.name.clone(),
         name_error: errors.name,
         is_agent,
+        is_gate,
         environment: step.environment.clone(),
         environment_error: errors.environment,
         environment_hint: String::new(),

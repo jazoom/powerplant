@@ -1,0 +1,223 @@
+<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
+  <div
+    class="mx-auto flex min-h-16 max-w-5xl flex-wrap items-center gap-3 px-4 py-3"
+  >
+    <a
+      href="/agents"
+      data-graft
+      class="flex min-w-0 items-center gap-2 rounded-sm"
+    >
+      <img
+        src="/static/images/logo.svg"
+        alt=""
+        width="28"
+        height="28"
+        class="powerplant-mark"
+      />
+      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
+        >Power Plant</span
+      >
+    </a>
+    <nav class="ml-auto flex flex-wrap items-center gap-2">
+      <a href="/runs/{{ run_id }}" data-graft class="btn btn-ghost btn-sm"
+        >Run detail</a
+      >
+      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
+    </nav>
+  </div>
+</header>
+
+<main class="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-8">
+  <div id="gate-detail" class="space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div class="space-y-1">
+        <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
+          {{ gate_name }}
+        </h1>
+        <p class="text-quiet text-sm">Step {{ position }} · Human gate</p>
+      </div>
+      <span class="badge badge-outline">{{ state }}</span>
+    </div>
+
+    {% if error != "" %}
+      <div role="alert" class="alert alert-error">
+        <span>{{ error }}</span>
+      </div>
+    {% endif %}
+
+    <section class="border-base-300 space-y-3 rounded-sm border p-4">
+      <h2 class="font-heading text-lg font-semibold">Pinned candidate</h2>
+      <dl class="grid gap-3 text-sm sm:grid-cols-[7rem_1fr]">
+        <dt class="text-quiet">Diff base</dt>
+        <dd class="font-mono break-all">{{ base }}</dd>
+        <dt class="text-quiet">Candidate</dt>
+        <dd class="font-mono break-all">{{ target }}</dd>
+        <dt class="text-quiet">Changes</dt>
+        <dd>{{ total }} · {{ range }}</dd>
+      </dl>
+      <p class="text-quiet text-sm">
+        Approval applies only to the displayed candidate hash.
+      </p>
+
+      {% if awaiting %}
+        <div class="grid gap-4 pt-2 lg:grid-cols-3">
+          <form
+            method="post"
+            action="/runs/{{ run_id }}/gates/{{ gate_id }}/approve"
+            data-graft
+            class="space-y-2"
+          >
+            <input type="hidden" name="gate-revision" value="{{ revision }}" />
+            <input type="hidden" name="candidate" value="{{ target }}" />
+            <button type="submit" class="btn btn-primary w-full">
+              Approve candidate
+            </button>
+          </form>
+          <form
+            method="post"
+            action="/runs/{{ run_id }}/gates/{{ gate_id }}/request-revision"
+            data-graft
+            class="space-y-2"
+          >
+            <input type="hidden" name="gate-revision" value="{{ revision }}" />
+            <input type="hidden" name="candidate" value="{{ target }}" />
+            <label class="form-control gap-1">
+              <span class="text-sm">Revision note</span>
+              <textarea
+                name="note"
+                required
+                maxlength="65536"
+                class="textarea textarea-bordered min-h-24"
+              ></textarea>
+            </label>
+            <button type="submit" class="btn btn-outline w-full">
+              Request revision
+            </button>
+          </form>
+          <form
+            method="post"
+            action="/runs/{{ run_id }}/gates/{{ gate_id }}/cancel"
+            data-graft
+            class="space-y-2"
+          >
+            <input type="hidden" name="gate-revision" value="{{ revision }}" />
+            <input type="hidden" name="candidate" value="{{ target }}" />
+            <p class="text-warning text-sm">
+              Cancel the run only when no later step must start.
+            </p>
+            <button type="submit" class="btn btn-error btn-outline w-full">
+              Cancel run
+            </button>
+          </form>
+        </div>
+      {% else if state == "Interrupted" %}
+        <p class="text-quiet text-sm">
+          The process restarted. This gate cannot continue because its
+          transcript context was not stored.
+        </p>
+      {% endif %}
+    </section>
+
+    <section class="space-y-3">
+      <div class="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 class="font-heading text-lg font-semibold">Candidate diff</h2>
+          <p class="text-quiet text-sm">
+            {{ range }} of {{ total }} changed paths.
+          </p>
+        </div>
+        <div class="join">
+          {% if previous != "" %}
+            <a href="{{ previous }}" data-graft class="btn btn-sm join-item"
+              >Previous paths</a
+            >
+          {% endif %}
+          {% if next != "" %}
+            <a href="{{ next }}" data-graft class="btn btn-sm join-item"
+              >Next paths</a
+            >
+          {% endif %}
+        </div>
+      </div>
+      {% if changes.is_empty() %}
+        <p class="text-quiet">The candidate has no changes.</p>
+      {% else %}
+        <ol class="space-y-2">
+          {% for change in changes %}
+            <li class="border-base-300 rounded-sm border p-3">
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <a
+                  href="{{ change.href }}"
+                  data-graft
+                  class="link font-mono text-sm break-all"
+                  >{{ change.path }}</a
+                >
+                <span class="badge badge-outline badge-sm"
+                  >{{ change.status }}</span
+                >
+              </div>
+              <dl class="mt-2 grid gap-2 text-xs sm:grid-cols-[4rem_1fr]">
+                <dt class="text-quiet">Base</dt>
+                <dd class="font-mono break-all">{{ change.old }}</dd>
+                <dt class="text-quiet">Target</dt>
+                <dd class="font-mono break-all">{{ change.new }}</dd>
+              </dl>
+              <div class="mt-2 flex flex-wrap gap-3 text-sm">
+                {% if change.base_download != "" %}
+                  <a href="{{ change.base_download }}" class="link"
+                    >Download base object</a
+                  >
+                {% endif %}
+                {% if change.target_download != "" %}
+                  <a href="{{ change.target_download }}" class="link"
+                    >Download target object</a
+                  >
+                {% endif %}
+              </div>
+            </li>
+          {% endfor %}
+        </ol>
+      {% endif %}
+    </section>
+
+    {% if selected_path != "" %}
+      <section class="space-y-3">
+        <h2 class="font-heading text-lg font-semibold break-all">
+          {{ selected_path }}
+        </h2>
+        {% if text_too_large %}
+          <p class="text-quiet">
+            This text change is too large to display. Use the immutable object
+            downloads.
+          </p>
+        {% else if binary %}
+          <p class="text-quiet">
+            This change contains binary file data. Use the immutable object
+            downloads.
+          </p>
+        {% else %}
+          <pre
+            class="border-base-300 bg-base-200 max-h-[70vh] overflow-auto rounded-sm border p-3 text-xs"
+          ><code>{% for row in text %}{{ row.text }}{% if row.continued %}
+            ⟦continued {{ row.range }}⟧
+          {% endif %}{% endfor %}</code></pre>
+          <div class="join">
+            {% if text_previous != "" %}
+              <a
+                href="{{ text_previous }}"
+                data-graft
+                class="btn btn-sm join-item"
+                >Previous lines</a
+              >
+            {% endif %}
+            {% if text_next != "" %}
+              <a href="{{ text_next }}" data-graft class="btn btn-sm join-item"
+                >Next lines</a
+              >
+            {% endif %}
+          </div>
+        {% endif %}
+      </section>
+    {% endif %}
+  </div>
+</main>

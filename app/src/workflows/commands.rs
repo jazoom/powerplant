@@ -20,6 +20,26 @@ pub(crate) struct SystemCommandContract {
     pub(crate) required_outputs: &'static [OutputKind],
 }
 
+impl SystemCommandContract {
+    pub(crate) fn accepts(&self, inputs: &[ArtefactKind], outputs: &[OutputKind]) -> bool {
+        if !kinds_match(outputs, self.required_outputs) {
+            return false;
+        }
+        if self.id == SystemCommandId::CommitCandidate {
+            return kinds_match(inputs, self.required_inputs)
+                || kinds_match(
+                    inputs,
+                    &[
+                        ArtefactKind::CandidateRevision,
+                        ArtefactKind::ReviewReport,
+                        ArtefactKind::HumanDecision,
+                    ],
+                );
+        }
+        kinds_match(inputs, self.required_inputs)
+    }
+}
+
 impl SystemCommandId {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {

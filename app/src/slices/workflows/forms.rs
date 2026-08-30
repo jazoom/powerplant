@@ -1,9 +1,9 @@
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
     AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    GuestDirectoryAccess, InputKey, MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS,
-    MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind, RequiredInput, RequiredOutput,
-    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
+    GuestDirectoryAccess, HumanGateStep, InputKey, MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS,
+    MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind, RequiredInput,
+    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
     candidate_revision_output, initial_candidate_input,
 };
@@ -346,7 +346,7 @@ impl WorkflowFormState {
         if roles.len() > MAXIMUM_ROLES || steps.len() > MAXIMUM_STEPS {
             return Err(FormError::Excessive);
         }
-        ensure_command_defaults(&mut steps);
+        ensure_action_defaults(&mut steps);
         Ok((
             Self {
                 name,
@@ -964,8 +964,36 @@ fn is_checked(value: &str) -> bool {
     matches!(value, "on" | "true" | "1")
 }
 
-fn ensure_command_defaults(steps: &mut [StepDraft]) {
+fn ensure_action_defaults(steps: &mut [StepDraft]) {
     for index in 0..steps.len() {
+        if steps[index].action == "human-gate" {
+            steps[index].environment.clear();
+            steps[index].role.clear();
+            steps[index].candidate_access.clear();
+            steps[index].command.clear();
+            steps[index].tools.clear();
+            steps[index].directories.clear();
+            let candidate_source = latest_candidate_source(&steps[..index]);
+            if !steps[index]
+                .inputs
+                .iter()
+                .any(|input| input.kind == ArtefactKind::CandidateRevision.as_str())
+            {
+                steps[index].inputs.insert(
+                    0,
+                    InputDraft {
+                        key: "candidate".to_owned(),
+                        kind: ArtefactKind::CandidateRevision.as_str().to_owned(),
+                        source: candidate_source,
+                    },
+                );
+            }
+            steps[index].outputs = vec![OutputDraft {
+                key: "decision".to_owned(),
+                kind: OutputKind::HumanDecision.as_str().to_owned(),
+            }];
+            continue;
+        }
         if steps[index].action != "system-command" {
             continue;
         }
@@ -979,8 +1007,15 @@ fn ensure_command_defaults(steps: &mut [StepDraft]) {
         let contract = command.contract();
         let candidate_source = latest_candidate_source(&steps[..index]);
         let existing_inputs = std::mem::take(&mut steps[index].inputs);
-        steps[index].inputs = contract
-            .required_inputs
+        let mut required_inputs = contract.required_inputs.to_vec();
+        if command == SystemCommandId::CommitCandidate
+            && existing_inputs
+                .iter()
+                .any(|input| ArtefactKind::parse(&input.kind) == Some(ArtefactKind::HumanDecision))
+        {
+            required_inputs.push(ArtefactKind::HumanDecision);
+        }
+        steps[index].inputs = required_inputs
             .iter()
             .enumerate()
             .map(|(position, kind)| {
@@ -994,6 +1029,7 @@ fn ensure_command_defaults(steps: &mut [StepDraft]) {
                             ArtefactKind::ReviewReport => "review",
                             ArtefactKind::Plan => "plan",
                             ArtefactKind::TestReport => "test",
+                            ArtefactKind::HumanDecision => "decision",
                         }
                         .to_owned(),
                         kind: kind.as_str().to_owned(),
@@ -1176,6 +1212,19 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 .map(output_from_required)
                 .collect(),
         },
+        StepAction::HumanGate(action) => StepDraft {
+            key: step.key.as_str().to_owned(),
+            name: step.name.clone(),
+            action: "human-gate".to_owned(),
+            environment: String::new(),
+            role: String::new(),
+            candidate_access: String::new(),
+            command: String::new(),
+            tools: Vec::new(),
+            directories: Vec::new(),
+            inputs: step.inputs.iter().map(input_from_required).collect(),
+            outputs: vec![output_from_required(&action.required_output)],
+        },
     }
 }
 
@@ -1198,6 +1247,7 @@ fn build_step(step: &StepDraft, errors: &mut StepErrors) -> Option<StepDefinitio
     let action = match step.action.as_str() {
         "agent" => build_agent_action(step, errors)?,
         "system-command" => build_command_action(step, errors)?,
+        "human-gate" => build_gate_action(step, errors)?,
         _ => {
             errors.action = "Choose an action type.";
             return None;
@@ -1304,6 +1354,31 @@ fn build_agent_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepA
         candidate_authority,
         authority,
         required_outputs: outputs,
+    }))
+}
+
+fn build_gate_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepAction> {
+    if step.outputs.len() != 1 {
+        errors.action = crate::workflows::definition::DefinitionError::HumanGate.message();
+        return None;
+    }
+    let output = &step.outputs[0];
+    let key = match OutputKey::parse(&output.key) {
+        Ok(key) => key,
+        Err(error) => {
+            errors.outputs[0].key = error.message();
+            return None;
+        }
+    };
+    if OutputKind::parse(&output.kind) != Some(OutputKind::HumanDecision) {
+        errors.outputs[0].kind = crate::workflows::definition::DefinitionError::HumanGate.message();
+        return None;
+    }
+    Some(StepAction::HumanGate(HumanGateStep {
+        required_output: RequiredOutput {
+            key,
+            kind: OutputKind::HumanDecision,
+        },
     }))
 }
 
@@ -1418,19 +1493,18 @@ fn relate_definition_error(
                     .iter()
                     .filter_map(|input| ArtefactKind::parse(&input.kind))
                     .collect();
-                if !crate::workflows::commands::kinds_match(&input_kinds, contract.required_inputs)
-                {
+                let output_kinds: Vec<_> = step
+                    .outputs
+                    .iter()
+                    .filter_map(|output| OutputKind::parse(&output.kind))
+                    .collect();
+                if !contract.accepts(&input_kinds, &output_kinds) {
                     mark_command_input_errors(
                         &mut errors.steps[index],
                         step,
                         contract.required_inputs,
                     );
                 }
-                let output_kinds: Vec<_> = step
-                    .outputs
-                    .iter()
-                    .filter_map(|output| OutputKind::parse(&output.kind))
-                    .collect();
                 if !crate::workflows::commands::kinds_match(
                     &output_kinds,
                     contract.required_outputs,
@@ -1469,7 +1543,9 @@ fn mark_command_input_errors(errors: &mut StepErrors, step: &StepDraft, required
         }
     }
     for (index, input) in step.inputs.iter().enumerate() {
-        if ArtefactKind::parse(&input.kind).is_some_and(|kind| !required.contains(&kind)) {
+        if ArtefactKind::parse(&input.kind)
+            .is_some_and(|kind| !required.contains(&kind) && kind != ArtefactKind::HumanDecision)
+        {
             errors.inputs[index].kind =
                 crate::workflows::definition::DefinitionError::InputKind.message();
         }

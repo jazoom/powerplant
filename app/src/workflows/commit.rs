@@ -32,6 +32,7 @@ pub(crate) struct CommitTransaction {
     pub(crate) state: CommitTransactionState,
     pub(crate) candidate: ArtefactReference,
     pub(crate) review: ArtefactReference,
+    pub(crate) approval: Option<ArtefactReference>,
     pub(crate) expected_reference: String,
     pub(crate) old_object: Option<String>,
     pub(crate) target_tree: Option<String>,
@@ -181,6 +182,49 @@ pub(crate) fn require_approved_review(
         ) if step == declared_step && output == declared_output => {}
         _ => return Err(CommitError::Assurance),
     }
+    let decisions: Vec<_> = inputs
+        .iter()
+        .filter(|input| input.artefact.kind == ArtefactKind::HumanDecision)
+        .collect();
+    if decisions.len() > 1 {
+        return Err(CommitError::Assurance);
+    }
+    if let Some(input) = decisions.first() {
+        let record = run
+            .artefact(&input.artefact.id)
+            .ok_or(CommitError::Assurance)?;
+        let bytes = store
+            .get(&record.object_hash)
+            .map_err(|_| CommitError::Assurance)?;
+        let TypedPayload::HumanDecision(decision) =
+            parse_typed_payload(ArtefactKind::HumanDecision, &bytes)
+                .map_err(|_| CommitError::Assurance)?
+        else {
+            return Err(CommitError::Assurance);
+        };
+        let base = run
+            .artefact(&source.initial.id)
+            .and_then(ArtefactRecord::candidate_hash)
+            .ok_or(CommitError::Assurance)?;
+        let (bound, diff_base) =
+            crate::workflows::gates::hashes(&decision).ok_or(CommitError::Assurance)?;
+        let ArtefactProducer::HumanGate { gate_id, .. } = &record.provenance.producer else {
+            return Err(CommitError::Assurance);
+        };
+        let gate = run
+            .gates
+            .iter()
+            .find(|gate| gate.id == *gate_id)
+            .ok_or(CommitError::Assurance)?;
+        if decision.decision != crate::workflows::gates::HumanDecisionKind::Approved
+            || gate.state != crate::workflows::gates::HumanGateState::Approved
+            || gate.decision.as_ref() != Some(&input.artefact)
+            || bound != candidate.candidate_hash
+            || diff_base != base
+        {
+            return Err(CommitError::Assurance);
+        }
+    }
     Ok((candidate_record, review_record, candidate))
 }
 
@@ -213,6 +257,7 @@ impl CommitTransaction {
     pub(crate) fn can_advance_to(&self, next: &Self) -> bool {
         if self.candidate != next.candidate
             || self.review != next.review
+            || self.approval != next.approval
             || self.expected_reference != next.expected_reference
             || self.old_object != next.old_object
             || self.timestamp != next.timestamp

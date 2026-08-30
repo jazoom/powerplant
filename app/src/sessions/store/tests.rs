@@ -137,7 +137,8 @@ fn expired_sessions_cannot_be_resolved() {
 
     store.advance_clock(SESSION_LIFETIME + Duration::from_secs(1));
     assert!(store.snapshot(&id, &agent).is_none());
-    assert!(!store.contains(&id));
+    assert!(store.contains(&id));
+    assert!(store.contains_expired(&id));
 }
 
 #[test]

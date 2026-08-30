@@ -667,6 +667,6 @@ pub(crate) fn definition_fits_agent(
                         .map(|(alias, access)| (alias.as_str(), *access)),
                 )
         }
-        StepAction::SystemCommand(_) => true,
+        StepAction::SystemCommand(_) | StepAction::HumanGate(_) => true,
     })
 }

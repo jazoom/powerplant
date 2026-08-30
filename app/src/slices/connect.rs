@@ -237,6 +237,8 @@ async fn forget(
     Form(form): Form<ForgetForm>,
 ) -> AppResult<Response> {
     if let Some(kind) = form.provider_kind() {
+        crate::workflows::interrupt_provider_continuations(&state, kind)
+            .map_err(|error| crate::error::AppError::new("interrupt human gates", error))?;
         state
             .vault
             .forget(kind)
@@ -246,6 +248,8 @@ async fn forget(
 
     if !state.vault.has_providers() {
         if let Some(session) = session {
+            crate::workflows::interrupt_session_continuations(&state, session)
+                .map_err(|error| crate::error::AppError::new("interrupt human gates", error))?;
             state.sessions.remove(&session);
         }
         let mut response = responses::graft_redirect(graft, "/connect");

@@ -104,6 +104,12 @@ impl SessionStore {
         live(&mut sessions, id, self.clock.now()).is_some()
     }
 
+    pub(crate) fn contains_expired(&self, id: &SessionId) -> bool {
+        self.lock()
+            .get(id)
+            .is_some_and(|session| session.expires_at <= self.clock.now())
+    }
+
     pub(crate) fn busy(&self, id: &SessionId) -> bool {
         let mut sessions = self.lock();
         live(&mut sessions, id, self.clock.now()).is_some_and(|session| session.active.is_some())
@@ -239,6 +245,16 @@ impl SessionStore {
         cancel_and_remove(&mut sessions, id);
     }
 
+    pub(crate) fn expired_ids(&self) -> Vec<SessionId> {
+        let now = self.clock.now();
+        self.lock()
+            .iter()
+            .filter(|(_, session)| session.expires_at <= now)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn purge_expired(&self) {
         let now = self.clock.now();
         self.lock().retain(|_, session| {
@@ -314,8 +330,7 @@ fn live<'a>(
     id: &SessionId,
     now: Instant,
 ) -> Option<&'a StoredSession> {
-    evict_if_expired(sessions, id, now);
-    sessions.get(id)
+    sessions.get(id).filter(|session| session.expires_at > now)
 }
 
 fn live_mut<'a>(
@@ -323,21 +338,13 @@ fn live_mut<'a>(
     id: &SessionId,
     now: Instant,
 ) -> Option<&'a mut StoredSession> {
-    evict_if_expired(sessions, id, now);
-    sessions.get_mut(id)
-}
-
-fn evict_if_expired(
-    sessions: &mut HashMap<SessionId, StoredSession>,
-    id: &SessionId,
-    now: Instant,
-) {
     if sessions
         .get(id)
         .is_some_and(|session| session.expires_at <= now)
     {
-        cancel_and_remove(sessions, id);
+        return None;
     }
+    sessions.get_mut(id)
 }
 
 fn cancel_and_remove(sessions: &mut HashMap<SessionId, StoredSession>, id: &SessionId) {

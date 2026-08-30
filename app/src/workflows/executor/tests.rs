@@ -6,7 +6,6 @@ use super::super::definition::{
 use super::{
     StepOutcome, SuccessAttempt, active_step_label, attempt_spec, cleanup_after_start_failure,
     guest_command, intersect_authority, publish_success, record_unknown_observed,
-    settle_transient_job,
 };
 use crate::agents::{AccessMode, AgentId, DirectoryPolicy, PolicyGrant};
 use crate::sandbox::GUEST_PROJECT;
@@ -260,35 +259,94 @@ fn fixing_publication_fixture() -> (
 }
 
 #[test]
-fn terminal_settlement_releases_the_active_session_turn() {
+fn interruption_failure_restores_current_and_unprocessed_jobs() {
+    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let provider = crate::providers::ProviderKind::Xai;
+    let session = crate::sessions::generate_session_token()
+        .expect("session")
+        .id();
+    let mut runs = (0..3)
+        .map(|_| {
+            let definition = crate::workflows::definition::test_named_definition("Interrupt");
+            let environments = crate::workflows::test_environment_set(&definition);
+            crate::workflows::WorkflowRun::create(
+                crate::workflows::RunId::generate().expect("run"),
+                1,
+                AgentId::generate().expect("agent"),
+                crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
+                environments,
+            )
+        })
+        .collect::<Vec<_>>();
+    runs.sort_by_key(|run| run.id);
+    let mut all_runs = Vec::new();
+    for (index, mut run) in runs.into_iter().enumerate() {
+        run.state = if index == 1 {
+            crate::workflows::run::RunState::Completed
+        } else {
+            crate::workflows::run::RunState::InitialisingSource
+        };
+        let run_id = run.id;
+        all_runs.push(run_id);
+        state.workflow_runs.create(run).expect("store run");
+        let job = crate::workflows::WorkflowJob {
+            run_id,
+            session_id: session,
+            agent_id: AgentId::generate().expect("agent"),
+            connection: crate::providers::ProviderConnection::with_key(provider, "key", "model"),
+            host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
+            turns: Vec::new(),
+            job: crate::sessions::Job::new(
+                crate::sessions::JobId::generate().expect("job"),
+                run_id,
+                0,
+            ),
+            eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        };
+        assert!(state.gate_continuations.insert(job));
+    }
+    assert!(super::interrupt_provider_continuations(&state, provider).is_err());
+
+    assert!(!state.gate_continuations.available(&all_runs[0], &session));
+    assert!(state.gate_continuations.available(&all_runs[1], &session));
+    assert!(state.gate_continuations.available(&all_runs[2], &session));
+}
+
+#[test]
+fn final_gate_completion_settles_the_session_job_successfully() {
     let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
     let token = crate::sessions::generate_session_token().expect("token");
     let session_id = token.id();
     let agent_id = AgentId::generate().expect("agent");
+    let run_id = crate::workflows::RunId::generate().expect("run");
     state.sessions.insert(session_id);
     let begun = state
         .sessions
-        .begin_turn(
-            &session_id,
-            agent_id,
-            crate::workflows::RunId::generate().expect("run"),
-            "Hello".to_owned(),
-        )
+        .begin_turn(&session_id, agent_id, run_id, "Hello".to_owned())
         .expect("turn");
-    settle_transient_job(
-        &state,
-        &session_id,
-        &agent_id,
-        &begun.job,
-        JobStatus::Failed,
-        Some("Operational error"),
-    );
+    let workflow = crate::workflows::WorkflowJob {
+        run_id,
+        session_id,
+        agent_id,
+        connection: crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "key",
+            "model",
+        ),
+        host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
+        turns: Vec::new(),
+        job: begun.job.clone(),
+        eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+    };
+
+    super::settle_completed_job(&state, &workflow);
+
     let snapshot = state
         .sessions
         .snapshot(&session_id, &agent_id)
         .expect("session");
     assert!(!snapshot.session_busy);
-    assert_eq!(begun.job.snapshot().status, JobStatus::Failed);
+    assert_eq!(begun.job.snapshot().status, JobStatus::Completed);
 }
 
 #[test]
@@ -717,6 +775,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
             },
             candidate: target_reference,
             review: review_reference,
+            approval: None,
             expected_reference: reference,
             old_object: Some(old.clone()),
             target_tree: Some(tree),

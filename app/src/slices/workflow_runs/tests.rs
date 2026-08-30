@@ -226,6 +226,7 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
                 note: "",
             }],
             commit: "01234567".to_owned(),
+            gate_href: String::new(),
         }],
         environments: Vec::new(),
         attempts: Vec::new(),

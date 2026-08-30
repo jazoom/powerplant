@@ -162,7 +162,7 @@ fn sequential_team_uses_the_supplied_environment_without_seed_provenance() {
         definition
             .steps()
             .iter()
-            .all(|step| step.environment() == StepEnvironment::WorkflowDefault)
+            .all(|step| step.environment() == Some(StepEnvironment::WorkflowDefault))
     );
     let bytes = serde_json::to_vec(&definition.to_file()).expect("json");
     let text = String::from_utf8(bytes).expect("utf8");

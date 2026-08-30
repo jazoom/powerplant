@@ -291,43 +291,55 @@
                   </option>
                   <option
                     value="system-command"
-                    {% if !step.is_agent %}selected{% endif %}
+                    {% if !step.is_agent && !step.is_gate %}selected{% endif %}
                   >
                     System command
+                  </option>
+                  <option
+                    value="human-gate"
+                    {% if step.is_gate %}selected{% endif %}
+                  >
+                    Human gate
                   </option>
                 </select>
                 {% if step.action_error != "" %}
                   <p class="text-error text-sm">{{ step.action_error }}</p>
                 {% endif %}
               </label>
-              <label class="flex flex-col gap-1">
-                <span class="text-sm">Environment</span>
-                <select
-                  class="select select-bordered"
-                  name="step_{{ step.index }}_environment"
-                >
-                  <option
-                    value=""
-                    {% if step.environment == "" %}selected{% endif %}
+              {% if !step.is_gate %}
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Environment</span>
+                  <select
+                    class="select select-bordered"
+                    name="step_{{ step.index }}_environment"
                   >
-                    Use workflow default
-                  </option>
-                  {% for option in environment_options %}
                     <option
-                      value="{{ option.id }}"
-                      {% if option.id == step.environment %}selected{% endif %}
+                      value=""
+                      {% if step.environment == "" %}selected{% endif %}
                     >
-                      {{ option.name }} ({{ option.context }})
+                      Use workflow default
                     </option>
-                  {% endfor %}
-                </select>
-                {% if step.environment_hint != "" %}
-                  <p class="text-quiet text-xs">{{ step.environment_hint }}</p>
-                {% endif %}
-                {% if step.environment_error != "" %}
-                  <p class="text-error text-sm">{{ step.environment_error }}</p>
-                {% endif %}
-              </label>
+                    {% for option in environment_options %}
+                      <option
+                        value="{{ option.id }}"
+                        {% if option.id == step.environment %}selected{% endif %}
+                      >
+                        {{ option.name }} ({{ option.context }})
+                      </option>
+                    {% endfor %}
+                  </select>
+                  {% if step.environment_hint != "" %}
+                    <p class="text-quiet text-xs">
+                      {{ step.environment_hint }}
+                    </p>
+                  {% endif %}
+                  {% if step.environment_error != "" %}
+                    <p class="text-error text-sm">
+                      {{ step.environment_error }}
+                    </p>
+                  {% endif %}
+                </label>
+              {% endif %}
               {% if step.is_agent %}
                 <label class="flex flex-col gap-1">
                   <span class="text-sm">Role</span>
@@ -534,6 +546,26 @@
                     </button>
                   {% endif %}
                 </fieldset>
+              {% else if step.is_gate %}
+                <p class="text-quiet text-sm">
+                  Pauses the run for a decision on the exact candidate diff.
+                </p>
+                <div class="border-base-300 rounded-sm border p-3 text-sm">
+                  Required output: <span class="font-mono">decision</span> ·
+                  Human decision
+                </div>
+                {% for output in step.outputs %}
+                  <input
+                    type="hidden"
+                    name="step_{{ step.index }}_output_{{ output.index }}_key"
+                    value="{{ output.key }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="step_{{ step.index }}_output_{{ output.index }}_kind"
+                    value="human-decision"
+                  />
+                {% endfor %}
               {% else %}
                 <label class="flex flex-col gap-1">
                   <span class="text-sm">System command</span>
@@ -653,6 +685,12 @@
                           {% if input.kind == "test-report" %}selected{% endif %}
                         >
                           Test report
+                        </option>
+                        <option
+                          value="human-decision"
+                          {% if input.kind == "human-decision" %}selected{% endif %}
+                        >
+                          Human decision
                         </option>
                       </select>
                       {% if input.kind_error != "" %}

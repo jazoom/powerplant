@@ -4,12 +4,12 @@ use sha2::{Digest, Sha256};
 use crate::agents::{AccessMode, ToolId};
 use crate::environments::EnvironmentId;
 
-use super::commands::{CommandSourceEffect, kinds_match};
+use super::commands::CommandSourceEffect;
 use super::id::WorkflowId;
 
 pub(crate) use super::commands::SystemCommandId;
 
-pub(crate) const DEFINITION_FORMAT_VERSION: u32 = 2;
+pub(crate) const DEFINITION_FORMAT_VERSION: u32 = 3;
 pub(crate) const MAXIMUM_NAME_BYTES: usize = 80;
 pub(crate) const MAXIMUM_EXPERTISE_BYTES: usize = 4_096;
 pub(crate) const MAXIMUM_PROMPT_DEFAULTS_BYTES: usize = 32_768;
@@ -54,6 +54,12 @@ pub(crate) struct StepDefinition {
 pub(crate) enum StepAction {
     Agent(AgentStep),
     SystemCommand(SystemCommandStep),
+    HumanGate(HumanGateStep),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HumanGateStep {
+    pub(crate) required_output: RequiredOutput,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -153,6 +159,7 @@ pub(crate) enum OutputKind {
     CandidateRevision,
     ReviewReport,
     TestReport,
+    HumanDecision,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -161,6 +168,7 @@ pub(crate) enum ArtefactKind {
     CandidateRevision,
     ReviewReport,
     TestReport,
+    HumanDecision,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -229,6 +237,7 @@ pub(crate) enum DefinitionError {
     Tools,
     Alias,
     DuplicateAlias,
+    HumanGate,
 }
 
 impl DefinitionError {
@@ -278,6 +287,9 @@ impl DefinitionError {
                 "Enter a directory alias that uses letters, numbers, hyphen or underscore."
             }
             Self::DuplicateAlias => "Directory aliases must be unique.",
+            Self::HumanGate => {
+                "A human gate needs one candidate input and one human decision output."
+            }
         }
     }
 }
@@ -338,6 +350,10 @@ enum ActionFile {
         environment: StepEnvironmentFile,
         #[serde(rename = "required-outputs")]
         required_outputs: Vec<OutputFile>,
+    },
+    HumanGate {
+        #[serde(rename = "required-output")]
+        required_output: OutputFile,
     },
 }
 
@@ -427,7 +443,7 @@ impl WorkflowDefinition {
     pub(crate) fn referenced_environments(&self) -> Vec<EnvironmentId> {
         let mut ids = vec![self.default_environment];
         for step in &self.steps {
-            if let StepEnvironment::Override { environment_id } = step.environment()
+            if let Some(StepEnvironment::Override { environment_id }) = step.environment()
                 && !ids.contains(&environment_id)
             {
                 ids.push(environment_id);
@@ -437,7 +453,7 @@ impl WorkflowDefinition {
     }
 
     pub(crate) fn effective_environment(&self, step: &StepDefinition) -> EnvironmentId {
-        match step.environment() {
+        match step.environment().expect("sandbox-backed step") {
             StepEnvironment::WorkflowDefault => self.default_environment,
             StepEnvironment::Override { environment_id } => environment_id,
         }
@@ -532,10 +548,11 @@ impl StepDefinition {
         })
     }
 
-    pub(crate) fn environment(&self) -> StepEnvironment {
+    pub(crate) fn environment(&self) -> Option<StepEnvironment> {
         match &self.action {
-            StepAction::Agent(action) => action.environment,
-            StepAction::SystemCommand(action) => action.environment,
+            StepAction::Agent(action) => Some(action.environment),
+            StepAction::SystemCommand(action) => Some(action.environment),
+            StepAction::HumanGate(_) => None,
         }
     }
 
@@ -550,6 +567,7 @@ impl StepDefinition {
         match &self.action {
             StepAction::Agent(action) => &action.required_outputs,
             StepAction::SystemCommand(action) => &action.required_outputs,
+            StepAction::HumanGate(action) => std::slice::from_ref(&action.required_output),
         }
     }
 
@@ -566,7 +584,7 @@ impl StepDefinition {
     pub(crate) fn command_source_effect(&self) -> Option<CommandSourceEffect> {
         match &self.action {
             StepAction::SystemCommand(action) => Some(action.command.contract().source_effect),
-            StepAction::Agent(_) => None,
+            StepAction::Agent(_) | StepAction::HumanGate(_) => None,
         }
     }
 
@@ -623,6 +641,12 @@ impl StepAction {
                 environment: StepEnvironment::from_file(environment)?,
                 required_outputs: parse_outputs(required_outputs)?,
             })),
+            ActionFile::HumanGate { required_output } => {
+                let mut outputs = parse_outputs(vec![required_output])?;
+                Ok(Self::HumanGate(HumanGateStep {
+                    required_output: outputs.remove(0),
+                }))
+            }
         }
     }
 
@@ -640,6 +664,10 @@ impl StepAction {
                 environment: step.environment.to_file(),
                 required_outputs: outputs_to_file(&step.required_outputs),
             },
+            Self::HumanGate(step) => ActionFile::HumanGate {
+                required_output: outputs_to_file(std::slice::from_ref(&step.required_output))
+                    .remove(0),
+            },
         }
     }
 
@@ -647,6 +675,7 @@ impl StepAction {
         match self {
             Self::Agent(_) => "Agent",
             Self::SystemCommand(_) => "System command",
+            Self::HumanGate(_) => "Human gate",
         }
     }
 }
@@ -806,6 +835,7 @@ impl OutputKind {
             "candidate-revision" => Some(Self::CandidateRevision),
             "review-report" => Some(Self::ReviewReport),
             "test-report" => Some(Self::TestReport),
+            "human-decision" => Some(Self::HumanDecision),
             _ => None,
         }
     }
@@ -817,6 +847,7 @@ impl OutputKind {
             Self::CandidateRevision => "candidate-revision",
             Self::ReviewReport => "review-report",
             Self::TestReport => "test-report",
+            Self::HumanDecision => "human-decision",
         }
     }
 
@@ -827,6 +858,7 @@ impl OutputKind {
             Self::CandidateRevision => Some(ArtefactKind::CandidateRevision),
             Self::ReviewReport => Some(ArtefactKind::ReviewReport),
             Self::TestReport => Some(ArtefactKind::TestReport),
+            Self::HumanDecision => Some(ArtefactKind::HumanDecision),
         }
     }
 }
@@ -838,6 +870,7 @@ impl ArtefactKind {
             "candidate-revision" => Some(Self::CandidateRevision),
             "review-report" => Some(Self::ReviewReport),
             "test-report" => Some(Self::TestReport),
+            "human-decision" => Some(Self::HumanDecision),
             _ => None,
         }
     }
@@ -848,6 +881,7 @@ impl ArtefactKind {
             Self::CandidateRevision => "candidate-revision",
             Self::ReviewReport => "review-report",
             Self::TestReport => "test-report",
+            Self::HumanDecision => "human-decision",
         }
     }
 
@@ -970,6 +1004,7 @@ fn assemble(
             StepAction::SystemCommand(action) => {
                 action.environment = action.environment.normalised(default_environment);
             }
+            StepAction::HumanGate(_) => {}
         }
     }
     reject_duplicate_roles(&roles)?;
@@ -1170,10 +1205,30 @@ fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), Definition
                     .iter()
                     .map(|output| output.kind)
                     .collect();
-                if !kinds_match(&input_kinds, contract.required_inputs)
-                    || !kinds_match(&output_kinds, contract.required_outputs)
-                {
+                if !contract.accepts(&input_kinds, &output_kinds) {
                     return Err(DefinitionError::UnsupportedOutput);
+                }
+            }
+            StepAction::HumanGate(action) => {
+                if action.required_output.kind != OutputKind::HumanDecision
+                    || step
+                        .inputs
+                        .iter()
+                        .filter(|input| input.kind == ArtefactKind::CandidateRevision)
+                        .count()
+                        != 1
+                    || step.inputs.iter().any(|input| {
+                        !matches!(
+                            input.kind,
+                            ArtefactKind::CandidateRevision
+                                | ArtefactKind::Plan
+                                | ArtefactKind::ReviewReport
+                                | ArtefactKind::TestReport
+                                | ArtefactKind::HumanDecision
+                        )
+                    })
+                {
+                    return Err(DefinitionError::HumanGate);
                 }
             }
         }
@@ -1230,7 +1285,8 @@ fn reject_handoff(first: &StepKey, steps: &[StepDefinition]) -> Result<(), Defin
                     OutputKind::ReviewReport | OutputKind::TestReport
                 )
             });
-        if step.is_sandbox_backed() || assurance {
+        if step.is_sandbox_backed() || assurance || matches!(step.action, StepAction::HumanGate(_))
+        {
             if candidate_inputs.len() != 1 {
                 return Err(DefinitionError::CandidateInput);
             }
@@ -1352,6 +1408,7 @@ fn reject_step_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
         let outputs = match &step.action {
             StepAction::Agent(action) => &action.required_outputs,
             StepAction::SystemCommand(action) => &action.required_outputs,
+            StepAction::HumanGate(action) => std::slice::from_ref(&action.required_output),
         };
         if outputs.len() > MAXIMUM_OUTPUTS {
             return Err(DefinitionError::OutputCount);

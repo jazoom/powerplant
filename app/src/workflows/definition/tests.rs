@@ -259,7 +259,7 @@ fn unreachable_steps_are_rejected() {
 fn arbitrary_command_values_are_rejected() {
     let json = format!(
         r#"{{
-        "format-version": 2,
+        "format-version": 3,
         "name": "Status",
         "default-environment": "{}",
         "roles": [],
@@ -408,7 +408,7 @@ fn an_override_equal_to_the_default_normalises_to_workflow_default() {
     .expect("definition");
     assert_eq!(
         definition.steps()[0].environment(),
-        StepEnvironment::WorkflowDefault
+        Some(StepEnvironment::WorkflowDefault)
     );
 }
 

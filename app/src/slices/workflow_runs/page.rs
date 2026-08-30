@@ -42,6 +42,7 @@ pub(super) struct StepView {
     pub(super) result: String,
     pub(super) artefacts: Vec<StepArtefactView>,
     pub(super) commit: String,
+    pub(super) gate_href: String,
 }
 
 pub(super) struct PinnedEnvironmentView {
@@ -160,6 +161,7 @@ impl RunDetailView {
                         .iter()
                         .rev()
                         .find(|attempt| attempt.step == step.key);
+                    let gate = run.gates.iter().rev().find(|gate| gate.step == step.key);
                     StepView {
                         name: step.name.clone(),
                         action: step.action.kind_label(),
@@ -167,10 +169,17 @@ impl RunDetailView {
                             crate::workflows::definition::StepAction::Agent(action) => {
                                 action.candidate_authority.label()
                             }
-                            crate::workflows::definition::StepAction::SystemCommand(_) => "",
+                            crate::workflows::definition::StepAction::SystemCommand(_)
+                            | crate::workflows::definition::StepAction::HumanGate(_) => "",
                         },
                         environment: step_environment_label(run, step),
-                        status: attempt.map_or("Waiting", |attempt| attempt.state.as_label()),
+                        status: gate.map_or_else(|| attempt.map_or("Waiting", |attempt| attempt.state.as_label()), |gate| match gate.state {
+                            crate::workflows::gates::HumanGateState::AwaitingDecision => "Awaiting decision",
+                            crate::workflows::gates::HumanGateState::Approved => "Approved",
+                            crate::workflows::gates::HumanGateState::RevisionRequested => "Revision requested",
+                            crate::workflows::gates::HumanGateState::Cancelled => "Cancelled",
+                            crate::workflows::gates::HumanGateState::Interrupted => "Interrupted",
+                        }),
                         result: attempt
                             .and_then(|attempt| attempt.result.as_ref())
                             .map(|result| result.as_label())
@@ -236,6 +245,7 @@ impl RunDetailView {
                             .and_then(|attempt| attempt.commit_result.as_ref())
                             .map(|result| result.commit.chars().take(8).collect())
                             .unwrap_or_default(),
+                        gate_href: gate.map(|gate| format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex())).unwrap_or_default(),
                     }
                 })
                 .collect(),
@@ -486,6 +496,10 @@ fn artefact_body(kind: crate::workflows::definition::ArtefactKind, bytes: Vec<u8
         }
         Ok(crate::workflows::artefacts::TypedPayload::Test(report)) => {
             crate::markdown::render(&report.markdown)
+        }
+        Ok(crate::workflows::artefacts::TypedPayload::HumanDecision(decision)) => {
+            let note = decision.note.unwrap_or_default();
+            crate::markdown::escape_plain(&format!("{}\n{}", decision.decision.as_label(), note))
         }
         Err(_) => match String::from_utf8(bytes) {
             Ok(text) => crate::markdown::escape_plain(&text),

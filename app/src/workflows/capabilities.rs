@@ -111,6 +111,7 @@ impl AttemptCapabilities {
                 })
             }
             StepAction::SystemCommand(action) => Ok(commit_or_read_only(action.command, agent)),
+            StepAction::HumanGate(_) => Err(CapabilityError::Authority),
         }
     }
 

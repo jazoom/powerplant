@@ -80,6 +80,7 @@ impl std::error::Error for JobIdError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JobStatus {
     Running,
+    AwaitingDecision,
     Completed,
     Failed,
     Cancelled,
@@ -198,6 +199,35 @@ impl Job {
         self.lock().status == JobStatus::Running
     }
 
+    pub(crate) fn set_awaiting_decision(&self) -> Option<u64> {
+        let mut inner = self.lock();
+        if inner.status != JobStatus::Running {
+            return None;
+        }
+        inner.status = JobStatus::AwaitingDecision;
+        inner.latest_seq += 1;
+        let seq = inner.latest_seq;
+        inner.events.push(JobEvent {
+            seq,
+            kind: JobEventKind::Completed,
+        });
+        drop(inner);
+        self.notify.notify_waiters();
+        Some(seq)
+    }
+
+    pub(crate) fn resume(&self) -> bool {
+        let mut inner = self.lock();
+        if inner.status != JobStatus::AwaitingDecision {
+            return false;
+        }
+        inner.status = JobStatus::Running;
+        inner.error = None;
+        drop(inner);
+        self.notify.notify_waiters();
+        true
+    }
+
     pub(crate) fn cancel_requested(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
@@ -298,7 +328,10 @@ impl Job {
             return None;
         }
         let mut inner = self.lock();
-        if inner.status != JobStatus::Running {
+        if !matches!(
+            inner.status,
+            JobStatus::Running | JobStatus::AwaitingDecision
+        ) {
             return None;
         }
         inner.status = status;
@@ -311,7 +344,9 @@ impl Job {
                 JobStatus::Completed => JobEventKind::Completed,
                 JobStatus::Failed => JobEventKind::Failed,
                 JobStatus::Cancelled => JobEventKind::Cancelled,
-                JobStatus::Running => unreachable!("terminal status checked above"),
+                JobStatus::Running | JobStatus::AwaitingDecision => {
+                    unreachable!("terminal status checked above")
+                }
             },
         });
         drop(inner);

@@ -83,6 +83,11 @@
               {% if step.result != "" %}
                 <p class="text-sm">{{ step.result }}</p>
               {% endif %}
+              {% if step.gate_href != "" %}
+                <a href="{{ step.gate_href }}" data-graft class="link text-sm"
+                  >Open human gate</a
+                >
+              {% endif %}
               {% if step.commit != "" %}
                 <p class="font-mono text-sm">Commit {{ step.commit }}</p>
               {% endif %}

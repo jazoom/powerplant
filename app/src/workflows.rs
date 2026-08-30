@@ -6,6 +6,7 @@ mod commit;
 pub(crate) mod definition;
 mod execution;
 mod executor;
+pub(crate) mod gates;
 mod id;
 mod input_context;
 mod resolve;
@@ -22,8 +23,11 @@ pub(crate) use catalogue::{
 };
 pub(crate) use commit::CommitJournals;
 pub(crate) use execution::WorkflowExecution;
-pub(crate) use executor::{WorkflowJob, execute_run, recover_commit_transactions};
-pub(crate) use id::{ArtefactId, AttemptId, RunId, WorkflowId};
+pub(crate) use executor::{
+    WorkflowContinuationRegistry, WorkflowJob, execute_run, interrupt_provider_continuations,
+    interrupt_session_continuations, recover_commit_transactions, settle_completed_job,
+};
+pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
 #[cfg(test)]
 pub(crate) use resolve::test_set as test_environment_set;
 pub(crate) use resolve::{preview_environments, resolve_environments};

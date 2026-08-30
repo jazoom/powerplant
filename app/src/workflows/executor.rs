@@ -26,6 +26,78 @@ const COMMAND_DEADLINE: Duration = if cfg!(test) {
 };
 const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 
+pub(crate) struct WorkflowContinuationRegistry {
+    inner: std::sync::Mutex<std::collections::BTreeMap<RunId, WorkflowJob>>,
+}
+
+impl WorkflowContinuationRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        }
+    }
+
+    pub(crate) fn insert(&self, job: WorkflowJob) -> bool {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.contains_key(&job.run_id) {
+            return false;
+        }
+        inner.insert(job.run_id, job);
+        true
+    }
+
+    pub(crate) fn take(&self, run: &RunId) -> Option<WorkflowJob> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(run)
+    }
+
+    pub(crate) fn available(&self, run: &RunId, session: &SessionId) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(run)
+            .is_some_and(|job| job.session_id == *session)
+    }
+
+    pub(crate) fn put_back(&self, job: WorkflowJob) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(job.run_id, job);
+    }
+
+    fn take_provider(&self, provider: crate::providers::ProviderKind) -> Vec<WorkflowJob> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ids: Vec<_> = inner
+            .iter()
+            .filter(|(_, job)| job.connection.kind == provider)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter().filter_map(|id| inner.remove(&id)).collect()
+    }
+
+    fn take_session(&self, session: SessionId) -> Vec<WorkflowJob> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ids: Vec<_> = inner
+            .iter()
+            .filter(|(_, job)| job.session_id == session)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter().filter_map(|id| inner.remove(&id)).collect()
+    }
+}
+
 pub(crate) struct WorkflowJob {
     pub(crate) run_id: RunId,
     pub(crate) session_id: SessionId,
@@ -35,6 +107,43 @@ pub(crate) struct WorkflowJob {
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Arc<Job>,
     pub(crate) eligible_reply: Arc<std::sync::Mutex<String>>,
+}
+
+pub(crate) fn interrupt_provider_continuations(
+    state: &AppState,
+    provider: crate::providers::ProviderKind,
+) -> Result<(), StoreError> {
+    interrupt_continuations(state, state.gate_continuations.take_provider(provider))
+}
+
+pub(crate) fn interrupt_session_continuations(
+    state: &AppState,
+    session: SessionId,
+) -> Result<(), StoreError> {
+    interrupt_continuations(state, state.gate_continuations.take_session(session))
+}
+
+fn interrupt_continuations(state: &AppState, jobs: Vec<WorkflowJob>) -> Result<(), StoreError> {
+    let mut jobs = jobs.into_iter();
+    while let Some(job) = jobs.next() {
+        if state
+            .workflow_runs
+            .mutate(&job.run_id, |run| run.interrupt(now_ms()))
+            .is_err()
+        {
+            state.gate_continuations.put_back(job);
+            for unprocessed in jobs {
+                state.gate_continuations.put_back(unprocessed);
+            }
+            return Err(StoreError::Persist);
+        }
+        let _ =
+            state
+                .sessions
+                .fail_turn(&job.session_id, &job.agent_id, &job.job.id(), String::new());
+        job.job.finish(JobStatus::Cancelled, None);
+    }
+    Ok(())
 }
 
 pub(crate) async fn execute_run(
@@ -95,6 +204,63 @@ pub(crate) async fn execute_run(
             &state.workflow_artefacts,
         ) {
             settle_job(&state, &job, JobStatus::Failed, Some(error.message()));
+            return;
+        }
+        if matches!(step.action, StepAction::HumanGate(_)) {
+            let Some(candidate) = inputs
+                .iter()
+                .find(|input| {
+                    input.artefact.kind
+                        == crate::workflows::definition::ArtefactKind::CandidateRevision
+                })
+                .map(|input| input.artefact.clone())
+            else {
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some("A human gate needs a candidate input."),
+                );
+                return;
+            };
+            let crate::workflows::RunSource::Captured { source } = &run.source else {
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some(OPERATIONAL_STORE_ERROR),
+                );
+                return;
+            };
+            let Ok(gate_id) = crate::workflows::GateId::generate() else {
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some(OPERATIONAL_STORE_ERROR),
+                );
+                return;
+            };
+            let opened = state.workflow_runs.mutate(&job.run_id, |run| {
+                run.open_gate(gate_id, candidate.clone(), source.initial.clone(), now_ms())
+                    .map(|_| ())
+            });
+            if opened.is_err() {
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some(OPERATIONAL_STORE_ERROR),
+                );
+                return;
+            }
+            job.job.set_step_label("Awaiting decision".to_owned());
+            let _ = job.job.set_awaiting_decision();
+            if !state.gate_continuations.insert(job) {
+                let _ = state
+                    .workflow_runs
+                    .mutate(&run.id, |run| run.interrupt(now_ms()));
+            }
             return;
         }
         let commit_step = matches!(
@@ -897,11 +1063,18 @@ async fn execute_commit_transaction(
         })
         .map(|input| input.artefact.clone())
         .ok_or(CommitError::Assurance)?;
+    let approval = inputs
+        .iter()
+        .find(|input| {
+            input.artefact.kind == crate::workflows::definition::ArtefactKind::HumanDecision
+        })
+        .map(|input| input.artefact.clone());
     let timestamp = crate::workflows::commit::utc_timestamp(now_ms());
     let mut transaction = CommitTransaction {
         state: CommitTransactionState::Prepared,
         candidate,
         review,
+        approval,
         expected_reference,
         old_object: initial
             .repository
@@ -1215,6 +1388,10 @@ async fn dispatch_step(
             SystemCommandId::RepositoryStatus => {
                 run_system_exec(sandbox, &job.job, guest_command(action.command)).await
             }
+        },
+        StepAction::HumanGate(_) => StepOutcome::Failed {
+            category: FailureCategory::Definition,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
         },
     }
 }
@@ -1853,21 +2030,26 @@ fn resolve_inputs(
                 step: source_step,
                 output,
             } => {
-                let Some(attempt) = run.attempts.iter().rev().find(|attempt| {
+                let found = if let Some(attempt) = run.attempts.iter().rev().find(|attempt| {
                     attempt.step == *source_step
                         && matches!(
                             attempt.result,
                             Some(crate::workflows::run::AttemptResult::Completed { .. })
                         )
-                }) else {
-                    return Err("That input step has no successful output.");
+                }) {
+                    attempt
+                        .outputs
+                        .iter()
+                        .find(|item| item.key == *output)
+                        .map(|item| item.artefact.clone())
+                } else {
+                    run.gates
+                        .iter()
+                        .rev()
+                        .find(|gate| gate.step == *source_step && gate.output == *output)
+                        .and_then(|gate| gate.decision.clone())
                 };
-                let Some(found) = attempt
-                    .outputs
-                    .iter()
-                    .find(|item| item.key == *output)
-                    .map(|item| item.artefact.clone())
-                else {
+                let Some(found) = found else {
                     if output.as_str() == crate::workflows::definition::ASSISTANT_REPLY {
                         return Err("Assistant replies cannot be artefact inputs.");
                     }
@@ -1935,6 +2117,9 @@ fn candidate_hash_of(
         | crate::workflows::artefacts::ArtefactSummary::Review { candidate, .. }
         | crate::workflows::artefacts::ArtefactSummary::Test { candidate, .. } => Some(*candidate),
         crate::workflows::artefacts::ArtefactSummary::Plan { .. } => None,
+        crate::workflows::artefacts::ArtefactSummary::HumanDecision { candidate, .. } => {
+            Some(*candidate)
+        }
     }
 }
 
@@ -2398,6 +2583,10 @@ fn fail_operational(state: &AppState, workflow: &WorkflowJob) {
     );
 }
 
+pub(crate) fn settle_completed_job(state: &AppState, workflow: &WorkflowJob) {
+    settle_job(state, workflow, JobStatus::Completed, None);
+}
+
 fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error: Option<&str>) {
     let eligible = workflow
         .eligible_reply
@@ -2418,19 +2607,6 @@ fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error
         error,
         &reply,
     );
-}
-
-#[cfg(test)]
-fn settle_transient_job(
-    state: &AppState,
-    session_id: &SessionId,
-    agent_id: &crate::agents::AgentId,
-    job: &Job,
-    status: JobStatus,
-    error: Option<&str>,
-) {
-    let reply = job.snapshot().output;
-    settle_with_reply(state, session_id, agent_id, job, status, error, &reply);
 }
 
 fn settle_with_reply(

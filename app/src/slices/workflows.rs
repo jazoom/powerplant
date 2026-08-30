@@ -385,7 +385,7 @@ async fn reject_unready_environments(
         invalid = true;
     }
     for (index, step) in definition.steps().iter().enumerate() {
-        if let crate::workflows::definition::StepEnvironment::Override { environment_id } =
+        if let Some(crate::workflows::definition::StepEnvironment::Override { environment_id }) =
             step.environment()
             && !ready.contains(&environment_id)
         {

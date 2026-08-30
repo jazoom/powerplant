@@ -2,6 +2,7 @@ pub(crate) mod apply;
 pub(crate) mod assurance;
 pub(crate) mod candidate;
 mod confine;
+pub(crate) mod diff;
 mod id;
 pub(crate) mod materialise;
 pub(crate) mod output;
@@ -11,16 +12,18 @@ mod store;
 pub(crate) use apply::CandidateApply;
 pub(crate) use assurance::status_against;
 pub(crate) use candidate::{CANDIDATE_SCHEMA, CandidateCapture, CandidateEntryKind};
+pub(crate) use diff::CandidateDiff;
 pub(crate) use id::{ArtefactHash, CandidateHash, ObjectHash};
 pub(crate) use materialise::CandidateMaterialise;
 pub(crate) use payload::{
-    ReviewVerdict, TestOutcome, TypedPayload, artefact_hash_for, parse_typed_payload,
+    ReviewVerdict, TestOutcome, TypedPayload, artefact_hash_for, encode_human_decision,
+    parse_typed_payload,
 };
 pub(crate) use store::WorkflowArtefactRepository;
 
 use super::definition::ArtefactKind;
 use super::definition::{OutputKey, StepKey};
-use super::id::{ArtefactId, AttemptId, RunId};
+use super::id::{ArtefactId, AttemptId, GateId, RunId};
 
 pub(crate) const MAXIMUM_ARTEFACTS: usize = 256;
 
@@ -51,6 +54,11 @@ pub(crate) enum ArtefactProducer {
         step: StepKey,
         output: Option<OutputKey>,
         disposition: ProductionDisposition,
+    },
+    HumanGate {
+        gate_id: GateId,
+        step: StepKey,
+        output: OutputKey,
     },
 }
 
@@ -87,6 +95,11 @@ pub(crate) enum ArtefactSummary {
         bytes: u64,
         disposition: ProductionDisposition,
     },
+    HumanDecision {
+        candidate: CandidateHash,
+        diff_base: CandidateHash,
+        decision: crate::workflows::gates::HumanDecisionKind,
+    },
 }
 
 impl ArtefactRecord {
@@ -94,15 +107,25 @@ impl ArtefactRecord {
         match &self.summary {
             ArtefactSummary::Review { candidate, .. }
             | ArtefactSummary::Test { candidate, .. }
-            | ArtefactSummary::Candidate { candidate, .. } => Some(*candidate),
+            | ArtefactSummary::Candidate { candidate, .. }
+            | ArtefactSummary::HumanDecision { candidate, .. } => Some(*candidate),
             ArtefactSummary::Plan { .. } => None,
         }
     }
 
     pub(crate) fn assurance_label(&self, observed: Option<CandidateHash>) -> &'static str {
         match &self.summary {
-            ArtefactSummary::Review { candidate, .. } | ArtefactSummary::Test { candidate, .. } => {
-                status_against(Some(*candidate), observed).as_label()
+            ArtefactSummary::Review { candidate, .. }
+            | ArtefactSummary::Test { candidate, .. }
+            | ArtefactSummary::HumanDecision { candidate, .. } => {
+                let status = status_against(Some(*candidate), observed);
+                if matches!(self.summary, ArtefactSummary::HumanDecision { .. })
+                    && status != assurance::AssuranceStatus::Current
+                {
+                    "Stale"
+                } else {
+                    status.as_label()
+                }
             }
             _ => "",
         }
@@ -127,6 +150,11 @@ impl ArtefactRecord {
                 entries,
                 bytes
             ),
+            ArtefactSummary::HumanDecision {
+                candidate,
+                decision,
+                ..
+            } => format!("{} · {}", decision.as_label(), candidate.short()),
             ArtefactSummary::Plan { .. } => String::new(),
         }
     }
@@ -137,6 +165,7 @@ impl ArtefactProducer {
         match self {
             Self::RunSourceCapture => "Source capture",
             Self::StepAttempt { .. } => "Step attempt",
+            Self::HumanGate { .. } => "Human gate",
         }
     }
 }
