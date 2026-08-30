@@ -81,6 +81,34 @@ fn a_read_only_parent_does_not_replace_the_destination() {
     assert_eq!(fs::read(&path).expect("read"), b"keep");
 }
 
+#[cfg(unix)]
+#[test]
+fn recursive_removal_does_not_follow_a_replaced_directory_entry() {
+    use cap_std::ambient_authority;
+    use cap_std::fs::Dir;
+
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    let sentinel = outside.path().join("keep.txt");
+    fs::write(&sentinel, b"keep").expect("sentinel");
+    let victim = root.path().join("victim");
+    fs::create_dir(&victim).expect("victim");
+    let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).expect("parent");
+    let entry = parent
+        .entries()
+        .expect("entries")
+        .next()
+        .expect("entry")
+        .expect("entry");
+    fs::remove_dir(&victim).expect("remove victim");
+    std::os::unix::fs::symlink(outside.path(), &victim).expect("replace with link");
+
+    super::remove_entry_nofollow(entry).expect("remove link");
+
+    assert_eq!(fs::read(&sentinel).expect("read sentinel"), b"keep");
+    assert!(!victim.exists());
+}
+
 #[test]
 fn confined_child_rejects_separators_and_dot_components() {
     let dir = tempfile::tempdir().expect("dir");

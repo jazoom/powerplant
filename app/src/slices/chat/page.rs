@@ -44,7 +44,7 @@ pub(super) struct ChatViewModel {
     pub(super) job_id: String,
     pub(super) cursor: u64,
     pub(super) job_active: bool,
-    pub(super) job_status: &'static str,
+    pub(super) job_status: String,
     pub(super) session_busy: bool,
     pub(super) agent_id: String,
     pub(super) agent_name: String,
@@ -135,7 +135,7 @@ impl ChatViewModel {
         let mut job_id = String::new();
         let mut cursor = 0;
         let mut job_active = false;
-        let mut job_status = "";
+        let mut job_status = String::new();
         let mut run_id = String::new();
         let mut run_step = String::new();
         let mut workflow_name = String::new();
@@ -151,13 +151,11 @@ impl ChatViewModel {
                 cursor = job.latest_seq;
                 job_active = true;
                 job_status = if job.cancel_requested {
-                    "Stopping"
-                } else if job.step_label == "Preparing environment" {
-                    "Preparing environment"
-                } else if job.step_label == "Source capture" {
-                    "Source capture"
+                    "Stopping".to_owned()
+                } else if job.step_label.is_empty() {
+                    "Working".to_owned()
                 } else {
-                    "Writing"
+                    job.step_label.clone()
                 };
             }
         }
@@ -256,7 +254,7 @@ impl ChatViewModel {
             job_id: &self.job_id,
             cursor: self.cursor,
             job_active: self.job_active,
-            job_status: self.job_status,
+            job_status: &self.job_status,
             agent_id: &self.agent_id,
             run_id: &self.run_id,
             run_step: &self.run_step,
@@ -332,7 +330,7 @@ pub(super) struct JobObserveContents<'a> {
     pub(super) job_id: &'a str,
     pub(super) cursor: u64,
     pub(super) job_active: bool,
-    pub(super) job_status: &'static str,
+    pub(super) job_status: &'a str,
     pub(super) agent_id: &'a str,
     pub(super) run_id: &'a str,
     pub(super) run_step: &'a str,
@@ -364,7 +362,7 @@ impl<'a> JobObserveContents<'a> {
     pub(super) fn observing(
         job_id: &'a str,
         cursor: u64,
-        status: &'static str,
+        status: &'a str,
         error: &'a str,
         agent_id: &'a str,
         run_id: &'a str,

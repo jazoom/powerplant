@@ -15,6 +15,7 @@ use crate::{
     vault::ProviderVault,
     workflows::{
         WorkflowArtefactRepository, WorkflowCatalogue, WorkflowExecution, WorkflowRunStore,
+        workspace::WorkflowWorkspaces,
     },
 };
 
@@ -34,6 +35,7 @@ pub(crate) struct AppState {
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
     pub(crate) workflow_artefacts: Arc<WorkflowArtefactRepository>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
+    pub(crate) workflow_workspaces: Arc<WorkflowWorkspaces>,
     pub(crate) environments: Arc<EnvironmentCatalogue>,
     pub(crate) environment_snapshots: Arc<EnvironmentSnapshotRepository>,
     pub(crate) environment_preparations: Arc<EnvironmentPreparationScheduler>,
@@ -68,6 +70,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         EnvironmentSnapshotRepository::open(config.data_dir.join("environment-snapshots"))
             .map_err(|_| "The environment snapshot store is unreadable.".to_owned())?;
     let sandboxes = SandboxFleet::prepare().await;
+    let guest_recovery = sandboxes.recover_transient_guests().await;
     for environment in environments.list() {
         let Some(ready) = environment.ready_preparation else {
             continue;
@@ -85,6 +88,35 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
     let environment_preparations =
         EnvironmentPreparationScheduler::start(environments.clone(), environment_snapshots.clone());
     environment_preparations.wake();
+    let workflow_workspaces = WorkflowWorkspaces::open(config.data_dir.join("workflow-workspaces"))
+        .map_err(|_| "The workflow workspace store is unreadable.".to_owned())?;
+    let workspace_recovery = workflow_workspaces
+        .recover_leftovers(
+            |run, attempt| {
+                workflow_runs
+                    .get(run)
+                    .is_some_and(|record| record.active_attempt() == Some(*attempt))
+            },
+            |run, attempt| {
+                !guest_recovery.inventory_complete
+                    || guest_recovery.attempts_remaining.contains(attempt)
+                    || guest_recovery.runs_remaining.contains(run)
+            },
+        )
+        .map_err(|_| "Power Plant could not recover workflow workspaces.".to_owned())?;
+    for (run_id, attempt_id) in workflow_runs.pending_cleanup_attempts() {
+        let cleanup = recovered_cleanup_record(
+            guest_recovery.inventory_complete,
+            &guest_recovery.attempts_remaining,
+            &guest_recovery.runs_remaining,
+            &workspace_recovery,
+            run_id,
+            attempt_id,
+        );
+        workflow_runs
+            .mutate(&run_id, |run| run.record_cleanup(attempt_id, cleanup))
+            .map_err(|_| "Power Plant could not record workflow recovery.".to_owned())?;
+    }
     Ok(AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
@@ -100,12 +132,33 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         workflow_runs: Arc::new(workflow_runs),
         workflow_artefacts: Arc::new(workflow_artefacts),
         workflow_execution: Arc::new(WorkflowExecution::new()),
+        workflow_workspaces: Arc::new(workflow_workspaces),
         environments,
         environment_snapshots,
         environment_preparations,
         #[cfg(test)]
         scratch: Arc::new(std::sync::Mutex::new(Vec::new())),
     })
+}
+
+fn recovered_cleanup_record(
+    inventory_complete: bool,
+    guests_remaining: &std::collections::BTreeSet<crate::workflows::AttemptId>,
+    runs_remaining: &std::collections::BTreeSet<crate::workflows::RunId>,
+    workspaces: &[crate::workflows::workspace::WorkspaceRecovery],
+    run: crate::workflows::RunId,
+    attempt: crate::workflows::AttemptId,
+) -> crate::workflows::run::AttemptCleanupRecord {
+    let sandbox =
+        !inventory_complete || guests_remaining.contains(&attempt) || runs_remaining.contains(&run);
+    let workspace = workspaces
+        .iter()
+        .any(|item| item.run == run && item.attempt == attempt && item.remains);
+    if sandbox || workspace {
+        crate::workflows::run::AttemptCleanupRecord::Orphaned { sandbox, workspace }
+    } else {
+        crate::workflows::run::AttemptCleanupRecord::Complete
+    }
 }
 
 #[cfg(test)]
@@ -134,9 +187,13 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
         workflow_artefacts: Arc::new(WorkflowArtefactRepository::in_memory()),
         workflow_execution: Arc::new(WorkflowExecution::new()),
+        workflow_workspaces: Arc::new(WorkflowWorkspaces::in_memory()),
         environments,
         environment_snapshots,
         environment_preparations,
         scratch: Arc::new(std::sync::Mutex::new(Vec::new())),
     }
 }
+
+#[cfg(test)]
+mod tests;

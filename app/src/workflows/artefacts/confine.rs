@@ -1,0 +1,283 @@
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
+
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions};
+
+use super::candidate::CaptureError;
+
+pub(crate) struct WorkspaceDir {
+    dir: Dir,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkspaceKind {
+    File { executable: bool },
+    Symlink,
+    Directory,
+    Other,
+}
+
+impl WorkspaceDir {
+    pub(crate) fn create_empty(path: &Path) -> Result<Self, CaptureError> {
+        std::fs::create_dir_all(path).map_err(|_| CaptureError::ArtefactWrite)?;
+        crate::storage::ensure_private_dir(path).map_err(|_| CaptureError::ArtefactWrite)?;
+        let dir = Dir::open_ambient_dir(path, ambient_authority())
+            .map_err(|_| CaptureError::ArtefactWrite)?;
+        if dir
+            .entries()
+            .map_err(|_| CaptureError::ArtefactWrite)?
+            .next()
+            .is_some()
+        {
+            return Err(CaptureError::ArtefactWrite);
+        }
+        Ok(Self { dir })
+    }
+
+    pub(crate) fn open(path: &Path) -> Result<Self, CaptureError> {
+        let dir = Dir::open_ambient_dir(path, ambient_authority())
+            .map_err(|_| CaptureError::SourceRead)?;
+        Ok(Self { dir })
+    }
+
+    pub(crate) fn kind(&self, relative: &str) -> Result<WorkspaceKind, CaptureError> {
+        let meta = match self.dir.symlink_metadata(relative) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CaptureError::SourceRead);
+            }
+            Err(_) => return Err(CaptureError::SourceRead),
+        };
+        if meta.file_type().is_symlink() {
+            return Ok(WorkspaceKind::Symlink);
+        }
+        if meta.file_type().is_file() {
+            return Ok(WorkspaceKind::File {
+                executable: is_executable(&meta),
+            });
+        }
+        if meta.file_type().is_dir() {
+            return Ok(WorkspaceKind::Directory);
+        }
+        Ok(WorkspaceKind::Other)
+    }
+
+    pub(crate) fn exists(&self, relative: &str) -> bool {
+        self.dir.symlink_metadata(relative).is_ok()
+    }
+
+    pub(crate) fn read_file(&self, relative: &str) -> Result<(Vec<u8>, bool, u64), CaptureError> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        apply_nofollow(&mut options);
+        let mut file = self
+            .dir
+            .open_with(relative, &options)
+            .map_err(|_| CaptureError::SourceRead)?;
+        let meta = file.metadata().map_err(|_| CaptureError::SourceRead)?;
+        if !meta.file_type().is_file() {
+            return Err(CaptureError::SourceUnsupported);
+        }
+        let executable = is_executable(&meta);
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|_| CaptureError::SourceRead)?;
+        if bytes.len() as u64 != meta.len() {
+            return Err(CaptureError::SourceChanged);
+        }
+        Ok((bytes, executable, meta.len()))
+    }
+
+    pub(crate) fn read_link(&self, relative: &str) -> Result<String, CaptureError> {
+        let target = self
+            .dir
+            .read_link(relative)
+            .map_err(|_| CaptureError::SourceRead)?;
+        let text = target
+            .to_str()
+            .ok_or(CaptureError::SourceUnsupported)?
+            .to_owned();
+        if text.as_bytes().contains(&0) {
+            return Err(CaptureError::SourceUnsupported);
+        }
+        Ok(text)
+    }
+
+    pub(crate) fn write_file(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        executable: bool,
+    ) -> Result<(), CaptureError> {
+        self.ensure_parents(relative)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        apply_nofollow(&mut options);
+        let mut file = self
+            .dir
+            .open_with(relative, &options)
+            .map_err(|_| CaptureError::ArtefactWrite)?;
+        file.write_all(bytes)
+            .map_err(|_| CaptureError::ArtefactWrite)?;
+        set_executable(&file, executable)?;
+        Ok(())
+    }
+
+    pub(crate) fn create_symlink(&self, relative: &str, target: &str) -> Result<(), CaptureError> {
+        self.ensure_parents(relative)?;
+        self.dir
+            .symlink(target, relative)
+            .map_err(|_| CaptureError::ArtefactWrite)
+    }
+
+    pub(crate) fn create_placeholder_dir(&self, relative: &str) -> Result<(), CaptureError> {
+        self.ensure_parents(relative)?;
+        self.dir
+            .create_dir(relative)
+            .map_err(|_| CaptureError::ArtefactWrite)
+    }
+
+    pub(crate) fn dir_is_empty(&self, relative: &str) -> Result<bool, CaptureError> {
+        let nested = self
+            .dir
+            .open_dir(relative)
+            .map_err(|_| CaptureError::SourceRead)?;
+        Ok(nested
+            .entries()
+            .map_err(|_| CaptureError::SourceRead)?
+            .next()
+            .is_none())
+    }
+
+    pub(crate) fn collect_leaf_paths(&self) -> Result<Vec<String>, CaptureError> {
+        let mut paths = Vec::new();
+        collect_leaves(&self.dir, Path::new(""), &mut paths)?;
+        paths.sort();
+        Ok(paths)
+    }
+
+    fn ensure_parents(&self, relative: &str) -> Result<(), CaptureError> {
+        let path = Path::new(relative);
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
+        if parent == Path::new("") {
+            return Ok(());
+        }
+        let mut current = PathBuf::new();
+        for component in parent.components() {
+            let Component::Normal(name) = component else {
+                return Err(CaptureError::SourceUnsupported);
+            };
+            current.push(name);
+            match self.dir.symlink_metadata(&current) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(CaptureError::SourceUnsupported);
+                }
+                Ok(meta) if meta.file_type().is_dir() => {}
+                Ok(_) => return Err(CaptureError::SourceUnsupported),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.dir
+                        .create_dir(&current)
+                        .map_err(|_| CaptureError::ArtefactWrite)?;
+                }
+                Err(_) => return Err(CaptureError::ArtefactWrite),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn collect_leaves(dir: &Dir, prefix: &Path, paths: &mut Vec<String>) -> Result<(), CaptureError> {
+    for entry in dir.entries().map_err(|_| CaptureError::SourceRead)? {
+        let entry = entry.map_err(|_| CaptureError::SourceRead)?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| CaptureError::SourceUnsupported)?;
+        let relative = if prefix.as_os_str().is_empty() {
+            PathBuf::from(&name)
+        } else {
+            prefix.join(&name)
+        };
+        let file_type = entry.file_type().map_err(|_| CaptureError::SourceRead)?;
+        if file_type.is_symlink() || file_type.is_file() {
+            paths.push(relative.to_string_lossy().into_owned());
+        } else if file_type.is_dir() {
+            let nested = dir.open_dir(&name).map_err(|_| CaptureError::SourceRead)?;
+            let mut children = nested.entries().map_err(|_| CaptureError::SourceRead)?;
+            if children.next().is_none() {
+                paths.push(relative.to_string_lossy().into_owned());
+            } else {
+                collect_leaves(&nested, &relative, paths)?;
+            }
+        } else {
+            return Err(CaptureError::SourceUnsupported);
+        }
+    }
+    Ok(())
+}
+
+fn apply_nofollow(options: &mut OpenOptions) {
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(0o400000);
+    }
+}
+
+fn is_executable(meta: &cap_std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use cap_std::fs::MetadataExt;
+        meta.mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+fn set_executable(file: &cap_std::fs::File, executable: bool) -> Result<(), CaptureError> {
+    #[cfg(unix)]
+    {
+        use cap_std::fs::{Permissions, PermissionsExt};
+        let mode = if executable { 0o755 } else { 0o644 };
+        let permissions = Permissions::from_mode(mode);
+        file.set_permissions(permissions)
+            .map_err(|_| CaptureError::ArtefactWrite)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, executable);
+    }
+    Ok(())
+}
+
+pub(crate) fn split_relative(path: &str) -> Result<(), CaptureError> {
+    if path.is_empty() || path.starts_with('/') || path.contains('\0') {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    if path == ".git" || path.starts_with(".git/") {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    let mut components = Vec::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name.to_str().ok_or(CaptureError::SourceUnsupported)?;
+                if name == ".git" {
+                    return Err(CaptureError::SourceUnsupported);
+                }
+                components.push(name);
+            }
+            _ => return Err(CaptureError::SourceUnsupported),
+        }
+    }
+    if components.is_empty() {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    Ok(())
+}

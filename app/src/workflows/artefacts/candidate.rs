@@ -12,12 +12,14 @@ pub(crate) const MAXIMUM_MANIFEST_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAXIMUM_PREVIEW_PATHS: usize = 200;
 pub(crate) const MAXIMUM_PREVIEW_BYTES: usize = 1024 * 1024;
 const CANDIDATE_DOMAIN: &[u8] = b"powerplant.candidate.v1";
+const GIT_ADMIN_DOMAIN: &[u8] = b"powerplant.git-admin.v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CandidateRevisionArtefact {
     pub(crate) format_version: u32,
     pub(crate) candidate_hash: CandidateHash,
     pub(crate) repository: RepositoryAnchor,
+    pub(crate) git_admin: GitAdministrativeFingerprint,
     pub(crate) entries: Vec<CandidateEntry>,
 }
 
@@ -34,7 +36,20 @@ pub(crate) enum GitObjectFormat {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GitObjectId(String);
+pub(crate) struct GitObjectId(pub(crate) String);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GitAdministrativeFingerprint(String);
+
+impl GitAdministrativeFingerprint {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        ObjectHash::parse(value).map(|hash| Self(hash.as_str()))
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CandidateEntry {
@@ -61,7 +76,6 @@ pub(crate) enum CandidateEntryKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CaptureError {
     SourceNotGit,
-    SourceRoot,
     SourceUnsupported,
     SourceTooLarge,
     SourceChanged,
@@ -74,7 +88,6 @@ impl CaptureError {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::SourceNotGit => "The project is not a supported Git worktree.",
-            Self::SourceRoot => "The project directory is not the Git worktree root.",
             Self::SourceUnsupported => "That project state is not supported for source capture.",
             Self::SourceTooLarge => "The project is too large to capture.",
             Self::SourceChanged => "The project changed during source capture.",
@@ -90,7 +103,16 @@ impl CaptureError {
 struct CandidateManifestFile {
     format_version: u32,
     candidate_hash: String,
+    repository: RepositoryAnchorFile,
+    git_admin: String,
     entries: Vec<CandidateEntryFile>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct RepositoryAnchorFile {
+    object_format: String,
+    head: Option<String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -118,6 +140,14 @@ impl CandidateRevisionArtefact {
         let file = CandidateManifestFile {
             format_version: self.format_version,
             candidate_hash: self.candidate_hash.as_str(),
+            repository: RepositoryAnchorFile {
+                object_format: match self.repository.object_format {
+                    GitObjectFormat::Sha1 => "sha1".to_owned(),
+                    GitObjectFormat::Sha256 => "sha256".to_owned(),
+                },
+                head: self.repository.head.as_ref().map(|id| id.0.clone()),
+            },
+            git_admin: self.git_admin.as_str().to_owned(),
             entries: self
                 .entries
                 .iter()
@@ -151,8 +181,11 @@ impl CandidateRevisionArtefact {
         Ok(bytes)
     }
 
-    pub(crate) fn from_manifest_bytes(bytes: &[u8]) -> Option<Vec<CandidateEntry>> {
+    pub(crate) fn from_manifest_bytes(bytes: &[u8]) -> Option<Self> {
         let file: CandidateManifestFile = serde_json::from_slice(bytes).ok()?;
+        if file.format_version != CANDIDATE_SCHEMA {
+            return None;
+        }
         let mut entries = Vec::new();
         for entry in file.entries {
             entries.push(match entry {
@@ -184,7 +217,25 @@ impl CandidateRevisionArtefact {
                 },
             });
         }
-        Some(entries)
+        let object_format = match file.repository.object_format.as_str() {
+            "sha1" => GitObjectFormat::Sha1,
+            "sha256" => GitObjectFormat::Sha256,
+            _ => return None,
+        };
+        let artefact = Self {
+            format_version: file.format_version,
+            candidate_hash: CandidateHash::parse(&file.candidate_hash)?,
+            repository: RepositoryAnchor {
+                object_format,
+                head: file.repository.head.map(GitObjectId),
+            },
+            git_admin: GitAdministrativeFingerprint::parse(&file.git_admin)?,
+            entries,
+        };
+        if hash_entries(&artefact.entries) != artefact.candidate_hash {
+            return None;
+        }
+        Some(artefact)
     }
 }
 
@@ -195,13 +246,32 @@ impl CandidateCapture {
         root: &Path,
         store: &WorkflowArtefactRepository,
     ) -> Result<CandidateRevisionArtefact, CaptureError> {
-        let first = discover_host(root, store)?;
-        let second = discover_host(root, store)?;
-        if first != second {
-            return Err(CaptureError::SourceChanged);
-        }
-        Ok(first)
+        let git_dir = root.join(".git");
+        capture_twice(root, &git_dir, None, store)
     }
+
+    pub(crate) fn capture_worktree(
+        worktree: &Path,
+        git_dir: &Path,
+        expected_git: &GitAdministrativeFingerprint,
+        store: &WorkflowArtefactRepository,
+    ) -> Result<CandidateRevisionArtefact, CaptureError> {
+        capture_twice(worktree, git_dir, Some(expected_git), store)
+    }
+}
+
+fn capture_twice(
+    worktree: &Path,
+    git_dir: &Path,
+    expected_git: Option<&GitAdministrativeFingerprint>,
+    store: &WorkflowArtefactRepository,
+) -> Result<CandidateRevisionArtefact, CaptureError> {
+    let first = discover(worktree, git_dir, expected_git, store)?;
+    let second = discover(worktree, git_dir, Some(&first.git_admin), store)?;
+    if first != second {
+        return Err(CaptureError::SourceChanged);
+    }
+    Ok(first)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -465,70 +535,76 @@ fn is_text(bytes: &[u8]) -> bool {
     !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
 }
 
-fn discover_host(
-    root: &Path,
+fn discover(
+    worktree: &Path,
+    git_dir: &Path,
+    expected_git: Option<&GitAdministrativeFingerprint>,
     store: &WorkflowArtefactRepository,
 ) -> Result<CandidateRevisionArtefact, CaptureError> {
-    let git_dir = root.join(".git");
-    let meta = std::fs::symlink_metadata(&git_dir).map_err(|_| CaptureError::SourceNotGit)?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
+    let git_meta = std::fs::symlink_metadata(git_dir).map_err(|_| CaptureError::SourceNotGit)?;
+    if git_meta.file_type().is_symlink() || !git_meta.is_dir() {
         return Err(CaptureError::SourceUnsupported);
     }
-    let toplevel = git_output(root, &["rev-parse", "--show-toplevel"])?;
-    let toplevel = PathBuf::from(
-        String::from_utf8(toplevel)
-            .map_err(|_| CaptureError::SourceUnsupported)?
-            .trim(),
-    );
-    if std::fs::canonicalize(root).ok().as_ref() != Some(&toplevel) && root != toplevel {
-        return Err(CaptureError::SourceRoot);
+    let fingerprint = git_fingerprint(git_dir)?;
+    if let Some(expected) = expected_git
+        && expected != &fingerprint
+    {
+        return Err(CaptureError::SourceChanged);
     }
-    let head = git_output(root, &["rev-parse", "HEAD"]).ok();
-    let head = head.and_then(|bytes| {
-        let text = String::from_utf8(bytes).ok()?;
-        let id = text.trim();
-        if id.is_empty() || id == "HEAD" {
-            None
-        } else {
-            Some(GitObjectId(id.to_owned()))
-        }
-    });
-    let format = git_output(root, &["rev-parse", "--show-object-format"])
+    let workspace = super::confine::WorkspaceDir::open(worktree)?;
+    let object_format = match git_text(git_dir, worktree, &["rev-parse", "--show-object-format"])
         .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .map(|value| value.trim().to_owned());
-    let object_format = match format.as_deref() {
+        .as_deref()
+    {
         Some("sha256") => GitObjectFormat::Sha256,
         _ => GitObjectFormat::Sha1,
     };
-    let unmerged = git_output(root, &["ls-files", "-u", "-z"])?;
+    let head = git_text(git_dir, worktree, &["rev-parse", "HEAD"])
+        .ok()
+        .and_then(|text| {
+            let id = text.trim();
+            if id.is_empty() || id == "HEAD" {
+                None
+            } else {
+                Some(GitObjectId(id.to_owned()))
+            }
+        });
+    let unmerged = git_output(git_dir, worktree, &["ls-files", "-u", "-z"])?;
     if !unmerged.is_empty() {
         return Err(CaptureError::SourceUnsupported);
     }
-    let staged = git_output(root, &["ls-files", "-z", "--stage"])?;
-    let others = git_output(root, &["ls-files", "-z", "--others", "--exclude-standard"])?;
+    let staged = git_output(git_dir, worktree, &["ls-files", "-z", "--stage"])?;
+    let others = git_output(
+        git_dir,
+        worktree,
+        &["ls-files", "-z", "--others", "--exclude-standard"],
+    )?;
     let mut entries = Vec::new();
     let mut total = 0u64;
-    parse_staged(root, store, &staged, &mut entries, &mut total)?;
-    parse_untracked(root, store, &others, &mut entries, &mut total)?;
+    parse_staged(&workspace, store, &staged, &mut entries, &mut total)?;
+    parse_untracked(&workspace, store, &others, &mut entries, &mut total)?;
     entries.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     if entries.len() > MAXIMUM_ENTRIES {
         return Err(CaptureError::SourceTooLarge);
     }
-    let hash = hash_entries(&entries);
+    let after = git_fingerprint(git_dir)?;
+    if after != fingerprint {
+        return Err(CaptureError::SourceChanged);
+    }
     Ok(CandidateRevisionArtefact {
         format_version: CANDIDATE_SCHEMA,
-        candidate_hash: hash,
+        candidate_hash: hash_entries(&entries),
         repository: RepositoryAnchor {
             object_format,
             head,
         },
+        git_admin: fingerprint,
         entries,
     })
 }
 
 fn parse_staged(
-    root: &Path,
+    workspace: &super::confine::WorkspaceDir,
     store: &WorkflowArtefactRepository,
     bytes: &[u8],
     entries: &mut Vec<CandidateEntry>,
@@ -542,6 +618,9 @@ fn parse_staged(
             return Err(CaptureError::SourceUnsupported);
         };
         let path = parse_path(path)?;
+        if path_under_symlink(workspace, &path) {
+            continue;
+        }
         let meta = std::str::from_utf8(meta).map_err(|_| CaptureError::SourceUnsupported)?;
         let mut parts = meta.split(' ');
         let mode = parts.next().ok_or(CaptureError::SourceUnsupported)?;
@@ -550,36 +629,79 @@ fn parse_staged(
         if stage != "0" {
             return Err(CaptureError::SourceUnsupported);
         }
-        match mode {
-            "100644" | "100755" => {
-                let executable = mode == "100755";
-                let (blob, bytes) = read_regular(root, store, &path)?;
-                push_regular(entries, total, path, executable, bytes, blob)?;
-            }
-            "120000" => {
-                let target = read_link(root, &path)?;
-                let blob = store.publish(target.as_bytes()).map_err(map_store)?;
-                entries.push(CandidateEntry {
-                    path,
-                    kind: CandidateEntryKind::Symlink { target, blob },
-                });
-            }
-            "160000" => {
-                entries.push(CandidateEntry {
-                    path,
-                    kind: CandidateEntryKind::Gitlink {
-                        commit: GitObjectId(object.to_owned()),
-                    },
-                });
-            }
-            _ => return Err(CaptureError::SourceUnsupported),
+        if let Some(entry) = capture_tracked(workspace, store, &path, mode, object, total)? {
+            entries.push(entry);
         }
     }
     Ok(())
 }
 
+fn capture_tracked(
+    workspace: &super::confine::WorkspaceDir,
+    store: &WorkflowArtefactRepository,
+    path: &str,
+    index_mode: &str,
+    index_object: &str,
+    total: &mut u64,
+) -> Result<Option<CandidateEntry>, CaptureError> {
+    use super::confine::WorkspaceKind;
+    if !workspace.exists(path) {
+        return Ok(None);
+    }
+    match workspace.kind(path)? {
+        WorkspaceKind::File { executable } => {
+            if index_mode == "160000" {
+                return Err(CaptureError::SourceUnsupported);
+            }
+            let (bytes, opened_executable, size) = workspace.read_file(path)?;
+            if opened_executable != executable {
+                return Err(CaptureError::SourceChanged);
+            }
+            let blob = store.publish(&bytes).map_err(map_store)?;
+            *total = total.saturating_add(size);
+            if *total > MAXIMUM_TOTAL_BYTES || size > MAXIMUM_FILE_BYTES {
+                return Err(CaptureError::SourceTooLarge);
+            }
+            Ok(Some(CandidateEntry {
+                path: path.to_owned(),
+                kind: CandidateEntryKind::Regular {
+                    executable,
+                    bytes: size,
+                    blob,
+                },
+            }))
+        }
+        WorkspaceKind::Symlink => {
+            if index_mode == "160000" {
+                return Err(CaptureError::SourceUnsupported);
+            }
+            let target = workspace.read_link(path)?;
+            let blob = store.publish(target.as_bytes()).map_err(map_store)?;
+            Ok(Some(CandidateEntry {
+                path: path.to_owned(),
+                kind: CandidateEntryKind::Symlink { target, blob },
+            }))
+        }
+        WorkspaceKind::Directory => {
+            if index_mode != "160000" {
+                return Ok(None);
+            }
+            if !workspace.dir_is_empty(path)? {
+                return Err(CaptureError::SourceUnsupported);
+            }
+            Ok(Some(CandidateEntry {
+                path: path.to_owned(),
+                kind: CandidateEntryKind::Gitlink {
+                    commit: GitObjectId(index_object.to_owned()),
+                },
+            }))
+        }
+        WorkspaceKind::Other => Err(CaptureError::SourceUnsupported),
+    }
+}
+
 fn parse_untracked(
-    root: &Path,
+    workspace: &super::confine::WorkspaceDir,
     store: &WorkflowArtefactRepository,
     bytes: &[u8],
     entries: &mut Vec<CandidateEntry>,
@@ -593,83 +715,221 @@ fn parse_untracked(
         if entries.iter().any(|entry| entry.path == path) {
             continue;
         }
-        let full = root.join(&path);
-        let meta = std::fs::symlink_metadata(&full).map_err(|_| CaptureError::SourceRead)?;
-        if meta.file_type().is_symlink() {
-            let target = read_link(root, &path)?;
-            let blob = store.publish(target.as_bytes()).map_err(map_store)?;
-            entries.push(CandidateEntry {
-                path,
-                kind: CandidateEntryKind::Symlink { target, blob },
-            });
-        } else if meta.is_file() {
-            let executable = is_executable(&meta);
-            let (blob, bytes) = read_regular(root, store, &path)?;
-            push_regular(entries, total, path, executable, bytes, blob)?;
-        } else if meta.is_dir() {
+        if path_under_symlink(workspace, &path) {
             continue;
-        } else {
-            return Err(CaptureError::SourceUnsupported);
+        }
+        if !workspace.exists(&path) {
+            continue;
+        }
+        match workspace.kind(&path)? {
+            super::confine::WorkspaceKind::Symlink => {
+                let target = workspace.read_link(&path)?;
+                let blob = store.publish(target.as_bytes()).map_err(map_store)?;
+                entries.push(CandidateEntry {
+                    path,
+                    kind: CandidateEntryKind::Symlink { target, blob },
+                });
+            }
+            super::confine::WorkspaceKind::File { executable } => {
+                let (bytes, opened_executable, size) = match workspace.read_file(&path) {
+                    Ok(value) => value,
+                    Err(CaptureError::SourceRead)
+                        if workspace.kind(&path).ok()
+                            == Some(super::confine::WorkspaceKind::Symlink) =>
+                    {
+                        let target = workspace.read_link(&path)?;
+                        let blob = store.publish(target.as_bytes()).map_err(map_store)?;
+                        entries.push(CandidateEntry {
+                            path,
+                            kind: CandidateEntryKind::Symlink { target, blob },
+                        });
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if opened_executable != executable {
+                    return Err(CaptureError::SourceChanged);
+                }
+                let blob = store.publish(&bytes).map_err(map_store)?;
+                *total = total.saturating_add(size);
+                if *total > MAXIMUM_TOTAL_BYTES || size > MAXIMUM_FILE_BYTES {
+                    return Err(CaptureError::SourceTooLarge);
+                }
+                entries.push(CandidateEntry {
+                    path,
+                    kind: CandidateEntryKind::Regular {
+                        executable,
+                        bytes: size,
+                        blob,
+                    },
+                });
+            }
+            super::confine::WorkspaceKind::Directory => continue,
+            super::confine::WorkspaceKind::Other => return Err(CaptureError::SourceUnsupported),
         }
     }
     Ok(())
 }
 
-fn push_regular(
-    entries: &mut Vec<CandidateEntry>,
-    total: &mut u64,
-    path: String,
-    executable: bool,
-    bytes: u64,
-    blob: ObjectHash,
-) -> Result<(), CaptureError> {
-    *total = total.saturating_add(bytes);
-    if *total > MAXIMUM_TOTAL_BYTES || bytes > MAXIMUM_FILE_BYTES {
-        return Err(CaptureError::SourceTooLarge);
+fn path_under_symlink(workspace: &super::confine::WorkspaceDir, path: &str) -> bool {
+    let mut current = PathBuf::new();
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() < 2 {
+        return false;
     }
-    entries.push(CandidateEntry {
-        path,
-        kind: CandidateEntryKind::Regular {
-            executable,
-            bytes,
-            blob,
-        },
-    });
+    for part in &parts[..parts.len() - 1] {
+        current.push(part);
+        let relative = current.to_string_lossy();
+        if workspace.exists(relative.as_ref())
+            && workspace.kind(relative.as_ref()).ok()
+                == Some(super::confine::WorkspaceKind::Symlink)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn git_fingerprint(
+    git_dir: &Path,
+) -> Result<GitAdministrativeFingerprint, CaptureError> {
+    let index = read_optional_git_file(git_dir, "index")?.unwrap_or_default();
+    let head = read_git_file(git_dir, "HEAD")?;
+    let config = read_git_file(git_dir, "config")?;
+    reject_config_includes(&config)?;
+    if git_dir.join("config.worktree").exists() {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    let exclude = read_optional_git_file(git_dir, "info/exclude")?;
+    let resolved = std::process::Command::new("git")
+        .args(["--git-dir"])
+        .arg(git_dir)
+        .args([
+            "--no-optional-locks",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "alias.rev-parse=",
+            "rev-parse",
+            "HEAD",
+        ])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| output.stdout)
+        .unwrap_or_default();
+    let format = std::process::Command::new("git")
+        .args(["--git-dir"])
+        .arg(git_dir)
+        .args([
+            "--no-optional-locks",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "alias.rev-parse=",
+            "rev-parse",
+            "--show-object-format",
+        ])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| output.stdout)
+        .unwrap_or_default();
+    let mut encoded = Vec::from(GIT_ADMIN_DOMAIN);
+    encoded.push(0);
+    push_len_bytes(&mut encoded, &index);
+    push_len_bytes(&mut encoded, &head);
+    push_len_bytes(&mut encoded, &resolved);
+    push_len_bytes(&mut encoded, &format);
+    push_len_bytes(&mut encoded, &config);
+    match exclude {
+        Some(bytes) => {
+            encoded.push(1);
+            push_len_bytes(&mut encoded, &bytes);
+        }
+        None => encoded.push(0),
+    }
+    Ok(GitAdministrativeFingerprint(
+        ObjectHash::of(&encoded).as_str(),
+    ))
+}
+
+fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn read_git_file(git_dir: &Path, relative: &str) -> Result<Vec<u8>, CaptureError> {
+    read_optional_git_file(git_dir, relative)?.ok_or(CaptureError::SourceRead)
+}
+
+fn read_optional_git_file(git_dir: &Path, relative: &str) -> Result<Option<Vec<u8>>, CaptureError> {
+    let path = git_dir.join(relative);
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(CaptureError::SourceRead),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    Ok(Some(
+        std::fs::read(&path).map_err(|_| CaptureError::SourceRead)?,
+    ))
+}
+
+fn reject_config_includes(bytes: &[u8]) -> Result<(), CaptureError> {
+    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
+    if text.contains("[include]") || text.contains("[includeif") || text.contains("worktreeconfig")
+    {
+        return Err(CaptureError::SourceUnsupported);
+    }
     Ok(())
 }
 
-fn read_regular(
-    root: &Path,
-    store: &WorkflowArtefactRepository,
-    path: &str,
-) -> Result<(ObjectHash, u64), CaptureError> {
-    let full = root.join(path);
-    let before = std::fs::symlink_metadata(&full).map_err(|_| CaptureError::SourceRead)?;
-    if before.file_type().is_symlink() {
-        return Err(CaptureError::SourceUnsupported);
-    }
-    let bytes = std::fs::read(&full).map_err(|_| CaptureError::SourceRead)?;
-    let after = std::fs::symlink_metadata(&full).map_err(|_| CaptureError::SourceRead)?;
-    if before.len() != after.len() {
-        return Err(CaptureError::SourceChanged);
-    }
-    if bytes.len() as u64 > MAXIMUM_FILE_BYTES {
-        return Err(CaptureError::SourceTooLarge);
-    }
-    let blob = store.publish(&bytes).map_err(map_store)?;
-    Ok((blob, bytes.len() as u64))
+fn git_text(git_dir: &Path, worktree: &Path, args: &[&str]) -> Result<String, CaptureError> {
+    let bytes = git_output(git_dir, worktree, args)?;
+    String::from_utf8(bytes)
+        .map(|text| text.trim().to_owned())
+        .map_err(|_| CaptureError::SourceUnsupported)
 }
 
-fn read_link(root: &Path, path: &str) -> Result<String, CaptureError> {
-    let target = std::fs::read_link(root.join(path)).map_err(|_| CaptureError::SourceRead)?;
-    let text = target
-        .to_str()
-        .ok_or(CaptureError::SourceUnsupported)?
-        .to_owned();
-    if text.as_bytes().contains(&0) {
-        return Err(CaptureError::SourceUnsupported);
+fn git_output(git_dir: &Path, worktree: &Path, args: &[&str]) -> Result<Vec<u8>, CaptureError> {
+    let output = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(git_dir)
+        .arg("--work-tree")
+        .arg(worktree)
+        .args([
+            "--no-optional-locks",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=",
+            "-c",
+            "core.excludesFile=/dev/null",
+            "-c",
+            "alias.rev-parse=",
+            "-c",
+            "alias.ls-files=",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .map_err(|_| CaptureError::SourceUnsupported)?;
+    if !output.status.success() {
+        return Err(CaptureError::SourceNotGit);
     }
-    Ok(text)
+    Ok(output.stdout)
 }
 
 fn parse_path(bytes: &[u8]) -> Result<String, CaptureError> {
@@ -678,6 +938,9 @@ fn parse_path(bytes: &[u8]) -> Result<String, CaptureError> {
     }
     let path = std::str::from_utf8(bytes).map_err(|_| CaptureError::SourceUnsupported)?;
     if path.is_empty() || path.starts_with('/') || path.contains('\0') {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    if path == ".git" || path.starts_with(".git/") || path.split('/').any(|part| part == "..") {
         return Err(CaptureError::SourceUnsupported);
     }
     Ok(path.to_owned())
@@ -690,40 +953,6 @@ fn split_nul(bytes: &[u8]) -> Vec<&[u8]> {
 fn split_once_space_tab(record: &[u8]) -> Option<(&[u8], &[u8])> {
     let index = record.iter().position(|byte| *byte == b'\t')?;
     Some((&record[..index], &record[index + 1..]))
-}
-
-fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>, CaptureError> {
-    let output = std::process::Command::new("git")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=",
-            "--no-optional-locks",
-        ])
-        .args(args)
-        .current_dir(root)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|_| CaptureError::SourceUnsupported)?;
-    if !output.status.success() {
-        return Err(CaptureError::SourceNotGit);
-    }
-    Ok(output.stdout)
-}
-
-fn is_executable(meta: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        false
-    }
 }
 
 fn map_store(error: ArtefactStoreError) -> CaptureError {
@@ -814,6 +1043,81 @@ mod tests {
     }
 
     #[test]
+    fn capture_disables_external_exclude_files() {
+        let dir = tempfile::tempdir().expect("dir");
+        let external = tempfile::NamedTempFile::new().expect("exclude");
+        std::fs::write(external.path(), b"external.txt\n").expect("pattern");
+        git_init(dir.path());
+        assert!(
+            std::process::Command::new("git")
+                .args(["config", "core.excludesFile"])
+                .arg(external.path())
+                .current_dir(dir.path())
+                .status()
+                .expect("config")
+                .success()
+        );
+        std::fs::write(dir.path().join("external.txt"), b"capture").expect("file");
+        let store = WorkflowArtefactRepository::in_memory();
+
+        let candidate = CandidateCapture::capture_host(dir.path(), &store).expect("capture");
+
+        assert!(
+            candidate
+                .entries
+                .iter()
+                .any(|entry| entry.path == "external.txt")
+        );
+    }
+
+    #[test]
+    fn gitlink_placeholders_reject_kind_and_content_changes() {
+        let dir = tempfile::tempdir().expect("dir");
+        git_init(dir.path());
+        let commit = "1".repeat(40);
+        assert!(
+            std::process::Command::new("git")
+                .args(["update-index", "--add", "--cacheinfo"])
+                .arg(format!("160000,{commit},module"))
+                .current_dir(dir.path())
+                .status()
+                .expect("index")
+                .success()
+        );
+        let store = WorkflowArtefactRepository::in_memory();
+        let module = dir.path().join("module");
+        std::fs::create_dir(&module).expect("placeholder");
+        let captured = CandidateCapture::capture_host(dir.path(), &store).expect("gitlink");
+        assert!(matches!(
+            captured.entries[0].kind,
+            CandidateEntryKind::Gitlink { .. }
+        ));
+
+        std::fs::remove_dir(&module).expect("remove placeholder");
+        std::fs::write(&module, b"file").expect("replace file");
+        assert_eq!(
+            CandidateCapture::capture_host(dir.path(), &store).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
+        std::fs::remove_file(&module).expect("remove file");
+        std::os::unix::fs::symlink("target", &module).expect("replace link");
+        assert_eq!(
+            CandidateCapture::capture_host(dir.path(), &store).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
+        std::fs::remove_file(&module).expect("remove link");
+        std::fs::create_dir(&module).expect("placeholder");
+        std::fs::write(module.join("nested"), b"content").expect("nested");
+        assert_eq!(
+            CandidateCapture::capture_host(dir.path(), &store).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
+        std::fs::remove_dir_all(&module).expect("remove module");
+        let deleted = CandidateCapture::capture_host(dir.path(), &store).expect("deletion");
+        assert!(deleted.entries.is_empty());
+    }
+
+    #[test]
     fn comparison_reports_additions_and_mode_changes() {
         let blob = ObjectHash::of(b"x");
         let before = vec![CandidateEntry {
@@ -849,5 +1153,89 @@ mod tests {
                 .any(|item| item.1 == CandidateChange::ModeChanged)
         );
         assert!(changes.iter().any(|item| item.1 == CandidateChange::Added));
+    }
+
+    #[test]
+    fn git_fingerprint_detects_admin_drift() {
+        let dir = tempfile::tempdir().expect("dir");
+        git_init(dir.path());
+        std::fs::write(dir.path().join("tracked.txt"), b"one").expect("write");
+        assert!(
+            std::process::Command::new("git")
+                .args(["add", "tracked.txt"])
+                .current_dir(dir.path())
+                .status()
+                .expect("add")
+                .success()
+        );
+        let store = WorkflowArtefactRepository::in_memory();
+        let first = CandidateCapture::capture_host(dir.path(), &store).expect("capture");
+        let git = dir.path().join(".git");
+        let original_head = std::fs::read(git.join("HEAD")).expect("head");
+        std::fs::write(git.join("HEAD"), b"ref: refs/heads/other\n").expect("head");
+        assert_ne!(git_fingerprint(&git).expect("fp"), first.git_admin);
+        std::fs::write(git.join("HEAD"), original_head).expect("restore");
+        let original_exclude = std::fs::read(git.join("info/exclude")).unwrap_or_default();
+        std::fs::create_dir_all(git.join("info")).expect("info");
+        std::fs::write(git.join("info/exclude"), b"secret\n").expect("exclude");
+        assert_ne!(git_fingerprint(&git).expect("fp"), first.git_admin);
+        std::fs::write(git.join("info/exclude"), original_exclude).expect("restore exclude");
+        let original_config = std::fs::read(git.join("config")).expect("config");
+        let mut config = original_config.clone();
+        config.extend_from_slice(b"\n[user]\n\tname = Drift\n");
+        std::fs::write(git.join("config"), config).expect("config");
+        assert_ne!(git_fingerprint(&git).expect("fp"), first.git_admin);
+        std::fs::write(git.join("config"), original_config).expect("restore config");
+        assert_eq!(git_fingerprint(&git).expect("fp"), first.git_admin);
+    }
+
+    #[test]
+    fn capture_does_not_follow_a_workspace_symlink_to_a_sentinel() {
+        let project = tempfile::tempdir().expect("project");
+        git_init(project.path());
+        std::fs::write(project.path().join("tracked.txt"), b"inside").expect("tracked");
+        assert!(
+            std::process::Command::new("git")
+                .args(["add", "tracked.txt"])
+                .current_dir(project.path())
+                .status()
+                .expect("add")
+                .success()
+        );
+        let store = WorkflowArtefactRepository::in_memory();
+        let captured = CandidateCapture::capture_host(project.path(), &store).expect("capture");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let dest = workspace.path().join("project");
+        crate::workflows::artefacts::CandidateMaterialise::into_workspace(
+            &dest,
+            &captured,
+            crate::workflows::artefacts::artefact_hash_for(
+                crate::workflows::definition::ArtefactKind::CandidateRevision,
+                CANDIDATE_SCHEMA,
+                &captured.manifest_bytes().expect("bytes"),
+            ),
+            &store,
+        )
+        .expect("materialise");
+        let outside = tempfile::tempdir().expect("outside");
+        let sentinel = outside.path().join("secret.txt");
+        std::fs::write(&sentinel, b"SENTINEL").expect("sentinel");
+        std::os::unix::fs::symlink(&sentinel, dest.join("escape")).expect("link");
+        let recaptured = CandidateCapture::capture_worktree(
+            &dest,
+            &project.path().join(".git"),
+            &captured.git_admin,
+            &store,
+        );
+        if let Ok(recaptured) = recaptured {
+            let leaked = recaptured.entries.iter().any(|entry| match &entry.kind {
+                CandidateEntryKind::Regular { blob, .. } => store
+                    .get(blob)
+                    .ok()
+                    .is_some_and(|bytes| bytes == b"SENTINEL"),
+                _ => false,
+            });
+            assert!(!leaked);
+        }
     }
 }

@@ -630,8 +630,10 @@ fn encode_observe_final(
     if more {
         let status = if snapshot.cancel_requested {
             "Stopping"
+        } else if snapshot.step_label.is_empty() {
+            "Working"
         } else {
-            "Writing"
+            snapshot.step_label.as_str()
         };
         patches.children(
             "job-observe",

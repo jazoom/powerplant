@@ -1,6 +1,8 @@
 pub(crate) mod assurance;
 pub(crate) mod candidate;
+mod confine;
 mod id;
+pub(crate) mod materialise;
 pub(crate) mod output;
 pub(crate) mod payload;
 mod store;
@@ -8,6 +10,7 @@ mod store;
 pub(crate) use assurance::status_against;
 pub(crate) use candidate::{CANDIDATE_SCHEMA, CandidateCapture, CandidateEntryKind};
 pub(crate) use id::{ArtefactHash, CandidateHash, ObjectHash};
+pub(crate) use materialise::CandidateMaterialise;
 pub(crate) use payload::{
     ReviewVerdict, TestOutcome, TypedPayload, artefact_hash_for, parse_typed_payload,
 };

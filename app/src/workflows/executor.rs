@@ -29,11 +29,9 @@ pub(crate) struct WorkflowJob {
     pub(crate) session_id: SessionId,
     pub(crate) agent_id: crate::agents::AgentId,
     pub(crate) connection: ProviderConnection,
-    pub(crate) sandbox: Arc<GuestSandbox>,
     pub(crate) host_policy: DirectoryPolicy,
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Arc<Job>,
-    pub(crate) access: crate::sandbox::GuestAccess,
 }
 
 pub(crate) async fn execute_run(
@@ -67,7 +65,6 @@ pub(crate) async fn execute_run(
                 } else {
                     settle_job(&state, &job, JobStatus::Failed, Some(&error));
                 }
-                let _ = job.sandbox.remove().await;
                 return;
             }
             continue;
@@ -85,7 +82,6 @@ pub(crate) async fn execute_run(
             Ok(inputs) => inputs,
             Err(error) => {
                 settle_job(&state, &job, JobStatus::Failed, Some(error));
-                let _ = job.sandbox.remove().await;
                 return;
             }
         };
@@ -95,7 +91,6 @@ pub(crate) async fn execute_run(
             } else {
                 settle_job(&state, &job, JobStatus::Failed, Some(error));
             }
-            let _ = job.sandbox.remove().await;
             return;
         }
         let attempt_id = match AttemptId::generate() {
@@ -105,54 +100,73 @@ pub(crate) async fn execute_run(
                 return;
             }
         };
-        if persist_start(&state, &job.run_id, attempt_id, inputs.clone()).is_err() {
+        let Some(agent) = state.agents.get(&job.agent_id) else {
+            fail_operational(&state, &job);
+            return;
+        };
+        let capabilities = match crate::workflows::capabilities::AttemptCapabilities::derive(
+            &step,
+            &agent,
+            &job.connection,
+        ) {
+            Ok(capabilities) => capabilities,
+            Err(error) => {
+                settle_job(&state, &job, JobStatus::Failed, Some(error.message()));
+                return;
+            }
+        };
+        let Some(snapshot_digest) = run
+            .environments
+            .steps
+            .iter()
+            .find(|item| item.step == step.key)
+            .map(|item| item.snapshot_digest.clone())
+        else {
+            fail_operational(&state, &job);
+            return;
+        };
+        let sandbox_record = crate::workflows::run::AttemptSandboxRecord {
+            kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest,
+        };
+        if persist_start(
+            &state,
+            &job.run_id,
+            attempt_id,
+            inputs.clone(),
+            capabilities.clone(),
+            sandbox_record,
+        )
+        .is_err()
+        {
             fail_operational(&state, &job);
             return;
         }
-        if let Err(error) = ensure_run_sandbox(&state, &job, &step).await {
-            if job.job.cancel_requested() {
-                if persist_cancel(&state, &job.run_id).is_err() {
-                    fail_operational(&state, &job);
-                } else {
-                    settle_job(&state, &job, JobStatus::Cancelled, None);
-                }
-            } else if persist_fail(
-                &state,
-                &job.run_id,
-                Some(attempt_id),
-                FailureCategory::Operational,
-            )
-            .is_err()
-            {
-                fail_operational(&state, &job);
-            } else {
-                settle_job(&state, &job, JobStatus::Failed, Some(error));
-            }
-            let _ = job.sandbox.remove().await;
+        let isolated =
+            isolate_and_run(&state, &job, &step, attempt_id, &inputs, &capabilities).await;
+        let (outcome, cleanup, drafts, captured) = match isolated {
+            IsolatedRun::Finished {
+                outcome,
+                cleanup,
+                drafts,
+                captured,
+            } => (outcome, cleanup, drafts, captured),
+        };
+        if persist_cleanup(&state, &job.run_id, attempt_id, cleanup).is_err() {
+            fail_operational(&state, &job);
             return;
         }
-        if let Err(error) = capture_matches_input(&state, &job, &inputs) {
-            if persist_fail(
-                &state,
-                &job.run_id,
-                Some(attempt_id),
-                FailureCategory::Operational,
-            )
-            .is_err()
-            {
-                fail_operational(&state, &job);
-            } else {
-                settle_job(&state, &job, JobStatus::Failed, Some(error));
-            }
-            let _ = job.sandbox.remove().await;
-            return;
-        }
-        let drafts = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::workflows::artefacts::output::OutputDrafts::default(),
-        ));
-        let outcome = dispatch_step(&state, &job, &step, drafts.clone()).await;
-        if let Err(error) =
-            finalise_attempt(&state, &job, &step, attempt_id, &inputs, &drafts, &outcome).await
+        if let Err(error) = finalise_attempt(
+            &state,
+            &job,
+            &step,
+            attempt_id,
+            &inputs,
+            &drafts,
+            captured.as_ref(),
+            &outcome,
+        )
+        .await
         {
             fail_operational(&state, &job);
             let _ = error;
@@ -163,18 +177,15 @@ pub(crate) async fn execute_run(
                 if let Some(run) = state.workflow_runs.get(&job.run_id)
                     && run.is_terminal()
                 {
-                    let _ = job.sandbox.remove().await;
                     settle_job(&state, &job, JobStatus::Completed, None);
                     return;
                 }
             }
             StepOutcome::Failed { error, .. } => {
-                let _ = job.sandbox.remove().await;
                 settle_job(&state, &job, JobStatus::Failed, error.as_deref());
                 return;
             }
             StepOutcome::Cancelled => {
-                let _ = job.sandbox.remove().await;
                 settle_job(&state, &job, JobStatus::Cancelled, None);
                 return;
             }
@@ -191,16 +202,342 @@ enum StepOutcome {
     Cancelled,
 }
 
+enum IsolatedRun {
+    Finished {
+        outcome: StepOutcome,
+        cleanup: crate::workflows::run::AttemptCleanupRecord,
+        drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
+        captured: Option<crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
+    },
+}
+
+async fn isolate_and_run(
+    state: &AppState,
+    job: &WorkflowJob,
+    step: &StepDefinition,
+    attempt_id: AttemptId,
+    inputs: &[super::run::AttemptArtefactInput],
+    capabilities: &crate::workflows::capabilities::AttemptCapabilities,
+) -> IsolatedRun {
+    let drafts = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::workflows::artefacts::output::OutputDrafts::default(),
+    ));
+    job.job.set_step_label("Materialising source".to_owned());
+    if job.job.cancel_requested() {
+        return IsolatedRun::Finished {
+            outcome: StepOutcome::Cancelled,
+            cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+            drafts,
+            captured: None,
+        };
+    }
+    let Some(candidate_input) = load_candidate_input(state, job, inputs) else {
+        return IsolatedRun::Finished {
+            outcome: StepOutcome::Failed {
+                category: FailureCategory::Definition,
+                error: Some("A sandbox-backed step needs a candidate input.".to_owned()),
+            },
+            cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+            drafts,
+            captured: None,
+        };
+    };
+    let workspace = match state
+        .workflow_workspaces
+        .create_attempt(job.run_id, attempt_id)
+    {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            let cleanup = if error.orphaned {
+                crate::workflows::run::AttemptCleanupRecord::Orphaned {
+                    sandbox: false,
+                    workspace: true,
+                }
+            } else {
+                crate::workflows::run::AttemptCleanupRecord::Complete
+            };
+            return IsolatedRun::Finished {
+                outcome: fail_for_orphan(
+                    StepOutcome::Failed {
+                        category: FailureCategory::Operational,
+                        error: Some(
+                            "Power Plant could not create the attempt workspace.".to_owned(),
+                        ),
+                    },
+                    &cleanup,
+                ),
+                cleanup,
+                drafts,
+                captured: None,
+            };
+        }
+    };
+    let hash = candidate_input.artefact_hash;
+    if crate::workflows::artefacts::CandidateMaterialise::into_workspace(
+        &workspace.project,
+        &candidate_input.artefact,
+        hash,
+        &state.workflow_artefacts,
+    )
+    .is_err()
+    {
+        let (outcome, cleanup) = finish_workspace_only(
+            workspace,
+            StepOutcome::Failed {
+                category: FailureCategory::Operational,
+                error: Some("Power Plant could not materialise the source tree.".to_owned()),
+            },
+        );
+        return IsolatedRun::Finished {
+            outcome,
+            cleanup,
+            drafts,
+            captured: None,
+        };
+    }
+    let user_project = match job
+        .host_policy
+        .grants()
+        .iter()
+        .find(|grant| grant.alias == job.host_policy.primary_alias())
+    {
+        Some(grant) => grant.host_path.clone(),
+        None => {
+            let (outcome, cleanup) = finish_workspace_only(
+                workspace,
+                StepOutcome::Failed {
+                    category: FailureCategory::Operational,
+                    error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+                },
+            );
+            return IsolatedRun::Finished {
+                outcome,
+                cleanup,
+                drafts,
+                captured: None,
+            };
+        }
+    };
+    let git_dir = user_project.join(".git");
+    if candidate_input.artefact.git_admin
+        != match crate::workflows::artefacts::candidate::git_fingerprint(&git_dir) {
+            Ok(value) => value,
+            Err(_) => {
+                let (outcome, cleanup) = finish_workspace_only(
+                    workspace,
+                    StepOutcome::Failed {
+                        category: FailureCategory::Operational,
+                        error: Some("The Git directory changed before that step.".to_owned()),
+                    },
+                );
+                return IsolatedRun::Finished {
+                    outcome,
+                    cleanup,
+                    drafts,
+                    captured: None,
+                };
+            }
+        }
+    {
+        let (outcome, cleanup) = finish_workspace_only(
+            workspace,
+            StepOutcome::Failed {
+                category: FailureCategory::Operational,
+                error: Some("The Git directory changed before that step.".to_owned()),
+            },
+        );
+        return IsolatedRun::Finished {
+            outcome,
+            cleanup,
+            drafts,
+            captured: None,
+        };
+    }
+    let sandbox = state.sandboxes.attempt_handle(job.run_id, attempt_id);
+    if let Err(error) =
+        start_attempt_sandbox(state, job, step, capabilities, &workspace, sandbox.clone()).await
+    {
+        let outcome = if job.job.cancel_requested() {
+            StepOutcome::Cancelled
+        } else {
+            StepOutcome::Failed {
+                category: FailureCategory::Operational,
+                error: Some(error.to_owned()),
+            }
+        };
+        let (outcome, cleanup) =
+            cleanup_after_start_failure(state, attempt_id, sandbox, workspace, outcome).await;
+        return IsolatedRun::Finished {
+            outcome,
+            cleanup,
+            drafts,
+            captured: None,
+        };
+    }
+    let outcome = dispatch_step(state, job, step, &sandbox, drafts.clone()).await;
+    job.job.set_step_label("Capturing outputs".to_owned());
+    let stopped = sandbox.stop().await.is_ok();
+    let captured = if stopped {
+        crate::workflows::artefacts::CandidateCapture::capture_worktree(
+            &workspace.project,
+            &git_dir,
+            &candidate_input.artefact.git_admin,
+            &state.workflow_artefacts,
+        )
+        .ok()
+    } else {
+        None
+    };
+    job.job.set_step_label("Cleaning up".to_owned());
+    let sandbox_gone = if stopped {
+        sandbox.remove().await.is_ok()
+    } else {
+        false
+    };
+    if sandbox_gone {
+        state.sandboxes.drop_attempt(attempt_id);
+    } else {
+        state.sandboxes.expose_orphan(sandbox.name().to_owned());
+    }
+    let workspace_gone = if sandbox_gone {
+        workspace.destroy().is_ok()
+    } else {
+        false
+    };
+    let cleanup = if sandbox_gone && workspace_gone {
+        crate::workflows::run::AttemptCleanupRecord::Complete
+    } else {
+        crate::workflows::run::AttemptCleanupRecord::Orphaned {
+            sandbox: !sandbox_gone,
+            workspace: !workspace_gone,
+        }
+    };
+    let mut outcome = match (outcome, stopped, captured.is_some()) {
+        (StepOutcome::Completed, true, true) => StepOutcome::Completed,
+        (StepOutcome::Completed, _, _) => StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some("Power Plant could not capture isolated outputs.".to_owned()),
+        },
+        (other, _, _) => other,
+    };
+    outcome = fail_for_orphan(outcome, &cleanup);
+    IsolatedRun::Finished {
+        outcome,
+        cleanup,
+        drafts,
+        captured,
+    }
+}
+
+fn finish_workspace_only(
+    workspace: crate::workflows::workspace::AttemptWorkspace,
+    outcome: StepOutcome,
+) -> (StepOutcome, crate::workflows::run::AttemptCleanupRecord) {
+    let cleanup = if workspace.destroy().is_ok() {
+        crate::workflows::run::AttemptCleanupRecord::Complete
+    } else {
+        crate::workflows::run::AttemptCleanupRecord::Orphaned {
+            sandbox: false,
+            workspace: true,
+        }
+    };
+    let outcome = fail_for_orphan(outcome, &cleanup);
+    (outcome, cleanup)
+}
+
+async fn cleanup_after_start_failure(
+    state: &AppState,
+    attempt_id: AttemptId,
+    sandbox: Arc<GuestSandbox>,
+    workspace: crate::workflows::workspace::AttemptWorkspace,
+    outcome: StepOutcome,
+) -> (StepOutcome, crate::workflows::run::AttemptCleanupRecord) {
+    let stopped = sandbox.stop().await.is_ok();
+    let sandbox_gone = stopped && sandbox.remove().await.is_ok();
+    if sandbox_gone {
+        state.sandboxes.drop_attempt(attempt_id);
+    } else {
+        state.sandboxes.expose_orphan(sandbox.name().to_owned());
+    }
+    let workspace_gone = sandbox_gone && workspace.destroy().is_ok();
+    let cleanup = if sandbox_gone && workspace_gone {
+        crate::workflows::run::AttemptCleanupRecord::Complete
+    } else {
+        crate::workflows::run::AttemptCleanupRecord::Orphaned {
+            sandbox: !sandbox_gone,
+            workspace: !workspace_gone,
+        }
+    };
+    let outcome = fail_for_orphan(outcome, &cleanup);
+    (outcome, cleanup)
+}
+
+fn fail_for_orphan(
+    outcome: StepOutcome,
+    cleanup: &crate::workflows::run::AttemptCleanupRecord,
+) -> StepOutcome {
+    if matches!(
+        cleanup,
+        crate::workflows::run::AttemptCleanupRecord::Complete
+    ) {
+        outcome
+    } else {
+        StepOutcome::Failed {
+            category: FailureCategory::Cleanup,
+            error: Some("Power Plant could not clean up the isolated sandbox.".to_owned()),
+        }
+    }
+}
+
+struct LoadedCandidate {
+    artefact_hash: crate::workflows::artefacts::ArtefactHash,
+    artefact: crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+}
+
+fn load_candidate_input(
+    state: &AppState,
+    job: &WorkflowJob,
+    inputs: &[super::run::AttemptArtefactInput],
+) -> Option<LoadedCandidate> {
+    let input = inputs.iter().find(|input| {
+        input.artefact.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+    })?;
+    let run = state.workflow_runs.get(&job.run_id)?;
+    let record = run.artefact(&input.artefact.id)?;
+    let bytes = state.workflow_artefacts.get(&record.object_hash).ok()?;
+    let artefact =
+        crate::workflows::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(
+            &bytes,
+        )?;
+    Some(LoadedCandidate {
+        artefact_hash: record.artefact_hash,
+        artefact,
+    })
+}
+
+fn persist_cleanup(
+    state: &AppState,
+    run_id: &RunId,
+    attempt_id: AttemptId,
+    cleanup: crate::workflows::run::AttemptCleanupRecord,
+) -> Result<(), StoreError> {
+    state
+        .workflow_runs
+        .mutate(run_id, |run| run.record_cleanup(attempt_id, cleanup))
+        .map(|_| ())
+}
+
 async fn dispatch_step(
     state: &AppState,
     job: &WorkflowJob,
     step: &StepDefinition,
+    sandbox: &std::sync::Arc<GuestSandbox>,
     drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
 ) -> StepOutcome {
     match &step.action {
-        StepAction::Agent(action) => run_agent_step(state, job, action, drafts).await,
+        StepAction::Agent(action) => run_agent_step(state, job, action, sandbox, drafts).await,
         StepAction::SystemCommand(action) => {
-            run_system_command_step(&job.sandbox, &job.job, action.command).await
+            run_system_command_step(sandbox, &job.job, action.command).await
         }
     }
 }
@@ -209,6 +546,7 @@ async fn run_agent_step(
     state: &AppState,
     job: &WorkflowJob,
     action: &AgentStep,
+    sandbox: &std::sync::Arc<GuestSandbox>,
     drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
 ) -> StepOutcome {
     if let Some(record) = state.agents.get(&job.agent_id) {
@@ -290,7 +628,7 @@ async fn run_agent_step(
         tool_ids: action.authority.tools.clone(),
         policy,
         connection: job.connection.clone(),
-        sandbox: job.sandbox.clone(),
+        sandbox: sandbox.clone(),
         output_drafts: Some(drafts),
         required_outputs: action.required_outputs.clone(),
     };
@@ -459,10 +797,13 @@ fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
     }
 }
 
-async fn ensure_run_sandbox(
+async fn start_attempt_sandbox(
     state: &AppState,
     job: &WorkflowJob,
     step: &StepDefinition,
+    capabilities: &crate::workflows::capabilities::AttemptCapabilities,
+    workspace: &crate::workflows::workspace::AttemptWorkspace,
+    sandbox: std::sync::Arc<GuestSandbox>,
 ) -> Result<(), &'static str> {
     job.job.set_step_label("Preparing environment".to_owned());
     if job.job.cancel_requested() {
@@ -492,24 +833,79 @@ async fn ensure_run_sandbox(
         .environment_snapshots
         .restore_path(&environment.snapshot.artifact_key)
         .map_err(|_| "That environment snapshot is unavailable.")?;
-    let policy = match &step.action {
-        StepAction::Agent(action) => intersect_authority(&action.authority, &job.host_policy)
-            .map_err(|_| "The pinned step authority exceeds the current directory policy.")?,
-        StepAction::SystemCommand(_) => job.host_policy.clone(),
-    };
-    let spec = protect_git_mount(
-        crate::sandbox::SandboxSpec::from_policy(&policy, job.access.clone()),
-        &policy,
+    let user_project = job
+        .host_policy
+        .grants()
+        .iter()
+        .find(|grant| grant.alias == job.host_policy.primary_alias())
+        .ok_or("Choose a project directory.")?;
+    let spec = attempt_spec(
+        capabilities,
+        workspace,
+        &user_project.host_path,
+        &job.host_policy,
+        capabilities.guest_access(&job.connection),
     )?;
+    crate::sandbox::reject_user_project_write(&spec, &user_project.host_path)
+        .map_err(|error| error.message())?;
     if job.job.cancel_requested() {
         return Err("The task was cancelled.");
     }
-    job.sandbox
+    sandbox
         .start_from_snapshot(&path, environment.snapshot.snapshot_digest.as_str(), spec)
         .await
         .map_err(|error| error.message())?;
     job.job.set_step_label(step.name.clone());
     Ok(())
+}
+
+fn attempt_spec(
+    capabilities: &crate::workflows::capabilities::AttemptCapabilities,
+    workspace: &crate::workflows::workspace::AttemptWorkspace,
+    user_project: &std::path::Path,
+    host: &DirectoryPolicy,
+    access: crate::sandbox::GuestAccess,
+) -> Result<crate::sandbox::SandboxSpec, &'static str> {
+    let mut mounts = Vec::new();
+    let Some(primary) = capabilities.primary() else {
+        return Err("A sandbox-backed step needs a primary source.");
+    };
+    mounts.push(crate::sandbox::MountSpec {
+        guest: primary.guest_path.clone(),
+        host: workspace.project.clone(),
+        read_only: !primary.access.is_writable(),
+    });
+    let git = user_project.join(".git");
+    if !git.is_dir() {
+        return Err("The project is not a supported Git worktree.");
+    }
+    mounts.push(crate::sandbox::MountSpec {
+        guest: format!("{}/.git", primary.guest_path),
+        host: git,
+        read_only: true,
+    });
+    for directory in &capabilities.directories {
+        if directory.role != crate::workflows::capabilities::DirectoryRole::SecondaryContext {
+            continue;
+        }
+        let Some(grant) = host
+            .grants()
+            .iter()
+            .find(|grant| grant.alias == directory.alias)
+        else {
+            return Err("The pinned step authority exceeds the current directory policy.");
+        };
+        mounts.push(crate::sandbox::MountSpec {
+            guest: directory.guest_path.clone(),
+            host: grant.host_path.clone(),
+            read_only: true,
+        });
+    }
+    Ok(crate::sandbox::SandboxSpec {
+        mounts,
+        workdir: primary.guest_path.clone(),
+        access,
+    })
 }
 
 async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(), String> {
@@ -579,32 +975,6 @@ fn persist_initial_fail(state: &AppState, run_id: &RunId) -> Result<(), StoreErr
         .workflow_runs
         .mutate(run_id, |run| run.fail_before_attempt(at_ms))
         .map(|_| ())
-}
-
-fn protect_git_mount(
-    mut spec: crate::sandbox::SandboxSpec,
-    policy: &DirectoryPolicy,
-) -> Result<crate::sandbox::SandboxSpec, &'static str> {
-    let Some(primary) = policy
-        .grants()
-        .iter()
-        .find(|grant| grant.alias == policy.primary_alias())
-    else {
-        return Ok(spec);
-    };
-    if !primary.access.is_writable() {
-        return Ok(spec);
-    }
-    let git = primary.host_path.join(".git");
-    if !git.is_dir() {
-        return Ok(spec);
-    }
-    spec.mounts.push(crate::sandbox::MountSpec {
-        guest: format!("{}/.git", primary.guest_path),
-        host: git,
-        read_only: true,
-    });
-    Ok(spec)
 }
 
 fn resolve_inputs(
@@ -709,52 +1079,7 @@ fn candidate_hash_of(
     }
 }
 
-fn capture_matches_input(
-    state: &AppState,
-    job: &WorkflowJob,
-    inputs: &[super::run::AttemptArtefactInput],
-) -> Result<(), &'static str> {
-    let Some(expected) = inputs
-        .iter()
-        .find(|input| {
-            input.artefact.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
-        })
-        .and_then(|input| {
-            state
-                .workflow_runs
-                .get(&job.run_id)
-                .and_then(|run| run.artefact(&input.artefact.id).cloned())
-        })
-        .and_then(|record| candidate_hash_of(&record))
-    else {
-        return Ok(());
-    };
-    let captured = capture_project(state, job)?;
-    if captured.candidate_hash != expected {
-        return Err("The project changed before that step.");
-    }
-    Ok(())
-}
-
-fn capture_project(
-    state: &AppState,
-    job: &WorkflowJob,
-) -> Result<crate::workflows::artefacts::candidate::CandidateRevisionArtefact, &'static str> {
-    let host = job
-        .host_policy
-        .grants()
-        .iter()
-        .find(|grant| grant.alias == job.host_policy.primary_alias())
-        .ok_or("Choose a project directory.")?;
-    match crate::workflows::artefacts::CandidateCapture::capture_host(
-        &host.host_path,
-        &state.workflow_artefacts,
-    ) {
-        Ok(captured) => Ok(captured),
-        Err(error) => Err(error.message()),
-    }
-}
-
+#[allow(clippy::too_many_arguments)]
 async fn finalise_attempt(
     state: &AppState,
     job: &WorkflowJob,
@@ -762,18 +1087,22 @@ async fn finalise_attempt(
     attempt_id: AttemptId,
     inputs: &[super::run::AttemptArtefactInput],
     drafts: &std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>,
+    captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
     outcome: &StepOutcome,
 ) -> Result<(), StoreError> {
     match outcome {
         StepOutcome::Cancelled => persist_cancel(state, &job.run_id),
         StepOutcome::Failed { category, .. } => {
             if step.writes_primary_source() {
-                let _ = record_observed(state, job, attempt_id, step, inputs);
+                record_observed(state, job, attempt_id, step, inputs, captured)
+                    .map_err(|_| StoreError::Persist)?;
             }
             persist_fail(state, &job.run_id, Some(attempt_id), *category)
         }
         StepOutcome::Completed => {
-            if let Err(error) = publish_success(state, job, step, attempt_id, inputs, drafts) {
+            if let Err(error) =
+                publish_success(state, job, step, attempt_id, inputs, drafts, captured)
+            {
                 persist_fail(
                     state,
                     &job.run_id,
@@ -794,12 +1123,16 @@ fn record_observed(
     attempt_id: AttemptId,
     step: &StepDefinition,
     inputs: &[super::run::AttemptArtefactInput],
+    captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
 ) -> Result<(), &'static str> {
-    let captured = capture_project(state, job)?;
+    let Some(captured) = captured else {
+        return record_unknown_observed(state, &job.run_id, attempt_id)
+            .map_err(|_| OPERATIONAL_STORE_ERROR);
+    };
     let record = publish_candidate(
         state,
         job,
-        &captured,
+        captured,
         crate::workflows::artefacts::ArtefactProducer::StepAttempt {
             attempt_id,
             step: step.key.clone(),
@@ -808,26 +1141,39 @@ fn record_observed(
         },
         inputs,
     )?;
-    let reference = super::artefacts::ArtefactReference {
-        id: record.id,
-        kind: record.kind,
-        artefact_hash: record.artefact_hash,
+    let observed = super::run::ObservedCandidate::Exact {
+        artefact: super::artefacts::ArtefactReference {
+            id: record.id,
+            kind: record.kind,
+            artefact_hash: record.artefact_hash,
+        },
     };
     state
         .workflow_runs
         .mutate(&job.run_id, |run| {
-            run.record_attempt_outputs(
-                attempt_id,
-                vec![record],
-                Vec::new(),
-                None,
-                super::run::ObservedCandidate::Exact {
-                    artefact: reference,
-                },
-            )
+            run.record_attempt_outputs(attempt_id, vec![record], Vec::new(), None, observed)
         })
         .map(|_| ())
         .map_err(|_| OPERATIONAL_STORE_ERROR)
+}
+
+fn record_unknown_observed(
+    state: &AppState,
+    run_id: &RunId,
+    attempt_id: AttemptId,
+) -> Result<(), StoreError> {
+    state
+        .workflow_runs
+        .mutate(run_id, |run| {
+            run.record_attempt_outputs(
+                attempt_id,
+                Vec::new(),
+                Vec::new(),
+                None,
+                super::run::ObservedCandidate::Unknown,
+            )
+        })
+        .map(|_| ())
 }
 
 fn publish_success(
@@ -837,8 +1183,9 @@ fn publish_success(
     attempt_id: AttemptId,
     inputs: &[super::run::AttemptArtefactInput],
     drafts: &std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>,
+    captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
 ) -> Result<(), &'static str> {
-    let captured = capture_project(state, job)?;
+    let captured = captured.ok_or("Power Plant could not capture isolated outputs.")?;
     let writes = step.writes_primary_source();
     let expected = inputs
         .iter()
@@ -875,7 +1222,7 @@ fn publish_success(
         let record = publish_candidate(
             state,
             job,
-            &captured,
+            captured,
             crate::workflows::artefacts::ArtefactProducer::StepAttempt {
                 attempt_id,
                 step: step.key.clone(),
@@ -1088,12 +1435,14 @@ fn persist_start(
     run_id: &RunId,
     attempt_id: AttemptId,
     inputs: Vec<super::run::AttemptArtefactInput>,
+    capabilities: crate::workflows::capabilities::AttemptCapabilities,
+    sandbox: crate::workflows::run::AttemptSandboxRecord,
 ) -> Result<(), StoreError> {
     let at_ms = now_ms();
     state
         .workflow_runs
         .mutate(run_id, |run| {
-            run.start_attempt_with_inputs(attempt_id, inputs, at_ms)
+            run.start_attempt(attempt_id, inputs, capabilities, sandbox, at_ms)
         })
         .map(|_| ())
 }
@@ -1145,10 +1494,6 @@ fn persist_cancel(state: &AppState, run_id: &RunId) -> Result<(), StoreError> {
 }
 
 fn fail_operational(state: &AppState, workflow: &WorkflowJob) {
-    let sandbox = workflow.sandbox.clone();
-    tokio::spawn(async move {
-        let _ = sandbox.remove().await;
-    });
     settle_job(
         state,
         workflow,

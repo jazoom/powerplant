@@ -116,6 +116,61 @@ pub(crate) fn confined_child(root: &Path, name: &str) -> Result<PathBuf, Persist
     Ok(path)
 }
 
+pub(crate) fn remove_tree_nofollow(path: &Path) -> Result<(), PersistError> {
+    use cap_std::ambient_authority;
+    use cap_std::fs::Dir;
+
+    let parent = path.parent().ok_or(PersistError)?;
+    let name = path.file_name().ok_or(PersistError)?;
+    let parent = Dir::open_ambient_dir(parent, ambient_authority()).map_err(|_| PersistError)?;
+    let Some(entry) = parent
+        .entries()
+        .map_err(|_| PersistError)?
+        .find_map(|entry| {
+            let entry = entry.ok()?;
+            (entry.file_name() == name).then_some(entry)
+        })
+    else {
+        return Ok(());
+    };
+    remove_entry_nofollow(entry)
+}
+
+fn remove_entry_nofollow(entry: cap_std::fs::DirEntry) -> Result<(), PersistError> {
+    match open_entry_dir_nofollow(&entry) {
+        Ok(dir) => {
+            let entries: Vec<_> = dir
+                .entries()
+                .map_err(|_| PersistError)?
+                .collect::<Result<_, _>>()
+                .map_err(|_| PersistError)?;
+            for child in entries {
+                remove_entry_nofollow(child)?;
+            }
+            dir.remove_open_dir().map_err(|_| PersistError)
+        }
+        Err(_) => match entry.remove_file() {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(PersistError),
+        },
+    }
+}
+
+fn open_entry_dir_nofollow(entry: &cap_std::fs::DirEntry) -> io::Result<cap_std::fs::Dir> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        const O_DIRECTORY: i32 = 0o200000;
+        const O_NOFOLLOW: i32 = 0o400000;
+        options.custom_flags(O_DIRECTORY | O_NOFOLLOW);
+    }
+    let file = entry.open_with(&options)?;
+    Ok(cap_std::fs::Dir::from_std_file(file.into_std()))
+}
+
 pub(crate) fn create_private_file(path: &Path) -> Result<(), PersistError> {
     let dir = path.parent().ok_or(PersistError)?;
     ensure_private_dir(dir)?;

@@ -59,6 +59,10 @@
         <p class="text-sm">Current step: {{ current_step }}</p>
       {% endif %}
       <p class="text-quiet text-xs">{{ created }}</p>
+      <p class="text-quiet text-sm">
+        Each step ran in a new isolated sandbox. Project files on this machine
+        stay unchanged until a later commit step.
+      </p>
       <section class="space-y-2">
         <h2 class="text-base font-semibold">Steps</h2>
         <ol class="list-decimal space-y-1 pl-5">
@@ -118,6 +122,14 @@
                 {% if attempt.result != "" %}
                   <p class="text-sm">{{ attempt.result }}</p>
                 {% endif %}
+                <p class="text-quiet text-xs">Tools: {{ attempt.tools }}</p>
+                <p class="text-quiet text-xs">
+                  Primary source: {{ attempt.primary_access }}
+                </p>
+                <p class="text-quiet text-xs">
+                  Git administrative access: {{ attempt.git_admin }}
+                </p>
+                <p class="text-quiet text-xs">Network: {{ attempt.network }}</p>
               </li>
             {% endfor %}
           </ul>

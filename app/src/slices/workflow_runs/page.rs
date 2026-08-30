@@ -17,6 +17,10 @@ pub(super) struct AttemptView {
     pub(super) started: String,
     pub(super) finished: String,
     pub(super) result: String,
+    pub(super) tools: String,
+    pub(super) primary_access: &'static str,
+    pub(super) git_admin: &'static str,
+    pub(super) network: &'static str,
 }
 
 pub(super) struct StepView {
@@ -157,6 +161,10 @@ impl RunDetailView {
                         .as_ref()
                         .map(|result| result.as_label())
                         .unwrap_or_default(),
+                    tools: attempt.capabilities.tools_label(),
+                    primary_access: attempt.capabilities.primary_access_label(),
+                    git_admin: "read-only",
+                    network: attempt.capabilities.network_label(),
                 })
                 .collect(),
             artefacts: artefact_rows(run),
@@ -342,7 +350,7 @@ fn candidate_preview(
     else {
         return (String::new(), false);
     };
-    let before = record
+    let before_entries = record
         .provenance
         .inputs
         .iter()
@@ -355,12 +363,13 @@ fn candidate_preview(
             crate::workflows::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(
                 &bytes,
             )
+            .map(|artefact| artefact.entries)
         })
         .unwrap_or_default();
     let (text, truncated) = crate::workflows::artefacts::candidate::preview_plain(
         &state.workflow_artefacts,
-        &before,
-        &after,
+        &before_entries,
+        &after.entries,
     );
     (crate::markdown::escape_plain(&text), truncated)
 }

@@ -77,6 +77,38 @@ async fn a_failed_command_records_the_guest_program() {
     assert_eq!(code, Some(1));
 }
 
+#[tokio::test]
+async fn equal_snapshot_starts_never_reuse_an_attempt_guest() {
+    let fleet = super::SandboxFleet::for_test();
+    let run = crate::workflows::RunId::generate().expect("run");
+    let attempt = crate::workflows::AttemptId::generate().expect("attempt");
+    let sandbox = fleet.attempt_handle(run, attempt);
+    let dir = tempfile::tempdir().expect("workspace");
+    let spec = spec(dir.path());
+
+    sandbox
+        .start_from_snapshot(Path::new("snapshot"), "sha256:deadbeef", spec.clone())
+        .await
+        .expect("start");
+    sandbox
+        .start_from_snapshot(Path::new("snapshot"), "sha256:deadbeef", spec)
+        .await
+        .expect("restart");
+
+    assert_eq!(sandbox.start_count(), 2);
+    assert_eq!(sandbox.view().await.status, super::GuestStatus::Running);
+}
+
+#[test]
+fn writable_user_project_mounts_are_rejected() {
+    let project = tempfile::tempdir().expect("project");
+    let spec = spec(project.path());
+    assert!(matches!(
+        super::reject_user_project_write(&spec, &spec.mounts[0].host),
+        Err(SandboxError::UserProjectWrite)
+    ));
+}
+
 #[test]
 fn stale_mounts_are_rejected() {
     let sandbox_spec = SandboxSpec {

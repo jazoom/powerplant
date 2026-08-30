@@ -1,4 +1,5 @@
 pub(crate) mod artefacts;
+pub(crate) mod capabilities;
 mod catalogue;
 pub(crate) mod definition;
 mod execution;
@@ -6,8 +7,10 @@ mod executor;
 mod id;
 mod resolve;
 pub(crate) mod run;
+
 pub(crate) mod seeds;
 mod store;
+pub(crate) mod workspace;
 
 pub(crate) use artefacts::WorkflowArtefactRepository;
 pub(crate) use catalogue::{
@@ -16,7 +19,7 @@ pub(crate) use catalogue::{
 };
 pub(crate) use execution::WorkflowExecution;
 pub(crate) use executor::{WorkflowJob, execute_run};
-pub(crate) use id::{ArtefactId, RunId, WorkflowId};
+pub(crate) use id::{ArtefactId, AttemptId, RunId, WorkflowId};
 #[cfg(test)]
 pub(crate) use resolve::test_set as test_environment_set;
 pub(crate) use resolve::{preview_environments, resolve_environments};

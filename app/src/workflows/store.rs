@@ -87,6 +87,21 @@ impl WorkflowRunStore {
         self.lock().get(id).cloned()
     }
 
+    pub(crate) fn pending_cleanup_attempts(&self) -> Vec<(RunId, super::id::AttemptId)> {
+        self.lock()
+            .values()
+            .flat_map(|run| {
+                run.attempts
+                    .iter()
+                    .filter(|attempt| {
+                        matches!(attempt.cleanup, super::run::AttemptCleanupRecord::Pending)
+                    })
+                    .map(|attempt| (run.id, attempt.id))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     pub(crate) fn summaries(&self) -> Vec<RunSummary> {
         let mut summaries: Vec<RunSummary> = self.lock().values().map(summary_of).collect();
         summaries.sort_by(|left, right| {

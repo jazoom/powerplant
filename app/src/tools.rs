@@ -158,6 +158,12 @@ pub(crate) async fn invoke(
     name: &str,
     arguments: &serde_json::Value,
 ) -> ToolTrace {
+    if context.job.cancel_requested() {
+        return ToolTrace {
+            label: name.to_owned(),
+            output: "Stopped.".to_owned(),
+        };
+    }
     if name == SUBMIT_WORKFLOW_OUTPUT {
         return submit_output(context, arguments);
     }

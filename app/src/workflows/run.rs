@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{AccessMode, ToolId};
 use crate::environments::snapshot::{OciManifestDigest, RecordedIntegrity, SnapshotArtifactKey};
 use crate::environments::{
     EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
 };
 
 use super::artefacts::{ArtefactRecord, ArtefactReference};
+use super::capabilities::{
+    AttemptCapabilities, CapabilityDirectory, DirectoryRole, NetworkCapability, SecretPresence,
+};
 use super::definition::{
     DefinitionFile, DefinitionVersion, InputKey, OutputKey, PinnedWorkflowDefinition, StepAction,
     StepDefinition, StepKey, SuccessTransition, WorkflowDefinition,
@@ -113,6 +117,9 @@ pub(crate) struct AttemptRecord {
     pub(crate) result: Option<AttemptResult>,
     pub(crate) inputs: Vec<AttemptArtefactInput>,
     pub(crate) outputs: Vec<AttemptArtefactOutput>,
+    pub(crate) capabilities: AttemptCapabilities,
+    pub(crate) sandbox: AttemptSandboxRecord,
+    pub(crate) cleanup: AttemptCleanupRecord,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,6 +144,26 @@ pub(crate) enum FailureCategory {
     Command,
     Operational,
     Definition,
+    Cleanup,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttemptSandboxRecord {
+    pub(crate) kind: AttemptSandboxKind,
+    pub(crate) snapshot_digest: SnapshotDigest,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AttemptSandboxKind {
+    IsolatedAttempt,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum AttemptCleanupRecord {
+    Pending,
+    Complete,
+    Orphaned { sandbox: bool, workspace: bool },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,10 +216,45 @@ struct AttemptFile {
     finished_at_ms: Option<u64>,
     state: String,
     result: Option<AttemptResultFile>,
-    #[serde(default)]
     inputs: Vec<AttemptInputFile>,
-    #[serde(default)]
     outputs: Vec<AttemptOutputFile>,
+    capabilities: AttemptCapabilitiesFile,
+    sandbox: AttemptSandboxFile,
+    cleanup: AttemptCleanupFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct AttemptCapabilitiesFile {
+    tools: Vec<String>,
+    directories: Vec<CapabilityDirectoryFile>,
+    git_admin: String,
+    network: String,
+    secret: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct CapabilityDirectoryFile {
+    alias: String,
+    guest_path: String,
+    access: String,
+    role: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct AttemptSandboxFile {
+    kind: String,
+    snapshot_digest: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum AttemptCleanupFile {
+    Pending,
+    Complete,
+    Orphaned { sandbox: bool, workspace: bool },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -433,6 +495,9 @@ impl WorkflowRun {
     pub(crate) fn start_attempt(
         &mut self,
         attempt_id: AttemptId,
+        inputs: Vec<AttemptArtefactInput>,
+        capabilities: AttemptCapabilities,
+        sandbox: AttemptSandboxRecord,
         at_ms: u64,
     ) -> Result<(), TransitionError> {
         if !self.accepts_time(at_ms) {
@@ -454,6 +519,20 @@ impl WorkflowRun {
         let Some(definition_step) = self.pinned.definition.step(&step) else {
             return Err(TransitionError::Invalid);
         };
+        if !capabilities_match_step(&capabilities, definition_step) {
+            return Err(TransitionError::Invalid);
+        }
+        let expected = self
+            .environments
+            .steps
+            .iter()
+            .find(|item| item.step == step)
+            .map(|item| &item.snapshot_digest);
+        if expected != Some(&sandbox.snapshot_digest)
+            || sandbox.kind != AttemptSandboxKind::IsolatedAttempt
+        {
+            return Err(TransitionError::Invalid);
+        }
         let ordinal = next_ordinal(&self.attempts, &step);
         self.attempts.push(AttemptRecord {
             id: attempt_id,
@@ -464,8 +543,11 @@ impl WorkflowRun {
             finished_at_ms: None,
             state: AttemptState::Active,
             result: None,
-            inputs: Vec::new(),
+            inputs,
             outputs: Vec::new(),
+            capabilities,
+            sandbox,
+            cleanup: AttemptCleanupRecord::Pending,
         });
         let from = self.state.clone();
         let to = RunState::Active {
@@ -476,16 +558,25 @@ impl WorkflowRun {
         Ok(())
     }
 
-    pub(crate) fn start_attempt_with_inputs(
+    pub(crate) fn record_cleanup(
         &mut self,
         attempt_id: AttemptId,
-        inputs: Vec<AttemptArtefactInput>,
-        at_ms: u64,
+        cleanup: AttemptCleanupRecord,
     ) -> Result<(), TransitionError> {
-        self.start_attempt(attempt_id, at_ms)?;
-        if let Some(attempt) = self.attempts.iter_mut().find(|item| item.id == attempt_id) {
-            attempt.inputs = inputs;
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id)
+        else {
+            return Err(TransitionError::Invalid);
+        };
+        if !matches!(attempt.cleanup, AttemptCleanupRecord::Pending) {
+            return Err(TransitionError::Invalid);
         }
+        if matches!(cleanup, AttemptCleanupRecord::Pending) {
+            return Err(TransitionError::Invalid);
+        }
+        attempt.cleanup = cleanup;
         Ok(())
     }
 
@@ -548,6 +639,12 @@ impl WorkflowRun {
             .ok_or(TransitionError::Invalid)?;
         let on_success = definition_step.on_success.clone();
         let expected_outputs = required_output_keys(&definition_step.action);
+        let Some(attempt) = self.attempts.iter().find(|item| item.id == attempt_id) else {
+            return Err(TransitionError::Invalid);
+        };
+        if attempt.cleanup != AttemptCleanupRecord::Complete {
+            return Err(TransitionError::Invalid);
+        }
         self.finish_attempt(
             attempt_id,
             at_ms,
@@ -599,6 +696,12 @@ impl WorkflowRun {
         if attempt != attempt_id {
             return Err(TransitionError::Invalid);
         }
+        let Some(record) = self.attempts.iter().find(|item| item.id == attempt_id) else {
+            return Err(TransitionError::Invalid);
+        };
+        if matches!(record.cleanup, AttemptCleanupRecord::Pending) {
+            return Err(TransitionError::Invalid);
+        }
         self.finish_attempt(
             attempt_id,
             at_ms,
@@ -631,6 +734,12 @@ impl WorkflowRun {
                 Ok(())
             }
             RunState::Active { attempt, .. } => {
+                let Some(record) = self.attempts.iter().find(|item| item.id == attempt) else {
+                    return Err(TransitionError::Invalid);
+                };
+                if matches!(record.cleanup, AttemptCleanupRecord::Pending) {
+                    return Err(TransitionError::Invalid);
+                }
                 self.finish_attempt(
                     attempt,
                     at_ms,
@@ -889,6 +998,7 @@ impl WorkflowRun {
                 return Err(RunRecordError::Corrupt);
             }
             validate_attempt_result(attempt, step)?;
+            validate_attempt_isolation(attempt, step, self)?;
         }
         validate_transitions(
             self.created_at_ms,
@@ -978,6 +1088,12 @@ impl AttemptRecord {
                     artefact: ref_to_file(&output.artefact),
                 })
                 .collect(),
+            capabilities: capabilities_to_file(&self.capabilities),
+            sandbox: AttemptSandboxFile {
+                kind: self.sandbox.kind.as_str().to_owned(),
+                snapshot_digest: self.sandbox.snapshot_digest.as_str().to_owned(),
+            },
+            cleanup: cleanup_to_file(&self.cleanup),
         }
     }
 
@@ -1004,6 +1120,14 @@ impl AttemptRecord {
                 .into_iter()
                 .map(output_from_file)
                 .collect::<Result<Vec<_>, _>>()?,
+            capabilities: capabilities_from_file(file.capabilities)?,
+            sandbox: AttemptSandboxRecord {
+                kind: AttemptSandboxKind::parse(&file.sandbox.kind)
+                    .ok_or(RunRecordError::Corrupt)?,
+                snapshot_digest: SnapshotDigest::parse(&file.sandbox.snapshot_digest)
+                    .ok_or(RunRecordError::Corrupt)?,
+            },
+            cleanup: cleanup_from_file(file.cleanup)?,
         })
     }
 }
@@ -1085,6 +1209,7 @@ impl FailureCategory {
             "command" => Some(Self::Command),
             "operational" => Some(Self::Operational),
             "definition" => Some(Self::Definition),
+            "cleanup" => Some(Self::Cleanup),
             _ => None,
         }
     }
@@ -1097,6 +1222,7 @@ impl FailureCategory {
             Self::Command => "command",
             Self::Operational => "operational",
             Self::Definition => "definition",
+            Self::Cleanup => "cleanup",
         }
     }
 
@@ -1108,6 +1234,7 @@ impl FailureCategory {
             Self::Command => "command",
             Self::Operational => "operational",
             Self::Definition => "definition",
+            Self::Cleanup => "cleanup",
         }
     }
 }
@@ -1617,6 +1744,194 @@ fn validate_attempt_result(
             Ok(())
         }
         _ => Err(RunRecordError::Corrupt),
+    }
+}
+
+fn validate_attempt_isolation(
+    attempt: &AttemptRecord,
+    step: &StepDefinition,
+    run: &WorkflowRun,
+) -> Result<(), RunRecordError> {
+    if attempt.sandbox.kind != AttemptSandboxKind::IsolatedAttempt {
+        return Err(RunRecordError::Corrupt);
+    }
+    let Some(binding) = run
+        .environments
+        .steps
+        .iter()
+        .find(|item| item.step == attempt.step)
+    else {
+        return Err(RunRecordError::Corrupt);
+    };
+    if attempt.sandbox.snapshot_digest != binding.snapshot_digest {
+        return Err(RunRecordError::Corrupt);
+    }
+    if attempt.capabilities.git_admin != AccessMode::ReadOnly {
+        return Err(RunRecordError::Corrupt);
+    }
+    match attempt.action_kind {
+        ActionKind::SystemCommand => {
+            if attempt.capabilities.network != NetworkCapability::None
+                || attempt.capabilities.secret != SecretPresence::None
+                || !attempt.capabilities.tools.is_empty()
+            {
+                return Err(RunRecordError::Corrupt);
+            }
+        }
+        ActionKind::Agent => {}
+    }
+    if !capabilities_match_step(&attempt.capabilities, step) {
+        return Err(RunRecordError::Corrupt);
+    }
+    match (&attempt.state, &attempt.cleanup) {
+        (AttemptState::Completed, AttemptCleanupRecord::Complete) => {}
+        (AttemptState::Active, AttemptCleanupRecord::Pending) => {}
+        (
+            AttemptState::Interrupted,
+            AttemptCleanupRecord::Pending
+            | AttemptCleanupRecord::Complete
+            | AttemptCleanupRecord::Orphaned { .. },
+        ) => {}
+        (
+            AttemptState::Failed | AttemptState::Cancelled,
+            AttemptCleanupRecord::Complete | AttemptCleanupRecord::Orphaned { .. },
+        ) => {}
+        _ => return Err(RunRecordError::Corrupt),
+    }
+    Ok(())
+}
+
+fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefinition) -> bool {
+    if capabilities.git_admin != AccessMode::ReadOnly {
+        return false;
+    }
+    match &step.action {
+        StepAction::Agent(action) => {
+            capabilities
+                .tools
+                .iter()
+                .all(|tool| action.authority.tools.contains(tool))
+                && capabilities.directories.iter().all(|directory| {
+                    valid_guest_path(&directory.guest_path)
+                        && action
+                            .authority
+                            .directories
+                            .iter()
+                            .any(|item| item.alias == directory.alias)
+                })
+        }
+        StepAction::SystemCommand(_) => {
+            capabilities.tools.is_empty()
+                && capabilities.network == NetworkCapability::None
+                && capabilities.secret == SecretPresence::None
+                && capabilities.directories.iter().all(|directory| {
+                    valid_guest_path(&directory.guest_path)
+                        && directory.access == AccessMode::ReadOnly
+                })
+        }
+    }
+}
+
+fn valid_guest_path(path: &str) -> bool {
+    (path == crate::agents::GUEST_PROJECT || path.starts_with("/access/"))
+        && !path.contains('\\')
+        && !path.contains(':')
+        && !path.contains("..")
+        && !path.contains("workflow-workspaces")
+}
+
+fn capabilities_to_file(capabilities: &AttemptCapabilities) -> AttemptCapabilitiesFile {
+    AttemptCapabilitiesFile {
+        tools: capabilities
+            .tools
+            .iter()
+            .map(|tool| tool.as_str().to_owned())
+            .collect(),
+        directories: capabilities
+            .directories
+            .iter()
+            .map(|directory| CapabilityDirectoryFile {
+                alias: directory.alias.clone(),
+                guest_path: directory.guest_path.clone(),
+                access: directory.access.as_str().to_owned(),
+                role: directory.role.as_str().to_owned(),
+            })
+            .collect(),
+        git_admin: capabilities.git_admin.as_str().to_owned(),
+        network: capabilities.network.as_str().to_owned(),
+        secret: capabilities.secret.as_str().to_owned(),
+    }
+}
+
+fn capabilities_from_file(
+    file: AttemptCapabilitiesFile,
+) -> Result<AttemptCapabilities, RunRecordError> {
+    let git_admin = AccessMode::parse(&file.git_admin).ok_or(RunRecordError::Corrupt)?;
+    if git_admin != AccessMode::ReadOnly {
+        return Err(RunRecordError::Corrupt);
+    }
+    let mut tools = Vec::new();
+    for name in file.tools {
+        let tool = ToolId::parse(&name).ok_or(RunRecordError::Corrupt)?;
+        if tools.contains(&tool) {
+            return Err(RunRecordError::Corrupt);
+        }
+        tools.push(tool);
+    }
+    let mut directories = Vec::new();
+    for directory in file.directories {
+        if !valid_guest_path(&directory.guest_path) {
+            return Err(RunRecordError::Corrupt);
+        }
+        directories.push(CapabilityDirectory {
+            alias: directory.alias,
+            guest_path: directory.guest_path,
+            access: AccessMode::parse(&directory.access).ok_or(RunRecordError::Corrupt)?,
+            role: DirectoryRole::parse(&directory.role).ok_or(RunRecordError::Corrupt)?,
+        });
+    }
+    Ok(AttemptCapabilities {
+        tools,
+        directories,
+        git_admin,
+        network: NetworkCapability::parse(&file.network).ok_or(RunRecordError::Corrupt)?,
+        secret: SecretPresence::parse(&file.secret).ok_or(RunRecordError::Corrupt)?,
+    })
+}
+
+fn cleanup_to_file(cleanup: &AttemptCleanupRecord) -> AttemptCleanupFile {
+    match cleanup {
+        AttemptCleanupRecord::Pending => AttemptCleanupFile::Pending,
+        AttemptCleanupRecord::Complete => AttemptCleanupFile::Complete,
+        AttemptCleanupRecord::Orphaned { sandbox, workspace } => AttemptCleanupFile::Orphaned {
+            sandbox: *sandbox,
+            workspace: *workspace,
+        },
+    }
+}
+
+fn cleanup_from_file(file: AttemptCleanupFile) -> Result<AttemptCleanupRecord, RunRecordError> {
+    Ok(match file {
+        AttemptCleanupFile::Pending => AttemptCleanupRecord::Pending,
+        AttemptCleanupFile::Complete => AttemptCleanupRecord::Complete,
+        AttemptCleanupFile::Orphaned { sandbox, workspace } => {
+            AttemptCleanupRecord::Orphaned { sandbox, workspace }
+        }
+    })
+}
+
+impl AttemptSandboxKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::IsolatedAttempt => "isolated-attempt",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "isolated-attempt" => Some(Self::IsolatedAttempt),
+            _ => None,
+        }
     }
 }
 

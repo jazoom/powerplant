@@ -18,7 +18,6 @@ use crate::{
     agents::{AgentId, AgentRecord, DirectoryPolicy},
     error::AppResult,
     responses,
-    sandbox::GuestAccess,
     sessions::{self, BeginTurnError, JobIdError, OptionalSession, SessionId, SessionSnapshot},
     state::AppState,
     workflows::{
@@ -189,8 +188,6 @@ async fn send(
         )
         .await;
     }
-    let access = GuestAccess::from_connection(&connection);
-
     let resolved = match state.workflows.resolve(&selection) {
         Ok(resolved) => resolved,
         Err(error) => {
@@ -253,12 +250,6 @@ async fn send(
     let run_id = workflows::RunId::generate()
         .map_err(|error| crate::error::AppError::new("create workflow run identifier", error))?;
     let workflow_name = resolved.pinned.definition.name().to_owned();
-    let step_name = resolved
-        .pinned
-        .definition
-        .step(resolved.pinned.definition.first_step())
-        .map(|step| step.name.clone())
-        .unwrap_or_default();
     let pinned = resolved.pinned;
     let started = match state
         .sessions
@@ -292,7 +283,7 @@ async fn send(
         .sessions
         .set_preferred_workflow(&session, record.id, selection.workflow_id);
     started.job.set_workflow_name(workflow_name);
-    started.job.set_step_label(step_name);
+    started.job.set_step_label("Source capture".to_owned());
     tokio::spawn(workflows::execute_run(
         state.clone(),
         WorkflowJob {
@@ -300,11 +291,9 @@ async fn send(
             session_id: session,
             agent_id: record.id,
             connection,
-            sandbox: state.sandboxes.run_handle(run_id),
             host_policy: policy,
             turns: started.turns.clone(),
             job: started.job.clone(),
-            access,
         },
         lease,
         execution,
@@ -575,7 +564,7 @@ fn accept_job_patch(
         &JobObserveContents::observing(
             job_id,
             0,
-            "Writing",
+            run_step,
             "",
             agent_id,
             run_id,

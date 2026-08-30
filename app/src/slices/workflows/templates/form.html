@@ -358,6 +358,10 @@
                 </fieldset>
                 <fieldset class="space-y-3">
                   <legend class="text-sm">Guest access</legend>
+                  <p class="text-quiet text-xs">
+                    Write access applies to an isolated sandbox. It does not
+                    change the project on this machine.
+                  </p>
                   {% for directory in step.directories %}
                     <div
                       class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-2"

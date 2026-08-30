@@ -11,6 +11,19 @@ fn definition(name: &str) -> WorkflowDefinition {
     test_named_definition(name)
 }
 
+fn start_test_attempt(
+    run: &mut WorkflowRun,
+    attempt: crate::workflows::id::AttemptId,
+    at_ms: u64,
+) -> Result<(), crate::workflows::run::TransitionError> {
+    let caps = crate::workflows::capabilities::test_agent_capabilities();
+    let sandbox = crate::workflows::run::AttemptSandboxRecord {
+        kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+        snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
+    };
+    run.start_attempt(attempt, Vec::new(), caps, sandbox, at_ms)
+}
+
 fn run_named(name: &str, created_at_ms: u64) -> WorkflowRun {
     let definition = definition(name);
     let environments = crate::workflows::test_environment_set(&definition);
@@ -64,7 +77,7 @@ fn recovery_marks_active_work_as_interrupted() {
     let run = store.create(run_named("Active", 1)).expect("create");
     let attempt = AttemptId::generate().expect("attempt");
     store
-        .mutate(&run.id, |run| run.start_attempt(attempt, 2))
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
         .expect("start");
     let reopened = WorkflowRunStore::open(dir.path().to_path_buf()).expect("reopen");
     let loaded = reopened.get(&run.id).expect("run");
@@ -142,7 +155,7 @@ fn non_monotonic_transitions_fail_startup() {
     let run = store.create(run_named("Named", 1)).expect("create");
     let attempt = AttemptId::generate().expect("attempt");
     store
-        .mutate(&run.id, |run| run.start_attempt(attempt, 2))
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
         .expect("start");
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
@@ -162,10 +175,16 @@ fn a_terminal_attempt_without_a_result_fails_startup() {
     let run = store.create(run_named("Named", 1)).expect("create");
     let attempt = AttemptId::generate().expect("attempt");
     store
-        .mutate(&run.id, |run| run.start_attempt(attempt, 2))
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
         .expect("start");
     store
-        .mutate(&run.id, |run| run.complete_attempt(attempt, 3))
+        .mutate(&run.id, |run| {
+            run.record_cleanup(
+                attempt,
+                crate::workflows::run::AttemptCleanupRecord::Complete,
+            )?;
+            run.complete_attempt(attempt, 3)
+        })
         .expect("complete");
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
@@ -185,10 +204,16 @@ fn a_transition_with_the_wrong_cause_fails_startup() {
     let run = store.create(run_named("Named", 1)).expect("create");
     let attempt = AttemptId::generate().expect("attempt");
     store
-        .mutate(&run.id, |run| run.start_attempt(attempt, 2))
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
         .expect("start");
     store
-        .mutate(&run.id, |run| run.complete_attempt(attempt, 3))
+        .mutate(&run.id, |run| {
+            run.record_cleanup(
+                attempt,
+                crate::workflows::run::AttemptCleanupRecord::Complete,
+            )?;
+            run.complete_attempt(attempt, 3)
+        })
         .expect("complete");
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
@@ -208,10 +233,16 @@ fn persisted_bytes_omit_secrets_prompts_and_command_output() {
     let run = store.create(run_named("Named", 1)).expect("create");
     let attempt = AttemptId::generate().expect("attempt");
     store
-        .mutate(&run.id, |run| run.start_attempt(attempt, 2))
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
         .expect("start");
     store
-        .mutate(&run.id, |run| run.complete_attempt(attempt, 3))
+        .mutate(&run.id, |run| {
+            run.record_cleanup(
+                attempt,
+                crate::workflows::run::AttemptCleanupRecord::Complete,
+            )?;
+            run.complete_attempt(attempt, 3)
+        })
         .expect("complete");
     let bytes = fs::read(dir.path().join(format!("{}.json", run.id.as_hex()))).expect("read");
     let text = String::from_utf8(bytes).expect("utf8");
@@ -220,6 +251,61 @@ fn persisted_bytes_omit_secrets_prompts_and_command_output() {
     assert!(!text.contains("Hello from the user"));
     assert!(!text.contains("git status"));
     assert!(!text.contains("M src/main.rs"));
+    assert!(!text.contains("workflow-workspaces"));
+    assert!(!text.contains("/tmp/"));
+    assert!(!text.contains("pp-attempt-"));
+    assert!(text.contains("isolated-attempt"));
+    assert!(text.contains("complete"));
+}
+
+#[test]
+fn a_completed_attempt_without_complete_cleanup_fails_startup() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
+    let run = store.create(run_named("Named", 1)).expect("create");
+    let attempt = AttemptId::generate().expect("attempt");
+    store
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
+        .expect("start");
+    store
+        .mutate(&run.id, |run| {
+            run.record_cleanup(
+                attempt,
+                crate::workflows::run::AttemptCleanupRecord::Complete,
+            )?;
+            run.complete_attempt(attempt, 3)
+        })
+        .expect("complete");
+    let path = dir.path().join(format!("{}.json", run.id.as_hex()));
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
+    value["attempts"][0]["cleanup"] = serde_json::json!({"state": "pending"});
+    fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
+    assert_eq!(
+        WorkflowRunStore::open(dir.path().to_path_buf()).err(),
+        Some(StoreError::Corrupt)
+    );
+}
+
+#[test]
+fn a_host_path_in_capabilities_fails_startup() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
+    let run = store.create(run_named("Named", 1)).expect("create");
+    let attempt = AttemptId::generate().expect("attempt");
+    store
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
+        .expect("start");
+    let path = dir.path().join(format!("{}.json", run.id.as_hex()));
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
+    value["attempts"][0]["capabilities"]["directories"][0]["guest-path"] =
+        serde_json::json!("/home/user/project");
+    fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
+    assert_eq!(
+        WorkflowRunStore::open(dir.path().to_path_buf()).err(),
+        Some(StoreError::Corrupt)
+    );
 }
 
 #[test]
