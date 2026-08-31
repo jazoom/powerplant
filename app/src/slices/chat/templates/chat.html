@@ -307,7 +307,12 @@
       <div id="job-observe">
         {% block job_observe %}
           {% if job_active %}
-            <div class="mb-3" data-island="job-observe" data-job-active="true">
+            <div
+              class="mb-3"
+              data-island="observe"
+              data-observe-active="true"
+              data-observe-target="job-observe"
+            >
               <p
                 class="text-composer-quiet text-sm"
                 role="status"

@@ -263,7 +263,7 @@ fn cursor_from(html: &str) -> u64 {
 }
 
 fn job_active(html: &str) -> bool {
-    html.contains("data-job-active=\"true\"")
+    html.contains("data-observe-active=\"true\"")
 }
 
 async fn wait_until_job_idle(state: &AppState, token: &str) {
@@ -393,7 +393,7 @@ async fn a_patch_send_starts_a_job_without_streaming() {
     assert!(!text.contains("phase=\""));
     assert!(text.contains("name=\"job\""));
     assert!(text.contains("name=\"cursor\" value=\"0\""));
-    assert!(text.contains("data-job-active=\"true\""));
+    assert!(text.contains("data-observe-active=\"true\""));
     assert!(text.contains("turn-1"));
     assert!(text.contains("Refresh"));
     assert!(text.contains("Stop"));
@@ -490,7 +490,7 @@ async fn a_later_document_show_renders_the_finished_job() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("<!doctype html>"));
     assert!(text.contains("Hello from Power Plant."));
-    assert!(!text.contains("data-job-active=\"true\""));
+    assert!(!text.contains("data-observe-active=\"true\""));
 
     let stored = session_snapshot(&state, &token);
     assert_eq!(
@@ -518,7 +518,7 @@ async fn a_later_document_show_drops_a_failed_job_error() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(!text.contains("You have insufficient credits"));
-    assert!(!text.contains("data-job-active=\"true\""));
+    assert!(!text.contains("data-observe-active=\"true\""));
 }
 
 #[tokio::test]

@@ -7,8 +7,7 @@ import { initComposer, initShortcutHint } from "./composer";
 import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
-import { initJobObserve } from "./job-observe";
-import { initEnvironmentPreparation } from "./environment-preparation";
+import { initObserve } from "./observe";
 import { initTranscript } from "./transcript";
 
 const bound = bindTransportFeedback(document);
@@ -26,8 +25,7 @@ startHypergraft({
         "connect-errors": initConnectErrors,
         "connect-plan": initConnectPlan,
         "desk-settings": initDeskSettings,
-        "environment-preparation": initEnvironmentPreparation,
-        "job-observe": initJobObserve,
+        observe: initObserve,
         "shortcut-hint": initShortcutHint,
         transcript: initTranscript,
     },

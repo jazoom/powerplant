@@ -2,14 +2,14 @@ import type { IslandInstance } from "hypergraft/browser";
 
 const RETRY_MS = 1000;
 
-export function initJobObserve(root: HTMLElement): IslandInstance {
+export function initObserve(root: HTMLElement): IslandInstance {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const form = () =>
         root.querySelector<HTMLFormElement>("form[method='get']");
 
     const submit = () => {
-        if (root.dataset.jobActive !== "true") {
+        if (root.dataset.observeActive !== "true") {
             return;
         }
         form()?.requestSubmit();
@@ -31,7 +31,7 @@ export function initJobObserve(root: HTMLElement): IslandInstance {
         }, delay);
     };
 
-    // The send POST is still pending when this root is first inserted.
+    // The initiating command is still pending when this root is first inserted.
     // A synchronous submit is dropped by the document unsafe guard.
     schedule(0);
 
@@ -40,13 +40,17 @@ export function initJobObserve(root: HTMLElement): IslandInstance {
             if (context.cause !== "patch") {
                 return;
             }
-            if (root.dataset.jobActive !== "true") {
+            if (root.dataset.observeActive !== "true") {
                 return;
             }
             // A later segment must start after this one settles. Morph may
             // keep this root, so mount will not run again.
             if (context.detail.outcome === "applied-patch") {
-                if (!context.detail.targetIds.includes("job-observe")) {
+                const target = root.dataset.observeTarget ?? "";
+                if (
+                    target === "" ||
+                    !context.detail.targetIds.includes(target)
+                ) {
                     return;
                 }
                 clearTimer();
