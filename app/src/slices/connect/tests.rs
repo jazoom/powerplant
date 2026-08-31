@@ -244,6 +244,130 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
     wait_flag(&dropped, "provider stream was not dropped").await;
 }
 
+#[tokio::test]
+async fn forget_of_the_last_provider_returns_a_connect_navigation() {
+    let state = test_state();
+    let token = connected(&state);
+    let id = session_id(&token);
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connect/forget")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("provider=xai"))
+                .unwrap(),
+        )
+        .await
+        .expect("forget");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(header::LOCATION).is_none());
+    let cookies = set_cookies(&response);
+    assert!(
+        cookies
+            .iter()
+            .any(|value| value.contains("powerplant_session="))
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#"navigate="/connect""#));
+    assert!(!text.contains(&token));
+    assert!(!text.contains(SECRET_KEY));
+    assert!(!state.sessions.contains(&id));
+    assert!(!state.vault.has_providers());
+}
+
+#[tokio::test]
+async fn forget_of_one_provider_keeps_the_rest() {
+    let state = test_state();
+    store_provider(&state, SECRET_KEY);
+    state
+        .vault
+        .put(ProviderConnection::with_key(
+            ProviderKind::Synthetic,
+            "sk-second-key",
+            "hf:custom",
+        ))
+        .expect("vault");
+    let token = sessions::generate_session_token().expect("session token");
+    state.sessions.insert(token.id());
+    let token = token.raw().as_str().to_owned();
+    let id = session_id(&token);
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connect/forget")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("provider=xai"))
+                .unwrap(),
+        )
+        .await
+        .expect("forget");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(header::LOCATION).is_none());
+    assert!(state.sessions.contains(&id));
+    assert!(!state.vault.contains(ProviderKind::Xai));
+    assert!(state.vault.contains(ProviderKind::Synthetic));
+    let cookies = set_cookies(&response);
+    assert!(cookies.iter().all(|value| !value.contains(SECRET_KEY)));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Synthetic"));
+    assert!(!text.contains(SECRET_KEY));
+}
+
+#[tokio::test]
+async fn a_failed_plan_forget_restores_the_provider_and_session() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    let staged = dir.path().join("staged-xai.json");
+    let plan_path = dir.path().join("xai-auth.json");
+    std::fs::write(&staged, br#"{"access_token":"plan-secret"}"#).unwrap();
+    let mut state = test_state();
+    state.vault = Arc::new(ProviderVault::open(path).expect("vault"));
+    state
+        .vault
+        .install_plan(ProviderKind::Xai, &staged)
+        .expect("plan");
+    let token = sessions::generate_session_token().expect("session token");
+    state.sessions.insert(token.id());
+    let token = token.raw().as_str().to_owned();
+    let id = session_id(&token);
+    state.vault.fail_next_marker_remove();
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connect/forget")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("provider=xai"))
+                .unwrap(),
+        )
+        .await
+        .expect("forget");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get(header::LOCATION).is_none());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(text, "Internal error");
+    assert!(!text.contains("plan-secret"));
+    assert!(state.vault.contains(ProviderKind::Xai));
+    assert!(state.sessions.contains(&id));
+    assert!(plan_path.exists());
+}
+
 fn connect_form() -> &'static str {
     "provider=xai&api_key=sk-test-key"
 }

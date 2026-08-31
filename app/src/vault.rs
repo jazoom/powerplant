@@ -103,6 +103,8 @@ pub(crate) struct ProviderVault {
     inner: Mutex<VaultState>,
     #[cfg(test)]
     fail_after_next_persist: Mutex<bool>,
+    #[cfg(test)]
+    fail_next_marker_remove: Mutex<bool>,
 }
 
 impl ProviderVault {
@@ -112,16 +114,20 @@ impl ProviderVault {
             path: None,
             inner: Mutex::new(VaultState::default()),
             fail_after_next_persist: Mutex::new(false),
+            fail_next_marker_remove: Mutex::new(false),
         }
     }
 
     pub(crate) fn open(path: PathBuf) -> Result<Self, VaultError> {
         let state = load(&path)?;
+        reconcile(&path, &state)?;
         Ok(Self {
             path: Some(path),
             inner: Mutex::new(state),
             #[cfg(test)]
             fail_after_next_persist: Mutex::new(false),
+            #[cfg(test)]
+            fail_next_marker_remove: Mutex::new(false),
         })
     }
 
@@ -284,16 +290,44 @@ impl ProviderVault {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
 
+    #[cfg(test)]
+    pub(crate) fn fail_next_marker_remove(&self) {
+        *self
+            .fail_next_marker_remove
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+
     pub(crate) fn forget(&self, kind: ProviderKind) -> Result<(), VaultError> {
-        self.mutate(|state| {
-            state.providers.remove(&kind);
-            delete_plan_file(self.path.as_deref(), kind);
-            if state.selected == Some(kind) {
-                state.selected = ProviderKind::ALL
-                    .into_iter()
-                    .find(|candidate| state.providers.contains_key(candidate));
-            }
-        })
+        let mut state = self.lock();
+        let Some(stored) = state.providers.get(&kind) else {
+            return Ok(());
+        };
+        let previous = state.clone();
+        let plan_deletion = if stored.auth == AuthMethod::Plan {
+            let final_path =
+                plan_file_path(self.path.as_deref(), kind).ok_or(VaultError::Persist)?;
+            Some(stage_plan_deletion(final_path)?)
+        } else {
+            None
+        };
+        state.providers.remove(&kind);
+        if state.selected == Some(kind) {
+            state.selected = ProviderKind::ALL
+                .into_iter()
+                .find(|candidate| state.providers.contains_key(candidate));
+        }
+        if self.commit(&state).is_err() {
+            self.rollback_forget(&mut state, previous, plan_deletion.as_ref())?;
+            return Err(VaultError::Persist);
+        }
+        if let Some(deletion) = plan_deletion.as_ref()
+            && self.remove_plan_deletion(deletion).is_err()
+        {
+            self.rollback_forget(&mut state, previous, plan_deletion.as_ref())?;
+            return Err(VaultError::Persist);
+        }
+        Ok(())
     }
 
     pub(crate) fn select(&self, kind: ProviderKind, model: String) -> Result<(), VaultError> {
@@ -342,6 +376,43 @@ impl ProviderVault {
             return Err(error);
         }
         Ok(value)
+    }
+
+    fn rollback_forget(
+        &self,
+        state: &mut VaultState,
+        previous: VaultState,
+        plan_deletion: Option<&PlanDeletion>,
+    ) -> Result<(), VaultError> {
+        *state = previous;
+        if let Some(deletion) = plan_deletion {
+            restore_plan_deletion(deletion)?;
+        }
+        self.commit(state)
+    }
+
+    fn remove_plan_deletion(&self, deletion: &PlanDeletion) -> Result<(), VaultError> {
+        let marker_result =
+            crate::storage::remove_private(&deletion.marker_path).map_err(|_| VaultError::Persist);
+        #[cfg(test)]
+        {
+            let mut failure = self
+                .fail_next_marker_remove
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *failure {
+                *failure = false;
+                marker_result?;
+                return Err(VaultError::Persist);
+            }
+        }
+        marker_result?;
+        match inspect(&deletion.final_path).map_err(|_| VaultError::Persist)? {
+            PathStatus::Absent => Ok(()),
+            PathStatus::File => crate::storage::remove_private(&deletion.final_path)
+                .map_err(|_| VaultError::Persist),
+            PathStatus::Invalid => Err(VaultError::Persist),
+        }
     }
 
     fn rollback_plan_install(
@@ -490,11 +561,7 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
         return Ok(());
     };
     if state.providers.is_empty() {
-        match fs::remove_file(path) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(_) => return Err(VaultError::Persist),
-        }
+        return crate::storage::remove_private(path).map_err(|_| VaultError::Persist);
     }
     let file = VaultFile {
         version: VAULT_VERSION,
@@ -576,8 +643,172 @@ fn plan_file_path(vault_path: Option<&Path>, kind: ProviderKind) -> Option<PathB
     Some(vault_path?.parent()?.join(name))
 }
 
-fn delete_plan_file(vault_path: Option<&Path>, kind: ProviderKind) {
-    if let Some(path) = plan_file_path(vault_path, kind) {
-        let _ = fs::remove_file(path);
+fn deletion_marker_path(final_path: &Path) -> PathBuf {
+    let mut name = final_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".deleting");
+    final_path.with_file_name(name)
+}
+
+struct PlanDeletion {
+    final_path: PathBuf,
+    marker_path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+enum PathStatus {
+    Absent,
+    File,
+    Invalid,
+}
+
+fn inspect(path: &Path) -> io::Result<PathStatus> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => Ok(PathStatus::File),
+        Ok(_) => Ok(PathStatus::Invalid),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PathStatus::Absent),
+        Err(error) => Err(error),
+    }
+}
+
+fn reconcile(vault_path: &Path, state: &VaultState) -> Result<(), VaultError> {
+    let dir = vault_path.parent().ok_or(VaultError::Corrupt)?;
+    let mut restores = Vec::new();
+    let mut restricts = Vec::new();
+    let mut removals = Vec::new();
+    for kind in ProviderKind::ALL {
+        let Some(name) = kind.plan_file_name() else {
+            continue;
+        };
+        let final_path = dir.join(name);
+        let marker_path = deletion_marker_path(&final_path);
+        let named = state
+            .providers
+            .get(&kind)
+            .is_some_and(|stored| stored.auth == AuthMethod::Plan);
+        let final_status = inspect(&final_path).map_err(|_| VaultError::Corrupt)?;
+        let marker_status = inspect(&marker_path).map_err(|_| VaultError::Corrupt)?;
+        match (named, final_status, marker_status) {
+            (true, PathStatus::File, PathStatus::Absent) => restricts.push(final_path),
+            (true, PathStatus::Absent, PathStatus::File) => {
+                restores.push((marker_path, final_path.clone()));
+                restricts.push(final_path);
+            }
+            (false, PathStatus::File, PathStatus::Absent) => removals.push(final_path),
+            (false, PathStatus::Absent, PathStatus::File) => removals.push(marker_path),
+            (false, PathStatus::Absent, PathStatus::Absent) => {}
+            (true, PathStatus::Absent, PathStatus::Absent)
+            | (true, PathStatus::File, PathStatus::File)
+            | (true, PathStatus::Invalid, _)
+            | (true, _, PathStatus::Invalid)
+            | (false, PathStatus::File, PathStatus::File)
+            | (false, PathStatus::Invalid, _)
+            | (false, _, PathStatus::Invalid) => return Err(VaultError::Corrupt),
+        }
+    }
+    removals.extend(abandoned_staged_files(dir)?);
+    for (from, to) in restores {
+        crate::storage::rename_in_dir(&from, &to).map_err(|_| VaultError::Persist)?;
+    }
+    for path in restricts {
+        crate::storage::restrict_private_file(&path).map_err(|_| VaultError::Persist)?;
+    }
+    for path in removals {
+        crate::storage::remove_private(&path).map_err(|_| VaultError::Persist)?;
+    }
+    Ok(())
+}
+
+fn abandoned_staged_files(dir: &Path) -> Result<Vec<PathBuf>, VaultError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(VaultError::Corrupt),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| VaultError::Corrupt)?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with('.') && name.ends_with(".staging") {
+            let path = entry.path();
+            if !matches!(inspect(&path), Ok(PathStatus::File)) {
+                return Err(VaultError::Corrupt);
+            }
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+fn stage_plan_deletion(final_path: PathBuf) -> Result<PlanDeletion, VaultError> {
+    let marker_path = deletion_marker_path(&final_path);
+    match (
+        inspect(&final_path).map_err(|_| VaultError::Persist)?,
+        inspect(&marker_path).map_err(|_| VaultError::Persist)?,
+    ) {
+        (PathStatus::File, PathStatus::Absent) => {
+            if crate::storage::rename_in_dir(&final_path, &marker_path).is_err() {
+                restore_plan_from_marker(&final_path, &marker_path)?;
+                return Err(VaultError::Persist);
+            }
+        }
+        (PathStatus::Absent, PathStatus::File) => {}
+        (PathStatus::Absent, PathStatus::Absent)
+        | (PathStatus::File, PathStatus::File)
+        | (PathStatus::Invalid, _)
+        | (_, PathStatus::Invalid) => return Err(VaultError::Persist),
+    }
+    let bytes = match crate::storage::read_private(&marker_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            restore_plan_from_marker(&final_path, &marker_path)?;
+            return Err(VaultError::Persist);
+        }
+    };
+    Ok(PlanDeletion {
+        final_path,
+        marker_path,
+        bytes,
+    })
+}
+
+fn restore_plan_from_marker(final_path: &Path, marker_path: &Path) -> Result<(), VaultError> {
+    match (
+        inspect(final_path).map_err(|_| VaultError::Persist)?,
+        inspect(marker_path).map_err(|_| VaultError::Persist)?,
+    ) {
+        (PathStatus::Absent, PathStatus::File) => {
+            crate::storage::rename_in_dir(marker_path, final_path).map_err(|_| VaultError::Persist)
+        }
+        (PathStatus::File, PathStatus::Absent) => Ok(()),
+        (PathStatus::Absent, PathStatus::Absent)
+        | (PathStatus::File, PathStatus::File)
+        | (PathStatus::Invalid, _)
+        | (_, PathStatus::Invalid) => Err(VaultError::Persist),
+    }
+}
+
+fn restore_plan_deletion(deletion: &PlanDeletion) -> Result<(), VaultError> {
+    match (
+        inspect(&deletion.final_path).map_err(|_| VaultError::Persist)?,
+        inspect(&deletion.marker_path).map_err(|_| VaultError::Persist)?,
+    ) {
+        (PathStatus::Absent, PathStatus::File) => {
+            crate::storage::rename_in_dir(&deletion.marker_path, &deletion.final_path)
+                .map_err(|_| VaultError::Persist)
+        }
+        (PathStatus::Absent, PathStatus::Absent) => {
+            crate::storage::write_private(&deletion.final_path, &deletion.bytes)
+                .map_err(|_| VaultError::Persist)
+        }
+        (PathStatus::File, PathStatus::Absent) => {
+            crate::storage::restrict_private_file(&deletion.final_path)
+                .map_err(|_| VaultError::Persist)
+        }
+        (PathStatus::File, PathStatus::File) => Err(VaultError::Persist),
+        (PathStatus::Invalid, _) | (_, PathStatus::Invalid) => Err(VaultError::Persist),
     }
 }

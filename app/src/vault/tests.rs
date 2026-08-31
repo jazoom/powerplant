@@ -1,5 +1,6 @@
 use super::{ProviderVault, VaultError};
 use crate::providers::{AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind};
+use std::path::{Path, PathBuf};
 
 const SECRET: &str = "sk-vault-secret-do-not-echo";
 
@@ -7,13 +8,37 @@ fn connection(kind: ProviderKind, model: &str) -> ProviderConnection {
     ProviderConnection::with_key(kind, SECRET, model)
 }
 
-fn file_vault() -> (ProviderVault, tempfile::TempDir, std::path::PathBuf) {
+fn file_vault() -> (ProviderVault, tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("providers.json");
     (ProviderVault::open(path.clone()).expect("vault"), dir, path)
 }
 
-fn assert_open_leaves_bytes(path: &std::path::Path, bytes: &[u8]) {
+fn marker_for(plan_path: &Path) -> PathBuf {
+    let mut name = plan_path.file_name().unwrap().to_os_string();
+    name.push(".deleting");
+    plan_path.with_file_name(name)
+}
+
+fn write_plan_metadata(path: &Path) {
+    std::fs::write(
+        path,
+        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"plan","model":"grok-4.6"}]}"#,
+    )
+    .unwrap();
+}
+
+fn write_api_metadata(path: &Path) {
+    std::fs::write(
+        path,
+        br#"{"version":1,"selected":"synthetic","providers":[{"kind":"synthetic","auth":"api_key","api_key":"sk-one","model":"hf:custom"}]}"#,
+    )
+    .unwrap();
+}
+
+const PLAN_BYTES: &[u8] = b"plan-credential";
+
+fn assert_open_leaves_bytes(path: &Path, bytes: &[u8]) {
     assert_eq!(
         ProviderVault::open(path.to_path_buf()).err(),
         Some(VaultError::Corrupt)
@@ -175,6 +200,7 @@ fn plan_auth_round_trips_without_a_key_and_forget_deletes_the_plan_file() {
 
     reloaded.forget(ProviderKind::Xai).unwrap();
     assert!(!plan_path.exists());
+    assert!(!marker_for(&plan_path).exists());
 }
 
 #[test]
@@ -204,6 +230,7 @@ fn a_retired_chatgpt_plan_model_is_replaced_on_read() {
         br#"{"version":1,"selected":"openai-codex","providers":[{"kind":"openai-codex","auth":"plan","model":"gpt-5.1-codex"}]}"#,
     )
     .unwrap();
+    std::fs::write(dir.path().join("chatgpt-auth.json"), b"{}").unwrap();
     let vault = ProviderVault::open(path).expect("vault");
     assert_eq!(
         vault.selected_connection().map(|item| item.model),
@@ -387,5 +414,275 @@ fn invalid_provider_records_are_corrupt_and_leave_the_file_unchanged() {
         let path = dir.path().join("providers.json");
         std::fs::write(&path, &bytes).unwrap();
         assert_open_leaves_bytes(&path, &bytes);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PlanFiles {
+    None,
+    Final,
+    Marker,
+    Both,
+}
+
+#[test]
+fn open_reconciles_every_final_file_and_marker_combination() {
+    struct Case {
+        named: bool,
+        files: PlanFiles,
+        open: Result<(), VaultError>,
+        final_after: bool,
+        marker_after: bool,
+    }
+    let cases = [
+        Case {
+            named: true,
+            files: PlanFiles::Final,
+            open: Ok(()),
+            final_after: true,
+            marker_after: false,
+        },
+        Case {
+            named: true,
+            files: PlanFiles::Marker,
+            open: Ok(()),
+            final_after: true,
+            marker_after: false,
+        },
+        Case {
+            named: true,
+            files: PlanFiles::None,
+            open: Err(VaultError::Corrupt),
+            final_after: false,
+            marker_after: false,
+        },
+        Case {
+            named: true,
+            files: PlanFiles::Both,
+            open: Err(VaultError::Corrupt),
+            final_after: true,
+            marker_after: true,
+        },
+        Case {
+            named: false,
+            files: PlanFiles::Final,
+            open: Ok(()),
+            final_after: false,
+            marker_after: false,
+        },
+        Case {
+            named: false,
+            files: PlanFiles::Marker,
+            open: Ok(()),
+            final_after: false,
+            marker_after: false,
+        },
+        Case {
+            named: false,
+            files: PlanFiles::None,
+            open: Ok(()),
+            final_after: false,
+            marker_after: false,
+        },
+        Case {
+            named: false,
+            files: PlanFiles::Both,
+            open: Err(VaultError::Corrupt),
+            final_after: true,
+            marker_after: true,
+        },
+    ];
+    for case in cases {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("providers.json");
+        if case.named {
+            write_plan_metadata(&path);
+        } else {
+            write_api_metadata(&path);
+        }
+        let metadata = std::fs::read(&path).unwrap();
+        let plan_path = dir.path().join("xai-auth.json");
+        let marker_path = marker_for(&plan_path);
+        match case.files {
+            PlanFiles::None => {}
+            PlanFiles::Final => std::fs::write(&plan_path, PLAN_BYTES).unwrap(),
+            PlanFiles::Marker => std::fs::write(&marker_path, PLAN_BYTES).unwrap(),
+            PlanFiles::Both => {
+                std::fs::write(&plan_path, PLAN_BYTES).unwrap();
+                std::fs::write(&marker_path, PLAN_BYTES).unwrap();
+            }
+        }
+        let opened = ProviderVault::open(path.clone());
+        match case.open {
+            Ok(()) => {
+                let vault = opened.expect("open");
+                assert_eq!(vault.contains(ProviderKind::Xai), case.named);
+                if case.named {
+                    assert_eq!(
+                        vault.selected_connection().map(|item| item.auth),
+                        Some(AuthMethod::Plan)
+                    );
+                    assert_eq!(std::fs::read(&plan_path).unwrap(), PLAN_BYTES);
+                }
+            }
+            Err(error) => {
+                assert_eq!(opened.err(), Some(error));
+                assert_eq!(std::fs::read(&path).unwrap(), metadata);
+            }
+        }
+        assert_eq!(plan_path.exists(), case.final_after);
+        assert_eq!(marker_path.exists(), case.marker_after);
+    }
+}
+
+#[test]
+fn open_removes_abandoned_staged_files() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    write_api_metadata(&path);
+    let staged = dir.path().join(".deadbeef.staging");
+    std::fs::write(&staged, b"abandoned").unwrap();
+    ProviderVault::open(path).expect("open");
+    assert!(!staged.exists());
+}
+
+#[test]
+fn open_fails_when_staged_recovery_cannot_complete() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    write_api_metadata(&path);
+    let metadata = std::fs::read(&path).unwrap();
+    let staged = dir.path().join(".deadbeef.staging");
+    std::fs::create_dir(&staged).unwrap();
+    assert_eq!(
+        ProviderVault::open(path.clone()).err(),
+        Some(VaultError::Corrupt)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), metadata);
+    assert!(staged.exists());
+}
+
+#[test]
+fn forget_of_an_absent_api_key_provider_is_idempotent() {
+    let (vault, _dir, path) = file_vault();
+    vault.forget(ProviderKind::Xai).unwrap();
+    assert!(!path.exists());
+    vault
+        .put(connection(ProviderKind::Synthetic, "hf:custom"))
+        .unwrap();
+    vault.forget(ProviderKind::Xai).unwrap();
+    assert!(vault.contains(ProviderKind::Synthetic));
+    vault.forget(ProviderKind::Synthetic).unwrap();
+    vault.forget(ProviderKind::Synthetic).unwrap();
+    assert!(!vault.has_providers());
+    assert!(!path.exists());
+}
+
+#[test]
+fn forget_rejects_a_missing_plan_file_without_changing_metadata() {
+    let (vault, _dir, path) = file_vault();
+    let staged = path.parent().unwrap().join("staged-xai.json");
+    let plan_path = path.parent().unwrap().join("xai-auth.json");
+    std::fs::write(&staged, PLAN_BYTES).unwrap();
+    vault.install_plan(ProviderKind::Xai, &staged).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&plan_path).unwrap();
+
+    assert_eq!(
+        vault.forget(ProviderKind::Xai).err(),
+        Some(VaultError::Persist)
+    );
+
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert!(vault.contains(ProviderKind::Xai));
+}
+
+#[test]
+fn forget_restores_plan_files_after_persist_failure() {
+    let (vault, _dir, path) = file_vault();
+    let staged = path.parent().unwrap().join("staged-xai.json");
+    let plan_path = path.parent().unwrap().join("xai-auth.json");
+    std::fs::write(&staged, PLAN_BYTES).unwrap();
+    vault.install_plan(ProviderKind::Xai, &staged).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    let previous_plan = std::fs::read(&plan_path).unwrap();
+
+    vault.fail_after_next_persist();
+    assert_eq!(
+        vault.forget(ProviderKind::Xai).err(),
+        Some(VaultError::Persist)
+    );
+
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert_eq!(std::fs::read(&plan_path).unwrap(), previous_plan);
+    assert!(!marker_for(&plan_path).exists());
+    assert!(vault.contains(ProviderKind::Xai));
+    assert_eq!(
+        vault.selected_connection().map(|item| item.auth),
+        Some(AuthMethod::Plan)
+    );
+}
+
+#[test]
+fn forget_restores_plan_files_after_marker_removal_failure() {
+    let (vault, _dir, path) = file_vault();
+    let staged = path.parent().unwrap().join("staged-xai.json");
+    let plan_path = path.parent().unwrap().join("xai-auth.json");
+    std::fs::write(&staged, PLAN_BYTES).unwrap();
+    vault.install_plan(ProviderKind::Xai, &staged).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    let previous_plan = std::fs::read(&plan_path).unwrap();
+
+    vault.fail_next_marker_remove();
+    assert_eq!(
+        vault.forget(ProviderKind::Xai).err(),
+        Some(VaultError::Persist)
+    );
+
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert_eq!(std::fs::read(&plan_path).unwrap(), previous_plan);
+    assert!(!marker_for(&plan_path).exists());
+    assert!(vault.contains(ProviderKind::Xai));
+}
+
+#[test]
+fn forget_restores_api_key_metadata_after_persist_failure() {
+    let (vault, _dir, path) = file_vault();
+    vault
+        .put(connection(ProviderKind::Xai, "grok-4.6"))
+        .unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    vault.fail_after_next_persist();
+    assert_eq!(
+        vault.forget(ProviderKind::Xai).err(),
+        Some(VaultError::Persist)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert!(vault.contains(ProviderKind::Xai));
+}
+
+#[cfg(unix)]
+#[test]
+fn open_restricts_retained_plan_files_to_owner_read_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for restore_marker in [false, true] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("providers.json");
+        write_plan_metadata(&path);
+        let plan_path = dir.path().join("xai-auth.json");
+        let credential_path = if restore_marker {
+            marker_for(&plan_path)
+        } else {
+            plan_path.clone()
+        };
+        std::fs::write(&credential_path, PLAN_BYTES).unwrap();
+        let mut permissions = std::fs::metadata(&credential_path).unwrap().permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&credential_path, permissions).unwrap();
+
+        ProviderVault::open(path).expect("open");
+        let mode = std::fs::metadata(&plan_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }
