@@ -526,13 +526,11 @@ async fn observe(
     };
     let Some(job_id) = query.job_id() else {
         if !query.workflow.trim().is_empty() {
-            return Ok(hypergraft::outcome::children_patch(
-                PatchStatus::Ok,
-                "composer",
-                &view(state, record, snapshot, "", "", &query.workflow)
-                    .await
-                    .composer(),
-            )?);
+            let page = view(state, record, snapshot, "", "", &query.workflow).await;
+            let mut patches = PatchSet::new();
+            patches.children("readiness-route", &page.readiness_route())?;
+            patches.children("composer", &page.composer())?;
+            return Ok(patches.respond(PatchStatus::Ok)?);
         }
         return refresh_composer(state, record, snapshot).await;
     };

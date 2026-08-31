@@ -1258,7 +1258,7 @@ async fn a_missing_environment_rejects_a_task_before_a_run_starts() {
 }
 
 #[tokio::test]
-async fn a_workflow_preview_patch_targets_composer() {
+async fn a_workflow_preview_patch_updates_readiness_and_composer() {
     let state = test_state();
     let token = connected(&state).await;
     let response = app(&state)
@@ -1281,6 +1281,7 @@ async fn a_workflow_preview_patch_targets_composer() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"readiness-route\""));
     assert!(text.contains("target=\"composer\""));
 }
 

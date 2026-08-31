@@ -245,6 +245,15 @@ impl ChatViewModel {
         }
     }
 
+    pub(super) fn readiness_route(&self) -> ReadinessRouteContents<'_> {
+        ReadinessRouteContents {
+            providers: &self.providers,
+            workflow_options: &self.workflow_options,
+            workflow_empty: self.workflow_empty,
+            preview_ready: self.preview_ready,
+        }
+    }
+
     pub(super) fn job_observe(&self) -> JobObserveContents<'_> {
         self.job_observe_with("")
     }
@@ -308,6 +317,15 @@ pub(super) struct DeskModelCatalogueContents<'a> {
 #[template(path = "chat/templates/chat.html", block = "transcript")]
 pub(super) struct TranscriptContents<'a> {
     pub(super) turns: &'a [TurnView],
+}
+
+#[derive(Template)]
+#[template(path = "chat/templates/chat.html", block = "readiness_route")]
+pub(super) struct ReadinessRouteContents<'a> {
+    pub(super) providers: &'a [DeskProviderOption],
+    pub(super) workflow_options: &'a [WorkflowOption],
+    pub(super) workflow_empty: bool,
+    pub(super) preview_ready: bool,
 }
 
 #[derive(Template)]

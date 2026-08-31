@@ -1,15 +1,15 @@
-<section
-  id="connect-card"
-  data-island="connect-errors"
-  class="border-base-300 bg-base-100 w-full rounded-md border p-6 sm:p-8"
->
+<section id="connect-card" data-island="connect-errors" class="connect-sheet">
   {% block card_contents %}
-    <h1 class="font-heading text-3xl font-semibold tracking-[-0.03em]">
-      Connect a provider
-    </h1>
-    <p class="text-quiet mt-2 max-w-[65ch]">
-      Power Plant stores a key or a plan login on this machine until you forget
-      that provider.
+    {% if open_chat %}
+      <p class="mb-5 text-sm">
+        <a href="/" class="link link-hover">Back to the local desk</a>
+      </p>
+    {% endif %}
+
+    <h1 class="font-heading font-semibold">Connect a provider</h1>
+    <p class="text-quiet mt-3 max-w-[65ch]">
+      Power Plant stores one key or plan login for each provider on this
+      machine. Forget removes that provider connection.
     </p>
 
     {% if sandbox_missing != "" %}
@@ -18,64 +18,60 @@
       </div>
     {% endif %}
 
-    {% if open_chat %}
-      <p class="mt-4">
-        <a href="/" class="link link-hover">Back to chat</a>
-      </p>
-    {% endif %}
-
     {% if let Some(pending) = pending %}
-      <div
+      <section
         id="connect-plan-status"
-        class="border-base-300 mt-6 space-y-3 rounded-sm border p-4"
+        class="connect-sheet-section space-y-3"
         data-island="connect-plan"
         data-plan-active="{% if pending.active %}true{% else %}false{% endif %}"
       >
-        <h2 class="text-base font-semibold">Finish sign-in</h2>
+        <h2 class="text-lg font-semibold">Finish sign-in</h2>
         <p class="text-quiet">{{ pending.provider_label }}</p>
         {% if let Some(message) = pending.error %}
           <div class="alert alert-error" role="alert">
             <p>{{ message }}</p>
           </div>
         {% else %}
-          <p>Open this link and enter the code.</p>
+          <p>Open the provider link and enter this code.</p>
           <p>
             <a
               href="{{ pending.verification_uri }}"
-              class="link"
+              class="link break-all"
               rel="noreferrer"
               target="_blank"
               >{{ pending.verification_uri }}</a
             >
           </p>
-          <p class="font-mono text-lg tracking-wide">{{ pending.user_code }}</p>
+          <p class="font-mono text-xl tracking-wide">{{ pending.user_code }}</p>
           <form data-graft method="get" action="/connect" hidden></form>
         {% endif %}
-      </div>
+      </section>
     {% endif %}
 
     {% if !stored.is_empty() %}
-      <h2 class="mt-6 text-base font-semibold">Stored providers</h2>
-      <ul class="mt-3 space-y-2">
-        {% for provider in stored %}
-          <li
-            class="border-base-300 flex min-h-12 items-center justify-between gap-3 rounded-sm border px-3 py-2"
-          >
-            <span class="min-w-0">
-              <span class="block">{{ provider.label }}</span>
-              <span class="text-quiet text-sm">{{ provider.method }}</span>
-            </span>
-            <form data-graft method="post" action="/connect/forget">
-              <input
-                type="hidden"
-                name="provider"
-                value="{{ provider.value }}"
-              />
-              <button class="btn btn-ghost btn-sm" type="submit">Forget</button>
-            </form>
-          </li>
-        {% endfor %}
-      </ul>
+      <section class="connect-sheet-section space-y-3">
+        <h2 class="text-lg font-semibold">Connected providers</h2>
+        <ul class="record-list">
+          {% for provider in stored %}
+            <li class="record-row">
+              <span class="min-w-0">
+                <span class="block font-medium">{{ provider.label }}</span>
+                <span class="text-quiet text-sm">{{ provider.method }}</span>
+              </span>
+              <form data-graft method="post" action="/connect/forget">
+                <input
+                  type="hidden"
+                  name="provider"
+                  value="{{ provider.value }}"
+                />
+                <button class="btn btn-ghost btn-sm" type="submit">
+                  Forget
+                </button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
     {% endif %}
 
     {% if let Some(error) = error %}
@@ -90,8 +86,13 @@
     {% endif %}
 
     {% if show_chatgpt || show_grok %}
-      <div id="connect-plan" class="mt-6 space-y-3">
-        <h2 class="text-base font-semibold">Plan login</h2>
+      <section id="connect-plan" class="connect-sheet-section space-y-3">
+        <div>
+          <h2 class="text-lg font-semibold">Use a plan login</h2>
+          <p class="text-quiet mt-1 text-sm">
+            Sign in through the provider in a separate browser tab.
+          </p>
+        </div>
         {% if show_chatgpt %}
           <form data-graft method="post" action="/connect/plan">
             <input type="hidden" name="provider" value="openai-codex" />
@@ -116,20 +117,26 @@
             </button>
           </form>
         {% endif %}
-      </div>
+      </section>
     {% endif %}
 
     {% if !providers.is_empty() %}
       <form
         data-graft
-        class="mt-6 space-y-5"
+        class="connect-sheet-section space-y-5"
         method="post"
         action="/connect"
         autocomplete="off"
       >
+        <div>
+          <h2 class="text-lg font-semibold">Use an API key</h2>
+          <p class="text-quiet mt-1 text-sm">
+            Choose the provider that issued the key.
+          </p>
+        </div>
         <fieldset
           id="connect-provider"
-          class="space-y-2"
+          class="grid gap-2 sm:grid-cols-2"
           tabindex="-1"
           {% if let Some(error) = error %}
             {% if error.is_provider() %}
@@ -137,10 +144,10 @@
             {% endif %}
           {% endif %}
         >
-          <legend class="label">Provider</legend>
+          <legend class="label mb-2">Provider</legend>
           {% for provider in providers %}
             <label
-              class="border-base-300 has-checked:border-primary has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 rounded-sm border px-3"
+              class="border-base-300 has-checked:border-accent has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 border px-3"
             >
               <input
                 class="radio radio-primary"

@@ -1,24 +1,40 @@
 {% extends "layout/base.html" %}
 {% let csp_nonce = "nonce"|crate::template_filters::csp_nonce -%}
 {% block body %}
-  <div class="flex min-h-screen items-center px-4 py-10 sm:px-6">
-    <div class="mx-auto w-full max-w-md">
-      <a
-        href="/connect"
-        data-graft
-        class="mb-8 inline-flex items-center gap-3 rounded-sm"
-      >
+  <div class="connect-frame">
+    <aside class="connect-index">
+      <a href="/connect" data-graft class="app-brand">
         <img
           src="/static/images/logo.svg"
           alt=""
-          width="48"
-          height="34"
+          width="58"
+          height="42"
           class="powerplant-mark"
         />
-        <span class="font-heading text-2xl font-semibold tracking-[-0.03em]"
-          >Power Plant</span
-        >
+        <span>
+          <strong>Power Plant</strong>
+          <small>Local agent desk</small>
+        </span>
       </a>
+      <div class="connect-intro">
+        <h1>Bring your model connection.</h1>
+        <p>
+          Power Plant keeps the provider connection on this machine. The agent
+          works inside an isolated sandbox.
+        </p>
+        <ol aria-label="Setup route">
+          <li><span>1</span>Connect a provider</li>
+          <li><span>2</span>Define the work</li>
+          <li><span>3</span>Change the project</li>
+        </ol>
+      </div>
+      <p class="connect-local"><i aria-hidden="true"></i>No product account</p>
+    </aside>
+    <div class="connect-file">
+      <header class="app-file-bar">
+        <span class="font-mono">FILE PP–CONNECT</span>
+        <span class="app-local-badge">Stored on this machine</span>
+      </header>
       <main id="connect-main" tabindex="-1">{{ content|safe }}</main>
     </div>
   </div>

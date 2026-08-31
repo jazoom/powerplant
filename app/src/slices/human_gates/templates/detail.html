@@ -1,42 +1,17 @@
-<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
-  <div
-    class="mx-auto flex min-h-16 max-w-5xl flex-wrap items-center gap-3 px-4 py-3"
-  >
-    <a
-      href="/agents"
-      data-graft
-      class="flex min-w-0 items-center gap-2 rounded-sm"
-    >
-      <img
-        src="/static/images/logo.svg"
-        alt=""
-        width="40"
-        height="29"
-        class="powerplant-mark"
-      />
-      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
-        >Power Plant</span
-      >
-    </a>
-    <nav class="ml-auto flex flex-wrap items-center gap-2">
-      <a href="/runs/{{ run_id }}" data-graft class="btn btn-ghost btn-sm"
-        >Run detail</a
-      >
-      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
-    </nav>
-  </div>
-</header>
-
-<main class="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-8">
+<main
+  data-section="runs"
+  class="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
+>
+  <p class="text-sm">
+    <a href="/runs/{{ run_id }}" data-graft class="link">Back to run detail</a>
+  </p>
   <div id="gate-detail" class="space-y-6">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <div class="space-y-1">
-        <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
-          {{ gate_name }}
-        </h1>
-        <p class="text-quiet text-sm">Step {{ position }} · Human gate</p>
+    <div class="page-intro">
+      <div>
+        <h1>{{ gate_name }}</h1>
+        <p>Step {{ position }} · Human gate</p>
       </div>
-      <span class="badge badge-outline">{{ state }}</span>
+      <span class="status-stamp">{{ state }}</span>
     </div>
 
     {% if error != "" %}

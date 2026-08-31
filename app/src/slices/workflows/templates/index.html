@@ -1,65 +1,44 @@
-<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
-  <div
-    class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
-  >
-    <a
-      href="/agents"
-      data-graft
-      class="flex min-w-0 items-center gap-2 rounded-sm"
-    >
-      <img
-        src="/static/images/logo.svg"
-        alt=""
-        width="40"
-        height="29"
-        class="powerplant-mark"
-      />
-      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
-        >Power Plant</span
-      >
-    </a>
-    <nav class="ml-auto flex flex-wrap items-center gap-2">
-      <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
-      <a href="/workflows" data-graft class="btn btn-ghost btn-sm">Workflows</a>
-      <a href="/environments" data-graft class="btn btn-ghost btn-sm"
-        >Environments</a
-      >
-      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
-    </nav>
-  </div>
-</header>
-
-<main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
-      Workflows
-    </h1>
+<main
+  data-section="workflows"
+  class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
+>
+  <div class="page-intro">
+    <div>
+      <h1>Workflows</h1>
+      <p>Workflows connect roles, environments, steps and review policy.</p>
+    </div>
     <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
       >New workflow</a
     >
   </div>
+
   {% if workflows.is_empty() %}
-    <div class="border-base-300 space-y-3 rounded-sm border px-4 py-6">
-      <p>Tasks need a workflow before you can send work.</p>
+    <section class="file-section space-y-3">
+      <h2 class="text-lg font-semibold">No workflows</h2>
+      <p class="text-quiet max-w-[60ch]">
+        Tasks need a workflow before an agent can send work.
+      </p>
       <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
-        >New workflow</a
+        >Create the first workflow</a
       >
-    </div>
+    </section>
   {% else %}
-    <ul class="space-y-2">
+    <ul class="record-list">
       {% for workflow in workflows %}
-        <li class="border-base-300 rounded-sm border px-3 py-3">
-          <a
-            href="/workflows/{{ workflow.id }}/configuration"
-            data-graft
-            class="link link-hover font-medium"
-            >{{ workflow.name }}</a
-          >
-          <p class="text-quiet mt-1 text-xs">
-            {{ workflow.roles }} roles · {{ workflow.steps }} steps ·
-            <span class="font-mono">{{ workflow.version }}</span>
-            · {{ workflow.updated }}
-          </p>
+        <li class="record-row">
+          <div>
+            <a
+              href="/workflows/{{ workflow.id }}/configuration"
+              data-graft
+              class="link link-hover font-medium"
+              >{{ workflow.name }}</a
+            >
+            <p class="text-quiet text-xs">
+              {{ workflow.roles }} roles · {{ workflow.steps }} steps ·
+              <span class="font-mono">{{ workflow.version }}</span>
+            </p>
+          </div>
+          <span class="text-quiet text-xs">{{ workflow.updated }}</span>
         </li>
       {% endfor %}
     </ul>

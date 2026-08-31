@@ -1,75 +1,54 @@
-<header class="border-base-300 bg-base-100 sticky top-0 z-40 border-b">
-  <div
-    class="mx-auto flex min-h-16 max-w-4xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
-  >
-    <a
-      href="/agents"
-      data-graft
-      class="flex min-w-0 items-center gap-2 rounded-sm"
-    >
-      <img
-        src="/static/images/logo.svg"
-        alt=""
-        width="40"
-        height="29"
-        class="powerplant-mark"
-      />
-      <span class="font-heading text-xl font-semibold tracking-[-0.03em]"
-        >Power Plant</span
-      >
-    </a>
-    <nav class="ml-auto flex flex-wrap items-center gap-2">
-      <a href="/agents" data-graft class="btn btn-ghost btn-sm">Agents</a>
-      <a href="/workflows" data-graft class="btn btn-ghost btn-sm">Workflows</a>
-      <a href="/environments" data-graft class="btn btn-ghost btn-sm"
-        >Environments</a
-      >
-      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
-    </nav>
-  </div>
-</header>
-
-<main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
-      Environments
-    </h1>
+<main
+  data-section="environments"
+  class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
+>
+  <div class="page-intro">
+    <div>
+      <h1>Environments</h1>
+      <p>Prepare the guest images that workflow steps use inside sandboxes.</p>
+    </div>
     <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
       >New environment</a
     >
   </div>
+
   {% if environments.is_empty() %}
-    <div class="border-base-300 space-y-3 rounded-sm border px-4 py-6">
-      <p>Workflows require a prepared environment.</p>
+    <section class="file-section space-y-3">
+      <h2 class="text-lg font-semibold">No environments</h2>
+      <p class="text-quiet max-w-[60ch]">
+        Workflows require a prepared environment before they can run.
+      </p>
       <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
-        >New environment</a
+        >Create the first environment</a
       >
-    </div>
+    </section>
   {% else %}
-    <ul class="space-y-2">
+    <ul class="record-list">
       {% for environment in environments %}
-        <li class="border-base-300 rounded-sm border px-3 py-3">
-          <a
-            href="/environments/{{ environment.id }}/configuration"
-            data-graft
-            class="link link-hover font-medium"
-            >{{ environment.name }}</a
-          >
-          <p
-            class="text-quiet mt-1 flex flex-col gap-1 text-xs sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2"
-          >
-            <span class="font-mono break-all">{{ environment.image }}</span>
+        <li class="record-row">
+          <div>
+            <a
+              href="/environments/{{ environment.id }}/configuration"
+              data-graft
+              class="link link-hover font-medium"
+              >{{ environment.name }}</a
+            >
+            <p class="text-quiet font-mono text-xs break-all">
+              {{ environment.image }}
+            </p>
+            {% if environment.snapshot != "" %}
+              <p class="text-quiet font-mono text-xs break-all">
+                {{ environment.snapshot }}
+              </p>
+            {% endif %}
+          </div>
+          <div class="flex flex-col items-end gap-1 text-right">
             <span
               class="badge badge-sm {% if environment.readiness_tone == "success" %}badge-success{% else if environment.readiness_tone == "warning" %}badge-warning{% else if environment.readiness_tone == "info" %}badge-info{% else %}badge-ghost{% endif %}"
               >{{ environment.readiness }}</span
             >
-            {% if environment.snapshot != "" %}
-              <span class="font-mono break-all"
-                >{{ environment.snapshot }}</span
-              >
-            {% endif %}
-            <span>{{ environment.prepared }}</span>
-          </p>
+            <span class="text-quiet text-xs">{{ environment.prepared }}</span>
+          </div>
         </li>
       {% endfor %}
     </ul>

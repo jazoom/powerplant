@@ -442,10 +442,8 @@ async fn connect_stays_available_when_providers_are_stored() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("Stored providers"));
     assert!(text.contains("xAI (Grok)"));
-    assert!(text.contains("Forget"));
-    assert!(text.contains("Back to chat"));
+    assert!(text.contains("action=\"/connect/forget\""));
     assert!(!text.contains(SECRET_KEY));
 }
 

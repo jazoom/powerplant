@@ -131,7 +131,7 @@ fn static_error(
 ) -> AppResult<Response> {
     #[derive(askama::Template)]
     #[template(
-        source = "<main class=\"mx-auto max-w-3xl p-6\"><div role=\"alert\" class=\"alert alert-error\">{{ message }}</div><a href=\"/runs\" data-graft class=\"btn btn-ghost mt-4\">Runs</a></main>",
+        source = "<main data-section=\"runs\" class=\"mx-auto max-w-4xl p-8\"><div role=\"alert\" class=\"alert alert-error\">{{ message }}</div><a href=\"/runs\" data-graft class=\"btn btn-ghost mt-4\">Runs</a></main>",
         ext = "html"
     )]
     struct ErrorView {

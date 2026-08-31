@@ -1,12 +1,44 @@
 {% extends "layout/base.html" %}
 {% let csp_nonce = "nonce"|crate::template_filters::csp_nonce -%}
 {% block body %}
-  <a
-    class="bg-primary text-primary-content fixed top-2 left-2 z-60 -translate-y-20 rounded-sm px-4 py-2 font-semibold focus:translate-y-0"
-    href="#chat-main"
-    >Skip to main content</a
-  >
-  <div id="chat-main" tabindex="-1" class="flex min-h-screen flex-col">
-    {{ content|safe }}
+  <a class="skip-link" href="#chat-main">Skip to main content</a>
+  <div class="app-frame">
+    <aside class="app-index" aria-label="Product index">
+      <a href="/agents" data-graft class="app-brand">
+        <img
+          src="/static/images/logo.svg"
+          alt=""
+          width="50"
+          height="36"
+          class="powerplant-mark"
+        />
+        <span>
+          <strong>Power Plant</strong>
+          <small>Local agent desk</small>
+        </span>
+      </a>
+      <p class="app-index-label">Working file</p>
+      <nav class="app-index-nav" aria-label="Primary navigation">
+        <a href="/agents" data-graft data-nav="agents">Agents</a>
+        <a href="/workflows" data-graft data-nav="workflows">Workflows</a>
+        <a href="/environments" data-graft data-nav="environments"
+          >Environments</a
+        >
+        <a href="/runs" data-graft data-nav="runs">Runs</a>
+      </nav>
+      <div class="app-connection">
+        <strong><i aria-hidden="true"></i>Connected locally</strong>
+        <a href="/connect">Manage providers</a>
+      </div>
+    </aside>
+    <div class="app-file">
+      <header class="app-file-bar" aria-label="Local desk status">
+        <span class="font-mono">FILE PP–LOCAL</span>
+        <span class="app-local-badge">Local host</span>
+      </header>
+      <div id="chat-main" tabindex="-1" class="app-page">
+        {{ content|safe }}
+      </div>
+    </div>
   </div>
 {% endblock %}
