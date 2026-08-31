@@ -9,6 +9,7 @@ use crate::{
     },
     models::ModelCatalogue,
     plan_login::PlanLogin,
+    projects::ProjectStore,
     providers::ChatBackend,
     sandbox::SandboxFleet,
     sessions::SessionStore,
@@ -30,6 +31,8 @@ pub(crate) struct AppState {
     pub(crate) models: Arc<ModelCatalogue>,
     pub(crate) plan_login: Arc<PlanLogin>,
     pub(crate) agents: Arc<AgentStore>,
+    #[allow(dead_code)]
+    pub(crate) projects: Arc<ProjectStore>,
     pub(crate) sandboxes: Arc<SandboxFleet>,
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,
     pub(crate) workflows: Arc<WorkflowCatalogue>,
@@ -52,6 +55,8 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         &config.data_dir.join("project.json"),
     )
     .map_err(|error| error.message().to_owned())?;
+    let projects = ProjectStore::open(config.data_dir.join("projects.json"))
+        .map_err(|error| error.message().to_owned())?;
     let environments = EnvironmentCatalogue::open(
         config.data_dir.join("environments.json"),
         config.data_dir.join("environment-preparation-logs"),
@@ -106,6 +111,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
         agents: Arc::new(agents),
+        projects: Arc::new(projects),
         sandboxes: Arc::new(sandboxes),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(workflows),
@@ -224,6 +230,7 @@ pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
         agents: Arc::new(AgentStore::in_memory()),
+        projects: Arc::new(ProjectStore::in_memory()),
         sandboxes: Arc::new(SandboxFleet::for_test()),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(WorkflowCatalogue::in_memory()),

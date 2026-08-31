@@ -150,6 +150,28 @@ pub(crate) fn read_private(path: &Path) -> Result<Vec<u8>, PersistError> {
     Ok(bytes)
 }
 
+pub(crate) fn read_private_bounded(
+    path: &Path,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, PersistError> {
+    let file = open_private_file(path)?;
+    restrict_file_permissions(&file).map_err(|_| PersistError)?;
+    file.sync_all().map_err(|_| PersistError)?;
+    let maximum = u64::try_from(maximum_bytes).map_err(|_| PersistError)?;
+    if file.metadata().map_err(|_| PersistError)?.len() > maximum {
+        return Err(PersistError);
+    }
+    let read_limit = maximum.checked_add(1).ok_or(PersistError)?;
+    let mut bytes = Vec::new();
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| PersistError)?;
+    if bytes.len() > maximum_bytes {
+        return Err(PersistError);
+    }
+    Ok(bytes)
+}
+
 pub(crate) fn restrict_private_file(path: &Path) -> Result<(), PersistError> {
     let file = open_private_file(path)?;
     restrict_file_permissions(&file).map_err(|_| PersistError)?;
