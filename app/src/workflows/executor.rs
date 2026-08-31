@@ -1879,9 +1879,7 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
         StepAction::Agent(_) if step.writes_primary_source() => "Implement",
         _ => step.name.as_str(),
     };
-    let action = if let crate::workflows::definition::SuccessTransition::ReviewVerdictGate(gate) =
-        &step.on_success
-    {
+    let action = if let Some(policy) = &step.review {
         let phase = run.pinned.definition.review_phase(&step.key).unwrap_or(1);
         let ordinal = run
             .attempts
@@ -1891,7 +1889,7 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
             + 1;
         format!(
             "{action} phase {phase} · attempt {ordinal} of {}",
-            gate.attempt_limit
+            policy.attempt_limit
         )
     } else {
         action.to_owned()

@@ -4,8 +4,8 @@ use crate::environments::EnvironmentId;
 use super::commands::SystemCommandId;
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput, RoleDefinition, RoleKey,
-    StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition, SystemCommandStep,
+    InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition,
+    RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandStep,
     WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
 
@@ -93,7 +93,7 @@ pub(crate) fn one_agent_definition(default_environment: EnvironmentId) -> Workfl
         ToolId::ALL.to_vec(),
         vec![initial_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
-        SuccessTransition::CompleteRun,
+        None,
     );
     definition("One agent", default_environment, vec![role], vec![step])
 }
@@ -127,7 +127,7 @@ pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> 
         review_tools(),
         vec![initial_candidate_input()],
         vec![assistant_output(), output("plan", OutputKind::Plan)],
-        next("implementer"),
+        None,
     );
     let implementer = agent_step(
         "implementer",
@@ -140,7 +140,7 @@ pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> 
             input("plan", ArtefactKind::Plan, "planner", "plan"),
         ],
         vec![assistant_output(), candidate_revision_output()],
-        next("reviewer"),
+        None,
     );
     let reviewer = agent_step(
         "reviewer",
@@ -158,7 +158,7 @@ pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> 
             input("plan", ArtefactKind::Plan, "planner", "plan"),
         ],
         vec![assistant_output(), review_output()],
-        next("commit"),
+        None,
     );
     let commit = commit_step("implementer", "reviewer");
     definition(
@@ -194,7 +194,7 @@ pub(crate) fn read_only_review_definition(
         ToolId::ALL.to_vec(),
         vec![initial_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
-        next("reviewer"),
+        None,
     );
     let reviewer = agent_step(
         "reviewer",
@@ -209,7 +209,7 @@ pub(crate) fn read_only_review_definition(
             "candidate",
         )],
         vec![assistant_output(), review_output()],
-        next("commit"),
+        None,
     );
     definition(
         "Read-only review",
@@ -254,7 +254,7 @@ pub(crate) fn review_with_fixes_definition(
         ToolId::ALL.to_vec(),
         vec![initial_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
-        next("fixing-reviewer"),
+        None,
     );
     let fixing = agent_step(
         "fixing-reviewer",
@@ -273,7 +273,7 @@ pub(crate) fn review_with_fixes_definition(
             candidate_revision_output(),
             review_output(),
         ],
-        next("independent-reviewer"),
+        None,
     );
     let independent = agent_step(
         "independent-reviewer",
@@ -296,7 +296,7 @@ pub(crate) fn review_with_fixes_definition(
             ),
         ],
         vec![assistant_output(), review_output()],
-        next("commit"),
+        None,
     );
     definition(
         "Review with fixes",
@@ -336,7 +336,7 @@ pub(crate) fn review_until_approved_definition(
         ToolId::ALL.to_vec(),
         vec![current_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
-        next("reviewer"),
+        None,
     );
     let reviewer = agent_step(
         "reviewer",
@@ -346,7 +346,7 @@ pub(crate) fn review_until_approved_definition(
         review_tools(),
         vec![current_candidate_input()],
         vec![assistant_output(), review_output()],
-        review_gate("review", "commit", "implementer", 3),
+        Some(review_policy("review", "implementer", 3)),
     );
     definition(
         "Review until approved",
@@ -391,7 +391,7 @@ pub(crate) fn correctness_security_definition(
         ToolId::ALL.to_vec(),
         vec![current_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
-        next("correctness-review"),
+        None,
     );
     let correctness = agent_step(
         "correctness-review",
@@ -401,7 +401,7 @@ pub(crate) fn correctness_security_definition(
         review_tools(),
         vec![current_candidate_input()],
         vec![assistant_output(), review_output()],
-        review_gate("review", "security-review", "implementer", 3),
+        Some(review_policy("review", "implementer", 3)),
     );
     let security = agent_step(
         "security-review",
@@ -419,7 +419,7 @@ pub(crate) fn correctness_security_definition(
             ),
         ],
         vec![assistant_output(), review_output()],
-        review_gate("review", "commit", "implementer", 3),
+        Some(review_policy("review", "implementer", 3)),
     );
     definition(
         "Correctness and security review",
@@ -445,15 +445,12 @@ fn current_candidate_input() -> RequiredInput {
     }
 }
 
-fn review_gate(output: &str, approved: &str, revision: &str, limit: u8) -> SuccessTransition {
-    SuccessTransition::ReviewVerdictGate(super::definition::ReviewVerdictGate {
+fn review_policy(output: &str, revision: &str, limit: u8) -> ReviewPolicy {
+    ReviewPolicy {
         report_output: OutputKey::parse(output).expect("output"),
-        approved_target: super::definition::ApprovedTarget::Next(
-            StepKey::parse(approved).expect("approved"),
-        ),
         revision_target: StepKey::parse(revision).expect("revision"),
         attempt_limit: limit,
-    })
+    }
 }
 
 fn commit_step_current(reviews: &[(&str, &str)]) -> StepDefinition {
@@ -472,7 +469,7 @@ fn commit_step_current(reviews: &[(&str, &str)]) -> StepDefinition {
             environment: StepEnvironment::WorkflowDefault,
             required_outputs: vec![output("committed-candidate", OutputKind::CandidateRevision)],
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     }
 }
 
@@ -505,7 +502,7 @@ fn agent_step(
     tools: Vec<ToolId>,
     inputs: Vec<RequiredInput>,
     outputs: Vec<RequiredOutput>,
-    on_success: SuccessTransition,
+    review: Option<ReviewPolicy>,
 ) -> StepDefinition {
     StepDefinition {
         key: StepKey::parse(key).expect("step"),
@@ -518,7 +515,7 @@ fn agent_step(
             authority: AgentAuthority::new(tools, Vec::new()).expect("authority"),
             required_outputs: outputs,
         }),
-        on_success,
+        review,
     }
 }
 
@@ -540,7 +537,7 @@ fn commit_step(candidate_step: &str, review_step: &str) -> StepDefinition {
             environment: StepEnvironment::WorkflowDefault,
             required_outputs: vec![output("committed-candidate", OutputKind::CandidateRevision)],
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     }
 }
 
@@ -570,9 +567,6 @@ fn review_output() -> RequiredOutput {
 }
 fn review_tools() -> Vec<ToolId> {
     vec![ToolId::List, ToolId::Read, ToolId::Run]
-}
-fn next(step: &str) -> SuccessTransition {
-    SuccessTransition::Next(StepKey::parse(step).expect("next"))
 }
 
 #[cfg(test)]

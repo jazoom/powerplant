@@ -311,7 +311,7 @@ fn review_fields_are_required_and_bounded() {
     let (form, _) = WorkflowFormState::parse(stale_target).expect("parse");
     assert_eq!(
         form.to_definition().expect_err("stale target").summary,
-        "A step names an unknown successor."
+        "A review policy names an unknown step."
     );
 }
 

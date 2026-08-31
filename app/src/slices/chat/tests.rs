@@ -292,9 +292,7 @@ async fn wait_until_job_events(state: &AppState, token: &str, minimum: u64) {
 
 #[test]
 fn workflow_policy_follows_the_commit_edges() {
-    use crate::workflows::definition::{
-        ArtefactKind, ArtefactSource, SuccessTransition, WorkflowDefinition,
-    };
+    use crate::workflows::definition::{ArtefactKind, ArtefactSource, WorkflowDefinition};
 
     let environment = crate::workflows::definition::test_environment_id();
     let read_only = crate::workflows::seeds::read_only_review_definition(environment);
@@ -310,13 +308,6 @@ fn workflow_policy_follows_the_commit_edges() {
 
     let mut steps = independent.steps().to_vec();
     steps.retain(|step| step.key.as_str() != "independent-reviewer");
-    let fixing = steps
-        .iter_mut()
-        .find(|step| step.key.as_str() == "fixing-reviewer")
-        .expect("fixing reviewer");
-    fixing.on_success = SuccessTransition::Next(
-        crate::workflows::definition::StepKey::parse("commit").expect("commit"),
-    );
     let commit = steps
         .iter_mut()
         .find(|step| step.key.as_str() == "commit")

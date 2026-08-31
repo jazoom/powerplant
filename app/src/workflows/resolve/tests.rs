@@ -7,8 +7,7 @@ use crate::environments::{
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind,
     RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    SuccessTransition, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
-    test_environment_id,
+    WorkflowDefinition, candidate_revision_output, initial_candidate_input, test_environment_id,
 };
 
 fn draft(name: &str) -> EnvironmentDraft {
@@ -49,7 +48,7 @@ fn definition(default: crate::environments::EnvironmentId) -> WorkflowDefinition
                     candidate_revision_output(),
                 ],
             }),
-            on_success: SuccessTransition::CompleteRun,
+            review: None,
         }],
     )
     .expect("definition")

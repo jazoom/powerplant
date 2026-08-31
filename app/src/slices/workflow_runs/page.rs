@@ -254,10 +254,11 @@ impl RunDetailView {
                             .unwrap_or_default(),
                         gate_href: gate.map(|gate| format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex())).unwrap_or_default(),
                         review_phase: run.pinned.definition.review_phase(&step.key).map(|phase| phase.to_string()).unwrap_or_default(),
-                        attempt_limit: match &step.on_success {
-                            crate::workflows::definition::SuccessTransition::ReviewVerdictGate(gate) => gate.attempt_limit.to_string(),
-                            _ => String::new(),
-                        },
+                        attempt_limit: step
+                            .review
+                            .as_ref()
+                            .map(|policy| policy.attempt_limit.to_string())
+                            .unwrap_or_default(),
                         latest_verdict: latest_review_verdict(run, attempt),
                         selected_route: review_route(run, step, attempt),
                         role: match &step.action {
@@ -371,26 +372,11 @@ fn review_route(
     }.to_owned()).unwrap_or_default()
 }
 
-fn approved_next(
-    transition: &crate::workflows::definition::SuccessTransition,
-) -> Option<&crate::workflows::definition::StepKey> {
-    match transition {
-        crate::workflows::definition::SuccessTransition::Next(next) => Some(next),
-        crate::workflows::definition::SuccessTransition::ReviewVerdictGate(gate) => {
-            match &gate.approved_target {
-                crate::workflows::definition::ApprovedTarget::Next(next) => Some(next),
-                crate::workflows::definition::ApprovedTarget::CompleteRun => None,
-            }
-        }
-        crate::workflows::definition::SuccessTransition::CompleteRun => None,
-    }
-}
-
 fn following_candidate_hash(
     run: &WorkflowRun,
     step: &crate::workflows::definition::StepDefinition,
 ) -> Option<crate::workflows::artefacts::CandidateHash> {
-    let mut next = approved_next(&step.on_success);
+    let mut next = run.pinned.definition.next_step(&step.key);
     while let Some(key) = next {
         if let Some(candidate) = run
             .attempts
@@ -408,11 +394,7 @@ fn following_candidate_hash(
         {
             return Some(candidate);
         }
-        next = run
-            .pinned
-            .definition
-            .step(key)
-            .and_then(|following| approved_next(&following.on_success));
+        next = run.pinned.definition.next_step(key);
     }
     None
 }
@@ -421,9 +403,7 @@ fn next_candidate_hash(
     run: &WorkflowRun,
     step: &crate::workflows::definition::StepDefinition,
 ) -> Option<crate::workflows::artefacts::CandidateHash> {
-    let crate::workflows::definition::SuccessTransition::Next(next) = &step.on_success else {
-        return None;
-    };
+    let next = run.pinned.definition.next_step(&step.key)?;
     let next = run.pinned.definition.step(next)?;
     let candidate = next.inputs.iter().find(|input| {
         input.kind == crate::workflows::definition::ArtefactKind::CandidateRevision

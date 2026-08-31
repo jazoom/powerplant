@@ -7,8 +7,7 @@ use crate::providers::{ProviderConnection, ProviderKind};
 use crate::tools::SUBMIT_WORKFLOW_OUTPUT;
 use crate::workflows::definition::{
     AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind, RequiredOutput, RoleKey,
-    StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition, SystemCommandId,
-    SystemCommandStep,
+    StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandId, SystemCommandStep,
 };
 
 fn agent(tools: Vec<ToolId>, writable: bool) -> AgentRecord {
@@ -56,7 +55,7 @@ fn agent_step(tools: Vec<ToolId>, writable: bool) -> StepDefinition {
             authority,
             required_outputs: Vec::new(),
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     }
 }
 
@@ -70,7 +69,7 @@ fn status_step() -> StepDefinition {
             environment: StepEnvironment::WorkflowDefault,
             required_outputs: Vec::new(),
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     }
 }
 
@@ -87,7 +86,7 @@ fn commit_step() -> StepDefinition {
                 kind: OutputKind::CandidateRevision,
             }],
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     }
 }
 

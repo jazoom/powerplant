@@ -1,8 +1,8 @@
 use super::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
     DefinitionError, GuestDirectoryAccess, InputKey, OutputKey, OutputKind, RequiredInput,
-    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction, StepDefinition,
+    StepEnvironment, StepKey, SystemCommandId, SystemCommandStep, WorkflowDefinition,
     candidate_revision_output, initial_candidate_input, test_environment_id,
 };
 use crate::agents::{AccessMode, ToolId};
@@ -22,10 +22,9 @@ fn authority() -> AgentAuthority {
     AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority")
 }
 
-fn agent_step(key: &str, next: SuccessTransition) -> StepDefinition {
+fn agent_step(key: &str) -> StepDefinition {
     write_agent_step(
         key,
-        next,
         ArtefactSource::RunInitialCandidate,
         vec![
             RequiredOutput {
@@ -34,14 +33,15 @@ fn agent_step(key: &str, next: SuccessTransition) -> StepDefinition {
             },
             candidate_revision_output(),
         ],
+        None,
     )
 }
 
 fn write_agent_step(
     key: &str,
-    next: SuccessTransition,
     candidate: ArtefactSource,
     outputs: Vec<RequiredOutput>,
+    review: Option<ReviewPolicy>,
 ) -> StepDefinition {
     StepDefinition {
         key: StepKey::parse(key).expect("step"),
@@ -58,11 +58,11 @@ fn write_agent_step(
             authority: authority(),
             required_outputs: outputs,
         }),
-        on_success: next,
+        review,
     }
 }
 
-fn command_step(key: &str, next: SuccessTransition) -> StepDefinition {
+fn command_step(key: &str) -> StepDefinition {
     StepDefinition {
         key: StepKey::parse(key).expect("step"),
         name: "Status".to_owned(),
@@ -72,7 +72,7 @@ fn command_step(key: &str, next: SuccessTransition) -> StepDefinition {
             environment: StepEnvironment::WorkflowDefault,
             required_outputs: Vec::new(),
         }),
-        on_success: next,
+        review: None,
     }
 }
 
@@ -81,7 +81,7 @@ fn one_agent() -> WorkflowDefinition {
         "Maintainer".to_owned(),
         test_environment_id(),
         vec![role()],
-        vec![agent_step("reply", SuccessTransition::CompleteRun)],
+        vec![agent_step("reply")],
     )
     .expect("definition")
 }
@@ -92,7 +92,7 @@ fn duplicate_role_keys_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role(), role()],
-        vec![agent_step("reply", SuccessTransition::CompleteRun)],
+        vec![agent_step("reply")],
     )
     .err();
     assert_eq!(error, Some(DefinitionError::DuplicateRole));
@@ -104,13 +104,7 @@ fn duplicate_step_keys_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        vec![
-            agent_step(
-                "reply",
-                SuccessTransition::Next(StepKey::parse("reply").expect("next")),
-            ),
-            agent_step("reply", SuccessTransition::CompleteRun),
-        ],
+        vec![agent_step("reply"), agent_step("reply")],
     )
     .err();
     assert_eq!(error, Some(DefinitionError::DuplicateStep));
@@ -118,7 +112,7 @@ fn duplicate_step_keys_are_rejected() {
 
 #[test]
 fn unknown_roles_are_rejected() {
-    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut step = agent_step("reply");
     if let StepAction::Agent(action) = &mut step.action {
         action.role = RoleKey::parse("reviewer").expect("role");
     }
@@ -145,104 +139,10 @@ fn unused_roles_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role(), extra],
-        vec![agent_step("reply", SuccessTransition::CompleteRun)],
+        vec![agent_step("reply")],
     )
     .err();
     assert_eq!(error, Some(DefinitionError::UnusedRole));
-}
-
-#[test]
-fn unknown_successors_are_rejected() {
-    let error = WorkflowDefinition::from_parts(
-        "Team".to_owned(),
-        test_environment_id(),
-        vec![role()],
-        vec![agent_step(
-            "reply",
-            SuccessTransition::Next(StepKey::parse("missing").expect("next")),
-        )],
-    )
-    .err();
-    assert_eq!(error, Some(DefinitionError::UnknownStep));
-}
-
-#[test]
-fn cycles_are_rejected() {
-    let error = WorkflowDefinition::from_parts(
-        "Team".to_owned(),
-        test_environment_id(),
-        vec![role()],
-        vec![
-            agent_step(
-                "one",
-                SuccessTransition::Next(StepKey::parse("two").expect("two")),
-            ),
-            command_step(
-                "two",
-                SuccessTransition::Next(StepKey::parse("one").expect("one")),
-            ),
-        ],
-    )
-    .err();
-    assert_eq!(error, Some(DefinitionError::Cycle));
-}
-
-#[test]
-fn joins_are_rejected() {
-    let error = WorkflowDefinition::from_parts(
-        "Team".to_owned(),
-        test_environment_id(),
-        vec![role()],
-        vec![
-            agent_step(
-                "one",
-                SuccessTransition::Next(StepKey::parse("end").expect("end")),
-            ),
-            command_step(
-                "two",
-                SuccessTransition::Next(StepKey::parse("end").expect("end")),
-            ),
-            command_step("end", SuccessTransition::CompleteRun),
-        ],
-    )
-    .err();
-    assert_eq!(error, Some(DefinitionError::Join));
-}
-
-#[test]
-fn extra_sources_are_rejected_as_branches() {
-    let error = WorkflowDefinition::from_parts(
-        "Team".to_owned(),
-        test_environment_id(),
-        vec![role()],
-        vec![
-            agent_step("one", SuccessTransition::CompleteRun),
-            command_step("two", SuccessTransition::CompleteRun),
-        ],
-    )
-    .err();
-    assert_eq!(error, Some(DefinitionError::Unreachable));
-}
-
-#[test]
-fn unreachable_steps_are_rejected() {
-    let error = WorkflowDefinition::from_parts(
-        "Team".to_owned(),
-        test_environment_id(),
-        vec![role()],
-        vec![
-            agent_step("one", SuccessTransition::CompleteRun),
-            command_step(
-                "two",
-                SuccessTransition::Next(StepKey::parse("one").expect("one")),
-            ),
-        ],
-    )
-    .err();
-    assert!(matches!(
-        error,
-        Some(DefinitionError::Join | DefinitionError::Branch | DefinitionError::Unreachable)
-    ));
 }
 
 #[test]
@@ -268,7 +168,7 @@ fn arbitrary_command_values_are_rejected() {
                     "environment": {{ "source": "workflow-default" }},
                     "required-outputs": []
                 }},
-                "on-success": {{ "type": "complete-run" }}
+                "review": null
             }}
         ]
     }}"#,
@@ -282,7 +182,7 @@ fn arbitrary_command_values_are_rejected() {
 
 #[test]
 fn command_outputs_that_the_command_cannot_produce_are_rejected() {
-    let mut step = command_step("status", SuccessTransition::CompleteRun);
+    let mut step = command_step("status");
     if let StepAction::SystemCommand(action) = &mut step.action {
         action.required_outputs.push(RequiredOutput {
             key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
@@ -301,7 +201,7 @@ fn command_outputs_that_the_command_cannot_produce_are_rejected() {
 
 #[test]
 fn duplicate_output_keys_are_rejected() {
-    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut step = agent_step("reply");
     if let StepAction::Agent(action) = &mut step.action {
         action.required_outputs.push(RequiredOutput {
             key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
@@ -325,7 +225,7 @@ fn content_versions_round_trip_both_action_kinds() {
         "Status".to_owned(),
         test_environment_id(),
         Vec::new(),
-        vec![command_step("status", SuccessTransition::CompleteRun)],
+        vec![command_step("status")],
     )
     .expect("command");
     let agent_bytes = serde_json::to_vec(&agent.to_file()).expect("json");
@@ -344,7 +244,7 @@ fn a_definition_change_creates_a_different_content_version() {
         "Changed".to_owned(),
         test_environment_id(),
         vec![role()],
-        vec![agent_step("reply", SuccessTransition::CompleteRun)],
+        vec![agent_step("reply")],
     )
     .expect("changed");
     assert_ne!(original.version(), changed.version());
@@ -365,7 +265,7 @@ fn pretty_printed_bytes_do_not_change_the_content_version() {
 }
 
 #[test]
-fn malformed_environment_identifiers_are_rejected_before_graph_checks() {
+fn malformed_environment_identifiers_are_rejected_before_other_definition_checks() {
     let mut file = one_agent().to_file();
     file.default_environment = "not-an-id".to_owned();
     let bytes = serde_json::to_vec(&file).expect("json");
@@ -377,7 +277,7 @@ fn malformed_environment_identifiers_are_rejected_before_graph_checks() {
 
 #[test]
 fn an_override_equal_to_the_default_normalises_to_workflow_default() {
-    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut step = agent_step("reply");
     if let StepAction::Agent(action) = &mut step.action {
         action.environment = StepEnvironment::Override {
             environment_id: test_environment_id(),
@@ -404,7 +304,7 @@ fn environment_identifiers_change_the_content_version() {
         "Maintainer".to_owned(),
         other,
         vec![role()],
-        vec![agent_step("reply", SuccessTransition::CompleteRun)],
+        vec![agent_step("reply")],
     )
     .expect("changed");
     assert_ne!(original.version(), changed.version());
@@ -462,7 +362,6 @@ fn from_step(step: &str, output: &str) -> ArtefactSource {
 fn unknown_step_outputs_are_rejected() {
     let later = write_agent_step(
         "reply",
-        SuccessTransition::Next(StepKey::parse("status").expect("next")),
         ArtefactSource::RunInitialCandidate,
         vec![
             RequiredOutput {
@@ -471,8 +370,9 @@ fn unknown_step_outputs_are_rejected() {
             },
             candidate_revision_output(),
         ],
+        None,
     );
-    let mut status = command_step("status", SuccessTransition::CompleteRun);
+    let mut status = command_step("status");
     status.inputs = vec![
         RequiredInput {
             key: InputKey::parse("candidate").expect("input"),
@@ -499,7 +399,6 @@ fn unknown_step_outputs_are_rejected() {
 fn input_kind_mismatch_is_rejected() {
     let planner = write_agent_step(
         "plan",
-        SuccessTransition::Next(StepKey::parse("review").expect("next")),
         ArtefactSource::RunInitialCandidate,
         vec![
             RequiredOutput {
@@ -508,10 +407,10 @@ fn input_kind_mismatch_is_rejected() {
             },
             candidate_revision_output(),
         ],
+        None,
     );
     let mut review = write_agent_step(
         "review",
-        SuccessTransition::CompleteRun,
         from_step("plan", "candidate"),
         vec![
             RequiredOutput {
@@ -520,6 +419,7 @@ fn input_kind_mismatch_is_rejected() {
             },
             candidate_revision_output(),
         ],
+        None,
     );
     review.inputs.push(RequiredInput {
         key: InputKey::parse("plan").expect("input"),
@@ -538,13 +438,9 @@ fn input_kind_mismatch_is_rejected() {
 
 #[test]
 fn stale_candidate_sources_are_rejected() {
-    let first = agent_step(
-        "one",
-        SuccessTransition::Next(StepKey::parse("two").expect("two")),
-    );
+    let first = agent_step("one");
     let second = write_agent_step(
         "two",
-        SuccessTransition::CompleteRun,
         ArtefactSource::RunInitialCandidate,
         vec![
             RequiredOutput {
@@ -553,6 +449,7 @@ fn stale_candidate_sources_are_rejected() {
             },
             candidate_revision_output(),
         ],
+        None,
     );
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
@@ -566,7 +463,7 @@ fn stale_candidate_sources_are_rejected() {
 
 #[test]
 fn sandbox_steps_without_candidate_inputs_are_rejected() {
-    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut step = agent_step("reply");
     step.inputs.clear();
     let error = WorkflowDefinition::from_parts(
         "Team".to_owned(),
@@ -580,7 +477,7 @@ fn sandbox_steps_without_candidate_inputs_are_rejected() {
 
 #[test]
 fn candidate_authority_rejects_conflicting_outputs() {
-    let mut read_only = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut read_only = agent_step("reply");
     let StepAction::Agent(action) = &mut read_only.action else {
         panic!("agent step");
     };
@@ -596,7 +493,7 @@ fn candidate_authority_rejects_conflicting_outputs() {
         Some(DefinitionError::CandidateOutput)
     );
 
-    let mut duplicate_reviews = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut duplicate_reviews = agent_step("reply");
     let StepAction::Agent(action) = &mut duplicate_reviews.action else {
         panic!("agent step");
     };
@@ -652,7 +549,7 @@ fn unknown_or_absent_candidate_authority_is_rejected() {
 
 #[test]
 fn write_steps_without_candidate_outputs_are_rejected() {
-    let mut step = agent_step("reply", SuccessTransition::CompleteRun);
+    let mut step = agent_step("reply");
     if let StepAction::Agent(action) = &mut step.action {
         action
             .required_outputs
@@ -694,8 +591,8 @@ fn rebuild_review_definition(
 }
 
 #[test]
-fn review_gate_shape_and_attempt_limits_are_validated() {
-    enum InvalidGate {
+fn review_policy_shape_and_attempt_limits_are_validated() {
+    enum InvalidPolicy {
         MissingReport,
         ForwardTarget,
         UnknownTarget,
@@ -703,11 +600,17 @@ fn review_gate_shape_and_attempt_limits_are_validated() {
     }
 
     for (invalid, expected) in [
-        (InvalidGate::MissingReport, DefinitionError::ReviewGate),
-        (InvalidGate::ForwardTarget, DefinitionError::ReviewGate),
-        (InvalidGate::UnknownTarget, DefinitionError::UnknownStep),
-        (InvalidGate::AttemptLimit(0), DefinitionError::AttemptLimit),
-        (InvalidGate::AttemptLimit(9), DefinitionError::AttemptLimit),
+        (InvalidPolicy::MissingReport, DefinitionError::ReviewPolicy),
+        (InvalidPolicy::ForwardTarget, DefinitionError::ReviewPolicy),
+        (InvalidPolicy::UnknownTarget, DefinitionError::UnknownStep),
+        (
+            InvalidPolicy::AttemptLimit(0),
+            DefinitionError::AttemptLimit,
+        ),
+        (
+            InvalidPolicy::AttemptLimit(9),
+            DefinitionError::AttemptLimit,
+        ),
     ] {
         let source =
             crate::workflows::seeds::review_until_approved_definition(test_environment_id());
@@ -716,20 +619,20 @@ fn review_gate_shape_and_attempt_limits_are_validated() {
             .iter_mut()
             .find(|step| step.key.as_str() == "reviewer")
             .expect("reviewer");
-        let SuccessTransition::ReviewVerdictGate(gate) = &mut reviewer.on_success else {
-            panic!("review gate")
+        let Some(policy) = reviewer.review.as_mut() else {
+            panic!("review policy")
         };
         match invalid {
-            InvalidGate::MissingReport => {
-                gate.report_output = OutputKey::parse("missing").expect("output")
+            InvalidPolicy::MissingReport => {
+                policy.report_output = OutputKey::parse("missing").expect("output")
             }
-            InvalidGate::ForwardTarget => {
-                gate.revision_target = StepKey::parse("commit").expect("step")
+            InvalidPolicy::ForwardTarget => {
+                policy.revision_target = StepKey::parse("commit").expect("step")
             }
-            InvalidGate::UnknownTarget => {
-                gate.revision_target = StepKey::parse("missing").expect("step")
+            InvalidPolicy::UnknownTarget => {
+                policy.revision_target = StepKey::parse("missing").expect("step")
             }
-            InvalidGate::AttemptLimit(limit) => gate.attempt_limit = limit,
+            InvalidPolicy::AttemptLimit(limit) => policy.attempt_limit = limit,
         }
         assert_eq!(rebuild_review_definition(steps).err(), Some(expected));
     }
@@ -760,8 +663,6 @@ fn review_loops_respect_the_conservative_run_bound() {
     let mut steps = Vec::new();
     for index in 0..10 {
         let key = StepKey::parse(&format!("step-{index}")).expect("step");
-        let next =
-            (index + 1 < 10).then(|| StepKey::parse(&format!("step-{}", index + 1)).expect("next"));
         let mut outputs = vec![
             RequiredOutput {
                 key: OutputKey::parse(ASSISTANT_REPLY).expect("reply"),
@@ -769,28 +670,24 @@ fn review_loops_respect_the_conservative_run_bound() {
             },
             candidate_revision_output(),
         ];
-        let on_success = if index == 0 {
-            SuccessTransition::Next(next.expect("next"))
+        let review = if index == 0 {
+            None
         } else {
             outputs.push(RequiredOutput {
                 key: OutputKey::parse("review").expect("review"),
                 kind: OutputKind::ReviewReport,
             });
-            SuccessTransition::ReviewVerdictGate(super::ReviewVerdictGate {
+            Some(ReviewPolicy {
                 report_output: OutputKey::parse("review").expect("review"),
-                approved_target: next.map_or(
-                    super::ApprovedTarget::CompleteRun,
-                    super::ApprovedTarget::Next,
-                ),
                 revision_target: StepKey::parse("step-0").expect("target"),
                 attempt_limit: 8,
             })
         };
         steps.push(write_agent_step(
             key.as_str(),
-            on_success,
             ArtefactSource::RunCurrentCandidate,
             outputs,
+            review,
         ));
     }
     assert_eq!(
@@ -806,26 +703,75 @@ fn review_loops_respect_the_conservative_run_bound() {
 }
 
 #[test]
-fn review_gates_and_current_candidates_round_trip() {
-    let definition =
-        crate::workflows::seeds::review_until_approved_definition(test_environment_id());
-    let bytes = serde_json::to_vec(&definition.to_file()).expect("json");
-    assert_eq!(
-        WorkflowDefinition::from_file_bytes(&bytes).expect("round trip"),
-        definition
-    );
-}
-
-#[test]
-fn definition_round_trip_derives_entry_from_vector_order() {
+fn version_one_linear_workflows_round_trip_from_vector_order() {
     let definition = crate::workflows::seeds::sequential_team_definition(test_environment_id());
     let value = serde_json::to_value(definition.to_file()).expect("json");
     assert!(value.get("first-step").is_none());
+    for step in value["steps"].as_array().expect("steps") {
+        assert!(step.get("on-success").is_none());
+        assert!(step.get("review").is_none());
+    }
 
     let bytes = serde_json::to_vec(&value).expect("bytes");
     let loaded = WorkflowDefinition::from_file_bytes(&bytes).expect("round trip");
     assert_eq!(loaded, definition);
     assert_eq!(loaded.first_step().as_str(), "planner");
+    assert_eq!(
+        loaded.next_step(loaded.first_step()).map(StepKey::as_str),
+        Some("implementer")
+    );
+    assert_eq!(
+        loaded
+            .next_step(&StepKey::parse("commit").expect("commit"))
+            .map(StepKey::as_str),
+        None
+    );
+}
+
+#[test]
+fn version_one_final_steps_round_trip_without_successors() {
+    let definition = one_agent();
+    let value = serde_json::to_value(definition.to_file()).expect("json");
+    assert!(value["steps"][0].get("review").is_none());
+    assert!(value["steps"][0].get("on-success").is_none());
+
+    let bytes = serde_json::to_vec(&value).expect("bytes");
+    let loaded = WorkflowDefinition::from_file_bytes(&bytes).expect("round trip");
+    assert_eq!(loaded, definition);
+    assert_eq!(loaded.first_step().as_str(), "reply");
+    assert_eq!(loaded.next_step(loaded.first_step()), None);
+    assert_eq!(loaded.step_position(loaded.first_step()), Some(0));
+}
+
+#[test]
+fn version_one_keyed_review_loops_round_trip() {
+    let definition =
+        crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    let value = serde_json::to_value(definition.to_file()).expect("json");
+    let reviewer = value["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .find(|step| step["key"] == "reviewer")
+        .expect("reviewer");
+    assert!(reviewer.get("on-success").is_none());
+    assert_eq!(reviewer["review"]["revision-target"], "implementer");
+    assert!(reviewer["review"].get("approved-target").is_none());
+
+    let bytes = serde_json::to_vec(&value).expect("bytes");
+    let loaded = WorkflowDefinition::from_file_bytes(&bytes).expect("round trip");
+    assert_eq!(loaded, definition);
+    let reviewer_key = StepKey::parse("reviewer").expect("reviewer");
+    let policy = loaded
+        .step(&reviewer_key)
+        .and_then(|step| step.review.as_ref())
+        .expect("review policy");
+    assert_eq!(policy.revision_target.as_str(), "implementer");
+    assert_eq!(
+        loaded.next_step(&reviewer_key).map(StepKey::as_str),
+        Some("commit")
+    );
+    assert!(loaded.step_position(&policy.revision_target) < loaded.step_position(&reviewer_key));
 }
 
 #[test]
@@ -834,6 +780,20 @@ fn obsolete_first_step_fields_are_rejected() {
     value.as_object_mut().expect("object").insert(
         "first-step".to_owned(),
         serde_json::Value::String("reply".to_owned()),
+    );
+    let bytes = serde_json::to_vec(&value).expect("bytes");
+    assert_eq!(
+        WorkflowDefinition::from_file_bytes(&bytes).err(),
+        Some(DefinitionError::Format)
+    );
+}
+
+#[test]
+fn obsolete_on_success_fields_are_rejected() {
+    let mut value = serde_json::to_value(one_agent().to_file()).expect("json");
+    value["steps"][0].as_object_mut().expect("step").insert(
+        "on-success".to_owned(),
+        serde_json::json!({ "type": "complete-run" }),
     );
     let bytes = serde_json::to_vec(&value).expect("bytes");
     assert_eq!(

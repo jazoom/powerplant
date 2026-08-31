@@ -119,8 +119,8 @@ fn fixing_publication_fixture() -> (
 ) {
     use crate::workflows::definition::{
         AgentStep, ArtefactKind, OutputKey, OutputKind, RequiredOutput, RoleDefinition, RoleKey,
-        StepAction, StepDefinition, StepEnvironment, StepKey, SuccessTransition,
-        WorkflowDefinition, candidate_revision_output, initial_candidate_input,
+        StepAction, StepDefinition, StepEnvironment, StepKey, WorkflowDefinition,
+        candidate_revision_output, initial_candidate_input,
     };
 
     let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
@@ -162,7 +162,7 @@ fn fixing_publication_fixture() -> (
                 },
             ],
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     };
     let definition = WorkflowDefinition::from_parts(
         "Fixing".to_owned(),

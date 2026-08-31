@@ -6,8 +6,8 @@ use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind,
     RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
-    candidate_revision_output, initial_candidate_input, test_environment_id, test_named_definition,
+    SystemCommandId, SystemCommandStep, WorkflowDefinition, candidate_revision_output,
+    initial_candidate_input, test_environment_id, test_named_definition,
 };
 use crate::workflows::id::WorkflowId;
 
@@ -345,7 +345,7 @@ fn command_steps_do_not_require_agent_authority() {
                     command: SystemCommandId::RepositoryStatus,
                     required_outputs: Vec::new(),
                 }),
-                on_success: SuccessTransition::Next(StepKey::parse("work").expect("next")),
+                review: None,
             },
             StepDefinition {
                 key: StepKey::parse("work").expect("step"),
@@ -364,7 +364,7 @@ fn command_steps_do_not_require_agent_authority() {
                         candidate_revision_output(),
                     ],
                 }),
-                on_success: SuccessTransition::CompleteRun,
+                review: None,
             },
         ],
     )

@@ -3,8 +3,8 @@ use crate::workflows::definition::{
     AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
     GuestDirectoryAccess, HumanGateStep, InputKey, MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS,
     MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind, RequiredInput,
-    RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
+    RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction, StepDefinition,
+    StepEnvironment, StepKey, SystemCommandId, SystemCommandStep, WorkflowDefinition,
     candidate_revision_output, initial_candidate_input,
 };
 use crate::workflows::{CatalogueError, WorkflowRecord};
@@ -536,15 +536,9 @@ impl WorkflowFormState {
             errors.summary = crate::workflows::definition::DefinitionError::StepCount.message();
             return Err(errors);
         }
-        let last = steps.len() - 1;
-        for index in 0..=last {
-            let approved_target = if index < last {
-                crate::workflows::definition::ApprovedTarget::Next(steps[index + 1].key.clone())
-            } else {
-                crate::workflows::definition::ApprovedTarget::CompleteRun
-            };
-            steps[index].on_success = if self.steps[index].exit == "review-verdict" {
-                let report_output = match OutputKey::parse(&self.steps[index].report_output) {
+        for (index, (step, draft)) in steps.iter_mut().zip(&self.steps).enumerate() {
+            step.review = if draft.exit == "review-verdict" {
+                let report_output = match OutputKey::parse(&draft.report_output) {
                     Ok(key) => key,
                     Err(error) => {
                         errors.steps[index].report_output = error.message();
@@ -552,7 +546,7 @@ impl WorkflowFormState {
                         return Err(errors);
                     }
                 };
-                let revision_target = match StepKey::parse(&self.steps[index].revision_target) {
+                let revision_target = match StepKey::parse(&draft.revision_target) {
                     Ok(key) => key,
                     Err(error) => {
                         errors.steps[index].revision_target = error.message();
@@ -560,7 +554,7 @@ impl WorkflowFormState {
                         return Err(errors);
                     }
                 };
-                let attempt_limit = match self.steps[index].attempt_limit.parse::<u8>() {
+                let attempt_limit = match draft.attempt_limit.parse::<u8>() {
                     Ok(limit)
                         if (crate::workflows::definition::MINIMUM_REVIEW_ATTEMPTS
                             ..=crate::workflows::definition::MAXIMUM_REVIEW_ATTEMPTS)
@@ -575,23 +569,13 @@ impl WorkflowFormState {
                         return Err(errors);
                     }
                 };
-                SuccessTransition::ReviewVerdictGate(
-                    crate::workflows::definition::ReviewVerdictGate {
-                        report_output,
-                        approved_target,
-                        revision_target,
-                        attempt_limit,
-                    },
-                )
-            } else if self.steps[index].exit == "normal" {
-                match approved_target {
-                    crate::workflows::definition::ApprovedTarget::Next(next) => {
-                        SuccessTransition::Next(next)
-                    }
-                    crate::workflows::definition::ApprovedTarget::CompleteRun => {
-                        SuccessTransition::CompleteRun
-                    }
-                }
+                Some(ReviewPolicy {
+                    report_output,
+                    revision_target,
+                    attempt_limit,
+                })
+            } else if draft.exit == "normal" {
+                None
             } else {
                 errors.steps[index].exit = "Choose an exit type.";
                 errors.summary = "Fix the highlighted fields.";
@@ -1288,14 +1272,14 @@ fn pad_directories(directories: &mut Vec<DirectoryDraft>) {
 }
 
 fn step_from_definition(step: &StepDefinition) -> StepDraft {
-    let (exit, report_output, revision_target, attempt_limit) = match &step.on_success {
-        SuccessTransition::ReviewVerdictGate(gate) => (
+    let (exit, report_output, revision_target, attempt_limit) = match &step.review {
+        Some(policy) => (
             "review-verdict".to_owned(),
-            gate.report_output.as_str().to_owned(),
-            gate.revision_target.as_str().to_owned(),
-            gate.attempt_limit.to_string(),
+            policy.report_output.as_str().to_owned(),
+            policy.revision_target.as_str().to_owned(),
+            policy.attempt_limit.to_string(),
         ),
-        _ => (
+        None => (
             "normal".to_owned(),
             String::new(),
             String::new(),
@@ -1430,7 +1414,7 @@ fn build_step(step: &StepDraft, errors: &mut StepErrors) -> Option<StepDefinitio
         name: display_name,
         inputs,
         action,
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     })
 }
 

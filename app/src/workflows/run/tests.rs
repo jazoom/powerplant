@@ -8,9 +8,9 @@ use crate::workflows::capabilities::{test_agent_capabilities, test_command_capab
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
     InputKey, OutputKey, OutputKind, PinnedWorkflowDefinition, RequiredInput, RequiredOutput,
-    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    SuccessTransition, SystemCommandId, SystemCommandStep, WorkflowDefinition,
-    candidate_revision_output, initial_candidate_input, test_environment_id,
+    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandId,
+    SystemCommandStep, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
+    test_environment_id,
 };
 use crate::workflows::id::RunId;
 
@@ -44,11 +44,7 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
                 candidate_revision_output(),
             ],
         }),
-        on_success: if include_command {
-            SuccessTransition::Next(StepKey::parse("status").expect("next"))
-        } else {
-            SuccessTransition::CompleteRun
-        },
+        review: None,
     };
     let mut steps = vec![reply];
     if include_command {
@@ -68,7 +64,7 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
                 command: SystemCommandId::RepositoryStatus,
                 required_outputs: Vec::new(),
             }),
-            on_success: SuccessTransition::CompleteRun,
+            review: None,
         });
     }
     WorkflowDefinition::from_parts(
@@ -212,7 +208,7 @@ fn completed_fixing_review_run() -> WorkflowRun {
                 },
             ],
         }),
-        on_success: SuccessTransition::CompleteRun,
+        review: None,
     };
     let definition = WorkflowDefinition::from_parts(
         "Fixing review".to_owned(),
@@ -440,7 +436,7 @@ fn transitions_after_a_terminal_state_are_rejected() {
 }
 
 #[test]
-fn completed_attempts_follow_on_success() {
+fn completed_attempts_advance_by_vector_position() {
     let definition = two_step(true);
     let environments = crate::workflows::test_environment_set(&definition);
     let mut run = WorkflowRun::create(
@@ -566,8 +562,12 @@ fn artefact_reference(
 }
 
 fn review_loop_run() -> WorkflowRun {
-    let definition =
-        crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    review_run(crate::workflows::seeds::review_until_approved_definition(
+        test_environment_id(),
+    ))
+}
+
+fn review_run(definition: WorkflowDefinition) -> WorkflowRun {
     let environments = crate::workflows::test_environment_set(&definition);
     let mut run = WorkflowRun::create(
         RunId::generate().expect("run"),
@@ -789,6 +789,32 @@ fn review_verdicts_select_all_four_routes() {
             ),
         }
     }
+}
+
+#[test]
+fn final_review_approval_completes_the_run() {
+    let source = crate::workflows::seeds::review_until_approved_definition(test_environment_id());
+    let definition = WorkflowDefinition::from_parts(
+        source.name().to_owned(),
+        source.default_environment(),
+        source.roles().to_vec(),
+        source.steps()[..2].to_vec(),
+    )
+    .expect("final review definition");
+    let mut run = review_run(definition);
+
+    complete_implementation(&mut run, 11);
+    complete_review(
+        &mut run,
+        crate::workflows::artefacts::ReviewVerdict::Approved,
+        13,
+    );
+
+    assert_eq!(run.state, RunState::Completed);
+    assert_eq!(
+        run.transitions.last().map(|transition| transition.cause),
+        Some(TransitionCause::ReviewApproved)
+    );
 }
 
 #[test]

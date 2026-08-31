@@ -7,8 +7,8 @@ use crate::agents::ToolId;
 use crate::workflows::catalogue::WorkflowCatalogue;
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 use crate::workflows::definition::{
-    ApprovedTarget, ArtefactKind, ArtefactSource, OutputKind, StepAction, StepEnvironment,
-    SuccessTransition, WorkflowDefinition, test_environment_id,
+    ArtefactKind, ArtefactSource, OutputKind, StepAction, StepEnvironment, WorkflowDefinition,
+    test_environment_id,
 };
 
 fn named(name: &str) -> WorkflowDefinition {
@@ -313,14 +313,13 @@ fn review_until_approved_loops_to_the_implementer_and_hands_off_its_report() {
     let reviewer = definition
         .step(&crate::workflows::definition::StepKey::parse("reviewer").expect("key"))
         .expect("reviewer");
-    let SuccessTransition::ReviewVerdictGate(gate) = &reviewer.on_success else {
-        panic!("review gate")
-    };
-    assert_eq!(gate.revision_target.as_str(), "implementer");
-    assert!(
-        matches!(&gate.approved_target, ApprovedTarget::Next(step) if step.as_str() == "commit")
+    let policy = reviewer.review.as_ref().expect("review policy");
+    assert_eq!(policy.revision_target.as_str(), "implementer");
+    assert_eq!(
+        definition.next_step(&reviewer.key).map(|key| key.as_str()),
+        Some("commit")
     );
-    assert_eq!(gate.attempt_limit, 3);
+    assert_eq!(policy.attempt_limit, 3);
     assert!(reviewer.inputs.iter().any(|input| {
         input.kind == ArtefactKind::CandidateRevision
             && input.source == ArtefactSource::RunCurrentCandidate
@@ -343,13 +342,12 @@ fn correctness_and_security_review_hands_both_current_reports_to_commit() {
     ] {
         let key = crate::workflows::definition::StepKey::parse(step_key).expect("key");
         let step = definition.step(&key).expect("review step");
-        let SuccessTransition::ReviewVerdictGate(gate) = &step.on_success else {
-            panic!("review gate")
-        };
+        let policy = step.review.as_ref().expect("review policy");
         assert_eq!(definition.review_phase(&key), Some(phase));
-        assert_eq!(gate.revision_target.as_str(), "implementer");
-        assert!(
-            matches!(&gate.approved_target, ApprovedTarget::Next(target) if target.as_str() == approved)
+        assert_eq!(policy.revision_target.as_str(), "implementer");
+        assert_eq!(
+            definition.next_step(&key).map(|target| target.as_str()),
+            Some(approved)
         );
     }
     let commit = definition

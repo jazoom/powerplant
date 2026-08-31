@@ -49,7 +49,7 @@ pub(crate) struct StepDefinition {
     pub(crate) name: String,
     pub(crate) inputs: Vec<RequiredInput>,
     pub(crate) action: StepAction,
-    pub(crate) on_success: SuccessTransition,
+    pub(crate) review: Option<ReviewPolicy>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -175,24 +175,10 @@ pub(crate) enum ArtefactKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SuccessTransition {
-    Next(StepKey),
-    CompleteRun,
-    ReviewVerdictGate(ReviewVerdictGate),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewVerdictGate {
+pub(crate) struct ReviewPolicy {
     pub(crate) report_output: OutputKey,
-    pub(crate) approved_target: ApprovedTarget,
     pub(crate) revision_target: StepKey,
     pub(crate) attempt_limit: u8,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovedTarget {
-    Next(StepKey),
-    CompleteRun,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -247,16 +233,12 @@ pub(crate) enum DefinitionError {
     UnusedRole,
     UnknownRole,
     UnknownStep,
-    Cycle,
-    Branch,
-    Join,
-    Unreachable,
     Command,
     Tools,
     Alias,
     DuplicateAlias,
     HumanGate,
-    ReviewGate,
+    ReviewPolicy,
     AttemptLimit,
     RunBound,
 }
@@ -297,11 +279,7 @@ impl DefinitionError {
             Self::SecondaryWrite => "Secondary directory grants must stay read-only.",
             Self::UnusedRole => "Every role must be used by an agent step.",
             Self::UnknownRole => "An agent step names an unknown role.",
-            Self::UnknownStep => "A step names an unknown successor.",
-            Self::Cycle => "The workflow graph cannot contain a cycle.",
-            Self::Branch => "This step only supports one serial chain.",
-            Self::Join => "This step only supports one serial chain.",
-            Self::Unreachable => "Every step must sit on the serial chain.",
+            Self::UnknownStep => "A review policy names an unknown step.",
             Self::Command => "Choose a registered system command.",
             Self::Tools => "Choose tools from the built-in set.",
             Self::Alias => {
@@ -311,7 +289,7 @@ impl DefinitionError {
             Self::HumanGate => {
                 "A human gate needs one candidate input and one human decision output."
             }
-            Self::ReviewGate => "Configure a valid review verdict gate.",
+            Self::ReviewPolicy => "Configure a valid review policy.",
             Self::AttemptLimit => "Set the review attempt limit from one through eight.",
             Self::RunBound => "This workflow can create too many attempts or artefacts.",
         }
@@ -346,14 +324,15 @@ struct RoleFile {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct StepFile {
     key: String,
     name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     inputs: Vec<InputFile>,
     action: ActionFile,
-    on_success: TransitionFile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review: Option<ReviewPolicyFile>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -425,23 +404,11 @@ enum InputSourceFile {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type", content = "step", rename_all = "kebab-case")]
-enum TransitionFile {
-    Next(String),
-    CompleteRun,
-    ReviewVerdictGate {
-        report_output: String,
-        approved_target: ApprovedTargetFile,
-        revision_target: String,
-        attempt_limit: u8,
-    },
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-enum ApprovedTargetFile {
-    Next { step: String },
-    CompleteRun,
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ReviewPolicyFile {
+    report_output: String,
+    revision_target: String,
+    attempt_limit: u8,
 }
 
 impl WorkflowDefinition {
@@ -511,15 +478,19 @@ impl WorkflowDefinition {
         self.steps.iter().find(|step| step.key == *key)
     }
 
-    pub(crate) fn approved_order(&self) -> Vec<StepKey> {
-        serial_order(&self.steps)
+    pub(crate) fn step_position(&self, key: &StepKey) -> Option<usize> {
+        self.steps.iter().position(|step| step.key == *key)
+    }
+
+    pub(crate) fn next_step(&self, key: &StepKey) -> Option<&StepKey> {
+        let index = self.step_position(key)?;
+        self.steps.get(index + 1).map(|step| &step.key)
     }
 
     pub(crate) fn review_phase(&self, key: &StepKey) -> Option<u32> {
         let mut phase = 0u32;
-        for step_key in self.approved_order() {
-            let step = self.step(&step_key)?;
-            if matches!(step.on_success, SuccessTransition::ReviewVerdictGate(_)) {
+        for step in &self.steps {
+            if step.review.is_some() {
                 phase += 1;
                 if &step.key == key {
                     return Some(phase);
@@ -530,18 +501,15 @@ impl WorkflowDefinition {
     }
 
     pub(crate) fn attempt_bound(&self) -> usize {
-        let order = self.approved_order();
         self.steps.len()
             + self
                 .steps
                 .iter()
-                .filter_map(|step| {
-                    let SuccessTransition::ReviewVerdictGate(gate) = &step.on_success else {
-                        return None;
-                    };
-                    let start = order.iter().position(|key| key == &gate.revision_target)?;
-                    let end = order.iter().position(|key| key == &step.key)?;
-                    Some((end - start + 1) * usize::from(gate.attempt_limit - 1))
+                .enumerate()
+                .filter_map(|(end, step)| {
+                    let policy = step.review.as_ref()?;
+                    let start = self.step_position(&policy.revision_target)?;
+                    Some((end - start + 1) * usize::from(policy.attempt_limit - 1))
                 })
                 .sum::<usize>()
     }
@@ -618,7 +586,7 @@ impl StepDefinition {
             name: normalise_name(&file.name)?,
             inputs: parse_inputs(file.inputs)?,
             action: StepAction::from_file(file.action)?,
-            on_success: SuccessTransition::from_file(file.on_success)?,
+            review: file.review.map(ReviewPolicy::from_file).transpose()?,
         })
     }
 
@@ -685,7 +653,7 @@ impl StepDefinition {
                 })
                 .collect(),
             action: self.action.to_file(),
-            on_success: self.on_success.to_file(),
+            review: self.review.as_ref().map(ReviewPolicy::to_file),
         }
     }
 }
@@ -886,53 +854,20 @@ impl StepEnvironment {
     }
 }
 
-impl SuccessTransition {
-    fn from_file(file: TransitionFile) -> Result<Self, DefinitionError> {
-        match file {
-            TransitionFile::Next(step) => Ok(Self::Next(StepKey::parse(&step)?)),
-            TransitionFile::CompleteRun => Ok(Self::CompleteRun),
-            TransitionFile::ReviewVerdictGate {
-                report_output,
-                approved_target,
-                revision_target,
-                attempt_limit,
-            } => Ok(Self::ReviewVerdictGate(ReviewVerdictGate {
-                report_output: OutputKey::parse(&report_output)?,
-                approved_target: ApprovedTarget::from_file(approved_target)?,
-                revision_target: StepKey::parse(&revision_target)?,
-                attempt_limit,
-            })),
-        }
+impl ReviewPolicy {
+    fn from_file(file: ReviewPolicyFile) -> Result<Self, DefinitionError> {
+        Ok(Self {
+            report_output: OutputKey::parse(&file.report_output)?,
+            revision_target: StepKey::parse(&file.revision_target)?,
+            attempt_limit: file.attempt_limit,
+        })
     }
 
-    fn to_file(&self) -> TransitionFile {
-        match self {
-            Self::Next(step) => TransitionFile::Next(step.as_str().to_owned()),
-            Self::CompleteRun => TransitionFile::CompleteRun,
-            Self::ReviewVerdictGate(gate) => TransitionFile::ReviewVerdictGate {
-                report_output: gate.report_output.as_str().to_owned(),
-                approved_target: gate.approved_target.to_file(),
-                revision_target: gate.revision_target.as_str().to_owned(),
-                attempt_limit: gate.attempt_limit,
-            },
-        }
-    }
-}
-
-impl ApprovedTarget {
-    fn from_file(file: ApprovedTargetFile) -> Result<Self, DefinitionError> {
-        match file {
-            ApprovedTargetFile::Next { step } => Ok(Self::Next(StepKey::parse(&step)?)),
-            ApprovedTargetFile::CompleteRun => Ok(Self::CompleteRun),
-        }
-    }
-
-    fn to_file(&self) -> ApprovedTargetFile {
-        match self {
-            Self::Next(step) => ApprovedTargetFile::Next {
-                step: step.as_str().to_owned(),
-            },
-            Self::CompleteRun => ApprovedTargetFile::CompleteRun,
+    fn to_file(&self) -> ReviewPolicyFile {
+        ReviewPolicyFile {
+            report_output: self.report_output.as_str().to_owned(),
+            revision_target: self.revision_target.as_str().to_owned(),
+            attempt_limit: self.attempt_limit,
         }
     }
 }
@@ -1123,8 +1058,7 @@ fn assemble(
     reject_unsupported_outputs(&steps)?;
     reject_secondary_writes(&steps)?;
     reject_role_use(&roles, &steps)?;
-    validate_serial_chain(&steps)?;
-    reject_review_gates(&steps)?;
+    reject_review_policies(&steps)?;
     reject_handoff(&steps)?;
     Ok(WorkflowDefinition {
         format_version: DEFINITION_FORMAT_VERSION,
@@ -1184,22 +1118,6 @@ fn has_secondary_write(step: &StepDefinition) -> bool {
         .directories
         .iter()
         .any(|directory| directory.access.is_writable())
-}
-
-fn serial_order(steps: &[StepDefinition]) -> Vec<StepKey> {
-    let Some(first) = steps.first() else {
-        return Vec::new();
-    };
-    let mut order = Vec::new();
-    let mut current = Some(first.key.clone());
-    while let Some(key) = current {
-        let Some(step) = steps.iter().find(|item| item.key == key) else {
-            break;
-        };
-        order.push(key);
-        current = approved_successor(&step.on_success).cloned();
-    }
-    order
 }
 
 fn parse_inputs(files: Vec<InputFile>) -> Result<Vec<RequiredInput>, DefinitionError> {
@@ -1373,14 +1291,9 @@ fn reject_step_inputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
 }
 
 fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
-    let order = serial_order(steps);
     let mut produced: Vec<(StepKey, OutputKey, ArtefactKind)> = Vec::new();
     let mut latest_candidate: Option<(StepKey, OutputKey)> = None;
-    for key in &order {
-        let step = steps
-            .iter()
-            .find(|item| item.key == *key)
-            .ok_or(DefinitionError::UnknownStep)?;
+    for (index, step) in steps.iter().enumerate() {
         let candidate_inputs: Vec<_> = step
             .inputs
             .iter()
@@ -1444,15 +1357,13 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
                             return Err(DefinitionError::InputKind);
                         }
                     } else {
-                        let Some(source) = steps.iter().find(|item| item.key == *source_step)
+                        let Some(source_index) =
+                            steps.iter().position(|item| item.key == *source_step)
                         else {
                             return Err(DefinitionError::UnknownOutput);
                         };
-                        if !order
-                            .iter()
-                            .take_while(|item| *item != &step.key)
-                            .any(|item| item == source_step)
-                        {
+                        let source = &steps[source_index];
+                        if source_index >= index {
                             return Err(DefinitionError::ForwardInput);
                         }
                         if source.required_outputs().iter().any(|item| {
@@ -1535,70 +1446,10 @@ fn reject_step_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
     Ok(())
 }
 
-fn approved_successor(transition: &SuccessTransition) -> Option<&StepKey> {
-    match transition {
-        SuccessTransition::Next(next) => Some(next),
-        SuccessTransition::ReviewVerdictGate(ReviewVerdictGate {
-            approved_target: ApprovedTarget::Next(next),
-            ..
-        }) => Some(next),
-        SuccessTransition::CompleteRun
-        | SuccessTransition::ReviewVerdictGate(ReviewVerdictGate {
-            approved_target: ApprovedTarget::CompleteRun,
-            ..
-        }) => None,
-    }
-}
-
-fn validate_serial_chain(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
-    let first = &steps[0].key;
-    let mut indegree = vec![0u32; steps.len()];
-    for step in steps {
-        if let Some(successor) = approved_successor(&step.on_success) {
-            let Some(index) = steps.iter().position(|item| item.key == *successor) else {
-                return Err(DefinitionError::UnknownStep);
-            };
-            indegree[index] = indegree[index]
-                .checked_add(1)
-                .ok_or(DefinitionError::Join)?;
-            if indegree[index] > 1 {
-                return Err(DefinitionError::Join);
-            }
-        }
-    }
-    let mut visited = Vec::new();
-    let mut current = first.clone();
-    loop {
-        if visited.contains(&current) {
-            return Err(DefinitionError::Cycle);
-        }
-        let step = steps
-            .iter()
-            .find(|item| item.key == current)
-            .ok_or(DefinitionError::UnknownStep)?;
-        visited.push(current);
-        let Some(next) = approved_successor(&step.on_success) else {
-            break;
-        };
-        current = next.clone();
-    }
-    if visited.len() != steps.len() {
-        return Err(DefinitionError::Unreachable);
-    }
-    if indegree.iter().filter(|count| **count == 0).count() != 1 {
-        return Err(DefinitionError::Branch);
-    }
-    Ok(())
-}
-
-fn reject_review_gates(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
-    let order = serial_order(steps);
-    if order.iter().ne(steps.iter().map(|step| &step.key)) {
-        return Err(DefinitionError::Branch);
-    }
+fn reject_review_policies(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
     let mut attempt_bound = steps.len();
     let mut artefact_bound = 1usize;
-    for step in steps {
+    for (gate_index, step) in steps.iter().enumerate() {
         artefact_bound = artefact_bound
             .checked_add(
                 step.required_outputs()
@@ -1607,42 +1458,33 @@ fn reject_review_gates(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
                     .count(),
             )
             .ok_or(DefinitionError::RunBound)?;
-        let SuccessTransition::ReviewVerdictGate(gate) = &step.on_success else {
+        let Some(policy) = &step.review else {
             continue;
         };
-        if !(MINIMUM_REVIEW_ATTEMPTS..=MAXIMUM_REVIEW_ATTEMPTS).contains(&gate.attempt_limit) {
+        if !(MINIMUM_REVIEW_ATTEMPTS..=MAXIMUM_REVIEW_ATTEMPTS).contains(&policy.attempt_limit) {
             return Err(DefinitionError::AttemptLimit);
         }
-        let Some(gate_index) = order.iter().position(|key| key == &step.key) else {
-            return Err(DefinitionError::Unreachable);
-        };
-        let Some(target_index) = order.iter().position(|key| key == &gate.revision_target) else {
+        let Some(target_index) = steps
+            .iter()
+            .position(|item| item.key == policy.revision_target)
+        else {
             return Err(DefinitionError::UnknownStep);
         };
         if target_index >= gate_index {
-            return Err(DefinitionError::ReviewGate);
+            return Err(DefinitionError::ReviewPolicy);
         }
         if !matches!(step.action, StepAction::Agent(_))
             || !step.required_outputs().iter().any(|output| {
-                output.key == gate.report_output && output.kind == OutputKind::ReviewReport
+                output.key == policy.report_output && output.kind == OutputKind::ReviewReport
             })
         {
-            return Err(DefinitionError::ReviewGate);
+            return Err(DefinitionError::ReviewPolicy);
         }
-        let interval = &order[target_index..=gate_index];
-        if !interval.iter().any(|key| {
-            steps
-                .iter()
-                .find(|item| &item.key == key)
-                .is_some_and(StepDefinition::writes_primary_source)
-        }) {
-            return Err(DefinitionError::ReviewGate);
+        let interval = &steps[target_index..=gate_index];
+        if !interval.iter().any(StepDefinition::writes_primary_source) {
+            return Err(DefinitionError::ReviewPolicy);
         }
-        for key in &order[target_index..] {
-            let interval_step = steps
-                .iter()
-                .find(|item| &item.key == key)
-                .ok_or(DefinitionError::UnknownStep)?;
+        for interval_step in &steps[target_index..] {
             if (interval_step.is_sandbox_backed()
                 || matches!(interval_step.action, StepAction::HumanGate(_)))
                 && interval_step
@@ -1654,7 +1496,7 @@ fn reject_review_gates(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
                 return Err(DefinitionError::CandidateInput);
             }
         }
-        let repeats = usize::from(gate.attempt_limit - 1);
+        let repeats = usize::from(policy.attempt_limit - 1);
         attempt_bound = attempt_bound
             .checked_add(
                 interval
@@ -1665,7 +1507,6 @@ fn reject_review_gates(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
             .ok_or(DefinitionError::RunBound)?;
         let interval_outputs: usize = interval
             .iter()
-            .filter_map(|key| steps.iter().find(|item| &item.key == key))
             .map(|item| {
                 item.required_outputs()
                     .iter()
@@ -1686,11 +1527,27 @@ fn reject_review_gates(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
     {
         return Err(DefinitionError::RunBound);
     }
-    for commit in steps.iter().filter(|step| matches!(&step.action, StepAction::SystemCommand(action) if action.command == SystemCommandId::CommitCandidate)) {
-        let commit_index = order.iter().position(|key| key == &commit.key).ok_or(DefinitionError::UnknownStep)?;
-        for review_step in order[..commit_index].iter().filter_map(|key| steps.iter().find(|step| &step.key == key)).filter(|step| matches!(step.on_success, SuccessTransition::ReviewVerdictGate(_))) {
-            let SuccessTransition::ReviewVerdictGate(gate) = &review_step.on_success else { continue };
-            if !commit.inputs.iter().any(|input| input.kind == ArtefactKind::ReviewReport && matches!(&input.source, ArtefactSource::StepOutput { step, output } if step == &review_step.key && output == &gate.report_output)) {
+    for (commit_index, commit) in steps.iter().enumerate().filter(|(_, step)| {
+        matches!(
+            &step.action,
+            StepAction::SystemCommand(action) if action.command == SystemCommandId::CommitCandidate
+        )
+    }) {
+        for review_step in steps[..commit_index]
+            .iter()
+            .filter(|step| step.review.is_some())
+        {
+            let Some(policy) = &review_step.review else {
+                continue;
+            };
+            if !commit.inputs.iter().any(|input| {
+                input.kind == ArtefactKind::ReviewReport
+                    && matches!(
+                        &input.source,
+                        ArtefactSource::StepOutput { step, output }
+                            if step == &review_step.key && output == &policy.report_output
+                    )
+            }) {
                 return Err(DefinitionError::AssuranceInput);
             }
         }
@@ -1810,7 +1667,7 @@ pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
                     candidate_revision_output(),
                 ],
             }),
-            on_success: SuccessTransition::CompleteRun,
+            review: None,
         }],
     )
     .expect("definition")
