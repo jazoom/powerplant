@@ -1,8 +1,25 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::{MAXIMUM_CATALOGUE_BYTES, ProjectStore};
 use crate::projects::id::ProjectId;
 use crate::projects::record::{MAXIMUM_PROJECTS, ProjectError};
+
+fn git_init(dir: &Path) {
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir)
+            .status()
+            .expect("git")
+            .success()
+    );
+}
+
+fn git_worktree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("dir");
+    git_init(dir.path());
+    dir
+}
 
 fn write_catalogue(path: &Path, json: &str) {
     std::fs::write(path, json).expect("write");
@@ -45,20 +62,26 @@ fn missing_file_opens_empty_without_import_or_write() {
 fn create_persists_revision_one_and_permits_duplicate_names() {
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("projects.json");
+    let one = git_worktree();
+    let two = git_worktree();
     let first;
     let second;
     {
         let store = ProjectStore::open(path.clone()).expect("open");
         first = store
-            .create("Desk".to_owned(), PathBuf::from("/srv/one"))
+            .create("Desk".to_owned(), one.path().to_path_buf())
             .expect("first");
         second = store
-            .create("Desk".to_owned(), PathBuf::from("/srv/two"))
+            .create("Desk".to_owned(), two.path().to_path_buf())
             .expect("second");
         assert_eq!(first.revision, 1);
         assert_eq!(second.revision, 1);
         assert_eq!(first.name, second.name);
         assert_ne!(first.id, second.id);
+        assert_eq!(
+            first.host_path,
+            one.path().canonicalize().expect("canonical")
+        );
     }
     let store = ProjectStore::open(path).expect("reopen");
     assert_eq!(
@@ -71,15 +94,113 @@ fn create_persists_revision_one_and_permits_duplicate_names() {
 #[test]
 fn create_rejects_duplicate_canonical_paths() {
     let store = ProjectStore::in_memory();
+    let dir = git_worktree();
     store
-        .create("One".to_owned(), PathBuf::from("/srv/app"))
+        .create("One".to_owned(), dir.path().to_path_buf())
         .expect("first");
     assert_eq!(
         store
-            .create("Two".to_owned(), PathBuf::from("/srv/app"))
+            .create("Two".to_owned(), dir.path().to_path_buf())
             .err(),
         Some(ProjectError::DuplicatePath)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn create_rejects_symlink_aliases_of_a_stored_path() {
+    let store = ProjectStore::in_memory();
+    let dir = git_worktree();
+    store
+        .create("One".to_owned(), dir.path().to_path_buf())
+        .expect("first");
+    let parent = tempfile::tempdir().expect("parent");
+    let alias = parent.path().join("alias");
+    std::os::unix::fs::symlink(dir.path(), &alias).expect("symlink");
+    assert_eq!(
+        store.create("Two".to_owned(), alias).err(),
+        Some(ProjectError::DuplicatePath)
+    );
+}
+
+#[test]
+fn create_rejects_unsupported_worktrees() {
+    let store = ProjectStore::in_memory();
+    let dir = tempfile::tempdir().expect("dir");
+    assert_eq!(
+        store
+            .create("Desk".to_owned(), dir.path().to_path_buf())
+            .err(),
+        Some(ProjectError::Worktree)
+    );
+}
+
+#[test]
+fn update_name_enforces_revision_and_keeps_the_path() {
+    let store = ProjectStore::in_memory();
+    let dir = git_worktree();
+    let created = store
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("create");
+    assert_eq!(
+        store
+            .update_name(&created.id, created.revision + 1, "Later".to_owned())
+            .err(),
+        Some(ProjectError::Conflict)
+    );
+    let updated = store
+        .update_name(&created.id, created.revision, "Later".to_owned())
+        .expect("rename");
+    assert_eq!(updated.name, "Later");
+    assert_eq!(updated.revision, created.revision + 1);
+    assert_eq!(updated.host_path, created.host_path);
+    assert_eq!(
+        store
+            .update_name(&created.id, created.revision, "Stale".to_owned())
+            .err(),
+        Some(ProjectError::Conflict)
+    );
+    assert_eq!(
+        store
+            .update_name(
+                &crate::projects::ProjectId::generate().expect("missing"),
+                1,
+                "Gone".to_owned(),
+            )
+            .err(),
+        Some(ProjectError::Missing)
+    );
+}
+
+#[test]
+fn failed_persistence_rolls_back_create_and_rename() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("projects.json");
+    let store = ProjectStore::open(path.clone()).expect("open");
+    let worktree = git_worktree();
+
+    std::fs::create_dir(&path).expect("blocking directory");
+    assert_eq!(
+        store
+            .create("Desk".to_owned(), worktree.path().to_path_buf())
+            .err(),
+        Some(ProjectError::Persist)
+    );
+    assert!(store.list().is_empty());
+
+    std::fs::remove_dir(&path).expect("remove blocking directory");
+    let created = store
+        .create("Desk".to_owned(), worktree.path().to_path_buf())
+        .expect("create");
+    std::fs::remove_file(&path).expect("remove catalogue");
+    std::fs::create_dir(&path).expect("blocking directory");
+    assert_eq!(
+        store
+            .update_name(&created.id, created.revision, "Later".to_owned())
+            .err(),
+        Some(ProjectError::Persist)
+    );
+    assert_eq!(store.get(&created.id), Some(created));
 }
 
 #[test]
@@ -189,17 +310,17 @@ fn file_bounds_and_catalogue_limits_are_enforced() {
     assert_eq!(std::fs::read(&path).expect("unchanged"), original);
 
     let store = ProjectStore::in_memory();
+    let root = tempfile::tempdir().expect("root");
     for index in 0..MAXIMUM_PROJECTS {
-        store
-            .create(
-                format!("Desk {index}"),
-                PathBuf::from(format!("/srv/project-{index}")),
-            )
-            .expect("create");
+        let path = root.path().join(format!("project-{index}"));
+        std::fs::create_dir(&path).expect("dir");
+        git_init(&path);
+        store.create(format!("Desk {index}"), path).expect("create");
     }
+    let overflow = git_worktree();
     assert_eq!(
         store
-            .create("Overflow".to_owned(), PathBuf::from("/srv/overflow"))
+            .create("Overflow".to_owned(), overflow.path().to_path_buf())
             .err(),
         Some(ProjectError::Full)
     );

@@ -535,12 +535,15 @@ fn is_text(bytes: &[u8]) -> bool {
     !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
 }
 
-fn discover(
+pub(crate) fn inspect_supported_worktree(worktree: &Path) -> Result<(), CaptureError> {
+    inspect_worktree(worktree, &worktree.join(".git"), None).map(|_| ())
+}
+
+fn inspect_worktree(
     worktree: &Path,
     git_dir: &Path,
     expected_git: Option<&GitAdministrativeFingerprint>,
-    store: &WorkflowArtefactRepository,
-) -> Result<CandidateRevisionArtefact, CaptureError> {
+) -> Result<(GitAdministrativeFingerprint, super::confine::WorkspaceDir), CaptureError> {
     let git_meta = std::fs::symlink_metadata(git_dir).map_err(|_| CaptureError::SourceNotGit)?;
     if git_meta.file_type().is_symlink() || !git_meta.is_dir() {
         return Err(CaptureError::SourceUnsupported);
@@ -552,6 +555,20 @@ fn discover(
         return Err(CaptureError::SourceChanged);
     }
     let workspace = super::confine::WorkspaceDir::open(worktree)?;
+    let unmerged = git_output(git_dir, worktree, &["ls-files", "-u", "-z"])?;
+    if !unmerged.is_empty() {
+        return Err(CaptureError::SourceUnsupported);
+    }
+    Ok((fingerprint, workspace))
+}
+
+fn discover(
+    worktree: &Path,
+    git_dir: &Path,
+    expected_git: Option<&GitAdministrativeFingerprint>,
+    store: &WorkflowArtefactRepository,
+) -> Result<CandidateRevisionArtefact, CaptureError> {
+    let (fingerprint, workspace) = inspect_worktree(worktree, git_dir, expected_git)?;
     let object_format = match git_text(git_dir, worktree, &["rev-parse", "--show-object-format"])
         .ok()
         .as_deref()
@@ -569,10 +586,6 @@ fn discover(
                 Some(GitObjectId(id.to_owned()))
             }
         });
-    let unmerged = git_output(git_dir, worktree, &["ls-files", "-u", "-z"])?;
-    if !unmerged.is_empty() {
-        return Err(CaptureError::SourceUnsupported);
-    }
     let staged = git_output(git_dir, worktree, &["ls-files", "-z", "--stage"])?;
     let others = git_output(
         git_dir,
@@ -983,6 +996,88 @@ mod tests {
             .args(["config", "user.name", "Dev"])
             .current_dir(dir)
             .status();
+    }
+
+    #[test]
+    fn inspect_supported_worktree_requires_a_real_git_directory() {
+        let dir = tempfile::tempdir().expect("dir");
+        assert_eq!(
+            inspect_supported_worktree(dir.path()).err(),
+            Some(CaptureError::SourceNotGit)
+        );
+        std::fs::write(dir.path().join(".git"), b"gitdir: /tmp/other").expect("gitfile");
+        assert_eq!(
+            inspect_supported_worktree(dir.path()).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
+        std::fs::remove_file(dir.path().join(".git")).expect("remove gitfile");
+        std::fs::create_dir(dir.path().join(".git")).expect("git directory");
+        std::fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/main\n").expect("head");
+        std::fs::write(
+            dir.path().join(".git/config"),
+            b"[core]\nrepositoryformatversion = 0\n",
+        )
+        .expect("config");
+        assert_eq!(
+            inspect_supported_worktree(dir.path()).err(),
+            Some(CaptureError::SourceNotGit)
+        );
+        std::fs::remove_dir_all(dir.path().join(".git")).expect("remove invalid repository");
+        git_init(dir.path());
+        inspect_supported_worktree(dir.path()).expect("supported");
+        let config = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config).expect("config");
+        text.push_str("\n[include]\n\tpath = /tmp/other\n");
+        std::fs::write(&config, text).expect("include");
+        assert_eq!(
+            inspect_supported_worktree(dir.path()).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
+    }
+
+    #[test]
+    fn inspect_supported_worktree_rejects_unmerged_entries() {
+        let dir = tempfile::tempdir().expect("dir");
+        git_init(dir.path());
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git")
+        };
+        std::fs::write(dir.path().join("conflict.txt"), b"base\n").expect("base");
+        assert!(run(&["add", "conflict.txt"]).status.success());
+        assert!(run(&["commit", "-qm", "base"]).status.success());
+        assert!(run(&["checkout", "-qb", "other"]).status.success());
+        std::fs::write(dir.path().join("conflict.txt"), b"other\n").expect("other");
+        assert!(run(&["commit", "-qam", "other"]).status.success());
+        assert!(
+            run(&["checkout", "-q", "--detach", "HEAD~1"])
+                .status
+                .success()
+        );
+        std::fs::write(dir.path().join("conflict.txt"), b"main\n").expect("main");
+        assert!(run(&["commit", "-qam", "main"]).status.success());
+        assert!(!run(&["merge", "other"]).status.success());
+        assert_eq!(
+            inspect_supported_worktree(dir.path()).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_supported_worktree_rejects_a_git_symlink() {
+        let dir = tempfile::tempdir().expect("dir");
+        let target = tempfile::tempdir().expect("target");
+        git_init(target.path());
+        std::os::unix::fs::symlink(target.path().join(".git"), dir.path().join(".git"))
+            .expect("symlink");
+        assert_eq!(
+            inspect_supported_worktree(dir.path()).err(),
+            Some(CaptureError::SourceUnsupported)
+        );
     }
 
     #[test]

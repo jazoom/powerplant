@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use rand::rand_core::TryRng;
 use rand::rngs::SysRng;
 

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -9,7 +7,9 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use super::id::ProjectId;
-use super::record::{MAXIMUM_PROJECTS, ProjectError, ProjectFile, ProjectRecord};
+use super::record::{
+    MAXIMUM_PROJECTS, ProjectError, ProjectFile, ProjectRecord, submitted_host_path,
+};
 
 const CATALOGUE_FILE_VERSION: u32 = 1;
 const MAXIMUM_CATALOGUE_BYTES: usize = 512 * 1024;
@@ -58,6 +58,7 @@ impl ProjectStore {
         name: String,
         host_path: PathBuf,
     ) -> Result<ProjectRecord, ProjectError> {
+        let host_path = submitted_host_path(&host_path)?;
         let mut projects = self.lock();
         if projects.len() >= MAXIMUM_PROJECTS {
             return Err(ProjectError::Full);
@@ -70,8 +71,43 @@ impl ProjectStore {
         {
             return Err(ProjectError::DuplicatePath);
         }
-        persist(self.path.as_deref(), &projects, Some(&record))?;
         projects.insert(record.id, record.clone());
+        if let Err(error) = persist(self.path.as_deref(), &projects) {
+            projects.remove(&record.id);
+            return Err(error);
+        }
+        Ok(record)
+    }
+
+    pub(crate) fn update_name(
+        &self,
+        id: &ProjectId,
+        expected_revision: u32,
+        name: String,
+    ) -> Result<ProjectRecord, ProjectError> {
+        let mut projects = self.lock();
+        let Some(current) = projects.get(id).cloned() else {
+            return Err(ProjectError::Missing);
+        };
+        if current.revision != expected_revision {
+            return Err(ProjectError::Conflict);
+        }
+        let revision = current
+            .revision
+            .checked_add(1)
+            .ok_or(ProjectError::Conflict)?;
+        let record = ProjectRecord {
+            id: current.id,
+            revision,
+            name: super::record::submitted_name(&name)?,
+            host_path: current.host_path.clone(),
+            created_at_ms: current.created_at_ms,
+        };
+        projects.insert(record.id, record.clone());
+        if let Err(error) = persist(self.path.as_deref(), &projects) {
+            projects.insert(current.id, current);
+            return Err(error);
+        }
         Ok(record)
     }
 
@@ -134,15 +170,11 @@ fn state_from_file(
 fn persist(
     path: Option<&Path>,
     projects: &BTreeMap<ProjectId, ProjectRecord>,
-    extra: Option<&ProjectRecord>,
 ) -> Result<(), ProjectError> {
     let Some(path) = path else {
         return Ok(());
     };
     let mut records: Vec<ProjectFile> = projects.values().map(ProjectRecord::to_file).collect();
-    if let Some(record) = extra {
-        records.push(record.to_file());
-    }
     records.sort_by(|left, right| left.id.cmp(&right.id));
     let file = CatalogueFile {
         file_version: CATALOGUE_FILE_VERSION,

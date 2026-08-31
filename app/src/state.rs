@@ -31,7 +31,6 @@ pub(crate) struct AppState {
     pub(crate) models: Arc<ModelCatalogue>,
     pub(crate) plan_login: Arc<PlanLogin>,
     pub(crate) agents: Arc<AgentStore>,
-    #[allow(dead_code)]
     pub(crate) projects: Arc<ProjectStore>,
     pub(crate) sandboxes: Arc<SandboxFleet>,
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,

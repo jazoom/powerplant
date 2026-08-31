@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +17,16 @@ pub(crate) struct ProjectRecord {
     pub(crate) created_at_ms: u64,
 }
 
+impl ProjectRecord {
+    pub(crate) fn host_path_is_available(&self) -> bool {
+        let Ok(canonical) = std::fs::canonicalize(&self.host_path) else {
+            return false;
+        };
+        canonical == self.host_path
+            && std::fs::metadata(&canonical).is_ok_and(|metadata| metadata.is_dir())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProjectError {
     Random,
@@ -27,7 +35,11 @@ pub(crate) enum ProjectError {
     Full,
     Name,
     Path,
+    NotADirectory,
+    Worktree,
     DuplicatePath,
+    Missing,
+    Conflict,
 }
 
 impl ProjectError {
@@ -41,7 +53,11 @@ impl ProjectError {
             Self::Path => {
                 "Enter an absolute directory path of at most 4,096 bytes without control characters."
             }
+            Self::NotADirectory => "That path is not an accessible directory.",
+            Self::Worktree => "The project is not a supported Git worktree.",
             Self::DuplicatePath => "A project already uses that directory.",
+            Self::Missing => "That project is not in the catalogue.",
+            Self::Conflict => "Reload the project and try again.",
         }
     }
 }
@@ -106,6 +122,23 @@ impl ProjectRecord {
             created_at_ms: self.created_at_ms,
         }
     }
+}
+
+pub(crate) fn submitted_name(raw: &str) -> Result<String, ProjectError> {
+    normalise_name(raw)
+}
+
+pub(crate) fn submitted_host_path(path: &Path) -> Result<PathBuf, ProjectError> {
+    stored_host_path(path)?;
+    let metadata = std::fs::metadata(path).map_err(|_| ProjectError::NotADirectory)?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::NotADirectory);
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|_| ProjectError::NotADirectory)?;
+    stored_host_path(&canonical)?;
+    crate::workflows::artefacts::inspect_supported_worktree(&canonical)
+        .map_err(|_| ProjectError::Worktree)?;
+    Ok(canonical)
 }
 
 pub(super) fn normalise_name(raw: &str) -> Result<String, ProjectError> {

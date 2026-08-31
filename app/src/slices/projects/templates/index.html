@@ -1,0 +1,60 @@
+<main
+  data-section="projects"
+  class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
+>
+  <div class="page-intro">
+    <div>
+      <h1>Projects</h1>
+      <p>
+        Register a local Git worktree and keep it as a stable project record.
+      </p>
+    </div>
+    <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
+      >New project</a
+    >
+  </div>
+
+  {% if projects.is_empty() %}
+    <section class="file-section space-y-3">
+      <h2 class="text-lg font-semibold">No projects</h2>
+      <p class="text-quiet max-w-[60ch]">
+        Create a project from an absolute Git worktree path. The path cannot
+        change later.
+      </p>
+      <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
+        >Create the first project</a
+      >
+    </section>
+  {% else %}
+    <ul class="record-list">
+      {% for project in projects %}
+        <li class="record-row">
+          <div>
+            <a
+              href="/projects/{{ project.id }}"
+              data-graft
+              class="link link-hover font-medium"
+              >{{ project.name }}</a
+            >
+            <p class="text-quiet font-mono text-xs break-all">
+              {{ project.path }}
+            </p>
+          </div>
+          <div class="flex flex-col items-end gap-1 text-right">
+            {% if project.available %}
+              <span class="badge badge-sm badge-success">Available</span>
+            {% else %}
+              <span class="badge badge-sm badge-warning">Unavailable</span>
+            {% endif %}
+            <a
+              href="/projects/{{ project.id }}/configuration"
+              data-graft
+              class="btn btn-ghost btn-sm"
+              >Rename</a
+            >
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</main>
