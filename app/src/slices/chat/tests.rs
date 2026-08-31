@@ -336,14 +336,8 @@ fn workflow_policy_follows_the_commit_edges() {
         .filter(|role| role.key.as_str() != "independent-reviewer")
         .cloned()
         .collect();
-    let direct = WorkflowDefinition::from_parts(
-        "Direct".to_owned(),
-        environment,
-        roles,
-        independent.first_step().clone(),
-        steps,
-    )
-    .expect("direct workflow");
+    let direct = WorkflowDefinition::from_parts("Direct".to_owned(), environment, roles, steps)
+        .expect("direct workflow");
     assert_eq!(
         super::workflow_policy(&direct),
         "Fixing review with direct commit policy"
@@ -1226,7 +1220,6 @@ async fn a_missing_environment_rejects_a_task_before_a_run_starts() {
                 "Missing environment".to_owned(),
                 crate::workflows::definition::test_environment_id(),
                 base.roles().to_vec(),
-                base.first_step().clone(),
                 base.steps().to_vec(),
             )
             .expect("definition"),
@@ -1459,7 +1452,6 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
             "Reader".to_owned(),
             environment_id,
             base.roles().to_vec(),
-            base.first_step().clone(),
             steps,
         )
         .expect("reader")
@@ -1580,7 +1572,6 @@ async fn a_stale_workflow_selection_is_a_conflict() {
                 "Edited agent".to_owned(),
                 crate::workflows::definition::test_environment_id(),
                 current.definition.roles().to_vec(),
-                current.definition.first_step().clone(),
                 current.definition.steps().to_vec(),
             )
             .expect("edited"),
@@ -1626,7 +1617,6 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
                 "Later name".to_owned(),
                 crate::workflows::definition::test_environment_id(),
                 record.definition.roles().to_vec(),
-                record.definition.first_step().clone(),
                 record.definition.steps().to_vec(),
             )
             .expect("later"),

@@ -71,12 +71,10 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
             on_success: SuccessTransition::CompleteRun,
         });
     }
-    let first = StepKey::parse("reply").expect("first");
     WorkflowDefinition::from_parts(
         "Maintainer".to_owned(),
         test_environment_id(),
         vec![role],
-        first,
         steps,
     )
     .expect("definition")
@@ -228,7 +226,6 @@ fn completed_fixing_review_run() -> WorkflowRun {
             )
             .expect("role"),
         ],
-        step.key.clone(),
         vec![step],
     )
     .expect("definition");

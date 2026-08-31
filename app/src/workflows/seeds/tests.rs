@@ -17,7 +17,6 @@ fn named(name: &str) -> WorkflowDefinition {
         name.to_owned(),
         test_environment_id(),
         definition.roles().to_vec(),
-        definition.first_step().clone(),
         definition.steps().to_vec(),
     )
     .expect("named")

@@ -32,7 +32,6 @@ pub(crate) struct WorkflowDefinition {
     name: String,
     default_environment: EnvironmentId,
     roles: Vec<RoleDefinition>,
-    first_step: StepKey,
     steps: Vec<StepDefinition>,
 }
 
@@ -328,13 +327,12 @@ impl std::fmt::Display for DefinitionError {
 impl std::error::Error for DefinitionError {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct DefinitionFile {
     format_version: u32,
     name: String,
     default_environment: String,
     roles: Vec<RoleFile>,
-    first_step: String,
     steps: Vec<StepFile>,
 }
 
@@ -465,10 +463,9 @@ impl WorkflowDefinition {
         name: String,
         default_environment: EnvironmentId,
         roles: Vec<RoleDefinition>,
-        first_step: StepKey,
         steps: Vec<StepDefinition>,
     ) -> Result<Self, DefinitionError> {
-        assemble(name, default_environment, roles, first_step, steps)
+        assemble(name, default_environment, roles, steps)
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -503,7 +500,7 @@ impl WorkflowDefinition {
     }
 
     pub(crate) fn first_step(&self) -> &StepKey {
-        &self.first_step
+        &self.steps[0].key
     }
 
     pub(crate) fn steps(&self) -> &[StepDefinition] {
@@ -515,7 +512,7 @@ impl WorkflowDefinition {
     }
 
     pub(crate) fn approved_order(&self) -> Vec<StepKey> {
-        serial_order(&self.first_step, &self.steps)
+        serial_order(&self.steps)
     }
 
     pub(crate) fn review_phase(&self, key: &StepKey) -> Option<u32> {
@@ -576,7 +573,6 @@ impl WorkflowDefinition {
                     prompt_defaults: role.prompt_defaults.clone(),
                 })
                 .collect(),
-            first_step: self.first_step.as_str().to_owned(),
             steps: self.steps.iter().map(StepDefinition::to_file).collect(),
         }
     }
@@ -1100,7 +1096,6 @@ fn assemble(
     name: String,
     default_environment: EnvironmentId,
     roles: Vec<RoleDefinition>,
-    first_step: StepKey,
     mut steps: Vec<StepDefinition>,
 ) -> Result<WorkflowDefinition, DefinitionError> {
     let name = normalise_name(&name)?;
@@ -1128,29 +1123,27 @@ fn assemble(
     reject_unsupported_outputs(&steps)?;
     reject_secondary_writes(&steps)?;
     reject_role_use(&roles, &steps)?;
-    validate_serial_chain(&first_step, &steps)?;
-    reject_review_gates(&first_step, &steps)?;
-    reject_handoff(&first_step, &steps)?;
+    validate_serial_chain(&steps)?;
+    reject_review_gates(&steps)?;
+    reject_handoff(&steps)?;
     Ok(WorkflowDefinition {
         format_version: DEFINITION_FORMAT_VERSION,
         name,
         default_environment,
         roles,
-        first_step,
         steps,
     })
 }
 
 fn from_current_file(file: DefinitionFile) -> Result<WorkflowDefinition, DefinitionError> {
-    let (name, default_environment, roles, first_step, steps) = parse_file_parts(file)?;
-    assemble(name, default_environment, roles, first_step, steps)
+    let (name, default_environment, roles, steps) = parse_file_parts(file)?;
+    assemble(name, default_environment, roles, steps)
 }
 
 type FileParts = (
     String,
     EnvironmentId,
     Vec<RoleDefinition>,
-    StepKey,
     Vec<StepDefinition>,
 );
 
@@ -1169,13 +1162,12 @@ fn parse_file_parts(file: DefinitionFile) -> Result<FileParts, DefinitionError> 
         .into_iter()
         .map(RoleDefinition::from_file)
         .collect::<Result<Vec<_>, _>>()?;
-    let first_step = StepKey::parse(&file.first_step)?;
     let steps = file
         .steps
         .into_iter()
         .map(StepDefinition::from_file)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((name, default_environment, roles, first_step, steps))
+    Ok((name, default_environment, roles, steps))
 }
 
 fn produces_candidate_revision(step: &StepDefinition) -> bool {
@@ -1194,9 +1186,12 @@ fn has_secondary_write(step: &StepDefinition) -> bool {
         .any(|directory| directory.access.is_writable())
 }
 
-fn serial_order(first: &StepKey, steps: &[StepDefinition]) -> Vec<StepKey> {
+fn serial_order(steps: &[StepDefinition]) -> Vec<StepKey> {
+    let Some(first) = steps.first() else {
+        return Vec::new();
+    };
     let mut order = Vec::new();
-    let mut current = Some(first.clone());
+    let mut current = Some(first.key.clone());
     while let Some(key) = current {
         let Some(step) = steps.iter().find(|item| item.key == key) else {
             break;
@@ -1377,8 +1372,8 @@ fn reject_step_inputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
     Ok(())
 }
 
-fn reject_handoff(first: &StepKey, steps: &[StepDefinition]) -> Result<(), DefinitionError> {
-    let order = serial_order(first, steps);
+fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    let order = serial_order(steps);
     let mut produced: Vec<(StepKey, OutputKey, ArtefactKind)> = Vec::new();
     let mut latest_candidate: Option<(StepKey, OutputKey)> = None;
     for key in &order {
@@ -1555,10 +1550,8 @@ fn approved_successor(transition: &SuccessTransition) -> Option<&StepKey> {
     }
 }
 
-fn validate_serial_chain(first: &StepKey, steps: &[StepDefinition]) -> Result<(), DefinitionError> {
-    if !steps.iter().any(|step| step.key == *first) {
-        return Err(DefinitionError::UnknownStep);
-    }
+fn validate_serial_chain(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    let first = &steps[0].key;
     let mut indegree = vec![0u32; steps.len()];
     for step in steps {
         if let Some(successor) = approved_successor(&step.on_success) {
@@ -1598,8 +1591,8 @@ fn validate_serial_chain(first: &StepKey, steps: &[StepDefinition]) -> Result<()
     Ok(())
 }
 
-fn reject_review_gates(first: &StepKey, steps: &[StepDefinition]) -> Result<(), DefinitionError> {
-    let order = serial_order(first, steps);
+fn reject_review_gates(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    let order = serial_order(steps);
     if order.iter().ne(steps.iter().map(|step| &step.key)) {
         return Err(DefinitionError::Branch);
     }
@@ -1800,7 +1793,6 @@ pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
         name.to_owned(),
         test_environment_id(),
         vec![role],
-        StepKey::parse("work").expect("first"),
         vec![StepDefinition {
             key: StepKey::parse("work").expect("step"),
             name: "Work on task".to_owned(),

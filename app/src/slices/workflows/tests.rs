@@ -266,7 +266,6 @@ async fn stale_updates_return_conflict() {
                 "Edited".to_owned(),
                 environment,
                 record.definition.roles().to_vec(),
-                record.definition.first_step().clone(),
                 record.definition.steps().to_vec(),
             )
             .expect("edited"),

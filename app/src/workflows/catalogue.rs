@@ -584,7 +584,6 @@ fn named_seed_definition(
         name,
         definition.default_environment(),
         definition.roles().to_vec(),
-        definition.first_step().clone(),
         definition.steps().to_vec(),
     )
     .map_err(|_| CatalogueError::Corrupt)

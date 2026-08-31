@@ -95,13 +95,7 @@ pub(crate) fn one_agent_definition(default_environment: EnvironmentId) -> Workfl
         vec![assistant_output(), candidate_revision_output()],
         SuccessTransition::CompleteRun,
     );
-    definition(
-        "One agent",
-        default_environment,
-        vec![role],
-        "work-on-task",
-        vec![step],
-    )
+    definition("One agent", default_environment, vec![role], vec![step])
 }
 
 pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> WorkflowDefinition {
@@ -171,7 +165,6 @@ pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> 
         "Sequential team",
         default_environment,
         roles,
-        "planner",
         vec![planner, implementer, reviewer, commit],
     )
 }
@@ -222,7 +215,6 @@ pub(crate) fn read_only_review_definition(
         "Read-only review",
         default_environment,
         roles,
-        "implementer",
         vec![
             implementer,
             reviewer,
@@ -310,7 +302,6 @@ pub(crate) fn review_with_fixes_definition(
         "Review with fixes",
         default_environment,
         roles,
-        "implementer",
         vec![
             implementer,
             fixing,
@@ -361,7 +352,6 @@ pub(crate) fn review_until_approved_definition(
         "Review until approved",
         default_environment,
         roles,
-        "implementer",
         vec![
             implementer,
             reviewer,
@@ -435,7 +425,6 @@ pub(crate) fn correctness_security_definition(
         "Correctness and security review",
         default_environment,
         roles,
-        "implementer",
         vec![
             implementer,
             correctness,
@@ -491,17 +480,10 @@ fn definition(
     name: &str,
     environment: EnvironmentId,
     roles: Vec<RoleDefinition>,
-    first: &str,
     steps: Vec<StepDefinition>,
 ) -> WorkflowDefinition {
-    WorkflowDefinition::from_parts(
-        name.to_owned(),
-        environment,
-        roles,
-        StepKey::parse(first).expect("first step"),
-        steps,
-    )
-    .expect("seed definition")
+    WorkflowDefinition::from_parts(name.to_owned(), environment, roles, steps)
+        .expect("seed definition")
 }
 
 fn role(key: &str, name: &str, expertise: &str, prompt: &str) -> RoleDefinition {

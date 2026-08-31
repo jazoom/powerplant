@@ -176,7 +176,6 @@ fn fixing_publication_fixture() -> (
             )
             .expect("role"),
         ],
-        step.key.clone(),
         vec![step.clone()],
     )
     .expect("definition");

@@ -32,7 +32,6 @@ fn definition(default: crate::environments::EnvironmentId) -> WorkflowDefinition
         "One step".to_owned(),
         default,
         vec![role],
-        StepKey::parse("work").expect("first"),
         vec![StepDefinition {
             key: StepKey::parse("work").expect("step"),
             name: "Work on task".to_owned(),

@@ -261,21 +261,12 @@ impl WorkflowFormState {
                 prompt: role.prompt_defaults.clone(),
             })
             .collect();
-        let mut steps = Vec::new();
-        let mut current = record.definition.first_step().clone();
-        while let Some(step) = record.definition.step(&current) {
-            steps.push(step_from_definition(step));
-            match &step.on_success {
-                SuccessTransition::Next(next) => current = next.clone(),
-                SuccessTransition::ReviewVerdictGate(gate) => match &gate.approved_target {
-                    crate::workflows::definition::ApprovedTarget::Next(next) => {
-                        current = next.clone()
-                    }
-                    crate::workflows::definition::ApprovedTarget::CompleteRun => break,
-                },
-                SuccessTransition::CompleteRun => break,
-            }
-        }
+        let steps = record
+            .definition
+            .steps()
+            .iter()
+            .map(step_from_definition)
+            .collect();
         Self {
             name: record.definition.name().to_owned(),
             default_environment: record.definition.default_environment().as_hex(),
@@ -545,7 +536,6 @@ impl WorkflowFormState {
             errors.summary = crate::workflows::definition::DefinitionError::StepCount.message();
             return Err(errors);
         }
-        let first = steps[0].key.clone();
         let last = steps.len() - 1;
         for index in 0..=last {
             let approved_target = if index < last {
@@ -618,13 +608,7 @@ impl WorkflowFormState {
                     return Err(errors);
                 }
             };
-        match WorkflowDefinition::from_parts(
-            self.name.clone(),
-            default_environment,
-            roles,
-            first,
-            steps,
-        ) {
+        match WorkflowDefinition::from_parts(self.name.clone(), default_environment, roles, steps) {
             Ok(definition) => Ok(definition),
             Err(error) => {
                 relate_definition_error(self, error, &mut errors);

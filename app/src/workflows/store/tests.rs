@@ -41,7 +41,7 @@ fn run_with_id(name: &str, id: RunId, created_at_ms: u64) -> WorkflowRun {
 }
 
 #[test]
-fn a_source_definition_edit_cannot_alter_an_earlier_run() {
+fn a_pinned_version_one_definition_survives_a_source_edit() {
     let dir = tempfile::tempdir().expect("dir");
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
     let first = definition("Original");
@@ -56,6 +56,12 @@ fn a_source_definition_edit_cannot_alter_an_earlier_run() {
             environments,
         ))
         .expect("create");
+    let path = dir.path().join(format!("{}.json", run.id.as_hex()));
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(path).expect("read")).expect("json");
+    assert!(value["definition"].get("first-step").is_none());
+    assert_eq!(value["version"], version.as_hex());
+
     let later = definition("Edited");
     assert_ne!(later.version(), version);
     let loaded = WorkflowRunStore::open(dir.path().to_path_buf())

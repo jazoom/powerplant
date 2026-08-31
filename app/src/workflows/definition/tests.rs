@@ -81,7 +81,6 @@ fn one_agent() -> WorkflowDefinition {
         "Maintainer".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
     )
     .expect("definition")
@@ -93,7 +92,6 @@ fn duplicate_role_keys_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role(), role()],
-        StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
     )
     .err();
@@ -106,7 +104,6 @@ fn duplicate_step_keys_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![
             agent_step(
                 "reply",
@@ -129,7 +126,6 @@ fn unknown_roles_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![step],
     )
     .err();
@@ -149,7 +145,6 @@ fn unused_roles_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role(), extra],
-        StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
     )
     .err();
@@ -162,7 +157,6 @@ fn unknown_successors_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![agent_step(
             "reply",
             SuccessTransition::Next(StepKey::parse("missing").expect("next")),
@@ -178,7 +172,6 @@ fn cycles_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("one").expect("first"),
         vec![
             agent_step(
                 "one",
@@ -200,7 +193,6 @@ fn joins_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("one").expect("first"),
         vec![
             agent_step(
                 "one",
@@ -223,7 +215,6 @@ fn extra_sources_are_rejected_as_branches() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("one").expect("first"),
         vec![
             agent_step("one", SuccessTransition::CompleteRun),
             command_step("two", SuccessTransition::CompleteRun),
@@ -239,7 +230,6 @@ fn unreachable_steps_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("one").expect("first"),
         vec![
             agent_step("one", SuccessTransition::CompleteRun),
             command_step(
@@ -263,7 +253,6 @@ fn arbitrary_command_values_are_rejected() {
         "name": "Status",
         "default-environment": "{}",
         "roles": [],
-        "first-step": "status",
         "steps": [
             {{
                 "key": "status",
@@ -304,7 +293,6 @@ fn command_outputs_that_the_command_cannot_produce_are_rejected() {
         "Status".to_owned(),
         test_environment_id(),
         Vec::new(),
-        StepKey::parse("status").expect("first"),
         vec![step],
     )
     .err();
@@ -324,7 +312,6 @@ fn duplicate_output_keys_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![step],
     )
     .err();
@@ -338,7 +325,6 @@ fn content_versions_round_trip_both_action_kinds() {
         "Status".to_owned(),
         test_environment_id(),
         Vec::new(),
-        StepKey::parse("status").expect("first"),
         vec![command_step("status", SuccessTransition::CompleteRun)],
     )
     .expect("command");
@@ -358,7 +344,6 @@ fn a_definition_change_creates_a_different_content_version() {
         "Changed".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
     )
     .expect("changed");
@@ -402,7 +387,6 @@ fn an_override_equal_to_the_default_normalises_to_workflow_default() {
         "Maintainer".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![step],
     )
     .expect("definition");
@@ -420,7 +404,6 @@ fn environment_identifiers_change_the_content_version() {
         "Maintainer".to_owned(),
         other,
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![agent_step("reply", SuccessTransition::CompleteRun)],
     )
     .expect("changed");
@@ -439,7 +422,6 @@ fn earlier_formats_are_rejected() {
             "expertise": "",
             "prompt-defaults": ""
         }],
-        "first-step": "reply",
         "steps": [{
             "key": "reply",
             "name": "Reply",
@@ -507,7 +489,6 @@ fn unknown_step_outputs_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![later, status],
     )
     .err();
@@ -549,7 +530,6 @@ fn input_kind_mismatch_is_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("plan").expect("first"),
         vec![planner, review],
     )
     .err();
@@ -578,7 +558,6 @@ fn stale_candidate_sources_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("one").expect("first"),
         vec![first, second],
     )
     .err();
@@ -593,7 +572,6 @@ fn sandbox_steps_without_candidate_inputs_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![step],
     )
     .err();
@@ -612,7 +590,6 @@ fn candidate_authority_rejects_conflicting_outputs() {
             "Read-only".to_owned(),
             test_environment_id(),
             vec![role()],
-            StepKey::parse("reply").expect("first"),
             vec![read_only],
         )
         .err(),
@@ -638,7 +615,6 @@ fn candidate_authority_rejects_conflicting_outputs() {
             "Fixing review".to_owned(),
             test_environment_id(),
             vec![role()],
-            StepKey::parse("reply").expect("first"),
             vec![duplicate_reviews],
         )
         .err(),
@@ -686,7 +662,6 @@ fn write_steps_without_candidate_outputs_are_rejected() {
         "Team".to_owned(),
         test_environment_id(),
         vec![role()],
-        StepKey::parse("reply").expect("first"),
         vec![step],
     )
     .err();
@@ -714,7 +689,6 @@ fn rebuild_review_definition(
         source.name().to_owned(),
         source.default_environment(),
         source.roles().to_vec(),
-        source.first_step().clone(),
         steps,
     )
 }
@@ -824,7 +798,6 @@ fn review_loops_respect_the_conservative_run_bound() {
             "Bounded".to_owned(),
             test_environment_id(),
             vec![role()],
-            StepKey::parse("step-0").expect("first"),
             steps,
         )
         .err(),
@@ -840,5 +813,31 @@ fn review_gates_and_current_candidates_round_trip() {
     assert_eq!(
         WorkflowDefinition::from_file_bytes(&bytes).expect("round trip"),
         definition
+    );
+}
+
+#[test]
+fn definition_round_trip_derives_entry_from_vector_order() {
+    let definition = crate::workflows::seeds::sequential_team_definition(test_environment_id());
+    let value = serde_json::to_value(definition.to_file()).expect("json");
+    assert!(value.get("first-step").is_none());
+
+    let bytes = serde_json::to_vec(&value).expect("bytes");
+    let loaded = WorkflowDefinition::from_file_bytes(&bytes).expect("round trip");
+    assert_eq!(loaded, definition);
+    assert_eq!(loaded.first_step().as_str(), "planner");
+}
+
+#[test]
+fn obsolete_first_step_fields_are_rejected() {
+    let mut value = serde_json::to_value(one_agent().to_file()).expect("json");
+    value.as_object_mut().expect("object").insert(
+        "first-step".to_owned(),
+        serde_json::Value::String("reply".to_owned()),
+    );
+    let bytes = serde_json::to_vec(&value).expect("bytes");
+    assert_eq!(
+        WorkflowDefinition::from_file_bytes(&bytes).err(),
+        Some(DefinitionError::Format)
     );
 }

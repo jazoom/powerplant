@@ -97,7 +97,7 @@ fn delete_retires_the_identifier_and_keeps_no_active_record() {
 }
 
 #[test]
-fn persist_survives_reopen() {
+fn version_one_definition_hash_survives_reopen() {
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("workflows.json");
     let id;
@@ -108,6 +108,15 @@ fn persist_survives_reopen() {
         id = record.id;
         version = record.definition_version;
     }
+    let bytes = std::fs::read(&path).expect("read");
+    let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert!(
+        json["workflows"][0]["definition"]
+            .get("first-step")
+            .is_none()
+    );
+    assert_eq!(json["workflows"][0]["definition-version"], version.as_hex());
+
     let catalogue = WorkflowCatalogue::open_with_seeds(path, &[]).expect("reopen");
     let loaded = catalogue.get(&id).expect("loaded");
     assert_eq!(loaded.definition.name(), "Planner");
@@ -326,7 +335,6 @@ fn command_steps_do_not_require_agent_authority() {
         "Mixed".to_owned(),
         test_environment_id(),
         vec![role],
-        StepKey::parse("status").expect("first"),
         vec![
             StepDefinition {
                 key: StepKey::parse("status").expect("step"),
