@@ -163,7 +163,7 @@
         min-height: 100vh;
         max-width: 96rem;
         margin: 0 auto;
-        overflow: hidden;
+        overflow: clip;
         border: 1px solid oklch(100% 0 0 / 0.18);
         background: var(--powerplant-paper);
         box-shadow: 0 1.1rem 3.4rem oklch(0% 0 0 / 0.34);
@@ -175,8 +175,12 @@
     }
 
     .app-index {
+        position: sticky;
+        top: 1px;
         display: flex;
+        height: calc(100vh - 2px);
         min-height: 0;
+        align-self: start;
         flex-direction: column;
         color: oklch(93% 0.05 115);
         background: var(--powerplant-cover);
@@ -965,7 +969,9 @@
     }
 
     .app-index {
+        position: static;
         display: block;
+        height: auto;
         border-right: 0;
     }
 
