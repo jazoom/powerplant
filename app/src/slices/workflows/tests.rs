@@ -347,20 +347,53 @@ async fn oversized_forms_are_rejected_before_row_allocation() {
 }
 
 #[tokio::test]
-async fn anonymous_workflow_pages_redirect_to_connect() {
+async fn anonymous_workflow_requests_redirect_to_connect() {
     let state = test_state();
-    let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .uri("/workflows")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let cases = [
+        ("GET", "/workflows", None, false),
+        ("GET", "/workflows", Some("navigation"), true),
+        ("POST", "/workflows", None, false),
+        ("POST", "/workflows", Some("patch"), true),
+    ];
+    for (method, uri, graft, enhanced) in cases {
+        assert_connect_redirect(&state, method, uri, graft, enhanced).await;
+    }
+}
+
+async fn assert_connect_redirect(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    graft: Option<&str>,
+    enhanced: bool,
+) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(graft) = graft {
+        builder = builder
+            .header(hypergraft::GRAFT_REQUEST, graft)
+            .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+    }
+    let response = app(state)
+        .oneshot(builder.body(Body::empty()).unwrap())
         .await
-        .expect("index");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        "/connect"
-    );
+        .expect("anonymous");
+    if enhanced {
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            hypergraft::MEDIA_TYPE
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            text.contains("navigate=\"/connect\""),
+            "{method} {uri} {graft:?}: {text}"
+        );
+    } else {
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/connect"
+        );
+    }
 }

@@ -59,8 +59,6 @@ struct StoredSession {
 
 #[derive(Clone)]
 pub(crate) struct SessionSnapshot {
-    #[allow(dead_code)]
-    pub(crate) id: SessionId,
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Option<JobSnapshot>,
     pub(crate) session_busy: bool,
@@ -117,8 +115,7 @@ impl SessionStore {
 
     pub(crate) fn snapshot(&self, id: &SessionId, agent: &AgentId) -> Option<SessionSnapshot> {
         let mut sessions = self.lock();
-        live(&mut sessions, id, self.clock.now())
-            .map(|session| snapshot_session(*id, agent, session))
+        live(&mut sessions, id, self.clock.now()).map(|session| snapshot_session(agent, session))
     }
 
     pub(crate) fn set_preferred_workflow(
@@ -140,15 +137,6 @@ impl SessionStore {
                 preferred_workflow: None,
             });
         conversation.preferred_workflow = Some(workflow);
-    }
-
-    pub(crate) fn clear_preferred_workflow(&self, id: &SessionId, agent: &AgentId) {
-        let mut sessions = self.lock();
-        if let Some(session) = live_mut(&mut sessions, id, self.clock.now())
-            && let Some(conversation) = session.conversations.get_mut(agent)
-        {
-            conversation.preferred_workflow = None;
-        }
     }
 
     pub(crate) fn begin_turn(
@@ -311,10 +299,9 @@ impl SessionStore {
     }
 }
 
-fn snapshot_session(id: SessionId, agent: &AgentId, session: &StoredSession) -> SessionSnapshot {
+fn snapshot_session(agent: &AgentId, session: &StoredSession) -> SessionSnapshot {
     let conversation = session.conversations.get(agent);
     SessionSnapshot {
-        id,
         turns: conversation
             .map(|conversation| conversation.turns.clone())
             .unwrap_or_default(),

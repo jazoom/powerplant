@@ -19,6 +19,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use hypergraft::GraftRequest;
 
 use crate::{
     error::{AppResult, AppResultExt, trace_operation_failure},
@@ -74,7 +75,14 @@ fn restore_or(
 fn existing_or_restore(state: &AppState, token: &ValidatedToken) -> ResolvedSession {
     let id = SessionId::from_validated(token);
     if state.sessions.contains_live(&id) {
-        return ResolvedSession::Present(id);
+        if state.vault.has_providers() {
+            return ResolvedSession::Present(id);
+        }
+        if crate::workflows::interrupt_session_continuations(state, id).is_err() {
+            return ResolvedSession::Invalid;
+        }
+        state.sessions.remove(&id);
+        return ResolvedSession::Invalid;
     }
     if state.sessions.contains_expired(&id) {
         if crate::workflows::interrupt_session_continuations(state, id).is_err() {
@@ -137,6 +145,26 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalSession {
                 _ => None,
             },
         ))
+    }
+}
+
+pub(crate) struct RequiredSession(pub(crate) SessionId);
+
+impl<S: Send + Sync> FromRequestParts<S> for RequiredSession {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        match parts.extensions.get::<ResolvedSession>().cloned() {
+            Some(ResolvedSession::Present(id)) => Ok(Self(id)),
+            _ => {
+                let graft = parts
+                    .extensions
+                    .get::<GraftRequest>()
+                    .copied()
+                    .unwrap_or_default();
+                Err(crate::responses::graft_redirect(graft, "/connect"))
+            }
+        }
     }
 }
 

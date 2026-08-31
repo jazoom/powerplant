@@ -740,11 +740,6 @@ fn attach_workflow_ui(
 ) {
     let records = state.workflows.list();
     if records.is_empty() {
-        if session.preferred_workflow.is_some()
-            && let Some(agent) = crate::agents::AgentId::parse(&page.agent_id)
-        {
-            state.sessions.clear_preferred_workflow(&session.id, &agent);
-        }
         page.workflow_options = Vec::new();
         page.workflow_empty = true;
     } else {
@@ -752,9 +747,6 @@ fn attach_workflow_ui(
         if let Some(id) = preferred
             && state.workflows.get(&id).is_none()
         {
-            if let Some(agent) = crate::agents::AgentId::parse(&page.agent_id) {
-                state.sessions.clear_preferred_workflow(&session.id, &agent);
-            }
             preferred = None;
         }
         let queried = WorkflowSelection::parse(workflow_query.trim()).map(|item| item.workflow_id);

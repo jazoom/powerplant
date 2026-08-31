@@ -19,7 +19,7 @@ use crate::{
     environments::{EnvironmentError, EnvironmentId, EnvironmentRecord},
     error::AppResult,
     responses,
-    sessions::{OptionalSession, SessionId},
+    sessions::RequiredSession,
     state::AppState,
 };
 
@@ -59,40 +59,19 @@ struct RefreshQuery {
     cursor: String,
 }
 
-async fn require_session(
-    state: &AppState,
-    session: Option<SessionId>,
-    graft: impl Into<hypergraft::GraftRequest>,
-) -> Result<SessionId, Response> {
-    let graft = graft.into();
-    let Some(session) = session else {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    };
-    if !state.vault.has_providers() {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    }
-    Ok(session)
-}
-
 async fn catalogue(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     render_catalogue(&state, graft).await
 }
 
 async fn new_environment(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     render_form_page(
         &state,
         graft.into(),
@@ -104,13 +83,10 @@ async fn new_environment(
 
 async fn create(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let form = match EnvironmentFormState::parse(pairs) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -146,14 +122,11 @@ async fn create(
 
 async fn show_configuration(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: GraftRequest,
     Path(environment_id): Path<String>,
     Query(query): Query<RefreshQuery>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_environment(&state, &environment_id) else {
         return Ok(responses::graft_redirect(graft, "/environments"));
     };
@@ -178,14 +151,11 @@ async fn show_configuration(
 
 async fn update_configuration(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(environment_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_environment(&state, &environment_id) else {
         return Ok(responses::graft_redirect(graft, "/environments"));
     };
@@ -245,14 +215,11 @@ async fn update_configuration(
 
 async fn retry_preparation(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(environment_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_environment(&state, &environment_id) else {
         return Ok(responses::graft_redirect(graft, "/environments"));
     };
@@ -284,14 +251,11 @@ async fn retry_preparation(
 
 async fn delete_environment(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(environment_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_environment(&state, &environment_id) else {
         return Ok(responses::graft_redirect(graft, "/environments"));
     };

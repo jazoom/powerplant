@@ -261,3 +261,56 @@ async fn delete_redirects_to_the_catalogue() {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
 }
+
+#[tokio::test]
+async fn anonymous_agent_requests_redirect_to_connect() {
+    let state = test_state();
+    let cases = [
+        ("GET", "/agents", None, false),
+        ("GET", "/agents", Some("navigation"), true),
+        ("GET", "/agents", Some("patch"), true),
+        ("POST", "/agents", None, false),
+        ("POST", "/agents", Some("patch"), true),
+    ];
+    for (method, uri, graft, enhanced) in cases {
+        assert_connect_redirect(&state, method, uri, graft, enhanced).await;
+    }
+}
+
+async fn assert_connect_redirect(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    graft: Option<&str>,
+    enhanced: bool,
+) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(graft) = graft {
+        builder = builder
+            .header(hypergraft::GRAFT_REQUEST, graft)
+            .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+    }
+    let response = app(state)
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .expect("anonymous");
+    if enhanced {
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            hypergraft::MEDIA_TYPE
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            text.contains("navigate=\"/connect\""),
+            "{method} {uri} {graft:?}: {text}"
+        );
+    } else {
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/connect"
+        );
+    }
+}

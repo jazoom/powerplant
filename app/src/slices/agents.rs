@@ -16,7 +16,7 @@ use crate::{
     agents::{AgentId, AgentRecord},
     error::AppResult,
     responses,
-    sessions::{OptionalSession, SessionId},
+    sessions::RequiredSession,
     state::AppState,
 };
 
@@ -40,12 +40,9 @@ pub(super) fn router() -> Router<AppState> {
 
 async fn root(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: GraftRequest,
 ) -> AppResult<Response> {
-    if session.is_none() || !state.vault.has_providers() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let agents = state.agents.list();
     let destination = match agents.as_slice() {
         [agent] => format!("/agents/{}", agent.id.as_hex()),
@@ -54,40 +51,19 @@ async fn root(
     Ok(responses::graft_redirect(graft, &destination))
 }
 
-async fn require_session(
-    state: &AppState,
-    session: Option<SessionId>,
-    graft: impl Into<hypergraft::GraftRequest>,
-) -> Result<SessionId, Response> {
-    let graft = graft.into();
-    let Some(session) = session else {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    };
-    if !state.vault.has_providers() {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    }
-    Ok(session)
-}
-
 async fn catalogue(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: GraftRequest,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     render_catalogue(&state, graft, PatchStatus::Ok, "")
 }
 
 async fn new_agent(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: GraftRequest,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     render_form(
         &state,
         graft,
@@ -99,13 +75,10 @@ async fn new_agent(
 
 async fn create(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Form(form): Form<AgentForm>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let draft = match form.draft() {
         Ok(draft) => draft,
         Err(error) => {
@@ -135,13 +108,10 @@ async fn create(
 
 async fn show_configuration(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: GraftRequest,
     Path(agent_id): Path<String>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
@@ -156,14 +126,11 @@ async fn show_configuration(
 
 async fn update_configuration(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(agent_id): Path<String>,
     Form(form): Form<AgentForm>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
@@ -208,13 +175,10 @@ async fn update_configuration(
 
 async fn delete_agent(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(agent_id): Path<String>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
@@ -240,13 +204,10 @@ async fn delete_agent(
 
 async fn remove_orphan(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Form(form): Form<OrphanForm>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let error = match state.sandboxes.remove_orphan(form.name.trim()).await {
         Ok(()) => "",
         Err(error) => error.message(),

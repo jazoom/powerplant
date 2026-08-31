@@ -15,7 +15,7 @@ use hypergraft::{CommandGraft, PageGraft, PatchStatus};
 use crate::{
     error::AppResult,
     responses,
-    sessions::{OptionalSession, SessionId},
+    sessions::RequiredSession,
     state::AppState,
     workflows::{CatalogueError, WorkflowId, WorkflowRecord},
 };
@@ -39,40 +39,19 @@ pub(super) fn router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(forms::MAXIMUM_FORM_BYTES))
 }
 
-async fn require_session(
-    state: &AppState,
-    session: Option<SessionId>,
-    graft: impl Into<hypergraft::GraftRequest>,
-) -> Result<SessionId, Response> {
-    let graft = graft.into();
-    let Some(session) = session else {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    };
-    if !state.vault.has_providers() {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    }
-    Ok(session)
-}
-
 async fn catalogue(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     render_catalogue(&state, graft)
 }
 
 async fn new_workflow(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     render_form_page(
         &state,
         graft.into(),
@@ -85,13 +64,10 @@ async fn new_workflow(
 
 async fn create(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let (mut form, intent) = match WorkflowFormState::parse(pairs) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -171,13 +147,10 @@ async fn create(
 
 async fn show_configuration(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
     Path(workflow_id): Path<String>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_workflow(&state, &workflow_id) else {
         return Ok(responses::graft_redirect(graft, "/workflows"));
     };
@@ -193,14 +166,11 @@ async fn show_configuration(
 
 async fn update_configuration(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(workflow_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_workflow(&state, &workflow_id) else {
         return Ok(responses::graft_redirect(graft, "/workflows"));
     };
@@ -302,14 +272,11 @@ async fn update_configuration(
 
 async fn delete_workflow(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: CommandGraft,
     Path(workflow_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(record) = load_workflow(&state, &workflow_id) else {
         return Ok(responses::graft_redirect(graft, "/workflows"));
     };

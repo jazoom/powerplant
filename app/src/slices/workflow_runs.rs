@@ -12,11 +12,7 @@ use axum::{
 use hypergraft::{GraftRequest, PageGraft, PatchStatus};
 
 use crate::{
-    error::AppResult,
-    responses,
-    sessions::{OptionalSession, SessionId},
-    state::AppState,
-    workflows::RunId,
+    error::AppResult, responses, sessions::RequiredSession, state::AppState, workflows::RunId,
 };
 
 use self::page::{ArtefactView, RunDetailView, RunIndexView};
@@ -28,29 +24,11 @@ pub(super) fn router() -> Router<AppState> {
         .route("/runs/{run_id}/artefacts/{artefact_id}", get(artefact))
 }
 
-async fn require_session(
-    state: &AppState,
-    session: Option<SessionId>,
-    graft: impl Into<hypergraft::GraftRequest>,
-) -> Result<SessionId, Response> {
-    let graft = graft.into();
-    let Some(session) = session else {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    };
-    if !state.vault.has_providers() {
-        return Err(responses::graft_redirect(graft, "/connect"));
-    }
-    Ok(session)
-}
-
 async fn index(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let view = RunIndexView::from_summaries(&state.workflow_runs.summaries());
     match graft {
         PageGraft::Document => {
@@ -69,13 +47,10 @@ async fn index(
 
 async fn detail(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: GraftRequest,
     Path(run_id): Path<String>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(id) = RunId::parse(&run_id) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };
@@ -105,13 +80,10 @@ async fn detail(
 
 async fn artefact(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
     Path((run_id, artefact_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    if require_session(&state, session, graft).await.is_err() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some(run_id) = RunId::parse(&run_id) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };

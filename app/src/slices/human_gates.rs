@@ -17,7 +17,7 @@ use hypergraft::{CommandGraft, PageGraft, PatchStatus};
 use crate::{
     error::AppResult,
     responses,
-    sessions::{JobStatus, OptionalSession, SessionId},
+    sessions::{JobStatus, RequiredSession, SessionId},
     state::AppState,
     workflows::{GateId, RunId},
 };
@@ -49,20 +49,13 @@ fn ids(run: &str, gate: &str) -> Option<(RunId, GateId)> {
     Some((RunId::parse(run)?, GateId::parse(gate)?))
 }
 
-fn has_session(state: &AppState, session: Option<SessionId>) -> bool {
-    session.is_some() && state.vault.has_providers()
-}
-
 async fn detail(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     graft: PageGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Query(raw): Query<RawQuery>,
 ) -> AppResult<Response> {
-    if !has_session(&state, session) {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    }
     let Some((run_id, gate_id)) = ids(&run_id, &gate_id) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };
@@ -154,7 +147,7 @@ fn static_error(
 
 async fn approve(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    RequiredSession(session): RequiredSession,
     graft: CommandGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Form(pairs): Form<Vec<(String, String)>>,
@@ -173,7 +166,7 @@ async fn approve(
 
 async fn request_revision(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    RequiredSession(session): RequiredSession,
     graft: CommandGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Form(pairs): Form<Vec<(String, String)>>,
@@ -192,7 +185,7 @@ async fn request_revision(
 
 async fn cancel(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    RequiredSession(session): RequiredSession,
     graft: CommandGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Form(pairs): Form<Vec<(String, String)>>,
@@ -218,16 +211,13 @@ enum DecisionAction {
 
 async fn decide(
     state: AppState,
-    session: Option<SessionId>,
+    session: SessionId,
     graft: CommandGraft,
     run_raw: String,
     gate_raw: String,
     pairs: Vec<(String, String)>,
     action: DecisionAction,
 ) -> AppResult<Response> {
-    let Some(session) = session else {
-        return Ok(responses::graft_redirect(graft, "/connect"));
-    };
     let Some((run_id, gate_id)) = ids(&run_raw, &gate_raw) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };
@@ -519,7 +509,7 @@ fn command_error(
 
 async fn object(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
+    _session: RequiredSession,
     Path((run_raw, gate_raw, side, change)): Path<(String, String, String, String)>,
     headers: HeaderMap,
 ) -> Response {
@@ -530,9 +520,6 @@ async fn object(
         || headers.contains_key(header::IF_UNMODIFIED_SINCE)
     {
         return StatusCode::BAD_REQUEST.into_response();
-    }
-    if session.is_none() || !state.vault.has_providers() {
-        return StatusCode::UNAUTHORIZED.into_response();
     }
     let Some((run_id, gate_id)) = ids(&run_raw, &gate_raw) else {
         return StatusCode::NOT_FOUND.into_response();

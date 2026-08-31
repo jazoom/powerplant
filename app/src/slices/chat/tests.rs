@@ -152,14 +152,14 @@ fn patch_send_message(state: &AppState, token: &str, message: &str) -> Request<B
         .unwrap()
 }
 
+fn session_id(token: &str) -> sessions::SessionId {
+    sessions::SessionId::from_validated(&sessions::ValidatedToken::parse(token).expect("token"))
+}
+
 fn session_snapshot(state: &AppState, token: &str) -> sessions::SessionSnapshot {
-    let validated = sessions::ValidatedToken::parse(token).expect("token");
     state
         .sessions
-        .snapshot(
-            &sessions::SessionId::from_validated(&validated),
-            &agent_id(state),
-        )
+        .snapshot(&session_id(token), &agent_id(state))
         .expect("session")
 }
 
@@ -890,12 +890,16 @@ async fn parallel_tabs_cannot_overwrite_a_completed_turn() {
         ["First"]
     );
     let job_id = stored.job.expect("job").id;
-    assert!(
-        state
-            .sessions
-            .finish_turn(&stored.id, &agent_id(&state), &job_id, "Done".to_owned())
-    );
-    if let Some(job) = state.sessions.job(&stored.id, &agent_id(&state), &job_id) {
+    assert!(state.sessions.finish_turn(
+        &session_id(&token),
+        &agent_id(&state),
+        &job_id,
+        "Done".to_owned()
+    ));
+    if let Some(job) = state
+        .sessions
+        .job(&session_id(&token), &agent_id(&state), &job_id)
+    {
         job.finish(JobStatus::Completed, None);
     }
 
@@ -914,7 +918,7 @@ async fn parallel_tabs_cannot_overwrite_a_completed_turn() {
 async fn an_oversized_navigation_falls_back_to_a_document() {
     let state = test_state();
     let token = connected(&state).await;
-    let id = session_snapshot(&state, &token).id;
+    let id = session_id(&token);
     let begun = state
         .sessions
         .begin_turn(
@@ -1485,7 +1489,7 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
     for _ in 0..2_000 {
         if state
             .sessions
-            .snapshot(&session_snapshot(&state, &token).id, &second.id)
+            .snapshot(&session_id(&token), &second.id)
             .expect("second session")
             .job
             .is_some_and(|job| job.status != JobStatus::Running)
