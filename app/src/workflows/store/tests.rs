@@ -1,6 +1,6 @@
 use std::fs;
 
-use super::{StoreError, WorkflowRunStore};
+use super::{BROWSER_SUMMARY_LIMIT, StoreError, WorkflowRunStore};
 use crate::workflows::definition::{
     PinnedWorkflowDefinition, WorkflowDefinition, test_named_definition,
 };
@@ -25,10 +25,14 @@ fn start_test_attempt(
 }
 
 fn run_named(name: &str, created_at_ms: u64) -> WorkflowRun {
+    run_with_id(name, RunId::generate().expect("run"), created_at_ms)
+}
+
+fn run_with_id(name: &str, id: RunId, created_at_ms: u64) -> WorkflowRun {
     let definition = definition(name);
     let environments = crate::workflows::test_environment_set(&definition);
     WorkflowRun::create(
-        RunId::generate().expect("run"),
+        id,
         created_at_ms,
         crate::agents::AgentId::generate().expect("agent"),
         PinnedWorkflowDefinition::pin(None, definition),
@@ -63,13 +67,48 @@ fn a_source_definition_edit_cannot_alter_an_earlier_run() {
 }
 
 #[test]
-fn summaries_sort_by_creation_time_then_identifier() {
+fn summaries_keep_the_newest_fifty_runs() {
     let store = WorkflowRunStore::in_memory();
-    let later = store.create(run_named("Later", 20)).expect("later");
-    let earlier = store.create(run_named("Earlier", 10)).expect("earlier");
+    let definition = definition("Limit");
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut created = Vec::new();
+    for created_at_ms in 1..=BROWSER_SUMMARY_LIMIT as u64 + 1 {
+        let run = store
+            .create(WorkflowRun::create(
+                RunId::generate().expect("run"),
+                created_at_ms,
+                crate::agents::AgentId::generate().expect("agent"),
+                PinnedWorkflowDefinition::pin(None, definition.clone()),
+                environments.clone(),
+            ))
+            .expect("create");
+        created.push(run);
+    }
     let summaries = store.summaries();
-    assert_eq!(summaries[0].id, earlier.id);
-    assert_eq!(summaries[1].id, later.id);
+    let expected: Vec<_> = created.iter().skip(1).rev().map(|run| run.id).collect();
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|summary| summary.id)
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
+fn summaries_break_equal_timestamps_by_greatest_run_id() {
+    let store = WorkflowRunStore::in_memory();
+    let lesser = RunId::parse(&"0".repeat(32)).expect("lesser");
+    let greater = RunId::parse(&"f".repeat(32)).expect("greater");
+    store
+        .create(run_with_id("Lesser", lesser, 10))
+        .expect("lesser");
+    store
+        .create(run_with_id("Greater", greater, 10))
+        .expect("greater");
+    let summaries = store.summaries();
+    assert_eq!(summaries[0].id, greater);
+    assert_eq!(summaries[1].id, lesser);
 }
 
 #[test]

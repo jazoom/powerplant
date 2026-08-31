@@ -122,9 +122,10 @@ impl WorkflowRunStore {
     pub(crate) fn summaries(&self) -> Vec<RunSummary> {
         let mut summaries: Vec<RunSummary> = self.lock().values().map(summary_of).collect();
         summaries.sort_by(|left, right| {
-            left.created_at_ms
-                .cmp(&right.created_at_ms)
-                .then(left.id.cmp(&right.id))
+            right
+                .created_at_ms
+                .cmp(&left.created_at_ms)
+                .then(right.id.cmp(&left.id))
         });
         summaries.truncate(BROWSER_SUMMARY_LIMIT);
         summaries
