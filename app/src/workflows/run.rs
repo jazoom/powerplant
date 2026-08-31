@@ -20,7 +20,7 @@ use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
 use super::id::{AttemptId, GateId, RunId, WorkflowId};
 use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
-pub(crate) const RUN_RECORD_VERSION: u32 = 3;
+pub(crate) const RUN_RECORD_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowRun {
@@ -34,7 +34,6 @@ pub(crate) struct WorkflowRun {
     pub(crate) artefacts: Vec<ArtefactRecord>,
     pub(crate) attempts: Vec<AttemptRecord>,
     pub(crate) gates: Vec<HumanGateRecord>,
-    pub(crate) transitions: Vec<TransitionRecord>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -113,32 +112,11 @@ pub(crate) enum EscalationReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TransitionCause {
-    InitialSourceCaptureStarted,
-    InitialSourceCaptured,
-    InitialSourceCaptureFailed,
-    SourceDriftDetected,
-    AttemptStarted,
-    AttemptCompleted,
-    ReviewApproved,
-    ReviewRevision,
-    ReviewBlockedEscalation,
-    ReviewAttemptLimitEscalation,
-    AttemptFailed,
-    CancellationRequested,
-    ProcessRestarted,
-    GateOpened,
-    GateApproved,
-    GateRevisionRequested,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TransitionRecord {
-    pub(crate) sequence: u64,
-    pub(crate) occurred_at_ms: u64,
-    pub(crate) cause: TransitionCause,
-    pub(crate) from: RunState,
-    pub(crate) to: RunState,
+pub(crate) enum ReviewRoute {
+    Approved,
+    RevisionRequested,
+    BlockedEscalation,
+    AttemptLimitEscalation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,6 +129,7 @@ pub(crate) struct AttemptRecord {
     pub(crate) finished_at_ms: Option<u64>,
     pub(crate) state: AttemptState,
     pub(crate) result: Option<AttemptResult>,
+    pub(crate) review_route: Option<ReviewRoute>,
     pub(crate) inputs: Vec<AttemptArtefactInput>,
     pub(crate) outputs: Vec<AttemptArtefactOutput>,
     pub(crate) capabilities: AttemptCapabilities,
@@ -222,7 +201,7 @@ pub(crate) enum RunRecordError {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(super) struct RunFile {
     record_version: u32,
     id: String,
@@ -237,7 +216,6 @@ pub(super) struct RunFile {
     artefacts: Vec<ArtefactFile>,
     attempts: Vec<AttemptFile>,
     gates: Vec<HumanGateFile>,
-    transitions: Vec<TransitionFile>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -287,7 +265,7 @@ struct HumanGateFile {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct AttemptFile {
     id: String,
     step: String,
@@ -297,6 +275,8 @@ struct AttemptFile {
     finished_at_ms: Option<u64>,
     state: String,
     result: Option<AttemptResultFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_route: Option<String>,
     inputs: Vec<AttemptInputFile>,
     outputs: Vec<AttemptOutputFile>,
     capabilities: AttemptCapabilitiesFile,
@@ -486,16 +466,6 @@ enum AttemptResultFile {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-struct TransitionFile {
-    sequence: u64,
-    occurred_at_ms: u64,
-    cause: String,
-    from: RunStateFile,
-    to: RunStateFile,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
 struct ResolvedEnvironmentSetFile {
     environments: Vec<ResolvedEnvironmentFile>,
     steps: Vec<ResolvedStepEnvironmentFile>,
@@ -558,7 +528,6 @@ impl WorkflowRun {
             artefacts: Vec::new(),
             attempts: Vec::new(),
             gates: Vec::new(),
-            transitions: Vec::new(),
         }
     }
 
@@ -569,10 +538,10 @@ impl WorkflowRun {
         if !matches!(self.source, RunSource::Pending) {
             return Err(TransitionError::Invalid);
         }
-        if record.kind != crate::workflows::definition::ArtefactKind::CandidateRevision {
-            return Err(TransitionError::Invalid);
-        }
-        if record.provenance.run_id != self.id {
+        if record.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+            || record.provenance.run_id != self.id
+            || self.artefacts.iter().any(|item| item.id == record.id)
+        {
             return Err(TransitionError::Invalid);
         }
         let reference = ArtefactReference {
@@ -640,8 +609,7 @@ impl WorkflowRun {
             return Err(TransitionError::Invalid);
         }
         let sequence = u32::try_from(self.gates.len() + 1).map_err(|_| TransitionError::Invalid)?;
-        let transition_sequence = self.transitions.last().map_or(1, |item| item.sequence + 1);
-        let revision = GateRevision::new(transition_sequence).ok_or(TransitionError::Invalid)?;
+        let revision = GateRevision::new(u64::from(sequence)).ok_or(TransitionError::Invalid)?;
         let gate = HumanGateRecord {
             id: gate_id,
             step: step.clone(),
@@ -656,16 +624,10 @@ impl WorkflowRun {
             output: action.required_output.key.clone(),
         };
         self.gates.push(gate.clone());
-        let from = self.state.clone();
-        self.push_transition(
-            at_ms,
-            TransitionCause::GateOpened,
-            from,
-            RunState::AwaitingHuman {
-                step,
-                gate: gate_id,
-            },
-        );
+        self.state = RunState::AwaitingHuman {
+            step,
+            gate: gate_id,
+        };
         Ok(gate)
     }
 
@@ -677,7 +639,10 @@ impl WorkflowRun {
         kind: super::gates::HumanDecisionKind,
         at_ms: u64,
     ) -> Result<(), TransitionError> {
-        if !self.accepts_time(at_ms) || record.provenance.run_id != self.id {
+        if !self.accepts_time(at_ms)
+            || record.provenance.run_id != self.id
+            || self.artefacts.iter().any(|item| item.id == record.id)
+        {
             return Err(TransitionError::Invalid);
         }
         let RunState::AwaitingHuman { step, gate } = self.state.clone() else {
@@ -706,8 +671,7 @@ impl WorkflowRun {
             super::gates::HumanDecisionKind::RevisionRequested => HumanGateState::RevisionRequested,
         };
         self.artefacts.push(record);
-        let from = self.state.clone();
-        match kind {
+        self.state = match kind {
             super::gates::HumanDecisionKind::Approved => {
                 let definition = self
                     .pinned
@@ -717,19 +681,13 @@ impl WorkflowRun {
                 if definition.review.is_some() {
                     return Err(TransitionError::Invalid);
                 }
-                let to = advanced_state(&self.pinned.definition, &step)?;
-                self.push_transition(at_ms, TransitionCause::GateApproved, from, to);
+                advanced_state(&self.pinned.definition, &step)?
             }
-            super::gates::HumanDecisionKind::RevisionRequested => self.push_transition(
-                at_ms,
-                TransitionCause::GateRevisionRequested,
-                from,
-                RunState::RevisionRequested {
-                    step,
-                    decision: reference,
-                },
-            ),
-        }
+            super::gates::HumanDecisionKind::RevisionRequested => RunState::RevisionRequested {
+                step,
+                decision: reference,
+            },
+        };
         Ok(())
     }
 
@@ -758,13 +716,7 @@ impl WorkflowRun {
         }
         record.state = HumanGateState::Cancelled;
         record.closed_at_ms = Some(at_ms);
-        let from = self.state.clone();
-        self.push_transition(
-            at_ms,
-            TransitionCause::CancellationRequested,
-            from,
-            RunState::Cancelled,
-        );
+        self.state = RunState::Cancelled;
         Ok(())
     }
 
@@ -819,6 +771,7 @@ impl WorkflowRun {
             finished_at_ms: None,
             state: AttemptState::Active,
             result: None,
+            review_route: None,
             inputs,
             outputs: Vec::new(),
             capabilities,
@@ -827,12 +780,10 @@ impl WorkflowRun {
             commit_transaction: None,
             commit_result: None,
         });
-        let from = self.state.clone();
-        let to = RunState::Active {
+        self.state = RunState::Active {
             step,
             attempt: attempt_id,
         };
-        self.push_transition(at_ms, TransitionCause::AttemptStarted, from, to);
         Ok(())
     }
 
@@ -923,12 +874,29 @@ impl WorkflowRun {
         {
             return Err(TransitionError::Invalid);
         }
-        for record in &artefacts {
+        for (index, record) in artefacts.iter().enumerate() {
             if record.provenance.run_id != self.id
                 || self.artefacts.iter().any(|item| item.id == record.id)
+                || artefacts[..index].iter().any(|item| item.id == record.id)
             {
                 return Err(TransitionError::Invalid);
             }
+        }
+        let reference_exists = |reference: &ArtefactReference| {
+            self.artefacts
+                .iter()
+                .chain(&artefacts)
+                .any(|record| artefact_matches_reference(record, reference))
+        };
+        if outputs
+            .iter()
+            .any(|output| !reference_exists(&output.artefact))
+            || accepted
+                .as_ref()
+                .is_some_and(|item| !reference_exists(item))
+            || matches!(&observed, ObservedCandidate::Exact { artefact } if !reference_exists(artefact))
+        {
+            return Err(TransitionError::Invalid);
         }
         let Some(attempt) = self
             .attempts
@@ -962,21 +930,43 @@ impl WorkflowRun {
         if attempt != attempt_id {
             return Err(TransitionError::Invalid);
         }
-        let definition_step = self
-            .pinned
-            .definition
-            .step(&step)
-            .ok_or(TransitionError::Invalid)?;
-        let review = definition_step.review.clone();
-        let expected_outputs = required_output_keys(&definition_step.action);
-        let Some(attempt) = self.attempts.iter().find(|item| item.id == attempt_id) else {
-            return Err(TransitionError::Invalid);
+        let (review, expected_outputs, ready) = {
+            let definition_step = self
+                .pinned
+                .definition
+                .step(&step)
+                .ok_or(TransitionError::Invalid)?;
+            let Some(attempt) = self.attempts.iter().find(|item| item.id == attempt_id) else {
+                return Err(TransitionError::Invalid);
+            };
+            (
+                definition_step.review.clone(),
+                required_output_keys(&definition_step.action),
+                attempt.cleanup == AttemptCleanupRecord::Complete
+                    && durable_outputs_match(attempt, definition_step),
+            )
         };
-        if attempt.cleanup != AttemptCleanupRecord::Complete
-            || !durable_outputs_match(attempt, definition_step)
-        {
+        if !ready {
             return Err(TransitionError::Invalid);
         }
+        let (review_route, next_state) = match review {
+            None => (None, advanced_state(&self.pinned.definition, &step)?),
+            Some(policy) => {
+                let attempt = self
+                    .attempts
+                    .iter()
+                    .find(|item| item.id == attempt_id)
+                    .ok_or(TransitionError::Invalid)?;
+                let (route, next_state) = review_consumption(
+                    &self.pinned.definition,
+                    &step,
+                    &policy,
+                    attempt,
+                    &self.artefacts,
+                )?;
+                (Some(route), next_state)
+            }
+        };
         self.finish_attempt(
             attempt_id,
             at_ms,
@@ -984,76 +974,9 @@ impl WorkflowRun {
             AttemptResult::Completed {
                 outputs: expected_outputs,
             },
+            review_route,
         )?;
-        let from = self.state.clone();
-        match review {
-            None => {
-                let to = advanced_state(&self.pinned.definition, &step)?;
-                self.push_transition(at_ms, TransitionCause::AttemptCompleted, from, to);
-            }
-            Some(policy) => {
-                let attempt = self
-                    .attempts
-                    .iter()
-                    .find(|item| item.id == attempt_id)
-                    .ok_or(TransitionError::Invalid)?;
-                let report = attempt
-                    .outputs
-                    .iter()
-                    .find(|output| output.key == policy.report_output)
-                    .map(|output| output.artefact.clone())
-                    .ok_or(TransitionError::Invalid)?;
-                let verdict = match &self
-                    .artefact(&report.id)
-                    .ok_or(TransitionError::Invalid)?
-                    .summary
-                {
-                    crate::workflows::artefacts::ArtefactSummary::Review { verdict, .. } => {
-                        *verdict
-                    }
-                    _ => return Err(TransitionError::Invalid),
-                };
-                match verdict {
-                    crate::workflows::artefacts::ReviewVerdict::Approved => {
-                        let to = advanced_state(&self.pinned.definition, &step)?;
-                        self.push_transition(at_ms, TransitionCause::ReviewApproved, from, to);
-                    }
-                    crate::workflows::artefacts::ReviewVerdict::RevisionRequired
-                        if attempt.ordinal < u32::from(policy.attempt_limit) =>
-                    {
-                        self.push_transition(
-                            at_ms,
-                            TransitionCause::ReviewRevision,
-                            from,
-                            RunState::Ready {
-                                step: policy.revision_target,
-                            },
-                        )
-                    }
-                    crate::workflows::artefacts::ReviewVerdict::RevisionRequired => self
-                        .push_transition(
-                            at_ms,
-                            TransitionCause::ReviewAttemptLimitEscalation,
-                            from,
-                            RunState::Escalated {
-                                step,
-                                report,
-                                reason: EscalationReason::AttemptLimit,
-                            },
-                        ),
-                    crate::workflows::artefacts::ReviewVerdict::Blocked => self.push_transition(
-                        at_ms,
-                        TransitionCause::ReviewBlockedEscalation,
-                        from,
-                        RunState::Escalated {
-                            step,
-                            report,
-                            reason: EscalationReason::Blocked,
-                        },
-                    ),
-                }
-            }
-        }
+        self.state = next_state;
         Ok(())
     }
 
@@ -1061,15 +984,9 @@ impl WorkflowRun {
         if !self.accepts_time(at_ms) {
             return Err(TransitionError::Invalid);
         }
-        match self.state.clone() {
+        match self.state {
             RunState::Ready { .. } | RunState::InitialisingSource => {
-                let from = self.state.clone();
-                self.push_transition(
-                    at_ms,
-                    TransitionCause::InitialSourceCaptureFailed,
-                    from,
-                    RunState::Failed,
-                );
+                self.state = RunState::Failed;
                 Ok(())
             }
             _ => Err(TransitionError::Invalid),
@@ -1102,14 +1019,9 @@ impl WorkflowRun {
             at_ms,
             AttemptState::Failed,
             AttemptResult::Failed { category },
+            None,
         )?;
-        let from = self.state.clone();
-        self.push_transition(
-            at_ms,
-            TransitionCause::AttemptFailed,
-            from,
-            RunState::Failed,
-        );
+        self.state = RunState::Failed;
         Ok(())
     }
 
@@ -1119,13 +1031,7 @@ impl WorkflowRun {
         }
         match self.state.clone() {
             RunState::Ready { .. } => {
-                let from = self.state.clone();
-                self.push_transition(
-                    at_ms,
-                    TransitionCause::CancellationRequested,
-                    from,
-                    RunState::Cancelled,
-                );
+                self.state = RunState::Cancelled;
                 Ok(())
             }
             RunState::Active { attempt, .. } => {
@@ -1140,24 +1046,13 @@ impl WorkflowRun {
                     at_ms,
                     AttemptState::Cancelled,
                     AttemptResult::Cancelled,
+                    None,
                 )?;
-                let from = self.state.clone();
-                self.push_transition(
-                    at_ms,
-                    TransitionCause::CancellationRequested,
-                    from,
-                    RunState::Cancelled,
-                );
+                self.state = RunState::Cancelled;
                 Ok(())
             }
             RunState::InitialisingSource => {
-                let from = self.state.clone();
-                self.push_transition(
-                    at_ms,
-                    TransitionCause::CancellationRequested,
-                    from,
-                    RunState::Cancelled,
-                );
+                self.state = RunState::Cancelled;
                 Ok(())
             }
             RunState::AwaitingHuman { gate, .. } => {
@@ -1183,13 +1078,7 @@ impl WorkflowRun {
             return Err(TransitionError::Invalid);
         }
         if matches!(self.state, RunState::InitialisingSource) {
-            let from = self.state.clone();
-            self.push_transition(
-                at_ms,
-                TransitionCause::ProcessRestarted,
-                from,
-                RunState::Interrupted,
-            );
+            self.state = RunState::Interrupted;
             return Ok(());
         }
         if let RunState::AwaitingHuman { gate, .. } = self.state.clone() {
@@ -1203,13 +1092,7 @@ impl WorkflowRun {
             }
             record.state = HumanGateState::Interrupted;
             record.closed_at_ms = Some(at_ms);
-            let from = self.state.clone();
-            self.push_transition(
-                at_ms,
-                TransitionCause::ProcessRestarted,
-                from,
-                RunState::Interrupted,
-            );
+            self.state = RunState::Interrupted;
             return Ok(());
         }
         let RunState::Active { attempt, .. } = self.state.clone() else {
@@ -1220,14 +1103,9 @@ impl WorkflowRun {
             at_ms,
             AttemptState::Interrupted,
             AttemptResult::Interrupted,
+            None,
         )?;
-        let from = self.state.clone();
-        self.push_transition(
-            at_ms,
-            TransitionCause::ProcessRestarted,
-            from,
-            RunState::Interrupted,
-        );
+        self.state = RunState::Interrupted;
         Ok(())
     }
 
@@ -1284,11 +1162,24 @@ impl WorkflowRun {
     }
 
     fn accepts_time(&self, at_ms: u64) -> bool {
-        at_ms >= self.created_at_ms
-            && self
-                .transitions
-                .last()
-                .is_none_or(|transition| at_ms >= transition.occurred_at_ms)
+        at_ms >= self.latest_fact_ms()
+    }
+
+    fn latest_fact_ms(&self) -> u64 {
+        let mut latest = self.created_at_ms;
+        for attempt in &self.attempts {
+            latest = latest.max(attempt.started_at_ms);
+            if let Some(finished) = attempt.finished_at_ms {
+                latest = latest.max(finished);
+            }
+        }
+        for gate in &self.gates {
+            latest = latest.max(gate.opened_at_ms);
+            if let Some(closed) = gate.closed_at_ms {
+                latest = latest.max(closed);
+            }
+        }
+        latest
     }
 
     fn finish_attempt(
@@ -1297,6 +1188,7 @@ impl WorkflowRun {
         at_ms: u64,
         state: AttemptState,
         result: AttemptResult,
+        review_route: Option<ReviewRoute>,
     ) -> Result<(), TransitionError> {
         let Some(attempt) = self
             .attempts
@@ -1305,35 +1197,17 @@ impl WorkflowRun {
         else {
             return Err(TransitionError::Invalid);
         };
-        if attempt.state != AttemptState::Active || attempt.result.is_some() {
+        if attempt.state != AttemptState::Active
+            || attempt.result.is_some()
+            || attempt.review_route.is_some()
+        {
             return Err(TransitionError::Invalid);
         }
         attempt.state = state;
         attempt.finished_at_ms = Some(at_ms);
         attempt.result = Some(result);
+        attempt.review_route = review_route;
         Ok(())
-    }
-
-    fn push_transition(
-        &mut self,
-        occurred_at_ms: u64,
-        cause: TransitionCause,
-        from: RunState,
-        to: RunState,
-    ) {
-        let sequence = self
-            .transitions
-            .last()
-            .map(|transition| transition.sequence + 1)
-            .unwrap_or(1);
-        self.transitions.push(TransitionRecord {
-            sequence,
-            occurred_at_ms,
-            cause,
-            from,
-            to: to.clone(),
-        });
-        self.state = to;
     }
 
     pub(super) fn to_file(&self) -> RunFile {
@@ -1351,11 +1225,6 @@ impl WorkflowRun {
             artefacts: self.artefacts.iter().map(artefact_to_file).collect(),
             attempts: self.attempts.iter().map(AttemptRecord::to_file).collect(),
             gates: self.gates.iter().map(gate_to_file).collect(),
-            transitions: self
-                .transitions
-                .iter()
-                .map(TransitionRecord::to_file)
-                .collect(),
         }
     }
 
@@ -1388,11 +1257,6 @@ impl WorkflowRun {
             .into_iter()
             .map(gate_from_file)
             .collect::<Result<Vec<_>, _>>()?;
-        let transitions = file
-            .transitions
-            .into_iter()
-            .map(TransitionRecord::from_file)
-            .collect::<Result<Vec<_>, _>>()?;
         let environments = environment_set_from_file(file.environments)?;
         let source = source_from_file(file.source)?;
         let artefacts = file
@@ -1415,50 +1279,28 @@ impl WorkflowRun {
             artefacts,
             attempts,
             gates,
-            transitions,
         };
         run.validate_loaded()?;
         Ok(run)
     }
 
     fn validate_loaded(&self) -> Result<(), RunRecordError> {
-        if self.attempts.len() > self.pinned.definition.attempt_bound()
-            || self.transitions.len() > self.pinned.definition.transition_bound()
+        let fact_count = self
+            .attempts
+            .len()
+            .checked_add(self.gates.len())
+            .ok_or(RunRecordError::Corrupt)?;
+        if fact_count > self.pinned.definition.attempt_bound()
+            || self.artefacts.len() > crate::workflows::artefacts::MAXIMUM_ARTEFACTS
         {
             return Err(RunRecordError::Corrupt);
         }
-        for (index, attempt) in self.attempts.iter().enumerate() {
-            if self.attempts[..index]
-                .iter()
-                .any(|earlier| earlier.id == attempt.id)
-            {
-                return Err(RunRecordError::Corrupt);
-            }
-            let step = self
-                .pinned
-                .definition
-                .step(&attempt.step)
-                .ok_or(RunRecordError::Corrupt)?;
-            if attempt.action_kind != ActionKind::from_action(&step.action)
-                || attempt.ordinal != next_ordinal(&self.attempts[..index], &attempt.step)
-                || attempt.started_at_ms < self.created_at_ms
-            {
-                return Err(RunRecordError::Corrupt);
-            }
-            validate_attempt_result(attempt, step)?;
-            validate_attempt_isolation(attempt, step, self)?;
-            validate_report_binding(attempt, step, self)?;
-        }
+        validate_artefacts(self)?;
+        validate_attempts(self)?;
         validate_gates(self)?;
-        validate_transitions(
-            self.created_at_ms,
-            &self.pinned.definition,
-            &self.attempts,
-            &self.artefacts,
-            &self.gates,
-            &self.transitions,
-            &self.state,
-        )?;
+        validate_review_routes(self)?;
+        validate_state_facts(self)?;
+        validate_source(self)?;
         validate_environments(self)
     }
 }
@@ -1564,6 +1406,10 @@ impl AttemptRecord {
             finished_at_ms: self.finished_at_ms,
             state: self.state.as_str().to_owned(),
             result: self.result.as_ref().map(AttemptResult::to_file),
+            review_route: self
+                .review_route
+                .map(ReviewRoute::as_str)
+                .map(str::to_owned),
             inputs: self
                 .inputs
                 .iter()
@@ -1609,6 +1455,10 @@ impl AttemptRecord {
             finished_at_ms: file.finished_at_ms,
             state: AttemptState::parse(&file.state).ok_or(RunRecordError::Corrupt)?,
             result: file.result.map(AttemptResult::from_file).transpose()?,
+            review_route: match file.review_route {
+                Some(value) => Some(ReviewRoute::parse(&value).ok_or(RunRecordError::Corrupt)?),
+                None => None,
+            },
             inputs: file
                 .inputs
                 .into_iter()
@@ -1786,28 +1636,6 @@ impl ActionKind {
     }
 }
 
-impl TransitionRecord {
-    fn to_file(&self) -> TransitionFile {
-        TransitionFile {
-            sequence: self.sequence,
-            occurred_at_ms: self.occurred_at_ms,
-            cause: self.cause.as_str().to_owned(),
-            from: RunStateFile::from_state(&self.from),
-            to: RunStateFile::from_state(&self.to),
-        }
-    }
-
-    fn from_file(file: TransitionFile) -> Result<Self, RunRecordError> {
-        Ok(Self {
-            sequence: file.sequence,
-            occurred_at_ms: file.occurred_at_ms,
-            cause: TransitionCause::parse(&file.cause).ok_or(RunRecordError::Corrupt)?,
-            from: RunState::from_file(file.from)?,
-            to: RunState::from_file(file.to)?,
-        })
-    }
-}
-
 impl EscalationReason {
     fn parse(value: &str) -> Option<Self> {
         match value {
@@ -1825,66 +1653,66 @@ impl EscalationReason {
     }
 }
 
-impl TransitionCause {
+impl ReviewRoute {
     fn parse(value: &str) -> Option<Self> {
         match value {
-            "initial-source-capture-started" => Some(Self::InitialSourceCaptureStarted),
-            "initial-source-captured" => Some(Self::InitialSourceCaptured),
-            "initial-source-capture-failed" => Some(Self::InitialSourceCaptureFailed),
-            "source-drift-detected" => Some(Self::SourceDriftDetected),
-            "attempt-started" => Some(Self::AttemptStarted),
-            "attempt-completed" => Some(Self::AttemptCompleted),
-            "review-approved" => Some(Self::ReviewApproved),
-            "review-revision" => Some(Self::ReviewRevision),
-            "review-blocked-escalation" => Some(Self::ReviewBlockedEscalation),
-            "review-attempt-limit-escalation" => Some(Self::ReviewAttemptLimitEscalation),
-            "attempt-failed" => Some(Self::AttemptFailed),
-            "cancellation-requested" => Some(Self::CancellationRequested),
-            "process-restarted" => Some(Self::ProcessRestarted),
-            "gate-opened" => Some(Self::GateOpened),
-            "gate-approved" => Some(Self::GateApproved),
-            "gate-revision-requested" => Some(Self::GateRevisionRequested),
+            "approved" => Some(Self::Approved),
+            "revision-requested" => Some(Self::RevisionRequested),
+            "blocked-escalation" => Some(Self::BlockedEscalation),
+            "attempt-limit-escalation" => Some(Self::AttemptLimitEscalation),
             _ => None,
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::InitialSourceCaptureStarted => "initial-source-capture-started",
-            Self::InitialSourceCaptured => "initial-source-captured",
-            Self::InitialSourceCaptureFailed => "initial-source-capture-failed",
-            Self::SourceDriftDetected => "source-drift-detected",
-            Self::AttemptStarted => "attempt-started",
-            Self::AttemptCompleted => "attempt-completed",
-            Self::ReviewApproved => "review-approved",
-            Self::ReviewRevision => "review-revision",
-            Self::ReviewBlockedEscalation => "review-blocked-escalation",
-            Self::ReviewAttemptLimitEscalation => "review-attempt-limit-escalation",
-            Self::AttemptFailed => "attempt-failed",
-            Self::CancellationRequested => "cancellation-requested",
-            Self::ProcessRestarted => "process-restarted",
-            Self::GateOpened => "gate-opened",
-            Self::GateApproved => "gate-approved",
-            Self::GateRevisionRequested => "gate-revision-requested",
+            Self::Approved => "approved",
+            Self::RevisionRequested => "revision-requested",
+            Self::BlockedEscalation => "blocked-escalation",
+            Self::AttemptLimitEscalation => "attempt-limit-escalation",
+        }
+    }
+
+    pub(crate) fn as_label(self) -> &'static str {
+        match self {
+            Self::Approved => "Approved route",
+            Self::RevisionRequested => "Revision route",
+            Self::BlockedEscalation => "Blocked escalation",
+            Self::AttemptLimitEscalation => "Attempt-limit escalation",
         }
     }
 }
 
 fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    let mut open_gates = 0usize;
     for (index, gate) in run.gates.iter().enumerate() {
-        if gate.sequence != u32::try_from(index + 1).map_err(|_| RunRecordError::Corrupt)?
+        if run.gates[..index]
+            .iter()
+            .any(|earlier| earlier.id == gate.id)
+            || run.gates[..index]
+                .iter()
+                .any(|earlier| earlier.revision == gate.revision)
+            || gate.sequence != u32::try_from(index + 1).map_err(|_| RunRecordError::Corrupt)?
+            || gate.revision.get() != u64::from(gate.sequence)
+            || gate.opened_at_ms < run.created_at_ms
             || gate.candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
             || gate.diff_base.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
-            || !run
-                .artefacts
-                .iter()
-                .any(|record| record.id == gate.candidate.id)
-            || !run
-                .artefacts
-                .iter()
-                .any(|record| record.id == gate.diff_base.id)
         {
             return Err(RunRecordError::Corrupt);
+        }
+        let candidate = referenced_artefact(run, &gate.candidate)?;
+        let diff_base = referenced_artefact(run, &gate.diff_base)?;
+        if let Some(previous) = index.checked_sub(1).map(|previous| &run.gates[previous]) {
+            let previous_closed = previous.closed_at_ms.ok_or(RunRecordError::Corrupt)?;
+            if gate.opened_at_ms < previous_closed {
+                return Err(RunRecordError::Corrupt);
+            }
+        }
+        if gate.state == HumanGateState::AwaitingDecision {
+            open_gates += 1;
+            if index + 1 != run.gates.len() {
+                return Err(RunRecordError::Corrupt);
+            }
         }
         let step = run
             .pinned
@@ -1905,7 +1733,7 @@ fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
             }
             HumanGateState::Approved | HumanGateState::RevisionRequested => {
                 let decision = gate.decision.as_ref().ok_or(RunRecordError::Corrupt)?;
-                let record = run.artefact(&decision.id).ok_or(RunRecordError::Corrupt)?;
+                let record = referenced_artefact(run, decision)?;
                 let crate::workflows::artefacts::ArtefactProducer::HumanGate {
                     gate_id,
                     step,
@@ -1927,8 +1755,16 @@ fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
                 } else {
                     super::gates::HumanDecisionKind::RevisionRequested
                 };
-                if !matches!(&record.summary, crate::workflows::artefacts::ArtefactSummary::HumanDecision { decision, .. } if *decision == expected)
-                {
+                if !matches!(
+                    &record.summary,
+                    crate::workflows::artefacts::ArtefactSummary::HumanDecision {
+                        candidate: decision_candidate,
+                        diff_base: decision_diff_base,
+                        decision,
+                    } if *decision == expected
+                        && Some(*decision_candidate) == candidate.candidate_hash()
+                        && Some(*decision_diff_base) == diff_base.candidate_hash()
+                ) {
                     return Err(RunRecordError::Corrupt);
                 }
             }
@@ -1938,6 +1774,14 @@ fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
                 }
             }
         }
+        if let Some(closed) = gate.closed_at_ms
+            && closed < gate.opened_at_ms
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+    }
+    if open_gates > 1 {
+        return Err(RunRecordError::Corrupt);
     }
     Ok(())
 }
@@ -2425,6 +2269,60 @@ fn advanced_state(
     })
 }
 
+fn review_consumption(
+    definition: &WorkflowDefinition,
+    step: &StepKey,
+    policy: &crate::workflows::definition::ReviewPolicy,
+    attempt: &AttemptRecord,
+    artefacts: &[ArtefactRecord],
+) -> Result<(ReviewRoute, RunState), TransitionError> {
+    let report = attempt
+        .outputs
+        .iter()
+        .find(|output| output.key == policy.report_output)
+        .map(|output| output.artefact.clone())
+        .ok_or(TransitionError::Invalid)?;
+    let verdict = artefacts
+        .iter()
+        .find(|artefact| artefact_matches_reference(artefact, &report))
+        .and_then(|artefact| match artefact.summary {
+            crate::workflows::artefacts::ArtefactSummary::Review { verdict, .. } => Some(verdict),
+            _ => None,
+        })
+        .ok_or(TransitionError::Invalid)?;
+    match verdict {
+        crate::workflows::artefacts::ReviewVerdict::Approved => {
+            Ok((ReviewRoute::Approved, advanced_state(definition, step)?))
+        }
+        crate::workflows::artefacts::ReviewVerdict::RevisionRequired
+            if attempt.ordinal < u32::from(policy.attempt_limit) =>
+        {
+            Ok((
+                ReviewRoute::RevisionRequested,
+                RunState::Ready {
+                    step: policy.revision_target.clone(),
+                },
+            ))
+        }
+        crate::workflows::artefacts::ReviewVerdict::RevisionRequired => Ok((
+            ReviewRoute::AttemptLimitEscalation,
+            RunState::Escalated {
+                step: step.clone(),
+                report,
+                reason: EscalationReason::AttemptLimit,
+            },
+        )),
+        crate::workflows::artefacts::ReviewVerdict::Blocked => Ok((
+            ReviewRoute::BlockedEscalation,
+            RunState::Escalated {
+                step: step.clone(),
+                report,
+                reason: EscalationReason::Blocked,
+            },
+        )),
+    }
+}
+
 fn required_output_keys(action: &StepAction) -> Vec<String> {
     let outputs = match action {
         StepAction::Agent(action) => &action.required_outputs,
@@ -2477,6 +2375,53 @@ fn commit_transaction_from_file(
         expected_commit: file.expected_commit,
         timestamp: file.timestamp,
     })
+}
+
+fn validate_attempt_references(
+    run: &WorkflowRun,
+    attempt: &AttemptRecord,
+    step: &StepDefinition,
+) -> Result<(), RunRecordError> {
+    for (index, input) in attempt.inputs.iter().enumerate() {
+        if attempt.inputs[..index]
+            .iter()
+            .any(|earlier| earlier.key == input.key)
+            || !step
+                .inputs
+                .iter()
+                .any(|declared| declared.key == input.key && declared.kind == input.artefact.kind)
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        referenced_artefact(run, &input.artefact)?;
+    }
+    for (index, output) in attempt.outputs.iter().enumerate() {
+        if attempt.outputs[..index]
+            .iter()
+            .any(|earlier| earlier.key == output.key)
+            || !step.required_outputs().iter().any(|declared| {
+                declared.key == output.key
+                    && declared.kind.as_artefact_kind() == Some(output.artefact.kind)
+            })
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        let record = referenced_artefact(run, &output.artefact)?;
+        if !matches!(
+            &record.provenance.producer,
+            crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+                attempt_id,
+                step: producer_step,
+                output: Some(producer_output),
+                disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+            } if *attempt_id == attempt.id
+                && *producer_step == attempt.step
+                && *producer_output == output.key
+        ) {
+            return Err(RunRecordError::Corrupt);
+        }
+    }
+    Ok(())
 }
 
 fn validate_attempt_result(
@@ -2699,7 +2644,12 @@ fn validate_attempt_isolation(
     }
     match (&attempt.state, &attempt.cleanup) {
         (AttemptState::Completed, AttemptCleanupRecord::Complete) => {}
-        (AttemptState::Active, AttemptCleanupRecord::Pending) => {}
+        (
+            AttemptState::Active,
+            AttemptCleanupRecord::Pending
+            | AttemptCleanupRecord::Complete
+            | AttemptCleanupRecord::Orphaned { .. },
+        ) => {}
         (
             AttemptState::Interrupted,
             AttemptCleanupRecord::Pending
@@ -2965,328 +2915,391 @@ impl AttemptSandboxKind {
     }
 }
 
-fn validate_transitions(
-    created_at_ms: u64,
-    definition: &WorkflowDefinition,
-    attempts: &[AttemptRecord],
-    artefacts: &[ArtefactRecord],
-    gates: &[HumanGateRecord],
-    transitions: &[TransitionRecord],
-    state: &RunState,
-) -> Result<(), RunRecordError> {
-    let mut expected_state = RunState::Ready {
-        step: definition.first_step().clone(),
-    };
-    let mut previous_time = created_at_ms;
-    let mut started_attempts = Vec::new();
-    for (index, transition) in transitions.iter().enumerate() {
-        let sequence = u64::try_from(index + 1).map_err(|_| RunRecordError::Corrupt)?;
-        if transition.sequence != sequence
-            || transition.occurred_at_ms < previous_time
-            || transition.from != expected_state
+fn validate_attempts(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    let mut active = 0usize;
+    for (index, attempt) in run.attempts.iter().enumerate() {
+        if run.attempts[..index]
+            .iter()
+            .any(|earlier| earlier.id == attempt.id)
         {
             return Err(RunRecordError::Corrupt);
         }
-        match transition.cause {
-            TransitionCause::InitialSourceCaptureStarted => {
-                if !matches!(
-                    transition.from,
-                    RunState::Ready { .. } | RunState::InitialisingSource
-                ) || transition.to != RunState::InitialisingSource
-                {
+        if let Some(previous) = index.checked_sub(1).map(|previous| &run.attempts[previous]) {
+            let previous_finished = previous.finished_at_ms.ok_or(RunRecordError::Corrupt)?;
+            if attempt.started_at_ms < previous_finished {
+                return Err(RunRecordError::Corrupt);
+            }
+        }
+        let step = run
+            .pinned
+            .definition
+            .step(&attempt.step)
+            .ok_or(RunRecordError::Corrupt)?;
+        if attempt.action_kind != ActionKind::from_action(&step.action)
+            || attempt.ordinal != next_ordinal(&run.attempts[..index], &attempt.step)
+            || attempt.started_at_ms < run.created_at_ms
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        if attempt.state == AttemptState::Active {
+            active += 1;
+            if index + 1 != run.attempts.len() {
+                return Err(RunRecordError::Corrupt);
+            }
+        }
+        validate_attempt_references(run, attempt, step)?;
+        validate_attempt_result(attempt, step)?;
+        validate_attempt_isolation(attempt, step, run)?;
+        validate_report_binding(attempt, step, run)?;
+    }
+    if active > 1 {
+        return Err(RunRecordError::Corrupt);
+    }
+    Ok(())
+}
+
+fn validate_review_routes(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    for attempt in &run.attempts {
+        let step = run
+            .pinned
+            .definition
+            .step(&attempt.step)
+            .ok_or(RunRecordError::Corrupt)?;
+        match (&step.review, attempt.state, attempt.review_route) {
+            (None, _, None) => {}
+            (Some(_), AttemptState::Completed, Some(route)) => {
+                let policy = step.review.as_ref().ok_or(RunRecordError::Corrupt)?;
+                let (expected, _) = review_consumption(
+                    &run.pinned.definition,
+                    &attempt.step,
+                    policy,
+                    attempt,
+                    &run.artefacts,
+                )
+                .map_err(|_| RunRecordError::Corrupt)?;
+                if expected != route {
                     return Err(RunRecordError::Corrupt);
                 }
             }
-            TransitionCause::InitialSourceCaptured => {
-                if transition.from != RunState::InitialisingSource
-                    || !matches!(transition.to, RunState::Ready { .. })
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::InitialSourceCaptureFailed => {
-                if !matches!(
-                    transition.from,
-                    RunState::InitialisingSource | RunState::Ready { .. }
-                ) || transition.to != RunState::Failed
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::SourceDriftDetected => {
-                if transition.to != RunState::Failed {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::AttemptStarted => {
-                let (
-                    RunState::Ready { step: from_step },
-                    RunState::Active {
-                        step: to_step,
-                        attempt,
-                    },
-                ) = (&transition.from, &transition.to)
-                else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = attempts
-                    .iter()
-                    .find(|record| record.id == *attempt)
-                    .ok_or(RunRecordError::Corrupt)?;
-                if from_step != to_step
-                    || record.step != *from_step
-                    || record.started_at_ms != transition.occurred_at_ms
-                    || started_attempts.contains(attempt)
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-                started_attempts.push(*attempt);
-            }
-            TransitionCause::AttemptCompleted => {
-                let RunState::Active { step, attempt } = &transition.from else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = attempts
-                    .iter()
-                    .find(|record| record.id == *attempt)
-                    .ok_or(RunRecordError::Corrupt)?;
-                let definition_step = definition.step(step).ok_or(RunRecordError::Corrupt)?;
-                if definition_step.review.is_some() {
-                    return Err(RunRecordError::Corrupt);
-                }
-                let expected_to =
-                    advanced_state(definition, step).map_err(|_| RunRecordError::Corrupt)?;
-                if record.state != AttemptState::Completed
-                    || record.finished_at_ms != Some(transition.occurred_at_ms)
-                    || transition.to != expected_to
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::ReviewApproved
-            | TransitionCause::ReviewRevision
-            | TransitionCause::ReviewBlockedEscalation
-            | TransitionCause::ReviewAttemptLimitEscalation => {
-                let RunState::Active { step, attempt } = &transition.from else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = attempts
-                    .iter()
-                    .find(|record| record.id == *attempt)
-                    .ok_or(RunRecordError::Corrupt)?;
-                let definition_step = definition.step(step).ok_or(RunRecordError::Corrupt)?;
-                let Some(policy) = &definition_step.review else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let report = record
-                    .outputs
-                    .iter()
-                    .find(|output| output.key == policy.report_output)
-                    .map(|output| &output.artefact)
-                    .ok_or(RunRecordError::Corrupt)?;
-                let verdict = artefacts
-                    .iter()
-                    .find(|artefact| artefact.id == report.id)
-                    .and_then(|artefact| match artefact.summary {
-                        crate::workflows::artefacts::ArtefactSummary::Review {
-                            verdict, ..
-                        } => Some(verdict),
-                        _ => None,
-                    })
-                    .ok_or(RunRecordError::Corrupt)?;
-                let expected = match (verdict, transition.cause) {
-                    (
-                        crate::workflows::artefacts::ReviewVerdict::Approved,
-                        TransitionCause::ReviewApproved,
-                    ) => advanced_state(definition, step).map_err(|_| RunRecordError::Corrupt)?,
-                    (
-                        crate::workflows::artefacts::ReviewVerdict::RevisionRequired,
-                        TransitionCause::ReviewRevision,
-                    ) if record.ordinal < u32::from(policy.attempt_limit) => RunState::Ready {
-                        step: policy.revision_target.clone(),
-                    },
-                    (
-                        crate::workflows::artefacts::ReviewVerdict::RevisionRequired,
-                        TransitionCause::ReviewAttemptLimitEscalation,
-                    ) if record.ordinal >= u32::from(policy.attempt_limit) => RunState::Escalated {
-                        step: step.clone(),
-                        report: report.clone(),
-                        reason: EscalationReason::AttemptLimit,
-                    },
-                    (
-                        crate::workflows::artefacts::ReviewVerdict::Blocked,
-                        TransitionCause::ReviewBlockedEscalation,
-                    ) => RunState::Escalated {
-                        step: step.clone(),
-                        report: report.clone(),
-                        reason: EscalationReason::Blocked,
-                    },
-                    _ => return Err(RunRecordError::Corrupt),
-                };
-                if record.state != AttemptState::Completed
-                    || record.finished_at_ms != Some(transition.occurred_at_ms)
-                    || transition.to != expected
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::AttemptFailed => {
-                let RunState::Active { attempt, .. } = &transition.from else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = attempts
-                    .iter()
-                    .find(|record| record.id == *attempt)
-                    .ok_or(RunRecordError::Corrupt)?;
-                if record.state != AttemptState::Failed
-                    || record.finished_at_ms != Some(transition.occurred_at_ms)
-                    || transition.to != RunState::Failed
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::GateOpened => {
-                let (
-                    RunState::Ready { step },
-                    RunState::AwaitingHuman {
-                        step: to_step,
-                        gate,
-                    },
-                ) = (&transition.from, &transition.to)
-                else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = gates
-                    .iter()
-                    .find(|item| item.id == *gate)
-                    .ok_or(RunRecordError::Corrupt)?;
-                if step != to_step
-                    || record.step != *step
-                    || record.revision.get() != transition.sequence
-                    || record.opened_at_ms != transition.occurred_at_ms
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::GateApproved => {
-                let RunState::AwaitingHuman { step, gate } = &transition.from else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = gates
-                    .iter()
-                    .find(|item| item.id == *gate)
-                    .ok_or(RunRecordError::Corrupt)?;
-                let definition_step = definition.step(step).ok_or(RunRecordError::Corrupt)?;
-                if definition_step.review.is_some() {
-                    return Err(RunRecordError::Corrupt);
-                }
-                let expected_to =
-                    advanced_state(definition, step).map_err(|_| RunRecordError::Corrupt)?;
-                if record.state != HumanGateState::Approved
-                    || record.closed_at_ms != Some(transition.occurred_at_ms)
-                    || transition.to != expected_to
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::GateRevisionRequested => {
-                let (
-                    RunState::AwaitingHuman { step, gate },
-                    RunState::RevisionRequested {
-                        step: to_step,
-                        decision,
-                    },
-                ) = (&transition.from, &transition.to)
-                else {
-                    return Err(RunRecordError::Corrupt);
-                };
-                let record = gates
-                    .iter()
-                    .find(|item| item.id == *gate)
-                    .ok_or(RunRecordError::Corrupt)?;
-                if step != to_step
-                    || record.state != HumanGateState::RevisionRequested
-                    || record.decision.as_ref() != Some(decision)
-                    || record.closed_at_ms != Some(transition.occurred_at_ms)
-                {
-                    return Err(RunRecordError::Corrupt);
-                }
-            }
-            TransitionCause::CancellationRequested => match &transition.from {
-                RunState::InitialisingSource | RunState::Ready { .. }
-                    if transition.to == RunState::Cancelled => {}
-                RunState::AwaitingHuman { gate, .. } if transition.to == RunState::Cancelled => {
-                    let record = gates
-                        .iter()
-                        .find(|item| item.id == *gate)
-                        .ok_or(RunRecordError::Corrupt)?;
-                    if record.state != HumanGateState::Cancelled || record.decision.is_some() {
-                        return Err(RunRecordError::Corrupt);
-                    }
-                }
-                RunState::Active { attempt, .. } if transition.to == RunState::Cancelled => {
-                    let record = attempts
-                        .iter()
-                        .find(|record| record.id == *attempt)
-                        .ok_or(RunRecordError::Corrupt)?;
-                    if record.state != AttemptState::Cancelled
-                        || record.finished_at_ms != Some(transition.occurred_at_ms)
-                    {
-                        return Err(RunRecordError::Corrupt);
-                    }
-                }
-                _ => return Err(RunRecordError::Corrupt),
+            (Some(_), AttemptState::Completed, None)
+            | (None, _, Some(_))
+            | (Some(_), _, Some(_)) => return Err(RunRecordError::Corrupt),
+            (Some(_), _, None) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_state_facts(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    let mut expected = RunState::Ready {
+        step: run.pinned.definition.first_step().clone(),
+    };
+    let mut attempt_index = 0usize;
+    let mut gate_index = 0usize;
+    let mut previous_at = run.created_at_ms;
+
+    while attempt_index < run.attempts.len() || gate_index < run.gates.len() {
+        let RunState::Ready {
+            step: expected_step,
+        } = &expected
+        else {
+            return Err(RunRecordError::Corrupt);
+        };
+        let attempt = run.attempts.get(attempt_index);
+        let gate = run.gates.get(gate_index);
+        let take_attempt = match (attempt, gate) {
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some(attempt), Some(gate)) => match attempt.started_at_ms.cmp(&gate.opened_at_ms) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Greater => false,
+                std::cmp::Ordering::Equal => !matches!(
+                    run.pinned
+                        .definition
+                        .step(expected_step)
+                        .ok_or(RunRecordError::Corrupt)?
+                        .action,
+                    StepAction::HumanGate(_)
+                ),
             },
-            TransitionCause::ProcessRestarted => {
-                if matches!(transition.from, RunState::InitialisingSource)
-                    && transition.to == RunState::Interrupted
-                {
-                    previous_time = transition.occurred_at_ms;
-                    expected_state = transition.to.clone();
-                    continue;
-                }
-                if let RunState::AwaitingHuman { gate, .. } = &transition.from {
-                    let record = gates
-                        .iter()
-                        .find(|item| item.id == *gate)
-                        .ok_or(RunRecordError::Corrupt)?;
-                    if record.state != HumanGateState::Interrupted
-                        || transition.to != RunState::Interrupted
-                    {
+            (None, None) => break,
+        };
+
+        if take_attempt {
+            let attempt = attempt.ok_or(RunRecordError::Corrupt)?;
+            if attempt.step != *expected_step || attempt.started_at_ms < previous_at {
+                return Err(RunRecordError::Corrupt);
+            }
+            previous_at = attempt.finished_at_ms.unwrap_or(attempt.started_at_ms);
+            expected = match attempt.state {
+                AttemptState::Active => RunState::Active {
+                    step: attempt.step.clone(),
+                    attempt: attempt.id,
+                },
+                _ => predicted_from_attempt(run, attempt)?,
+            };
+            attempt_index += 1;
+        } else {
+            let gate = gate.ok_or(RunRecordError::Corrupt)?;
+            if gate.step != *expected_step || gate.opened_at_ms < previous_at {
+                return Err(RunRecordError::Corrupt);
+            }
+            previous_at = gate.closed_at_ms.unwrap_or(gate.opened_at_ms);
+            expected = match gate.state {
+                HumanGateState::AwaitingDecision => RunState::AwaitingHuman {
+                    step: gate.step.clone(),
+                    gate: gate.id,
+                },
+                _ => predicted_from_gate(run, gate)?,
+            };
+            gate_index += 1;
+        }
+    }
+
+    if run.state == expected
+        || matches!(expected, RunState::Ready { .. })
+            && matches!(run.state, RunState::Failed | RunState::Cancelled)
+    {
+        return Ok(());
+    }
+    if run.attempts.is_empty()
+        && run.gates.is_empty()
+        && matches!(run.source, RunSource::Pending)
+        && matches!(
+            run.state,
+            RunState::InitialisingSource | RunState::Interrupted
+        )
+    {
+        return Ok(());
+    }
+    Err(RunRecordError::Corrupt)
+}
+
+fn predicted_from_attempt(
+    run: &WorkflowRun,
+    attempt: &AttemptRecord,
+) -> Result<RunState, RunRecordError> {
+    match attempt.state {
+        AttemptState::Completed => {
+            let step = run
+                .pinned
+                .definition
+                .step(&attempt.step)
+                .ok_or(RunRecordError::Corrupt)?;
+            match (&step.review, attempt.review_route) {
+                (None, None) => advanced_state(&run.pinned.definition, &attempt.step)
+                    .map_err(|_| RunRecordError::Corrupt),
+                (Some(_), Some(route)) => {
+                    let policy = step.review.as_ref().ok_or(RunRecordError::Corrupt)?;
+                    let (expected, next) = review_consumption(
+                        &run.pinned.definition,
+                        &attempt.step,
+                        policy,
+                        attempt,
+                        &run.artefacts,
+                    )
+                    .map_err(|_| RunRecordError::Corrupt)?;
+                    if expected != route {
                         return Err(RunRecordError::Corrupt);
                     }
-                    previous_time = transition.occurred_at_ms;
-                    expected_state = transition.to.clone();
-                    continue;
+                    Ok(next)
                 }
-                let RunState::Active { attempt, .. } = &transition.from else {
+                _ => Err(RunRecordError::Corrupt),
+            }
+        }
+        AttemptState::Failed => Ok(RunState::Failed),
+        AttemptState::Cancelled => Ok(RunState::Cancelled),
+        AttemptState::Interrupted => Ok(RunState::Interrupted),
+        AttemptState::Active => Err(RunRecordError::Corrupt),
+    }
+}
+
+fn predicted_from_gate(
+    run: &WorkflowRun,
+    gate: &HumanGateRecord,
+) -> Result<RunState, RunRecordError> {
+    match gate.state {
+        HumanGateState::Approved => {
+            let step = run
+                .pinned
+                .definition
+                .step(&gate.step)
+                .ok_or(RunRecordError::Corrupt)?;
+            if step.review.is_some() {
+                return Err(RunRecordError::Corrupt);
+            }
+            advanced_state(&run.pinned.definition, &gate.step).map_err(|_| RunRecordError::Corrupt)
+        }
+        HumanGateState::RevisionRequested => Ok(RunState::RevisionRequested {
+            step: gate.step.clone(),
+            decision: gate.decision.clone().ok_or(RunRecordError::Corrupt)?,
+        }),
+        HumanGateState::Cancelled => Ok(RunState::Cancelled),
+        HumanGateState::Interrupted => Ok(RunState::Interrupted),
+        HumanGateState::AwaitingDecision => Err(RunRecordError::Corrupt),
+    }
+}
+
+fn validate_source(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    match &run.source {
+        RunSource::Pending => Ok(()),
+        RunSource::Captured { source } => {
+            validate_source_ref(run, &source.initial)?;
+            validate_source_ref(run, &source.accepted)?;
+            match &source.observed {
+                ObservedCandidate::Exact { artefact } => validate_source_ref(run, artefact),
+                ObservedCandidate::Unknown => Ok(()),
+            }
+        }
+    }
+}
+
+fn validate_source_ref(
+    run: &WorkflowRun,
+    reference: &ArtefactReference,
+) -> Result<(), RunRecordError> {
+    if reference.kind != crate::workflows::definition::ArtefactKind::CandidateRevision {
+        return Err(RunRecordError::Corrupt);
+    }
+    referenced_artefact(run, reference)?;
+    Ok(())
+}
+
+fn referenced_artefact<'a>(
+    run: &'a WorkflowRun,
+    reference: &ArtefactReference,
+) -> Result<&'a ArtefactRecord, RunRecordError> {
+    run.artefacts
+        .iter()
+        .find(|record| artefact_matches_reference(record, reference))
+        .ok_or(RunRecordError::Corrupt)
+}
+
+fn artefact_matches_reference(record: &ArtefactRecord, reference: &ArtefactReference) -> bool {
+    record.id == reference.id
+        && record.kind == reference.kind
+        && record.artefact_hash == reference.artefact_hash
+}
+
+fn validate_artefacts(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    for (index, record) in run.artefacts.iter().enumerate() {
+        if run.artefacts[..index]
+            .iter()
+            .any(|earlier| earlier.id == record.id)
+            || record.provenance.run_id != run.id
+            || record.created_at_ms < run.created_at_ms
+            || !artefact_kind_matches_summary(record)
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        for input in &record.provenance.inputs {
+            if !run.artefacts[..index]
+                .iter()
+                .any(|stored| artefact_matches_reference(stored, input))
+            {
+                return Err(RunRecordError::Corrupt);
+            }
+        }
+        match &record.provenance.producer {
+            crate::workflows::artefacts::ArtefactProducer::RunSourceCapture => {
+                let RunSource::Captured { source } = &run.source else {
                     return Err(RunRecordError::Corrupt);
                 };
-                let record = attempts
+                if record.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+                    || !record.provenance.inputs.is_empty()
+                    || !artefact_matches_reference(record, &source.initial)
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
+            crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+                attempt_id,
+                step,
+                output,
+                disposition,
+            } => {
+                let attempt = run
+                    .attempts
                     .iter()
-                    .find(|record| record.id == *attempt)
+                    .find(|attempt| attempt.id == *attempt_id)
                     .ok_or(RunRecordError::Corrupt)?;
-                if record.state != AttemptState::Interrupted
-                    || record.finished_at_ms != Some(transition.occurred_at_ms)
-                    || transition.to != RunState::Interrupted
+                if attempt.step != *step
+                    || matches!(
+                        &record.summary,
+                        crate::workflows::artefacts::ArtefactSummary::Candidate {
+                            disposition: summary_disposition,
+                            ..
+                        } if summary_disposition != disposition
+                    )
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+                match disposition {
+                    crate::workflows::artefacts::ProductionDisposition::RequiredOutput => {
+                        let output = output.as_ref().ok_or(RunRecordError::Corrupt)?;
+                        if !attempt.outputs.iter().any(|attempt_output| {
+                            attempt_output.key == *output
+                                && artefact_matches_reference(record, &attempt_output.artefact)
+                        }) {
+                            return Err(RunRecordError::Corrupt);
+                        }
+                    }
+                    crate::workflows::artefacts::ProductionDisposition::ObservedAfterFailure
+                    | crate::workflows::artefacts::ProductionDisposition::SourceDrift => {
+                        if output.is_some()
+                            || record.kind
+                                != crate::workflows::definition::ArtefactKind::CandidateRevision
+                        {
+                            return Err(RunRecordError::Corrupt);
+                        }
+                    }
+                }
+            }
+            crate::workflows::artefacts::ArtefactProducer::HumanGate {
+                gate_id,
+                step,
+                output,
+            } => {
+                let gate = run
+                    .gates
+                    .iter()
+                    .find(|gate| gate.id == *gate_id)
+                    .ok_or(RunRecordError::Corrupt)?;
+                if gate.step != *step
+                    || gate.output != *output
+                    || gate
+                        .decision
+                        .as_ref()
+                        .is_none_or(|decision| !artefact_matches_reference(record, decision))
                 {
                     return Err(RunRecordError::Corrupt);
                 }
             }
         }
-        previous_time = transition.occurred_at_ms;
-        expected_state = transition.to.clone();
-    }
-    if expected_state != *state
-        || started_attempts
-            != attempts
-                .iter()
-                .map(|attempt| attempt.id)
-                .collect::<Vec<_>>()
-    {
-        return Err(RunRecordError::Corrupt);
     }
     Ok(())
+}
+
+fn artefact_kind_matches_summary(record: &ArtefactRecord) -> bool {
+    matches!(
+        (&record.kind, &record.summary),
+        (
+            crate::workflows::definition::ArtefactKind::Plan,
+            crate::workflows::artefacts::ArtefactSummary::Plan { .. },
+        ) | (
+            crate::workflows::definition::ArtefactKind::CandidateRevision,
+            crate::workflows::artefacts::ArtefactSummary::Candidate { .. },
+        ) | (
+            crate::workflows::definition::ArtefactKind::ReviewReport,
+            crate::workflows::artefacts::ArtefactSummary::Review { .. },
+        ) | (
+            crate::workflows::definition::ArtefactKind::TestReport,
+            crate::workflows::artefacts::ArtefactSummary::Test { .. },
+        ) | (
+            crate::workflows::definition::ArtefactKind::HumanDecision,
+            crate::workflows::artefacts::ArtefactSummary::HumanDecision { .. },
+        ),
+    )
 }
 
 #[cfg(test)]

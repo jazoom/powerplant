@@ -583,6 +583,7 @@ fn completed_output_attempt(
         result: Some(crate::workflows::run::AttemptResult::Completed {
             outputs: vec![output.to_owned()],
         }),
+        review_route: None,
         inputs: Vec::new(),
         outputs: vec![crate::workflows::run::AttemptArtefactOutput {
             key: crate::workflows::definition::OutputKey::parse(output).expect("output"),

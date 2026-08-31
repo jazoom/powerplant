@@ -138,6 +138,35 @@ fn recovery_marks_active_work_as_interrupted() {
 }
 
 #[test]
+fn recovery_accepts_cleanup_recorded_before_attempt_finalisation() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
+    let run = store.create(run_named("Active", 1)).expect("create");
+    let attempt = AttemptId::generate().expect("attempt");
+    store
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
+        .expect("start");
+    store
+        .mutate(&run.id, |run| {
+            run.record_cleanup(
+                attempt,
+                crate::workflows::run::AttemptCleanupRecord::Complete,
+            )
+        })
+        .expect("cleanup");
+
+    let reopened = WorkflowRunStore::open(dir.path().to_path_buf()).expect("reopen");
+    assert!(reopened.get(&run.id).expect("run").is_active());
+    reopened.interrupt_active().expect("interrupt");
+    let recovered = reopened.get(&run.id).expect("run");
+    assert_eq!(recovered.state, RunState::Interrupted);
+    assert_eq!(
+        recovered.attempts[0].cleanup,
+        crate::workflows::run::AttemptCleanupRecord::Complete
+    );
+}
+
+#[test]
 fn malformed_json_fails_startup() {
     let dir = tempfile::tempdir().expect("dir");
     fs::write(
@@ -198,7 +227,7 @@ fn invalid_states_fail_startup() {
 }
 
 #[test]
-fn non_monotonic_transitions_fail_startup() {
+fn non_chronological_attempts_fail_startup() {
     let dir = tempfile::tempdir().expect("dir");
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
     let run = store.create(run_named("Named", 1)).expect("create");
@@ -209,7 +238,7 @@ fn non_monotonic_transitions_fail_startup() {
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
-    value["transitions"][0]["sequence"] = serde_json::json!(3);
+    value["attempts"][0]["started-at-ms"] = serde_json::json!(0);
     fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
     assert_eq!(
         WorkflowRunStore::open(dir.path().to_path_buf()).err(),
@@ -247,7 +276,7 @@ fn a_terminal_attempt_without_a_result_fails_startup() {
 }
 
 #[test]
-fn a_transition_with_the_wrong_cause_fails_startup() {
+fn a_completed_run_marked_failed_fails_startup() {
     let dir = tempfile::tempdir().expect("dir");
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
     let run = store.create(run_named("Named", 1)).expect("create");
@@ -267,7 +296,7 @@ fn a_transition_with_the_wrong_cause_fails_startup() {
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
-    value["transitions"][1]["cause"] = serde_json::json!("attempt-failed");
+    value["state"] = serde_json::json!({"type": "failed"});
     fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
     assert_eq!(
         WorkflowRunStore::open(dir.path().to_path_buf()).err(),

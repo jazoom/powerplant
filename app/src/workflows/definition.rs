@@ -514,10 +514,6 @@ impl WorkflowDefinition {
                 .sum::<usize>()
     }
 
-    pub(crate) fn transition_bound(&self) -> usize {
-        self.attempt_bound().saturating_mul(2).saturating_add(1)
-    }
-
     pub(crate) fn role(&self, key: &RoleKey) -> Option<&RoleDefinition> {
         self.roles.iter().find(|role| role.key == *key)
     }

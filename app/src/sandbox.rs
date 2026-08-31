@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
-use crate::agents::DirectoryPolicy;
 use crate::workflows::{AttemptId, RunId};
 
 mod access;
@@ -28,14 +27,12 @@ pub(crate) const SANDBOX_RUN_LABEL: &str = "works.powerplant.run";
 pub(crate) const SANDBOX_ATTEMPT_LABEL: &str = "works.powerplant.attempt";
 pub(crate) const SANDBOX_SNAPSHOT_LABEL: &str = "works.powerplant.snapshot";
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GuestStatus {
     Running,
     Starting,
     Stopped,
     Crashed,
-    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,15 +58,6 @@ impl MissingRuntime {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SandboxView {
-    pub(crate) missing: Option<MissingRuntime>,
-    pub(crate) status: GuestStatus,
-    pub(crate) progress: String,
-    pub(crate) error: &'static str,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MountSpec {
     pub(crate) guest: String,
@@ -82,25 +70,6 @@ pub(crate) struct SandboxSpec {
     pub(crate) mounts: Vec<MountSpec>,
     pub(crate) workdir: String,
     pub(crate) access: GuestAccess,
-}
-
-impl SandboxSpec {
-    #[allow(dead_code)]
-    pub(crate) fn from_policy(policy: &DirectoryPolicy, access: GuestAccess) -> Self {
-        Self {
-            mounts: policy
-                .grants()
-                .iter()
-                .map(|grant| MountSpec {
-                    guest: grant.guest_path.clone(),
-                    host: grant.host_path.clone(),
-                    read_only: !grant.access.is_writable(),
-                })
-                .collect(),
-            workdir: policy.primary_guest().to_owned(),
-            access,
-        }
-    }
 }
 
 impl PartialEq for SandboxSpec {
@@ -345,42 +314,6 @@ impl Live {
         *lock_mutex(&self.progress) = progress;
         self.notify.notify_waiters();
     }
-
-    #[allow(dead_code)]
-    fn snapshot_with_error(
-        &self,
-        missing: Option<MissingRuntime>,
-        status: GuestStatus,
-        error: Option<&'static str>,
-    ) -> SandboxView {
-        if missing.is_some() {
-            return SandboxView {
-                missing,
-                status: GuestStatus::Stopped,
-                progress: String::new(),
-                error: "",
-            };
-        }
-        if self.overlay() == Overlay::Starting {
-            return SandboxView {
-                missing: None,
-                status: GuestStatus::Starting,
-                progress: lock_mutex(&self.progress).clone(),
-                error: "",
-            };
-        }
-        SandboxView {
-            missing: None,
-            status,
-            progress: String::new(),
-            error: error.unwrap_or_else(|| lock_mutex(&self.last_error).unwrap_or("")),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn snapshot(&self, missing: Option<MissingRuntime>, status: GuestStatus) -> SandboxView {
-        self.snapshot_with_error(missing, status, None)
-    }
 }
 
 impl SandboxFleet {
@@ -457,7 +390,7 @@ impl SandboxFleet {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn guest_named(&self, attempt: AttemptId) -> bool {
         lock_mutex(&self.attempt_handles).contains_key(&attempt)
     }
@@ -624,16 +557,6 @@ impl GuestSandbox {
         *lock_mutex(&self.runtime.missing)
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn view(&self) -> SandboxView {
-        let missing = self.missing();
-        match &self.inner {
-            Inner::Microsandbox(guest) => guest.view(&self.name, self.attempt_id, missing).await,
-            #[cfg(test)]
-            Inner::Scripted(guest) => guest.live.snapshot(missing, *lock_mutex(&guest.status)),
-        }
-    }
-
     pub(crate) async fn start_from_snapshot(
         &self,
         artifact: &std::path::Path,
@@ -699,11 +622,6 @@ impl GuestSandbox {
         &self.name
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn attempt_id(&self) -> AttemptId {
-        self.attempt_id
-    }
-
     pub(crate) async fn stop(&self) -> Result<(), SandboxError> {
         match &self.inner {
             Inner::Microsandbox(guest) => {
@@ -723,7 +641,6 @@ impl GuestSandbox {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn fail_next_stop(&self) {
         match &self.inner {
             Inner::Microsandbox(_) => {}
@@ -732,7 +649,6 @@ impl GuestSandbox {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn fail_next_remove(&self) {
         match &self.inner {
             Inner::Microsandbox(_) => {}
@@ -754,26 +670,6 @@ impl GuestSandbox {
 }
 
 impl MicrosandboxGuest {
-    #[allow(dead_code)]
-    async fn view(
-        &self,
-        name: &str,
-        kind: AttemptId,
-        missing: Option<MissingRuntime>,
-    ) -> SandboxView {
-        if missing.is_some() || self.live.overlay() == Overlay::Starting {
-            return self.live.snapshot(missing, GuestStatus::Stopped);
-        }
-        match current_status(name, kind).await {
-            Ok(status) => self.live.snapshot(missing, status),
-            Err(error) => self.live.snapshot_with_error(
-                missing,
-                GuestStatus::Unavailable,
-                Some(error.message()),
-            ),
-        }
-    }
-
     async fn exec(
         &self,
         name: &str,
@@ -1082,7 +978,6 @@ async fn stop_owned(name: &str, kind: AttemptId) -> Result<(), SandboxError> {
             }
             match current_status(name, kind).await {
                 Ok(GuestStatus::Stopped) | Ok(GuestStatus::Crashed) => Ok(()),
-                Ok(GuestStatus::Unavailable) => Err(SandboxError::Stop),
                 Ok(_) => Err(SandboxError::Stop),
                 Err(_) => Err(SandboxError::Stop),
             }

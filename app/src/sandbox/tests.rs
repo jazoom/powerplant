@@ -97,7 +97,6 @@ async fn equal_snapshot_starts_never_reuse_an_attempt_guest() {
         .expect("restart");
 
     assert_eq!(sandbox.start_count(), 2);
-    assert_eq!(sandbox.view().await.status, super::GuestStatus::Running);
 }
 
 #[test]

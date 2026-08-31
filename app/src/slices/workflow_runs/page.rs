@@ -260,7 +260,7 @@ impl RunDetailView {
                             .map(|policy| policy.attempt_limit.to_string())
                             .unwrap_or_default(),
                         latest_verdict: latest_review_verdict(run, attempt),
-                        selected_route: review_route(run, step, attempt),
+                        selected_route: review_route(attempt),
                         role: match &step.action {
                             crate::workflows::definition::StepAction::Agent(action) => run.pinned.definition.role(&action.role).map(|role| role.name.clone()).unwrap_or_default(),
                             _ => String::new(),
@@ -304,7 +304,7 @@ impl RunDetailView {
                             note: "",
                         }
                     }).collect(),
-                    route: run.pinned.definition.step(&attempt.step).map(|step| review_route(run, step, Some(attempt))).unwrap_or_default(),
+                    route: review_route(Some(attempt)),
                 })
                 .collect(),
             artefacts: artefact_rows(run),
@@ -355,21 +355,12 @@ pub(super) fn review_verdict_label<'a>(
         .unwrap_or_default()
 }
 
-fn review_route(
-    run: &WorkflowRun,
-    step: &crate::workflows::definition::StepDefinition,
-    attempt: Option<&crate::workflows::run::AttemptRecord>,
-) -> String {
-    let Some(attempt) = attempt else {
-        return String::new();
-    };
-    run.transitions.iter().rev().find(|transition| matches!(&transition.from, crate::workflows::run::RunState::Active { step: route_step, attempt: route_attempt } if route_step == &step.key && route_attempt == &attempt.id)).map(|transition| match transition.cause {
-        crate::workflows::run::TransitionCause::ReviewApproved => "Approved route",
-        crate::workflows::run::TransitionCause::ReviewRevision => "Revision route",
-        crate::workflows::run::TransitionCause::ReviewBlockedEscalation => "Blocked escalation",
-        crate::workflows::run::TransitionCause::ReviewAttemptLimitEscalation => "Attempt-limit escalation",
-        _ => "",
-    }.to_owned()).unwrap_or_default()
+fn review_route(attempt: Option<&crate::workflows::run::AttemptRecord>) -> String {
+    attempt
+        .and_then(|attempt| attempt.review_route)
+        .map(crate::workflows::run::ReviewRoute::as_label)
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn following_candidate_hash(

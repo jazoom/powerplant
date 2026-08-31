@@ -1,7 +1,7 @@
 use super::{
     ActionKind, AttemptCleanupRecord, AttemptId, AttemptRecord, AttemptResult, AttemptSandboxKind,
-    AttemptSandboxRecord, AttemptState, EscalationReason, FailureCategory, RunState,
-    TransitionCause, TransitionError, WorkflowRun, next_ordinal_for,
+    AttemptSandboxRecord, AttemptState, EscalationReason, FailureCategory, ReviewRoute, RunState,
+    TransitionError, WorkflowRun, next_ordinal_for,
 };
 use crate::agents::ToolId;
 use crate::workflows::capabilities::{test_agent_capabilities, test_command_capabilities};
@@ -352,11 +352,11 @@ fn test_artefact_record(
 }
 
 #[test]
-fn creation_stores_ready_without_a_transition() {
+fn creation_stores_ready_without_attempts() {
     let run = new_run();
     assert!(matches!(run.state, RunState::Ready { .. }));
-    assert!(run.transitions.is_empty());
     assert!(run.attempts.is_empty());
+    assert!(run.gates.is_empty());
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn parallel_attempts_are_rejected() {
         Err(TransitionError::Invalid)
     );
     assert_eq!(run.attempts.len(), 1);
-    assert_eq!(run.transitions.len(), 1);
+    assert!(matches!(run.state, RunState::Active { .. }));
 }
 
 #[test]
@@ -417,7 +417,7 @@ fn duplicate_terminal_results_are_rejected() {
 }
 
 #[test]
-fn transitions_after_a_terminal_state_are_rejected() {
+fn mutations_after_a_terminal_state_are_rejected() {
     let mut run = new_run();
     let attempt = start(&mut run);
     fail(&mut run, attempt, FailureCategory::Provider, 12);
@@ -476,10 +476,6 @@ fn failed_attempts_move_the_run_to_failed() {
     let attempt = start(&mut run);
     fail(&mut run, attempt, FailureCategory::Command, 12);
     assert_eq!(run.state, RunState::Failed);
-    assert_eq!(
-        run.transitions.last().map(|item| item.cause),
-        Some(TransitionCause::AttemptFailed)
-    );
 }
 
 #[test]
@@ -507,6 +503,7 @@ fn attempt_ordinals_count_repeated_step_attempts() {
         result: Some(AttemptResult::Failed {
             category: FailureCategory::Provider,
         }),
+        review_route: None,
         inputs: Vec::new(),
         outputs: Vec::new(),
         capabilities: test_agent_capabilities(),
@@ -531,6 +528,7 @@ fn attempt_ordinals_count_repeated_step_attempts() {
         finished_at_ms: None,
         state: AttemptState::Active,
         result: None,
+        review_route: None,
         inputs: Vec::new(),
         outputs: Vec::new(),
         capabilities: test_agent_capabilities(),
@@ -758,8 +756,8 @@ fn review_verdicts_select_all_four_routes() {
                     matches!(&run.state, RunState::Ready { step } if step.as_str() == "commit")
                 );
                 assert_eq!(
-                    run.transitions.last().map(|transition| transition.cause),
-                    Some(TransitionCause::ReviewApproved)
+                    run.attempts.last().and_then(|attempt| attempt.review_route),
+                    Some(ReviewRoute::Approved)
                 );
             }
             ExpectedRoute::Revision => {
@@ -767,26 +765,38 @@ fn review_verdicts_select_all_four_routes() {
                     matches!(&run.state, RunState::Ready { step } if step.as_str() == "implementer")
                 );
                 assert_eq!(
-                    run.transitions.last().map(|transition| transition.cause),
-                    Some(TransitionCause::ReviewRevision)
+                    run.attempts.last().and_then(|attempt| attempt.review_route),
+                    Some(ReviewRoute::RevisionRequested)
                 );
             }
-            ExpectedRoute::Blocked => assert_eq!(
-                run.state,
-                RunState::Escalated {
-                    step: StepKey::parse("reviewer").expect("step"),
-                    report,
-                    reason: EscalationReason::Blocked,
-                }
-            ),
-            ExpectedRoute::AttemptLimit => assert_eq!(
-                run.state,
-                RunState::Escalated {
-                    step: StepKey::parse("reviewer").expect("step"),
-                    report,
-                    reason: EscalationReason::AttemptLimit,
-                }
-            ),
+            ExpectedRoute::Blocked => {
+                assert_eq!(
+                    run.state,
+                    RunState::Escalated {
+                        step: StepKey::parse("reviewer").expect("step"),
+                        report,
+                        reason: EscalationReason::Blocked,
+                    }
+                );
+                assert_eq!(
+                    run.attempts.last().and_then(|attempt| attempt.review_route),
+                    Some(ReviewRoute::BlockedEscalation)
+                );
+            }
+            ExpectedRoute::AttemptLimit => {
+                assert_eq!(
+                    run.state,
+                    RunState::Escalated {
+                        step: StepKey::parse("reviewer").expect("step"),
+                        report,
+                        reason: EscalationReason::AttemptLimit,
+                    }
+                );
+                assert_eq!(
+                    run.attempts.last().and_then(|attempt| attempt.review_route),
+                    Some(ReviewRoute::AttemptLimitEscalation)
+                );
+            }
         }
     }
 }
@@ -812,8 +822,8 @@ fn final_review_approval_completes_the_run() {
 
     assert_eq!(run.state, RunState::Completed);
     assert_eq!(
-        run.transitions.last().map(|transition| transition.cause),
-        Some(TransitionCause::ReviewApproved)
+        run.attempts.last().and_then(|attempt| attempt.review_route),
+        Some(ReviewRoute::Approved)
     );
 }
 
@@ -842,7 +852,7 @@ fn repeated_steps_pin_the_current_candidate_and_increment_ordinals() {
 }
 
 #[test]
-fn durable_review_routes_reject_altered_transition_and_escalation_facts() {
+fn durable_review_routes_reject_altered_route_and_escalation_facts() {
     let mut approved = review_loop_run();
     complete_implementation(&mut approved, 11);
     complete_review(
@@ -850,14 +860,35 @@ fn durable_review_routes_reject_altered_transition_and_escalation_facts() {
         crate::workflows::artefacts::ReviewVerdict::Approved,
         13,
     );
-    let mut altered_transition = approved.to_file();
-    altered_transition
-        .transitions
-        .last_mut()
-        .expect("transition")
-        .cause = "review-revision".to_owned();
+    let mut altered_route = approved.to_file();
+    let review = altered_route
+        .attempts
+        .iter_mut()
+        .rev()
+        .find(|attempt| attempt.review_route.is_some())
+        .expect("review attempt");
+    review.review_route = Some("revision-requested".to_owned());
     assert_eq!(
-        WorkflowRun::from_file(altered_transition).err(),
+        WorkflowRun::from_file(altered_route).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let mut altered_report_reference = approved.to_file();
+    let review = altered_report_reference
+        .attempts
+        .iter_mut()
+        .rev()
+        .find(|attempt| attempt.review_route.is_some())
+        .expect("review attempt");
+    review
+        .outputs
+        .iter_mut()
+        .find(|output| output.key == "review")
+        .expect("review output")
+        .artefact
+        .artefact_hash = "0".repeat(64);
+    assert_eq!(
+        WorkflowRun::from_file(altered_report_reference).err(),
         Some(super::RunRecordError::Corrupt)
     );
 
@@ -907,6 +938,7 @@ fn durable_commit_transactions_preserve_every_review_reference() {
         finished_at_ms: None,
         state: AttemptState::Active,
         result: None,
+        review_route: None,
         inputs: vec![
             super::AttemptArtefactInput {
                 key: InputKey::parse("candidate").expect("input"),
@@ -955,4 +987,140 @@ fn durable_commit_transactions_preserve_every_review_reference() {
     let mut duplicate = transaction;
     duplicate.reviews = vec![first_review.clone(), first_review];
     assert!(!super::valid_commit_transaction(&attempt, &duplicate));
+}
+
+#[test]
+fn version_one_run_records_round_trip() {
+    let mut run = new_run();
+    let attempt = start(&mut run);
+    complete(&mut run, attempt, 12);
+    let loaded = WorkflowRun::from_file(run.to_file()).expect("round trip");
+    assert_eq!(loaded, run);
+    assert_eq!(loaded.attempts[0].review_route, None);
+
+    let mut reviewed = review_loop_run();
+    complete_implementation(&mut reviewed, 11);
+    complete_review(
+        &mut reviewed,
+        crate::workflows::artefacts::ReviewVerdict::Approved,
+        13,
+    );
+    let loaded = WorkflowRun::from_file(reviewed.to_file()).expect("review round trip");
+    assert_eq!(loaded, reviewed);
+    assert_eq!(
+        loaded
+            .attempts
+            .last()
+            .and_then(|attempt| attempt.review_route),
+        Some(ReviewRoute::Approved)
+    );
+}
+
+#[test]
+fn version_one_run_json_omits_the_transition_array() {
+    let mut run = new_run();
+    let attempt = start(&mut run);
+    complete(&mut run, attempt, 12);
+    let value = serde_json::to_value(run.to_file()).expect("json");
+    assert_eq!(value["record-version"], 1);
+    assert!(value.get("transitions").is_none());
+    assert!(value["attempts"][0].get("review-route").is_none());
+}
+
+#[test]
+fn obsolete_run_record_versions_are_rejected() {
+    let mut file = new_run().to_file();
+    file.record_version = 3;
+    assert_eq!(
+        WorkflowRun::from_file(file).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
+fn obsolete_transition_arrays_are_rejected() {
+    let mut run = new_run();
+    let attempt = start(&mut run);
+    complete(&mut run, attempt, 12);
+    let mut value = serde_json::to_value(run.to_file()).expect("json");
+    value["transitions"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<super::RunFile>(value).is_err());
+}
+
+#[test]
+fn snapshot_contradictions_fail_load() {
+    let mut run = new_run();
+    let attempt = start(&mut run);
+    complete(&mut run, attempt, 12);
+    let mut completed_as_failed = run.to_file();
+    completed_as_failed.state = super::RunStateFile::Failed;
+    assert_eq!(
+        WorkflowRun::from_file(completed_as_failed).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let mut route_on_normal = run.to_file();
+    route_on_normal.attempts[0].review_route = Some("approved".to_owned());
+    assert_eq!(
+        WorkflowRun::from_file(route_on_normal).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let mut reviewed = review_loop_run();
+    complete_implementation(&mut reviewed, 11);
+    complete_review(
+        &mut reviewed,
+        crate::workflows::artefacts::ReviewVerdict::Approved,
+        13,
+    );
+    let mut missing_route = reviewed.to_file();
+    let review = missing_route
+        .attempts
+        .iter_mut()
+        .rev()
+        .find(|attempt| attempt.review_route.is_some())
+        .expect("review attempt");
+    review.review_route = None;
+    assert_eq!(
+        WorkflowRun::from_file(missing_route).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let mut active = new_run();
+    start(&mut active);
+    let mut terminal_active = active.to_file();
+    terminal_active.state = super::RunStateFile::Completed;
+    assert_eq!(
+        WorkflowRun::from_file(terminal_active).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let definition = two_step(true);
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut missing_predecessor = WorkflowRun::create(
+        RunId::generate().expect("run"),
+        10,
+        crate::agents::AgentId::generate().expect("agent"),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let first = start(&mut missing_predecessor);
+    complete(&mut missing_predecessor, first, 12);
+    let second = AttemptId::generate().expect("attempt");
+    missing_predecessor
+        .start_attempt(
+            second,
+            Vec::new(),
+            test_command_capabilities(),
+            sandbox_record(&missing_predecessor),
+            13,
+        )
+        .expect("start");
+    complete(&mut missing_predecessor, second, 14);
+    let mut missing_predecessor = missing_predecessor.to_file();
+    missing_predecessor.attempts.remove(0);
+    assert_eq!(
+        WorkflowRun::from_file(missing_predecessor).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
 }
