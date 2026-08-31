@@ -452,11 +452,11 @@ async fn a_new_process_restores_a_session_from_the_vault_file() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("providers.json");
     let mut writer = test_state();
-    writer.vault = Arc::new(ProviderVault::open(path.clone()));
+    writer.vault = Arc::new(ProviderVault::open(path.clone()).expect("vault"));
     store_provider(&writer, SECRET_KEY);
 
     let mut reader = test_state();
-    reader.vault = Arc::new(ProviderVault::open(path));
+    reader.vault = Arc::new(ProviderVault::open(path).expect("vault"));
     let response = app(reader)
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
@@ -557,7 +557,7 @@ async fn a_stored_plan_token_is_not_echoed_in_html_or_cookies() {
     let plan_path = dir.path().join("xai-auth.json");
     std::fs::write(&plan_path, format!(r#"{{"access_token":"{PLAN_TOKEN}"}}"#)).unwrap();
     let mut state = test_state();
-    state.vault = Arc::new(ProviderVault::open(path));
+    state.vault = Arc::new(ProviderVault::open(path).expect("vault"));
     state
         .vault
         .put(ProviderConnection::with_plan(

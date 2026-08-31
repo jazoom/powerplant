@@ -95,11 +95,13 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         .map_err(|_| "The workflow commit journal store is unreadable.".to_owned())?;
     let workflow_workspaces = WorkflowWorkspaces::open(config.data_dir.join("workflow-workspaces"))
         .map_err(|_| "The workflow workspace store is unreadable.".to_owned())?;
+    let vault = ProviderVault::open(config.data_dir.join("providers.json"))
+        .map_err(|_| "The provider vault is unreadable.".to_owned())?;
     let state = AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
         sessions: Arc::new(SessionStore::new()),
-        vault: Arc::new(ProviderVault::open(config.data_dir.join("providers.json"))),
+        vault: Arc::new(vault),
         chat: Arc::new(ChatBackend::Rig),
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),

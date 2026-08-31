@@ -40,7 +40,6 @@ struct VaultFile {
 #[derive(Deserialize, Serialize)]
 struct VaultFileProvider {
     kind: String,
-    #[serde(default = "default_auth")]
     auth: String,
     #[serde(default)]
     api_key: String,
@@ -49,16 +48,24 @@ struct VaultFileProvider {
     favourites: Vec<String>,
 }
 
-fn default_auth() -> String {
-    AuthMethod::ApiKey.as_str().to_owned()
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VaultError {
+    Corrupt,
+    Persist,
 }
 
-#[derive(Debug)]
-pub(crate) struct VaultError;
+impl VaultError {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Corrupt => "The provider vault is unreadable.",
+            Self::Persist => "Power Plant could not store the provider vault. Try again.",
+        }
+    }
+}
 
 impl std::fmt::Display for VaultError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("provider vault persist failed")
+        formatter.write_str(self.message())
     }
 }
 
@@ -105,12 +112,12 @@ impl ProviderVault {
         }
     }
 
-    pub(crate) fn open(path: PathBuf) -> Self {
-        let state = load(&path).unwrap_or_default();
-        Self {
+    pub(crate) fn open(path: PathBuf) -> Result<Self, VaultError> {
+        let state = load(&path)?;
+        Ok(Self {
             path: Some(path),
             inner: Mutex::new(state),
-        }
+        })
     }
 
     pub(crate) fn has_providers(&self) -> bool {
@@ -244,22 +251,6 @@ impl ProviderVault {
     }
 }
 
-fn sanitise_favourites(raw: &[String]) -> Vec<String> {
-    let mut favourites: Vec<String> = Vec::new();
-    for item in raw {
-        let item = item.trim();
-        if item.is_empty() || !model_is_bounded(item) || favourites.iter().any(|seen| seen == item)
-        {
-            continue;
-        }
-        if favourites.len() >= MAXIMUM_FAVOURITES {
-            break;
-        }
-        favourites.push(item.to_owned());
-    }
-    favourites
-}
-
 fn connection_from(
     path: Option<&Path>,
     state: &VaultState,
@@ -283,63 +274,82 @@ fn stored_model(kind: ProviderKind, stored: &StoredProvider) -> String {
     }
 }
 
-fn load(path: &Path) -> Option<VaultState> {
-    let bytes = fs::read(path).ok()?;
-    let file: VaultFile = serde_json::from_slice(&bytes).ok()?;
+fn load(path: &Path) -> Result<VaultState, VaultError> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(VaultState::default()),
+        Err(_) => return Err(VaultError::Corrupt),
+    };
+    let file: VaultFile = serde_json::from_slice(&bytes).map_err(|_| VaultError::Corrupt)?;
     if file.version != VAULT_VERSION {
-        return None;
+        return Err(VaultError::Corrupt);
     }
     let mut state = VaultState::default();
     for entry in file.providers {
         let Some(kind) = ProviderKind::parse(&entry.kind) else {
-            continue;
+            return Err(VaultError::Corrupt);
         };
+        if state.providers.contains_key(&kind) {
+            return Err(VaultError::Corrupt);
+        }
         let Some(auth) = AuthMethod::parse(&entry.auth) else {
-            continue;
+            return Err(VaultError::Corrupt);
         };
-        if !model_is_bounded(&entry.model) {
-            continue;
+        if !model_is_canonical(&entry.model) {
+            return Err(VaultError::Corrupt);
         }
         let api_key = match auth {
             AuthMethod::ApiKey => {
-                if !api_key_is_bounded(&entry.api_key) {
-                    continue;
+                if entry.api_key.trim() != entry.api_key || !api_key_is_bounded(&entry.api_key) {
+                    return Err(VaultError::Corrupt);
                 }
                 SecretString::new(entry.api_key)
             }
             AuthMethod::Plan => {
-                if !kind.supports_plan() {
-                    continue;
+                if !kind.supports_plan() || !entry.api_key.is_empty() {
+                    return Err(VaultError::Corrupt);
                 }
                 SecretString::new(String::new())
             }
         };
-        let model = if entry.model.trim().is_empty() {
-            kind.default_model().to_owned()
-        } else {
-            entry.model.trim().to_owned()
-        };
+        if entry.favourites.len() > MAXIMUM_FAVOURITES {
+            return Err(VaultError::Corrupt);
+        }
+        let mut favourites = Vec::with_capacity(entry.favourites.len());
+        for item in entry.favourites {
+            if !model_is_canonical(&item) || favourites.iter().any(|seen| seen == &item) {
+                return Err(VaultError::Corrupt);
+            }
+            favourites.push(item);
+        }
         state.providers.insert(
             kind,
             StoredProvider {
                 auth,
                 api_key,
-                model,
-                favourites: sanitise_favourites(&entry.favourites),
+                model: entry.model,
+                favourites,
             },
         );
     }
-    state.selected = file
-        .selected
-        .as_deref()
-        .and_then(ProviderKind::parse)
-        .filter(|kind| state.providers.contains_key(kind))
-        .or_else(|| {
-            ProviderKind::ALL
-                .into_iter()
-                .find(|kind| state.providers.contains_key(kind))
-        });
-    Some(state)
+    state.selected = match file.selected.as_deref() {
+        None if state.providers.is_empty() => None,
+        None => return Err(VaultError::Corrupt),
+        Some(value) => {
+            let Some(kind) = ProviderKind::parse(value) else {
+                return Err(VaultError::Corrupt);
+            };
+            if !state.providers.contains_key(&kind) {
+                return Err(VaultError::Corrupt);
+            }
+            Some(kind)
+        }
+    };
+    Ok(state)
+}
+
+fn model_is_canonical(model: &str) -> bool {
+    !model.is_empty() && model.trim() == model && model_is_bounded(model)
 }
 
 fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
@@ -350,7 +360,7 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
         match fs::remove_file(path) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(_) => return Err(VaultError),
+            Err(_) => return Err(VaultError::Persist),
         }
     }
     let file = VaultFile {
@@ -372,11 +382,11 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
             })
             .collect(),
     };
-    let bytes = serde_json::to_vec_pretty(&file).map_err(|_| VaultError)?;
+    let bytes = serde_json::to_vec_pretty(&file).map_err(|_| VaultError::Persist)?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| VaultError)?;
+        fs::create_dir_all(parent).map_err(|_| VaultError::Persist)?;
     }
-    crate::storage::write_private(path, &bytes).map_err(|_| VaultError)
+    crate::storage::write_private(path, &bytes).map_err(|_| VaultError::Persist)
 }
 
 fn plan_file_path(vault_path: Option<&Path>, kind: ProviderKind) -> Option<PathBuf> {
