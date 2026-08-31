@@ -25,6 +25,41 @@ fn a_stale_generation_cannot_change_the_current_login() {
     assert_eq!(login.snapshot(), Some(pending("NEW-CODE")));
 }
 
+#[test]
+fn a_current_operation_excludes_a_new_generation() {
+    let login = std::sync::Arc::new(PlanLogin::new());
+    let generation = login.begin();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let operation_login = login.clone();
+    let operation = std::thread::spawn(move || {
+        operation_login.apply_if_current(generation, || {
+            entered_tx.send(()).expect("entered");
+            release_rx.recv().expect("release");
+        })
+    });
+    entered_rx.recv().expect("operation start");
+
+    let (attempting_tx, attempting_rx) = std::sync::mpsc::channel();
+    let (begun_tx, begun_rx) = std::sync::mpsc::channel();
+    let begin_login = login.clone();
+    let begin = std::thread::spawn(move || {
+        attempting_tx.send(()).expect("attempting begin");
+        begun_tx.send(begin_login.begin())
+    });
+    attempting_rx.recv().expect("begin attempt");
+    assert!(
+        begun_rx
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_err()
+    );
+
+    release_tx.send(()).expect("release operation");
+    assert_eq!(operation.join().expect("operation"), Some(()));
+    assert_ne!(begun_rx.recv().expect("new generation"), generation);
+    begin.join().expect("begin").expect("generation send");
+}
+
 #[tokio::test]
 async fn a_new_generation_aborts_the_previous_task() {
     struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);

@@ -1,47 +1,103 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use url::Url;
 
 use super::{ProviderError, ProviderKind, xai_plan};
 
 #[cfg(test)]
 mod tests;
 
+const CHATGPT_AUTH_HOST: &str = "auth.openai.com";
+
 pub(crate) struct DevicePrompt {
     pub(crate) verification_uri: String,
     pub(crate) user_code: String,
 }
 
-pub(crate) struct StartedPlan {
+// A unique staged path keeps an aborted authorisation from writing into a later attempt.
+pub(crate) struct PlanAttempt {
     pub(crate) prompt: DevicePrompt,
-    pub(crate) done: oneshot::Receiver<Result<(), ProviderError>>,
+    staged: Option<PathBuf>,
+    task: Option<JoinHandle<Result<(), ProviderError>>>,
 }
 
-pub(crate) async fn start(
-    kind: ProviderKind,
-    plan_file: PathBuf,
-) -> Result<StartedPlan, ProviderError> {
-    if let Some(parent) = plan_file.parent() {
-        std::fs::create_dir_all(parent).map_err(|_| ProviderError::Unreachable)?;
+impl PlanAttempt {
+    pub(crate) fn staged_path(&self) -> Option<&Path> {
+        self.staged.as_deref()
     }
+
+    pub(crate) async fn wait(&mut self) -> Result<(), ProviderError> {
+        let result = match self.task.as_mut() {
+            Some(task) => task.await,
+            None => return Err(ProviderError::Unreachable),
+        };
+        self.task = None;
+        match result {
+            Ok(result) => result,
+            Err(_) => Err(ProviderError::Unreachable),
+        }
+    }
+
+    pub(crate) fn mark_installed(&mut self) {
+        self.staged = None;
+    }
+
+    pub(crate) fn discard(&mut self) -> Result<(), crate::storage::PersistError> {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        if let Some(path) = self.staged.as_ref() {
+            crate::storage::remove_private(path)?;
+            self.staged = None;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn from_parts(staged: PathBuf, task: JoinHandle<Result<(), ProviderError>>) -> Self {
+        Self {
+            prompt: DevicePrompt {
+                verification_uri: "https://auth.openai.com/codex/device".to_owned(),
+                user_code: "TEST-CODE".to_owned(),
+            },
+            staged: Some(staged),
+            task: Some(task),
+        }
+    }
+}
+
+impl Drop for PlanAttempt {
+    fn drop(&mut self) {
+        let _ = self.discard();
+    }
+}
+
+pub(crate) async fn start(kind: ProviderKind, dir: PathBuf) -> Result<PlanAttempt, ProviderError> {
+    crate::storage::ensure_private_dir(&dir).map_err(|_| ProviderError::Unreachable)?;
     match kind {
-        ProviderKind::OpenaiCodex => start_chatgpt(plan_file).await,
-        ProviderKind::Xai => start_xai(plan_file).await,
+        ProviderKind::OpenaiCodex => start_chatgpt(dir).await,
+        ProviderKind::Xai => start_xai(dir).await,
         ProviderKind::Synthetic | ProviderKind::Openrouter | ProviderKind::Deepseek => {
             Err(ProviderError::Refused)
         }
     }
 }
 
-async fn start_chatgpt(plan_file: PathBuf) -> Result<StartedPlan, ProviderError> {
-    let _ = std::fs::remove_file(&plan_file);
+// Rig writes tokens with std::fs::write, which keeps the mode of a pre-created 0600 file.
+fn stage_chatgpt_file(dir: &Path) -> Result<PathBuf, ProviderError> {
+    crate::storage::create_unique_private(dir, b"{}").map_err(|_| ProviderError::Unreachable)
+}
+
+async fn start_chatgpt(dir: PathBuf) -> Result<PlanAttempt, ProviderError> {
+    let staged = stage_chatgpt_file(&dir)?;
     let (prompt_tx, prompt_rx) = oneshot::channel();
     let prompt_tx = std::sync::Mutex::new(Some(prompt_tx));
-    let (done_tx, done_rx) = oneshot::channel();
-    let client = rig_core::providers::chatgpt::Client::builder()
+    let client = match rig_core::providers::chatgpt::Client::builder()
         .oauth()
-        .auth_file(&plan_file)
+        .auth_file(&staged)
         .on_device_code(move |prompt| {
             if let Ok(mut slot) = prompt_tx.lock()
                 && let Some(tx) = slot.take()
@@ -53,49 +109,70 @@ async fn start_chatgpt(plan_file: PathBuf) -> Result<StartedPlan, ProviderError>
             }
         })
         .build()
-        .map_err(|_| ProviderError::Unreachable)?;
-    tokio::spawn(async move {
-        let result = client
+    {
+        Ok(client) => client,
+        Err(_) => {
+            crate::storage::remove_private(&staged).map_err(|_| ProviderError::Unreachable)?;
+            return Err(ProviderError::Unreachable);
+        }
+    };
+    let task = tokio::spawn(async move {
+        client
             .authorize()
             .await
-            .map_err(|_| ProviderError::Unreachable);
-        let _ = done_tx.send(result);
+            .map_err(|_| ProviderError::Unreachable)
     });
-    let prompt = tokio::time::timeout(Duration::from_secs(20), prompt_rx)
-        .await
-        .map_err(|_| ProviderError::Unreachable)?
-        .map_err(|_| ProviderError::Unreachable)?;
-    let verification_uri =
-        sanitise_https_uri(&prompt.verification_uri).ok_or(ProviderError::Unreachable)?;
-    let user_code = sanitise_user_code(&prompt.user_code).ok_or(ProviderError::Unreachable)?;
-    Ok(StartedPlan {
+    let mut attempt = PlanAttempt {
         prompt: DevicePrompt {
-            verification_uri,
-            user_code,
+            verification_uri: String::new(),
+            user_code: String::new(),
         },
-        done: done_rx,
-    })
+        staged: Some(staged),
+        task: Some(task),
+    };
+    let prompt = match tokio::time::timeout(Duration::from_secs(20), prompt_rx).await {
+        Ok(Ok(prompt)) => prompt,
+        Ok(Err(_)) | Err(_) => {
+            attempt.discard().map_err(|_| ProviderError::Unreachable)?;
+            return Err(ProviderError::Unreachable);
+        }
+    };
+    let Some(verification_uri) = sanitise_chatgpt_uri(&prompt.verification_uri) else {
+        attempt.discard().map_err(|_| ProviderError::Unreachable)?;
+        return Err(ProviderError::Unreachable);
+    };
+    let Some(user_code) = sanitise_user_code(&prompt.user_code) else {
+        attempt.discard().map_err(|_| ProviderError::Unreachable)?;
+        return Err(ProviderError::Unreachable);
+    };
+    attempt.prompt = DevicePrompt {
+        verification_uri,
+        user_code,
+    };
+    Ok(attempt)
 }
 
-async fn start_xai(plan_file: PathBuf) -> Result<StartedPlan, ProviderError> {
-    let _ = std::fs::remove_file(&plan_file);
+async fn start_xai(dir: PathBuf) -> Result<PlanAttempt, ProviderError> {
     let device = xai_plan::request_device_code().await?;
-    let (done_tx, done_rx) = oneshot::channel();
+    let staged =
+        crate::storage::create_unique_private(&dir, b"").map_err(|_| ProviderError::Unreachable)?;
+    let path = staged.clone();
     let prompt = DevicePrompt {
         verification_uri: device.verification_uri.clone(),
         user_code: device.user_code.clone(),
     };
-    tokio::spawn(async move {
-        let result = xai_plan::complete_device_code(device, &plan_file).await;
-        let _ = done_tx.send(result);
-    });
-    Ok(StartedPlan {
+    let task = tokio::spawn(async move { xai_plan::complete_device_code(device, &path).await });
+    Ok(PlanAttempt {
         prompt,
-        done: done_rx,
+        staged: Some(staged),
+        task: Some(task),
     })
 }
 
 fn sanitise_user_code(value: &str) -> Option<String> {
+    if value.chars().any(|character| character.is_control()) {
+        return None;
+    }
     let value = value.trim();
     if value.is_empty()
         || value.len() > 64
@@ -108,16 +185,24 @@ fn sanitise_user_code(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
-fn sanitise_https_uri(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.len() > 2_048
-        || value.chars().any(|character| character.is_control())
-    {
+fn sanitise_chatgpt_uri(value: &str) -> Option<String> {
+    if value.chars().any(|character| character.is_control()) {
         return None;
     }
-    let url = url::Url::parse(value).ok()?;
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 2_048 {
+        return None;
+    }
+    let url = Url::parse(value).ok()?;
+    let authority = value.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    if url.scheme() != "https"
+        || url.host_str() != Some(CHATGPT_AUTH_HOST)
+        || authority.contains('@')
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.port().is_some()
+    {
         return None;
     }
     Some(value.to_owned())

@@ -111,7 +111,7 @@ async fn submit(
 
     state
         .vault
-        .put(connection.clone())
+        .insert_api_key(connection.clone())
         .map_err(|error| crate::error::AppError::new("store provider", error))?;
     models::refresh(state.clone(), connection);
 
@@ -139,7 +139,7 @@ async fn start_plan(
             );
         }
     };
-    let Some(plan_file) = state.vault.plan_file(kind) else {
+    let Some(dir) = state.vault.provider_dir() else {
         return render(
             &state,
             graft.into(),
@@ -155,68 +155,29 @@ async fn start_plan(
     };
 
     let generation = state.plan_login.begin();
-    let started = match crate::providers::plan::start(kind, plan_file).await {
-        Ok(started) => started,
-        Err(error) => {
-            return render(
-                &state,
-                graft.into(),
-                error.patch_status(),
-                ConnectViewModel::failed(
-                    &state.vault,
-                    state.plan_login.snapshot(),
-                    sandbox_missing(&state).await,
-                    kind,
-                    error,
-                ),
-            );
-        }
-    };
-
-    let pending = PendingPlan {
-        kind,
-        verification_uri: started.prompt.verification_uri,
-        user_code: started.prompt.user_code,
-        error: None,
-    };
-    state.plan_login.set_pending(generation, pending);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let task_state = state.clone();
     let handle = tokio::spawn(async move {
-        let result = started
-            .done
-            .await
-            .unwrap_or(Err(ProviderError::Unreachable));
-        match result {
-            Ok(()) => {
-                let connection = ProviderConnection::with_plan(
-                    kind,
-                    kind.default_model(),
-                    task_state.vault.plan_file(kind),
-                );
-                if task_state.vault.put(connection.clone()).is_ok() {
-                    models::refresh(task_state.clone(), connection);
-                    task_state.plan_login.finish(generation);
-                } else {
-                    task_state.plan_login.set_error(
-                        generation,
-                        "Power Plant could not store that provider. Try again.".to_owned(),
-                    );
-                }
-            }
-            Err(ProviderError::Reauthenticate) => {
-                task_state.plan_login.set_error(
-                    generation,
-                    ProviderError::Reauthenticate.message().to_owned(),
-                );
-            }
-            Err(_) => {
-                task_state
-                    .plan_login
-                    .set_error(generation, "Sign-in did not finish. Try again.".to_owned());
-            }
-        }
+        complete_plan_login(task_state, kind, dir, generation, ready_tx).await;
     });
     state.plan_login.attach_task(generation, handle);
+
+    if let Ok(Err(error)) = ready_rx.await
+        && state.plan_login.generation_is_current(generation)
+    {
+        return render(
+            &state,
+            graft.into(),
+            error.patch_status(),
+            ConnectViewModel::failed(
+                &state.vault,
+                state.plan_login.snapshot(),
+                sandbox_missing(&state).await,
+                kind,
+                error,
+            ),
+        );
+    }
 
     render(
         &state,
@@ -228,6 +189,92 @@ async fn start_plan(
             sandbox_missing(&state).await,
         ),
     )
+}
+
+async fn complete_plan_login(
+    state: AppState,
+    kind: crate::providers::ProviderKind,
+    dir: std::path::PathBuf,
+    generation: u64,
+    ready: tokio::sync::oneshot::Sender<Result<(), ProviderError>>,
+) {
+    let mut attempt = match crate::providers::plan::start(kind, dir).await {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
+    state.plan_login.set_pending(
+        generation,
+        PendingPlan {
+            kind,
+            verification_uri: attempt.prompt.verification_uri.clone(),
+            user_code: attempt.prompt.user_code.clone(),
+            error: None,
+        },
+    );
+    let _ = ready.send(Ok(()));
+
+    let result = attempt.wait().await;
+    match result {
+        Ok(()) => {
+            let Some(staged) = attempt.staged_path().map(std::path::Path::to_path_buf) else {
+                state.plan_login.set_error(
+                    generation,
+                    "Power Plant could not store that provider. Try again.".to_owned(),
+                );
+                return;
+            };
+            let installation = state
+                .plan_login
+                .apply_if_current(generation, || state.vault.install_plan(kind, &staged));
+            match installation {
+                Some(Ok(())) => {
+                    attempt.mark_installed();
+                    let connection = ProviderConnection::with_plan(
+                        kind,
+                        kind.default_model(),
+                        state.vault.plan_file(kind),
+                    );
+                    models::refresh(state.clone(), connection);
+                    state.plan_login.finish(generation);
+                }
+                Some(Err(_)) => {
+                    let cleanup = attempt.discard();
+                    let message = if cleanup.is_ok() {
+                        "Power Plant could not store that provider. Try again."
+                    } else {
+                        "Power Plant could not remove the failed sign-in. Try again."
+                    };
+                    state.plan_login.set_error(generation, message.to_owned());
+                }
+                None => {
+                    if let Err(error) = attempt.discard() {
+                        crate::error::trace_operation_failure("remove stale plan attempt", &error);
+                    }
+                }
+            }
+        }
+        Err(ProviderError::Reauthenticate) => {
+            let cleanup = attempt.discard();
+            let message = if cleanup.is_ok() {
+                ProviderError::Reauthenticate.message()
+            } else {
+                "Power Plant could not remove the failed sign-in. Try again."
+            };
+            state.plan_login.set_error(generation, message.to_owned());
+        }
+        Err(_) => {
+            let cleanup = attempt.discard();
+            let message = if cleanup.is_ok() {
+                "Sign-in did not finish. Try again."
+            } else {
+                "Power Plant could not remove the failed sign-in. Try again."
+            };
+            state.plan_login.set_error(generation, message.to_owned());
+        }
+    }
 }
 
 async fn forget(

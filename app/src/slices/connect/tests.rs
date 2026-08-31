@@ -554,17 +554,13 @@ async fn pending_login_patch_updates_the_card() {
 async fn a_stored_plan_token_is_not_echoed_in_html_or_cookies() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("providers.json");
-    let plan_path = dir.path().join("xai-auth.json");
-    std::fs::write(&plan_path, format!(r#"{{"access_token":"{PLAN_TOKEN}"}}"#)).unwrap();
+    let staged = dir.path().join("staged-xai.json");
+    std::fs::write(&staged, format!(r#"{{"access_token":"{PLAN_TOKEN}"}}"#)).unwrap();
     let mut state = test_state();
     state.vault = Arc::new(ProviderVault::open(path).expect("vault"));
     state
         .vault
-        .put(ProviderConnection::with_plan(
-            ProviderKind::Xai,
-            "grok-4.6",
-            Some(plan_path),
-        ))
+        .install_plan(ProviderKind::Xai, &staged)
         .unwrap();
 
     let response = connect_get(state, None).await;

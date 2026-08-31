@@ -82,6 +82,22 @@ impl PlanLogin {
         inner.generation
     }
 
+    pub(crate) fn generation_is_current(&self, generation: u64) -> bool {
+        self.lock().generation == generation
+    }
+
+    pub(crate) fn apply_if_current<T>(
+        &self,
+        generation: u64,
+        operation: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let inner = self.lock();
+        if inner.generation != generation {
+            return None;
+        }
+        Some(operation())
+    }
+
     pub(crate) fn set_pending(&self, generation: u64, pending: PendingPlan) {
         let inner = self.lock();
         if inner.generation == generation {

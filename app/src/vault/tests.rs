@@ -155,19 +155,16 @@ fn persist_restricts_unix_permissions() {
 #[test]
 fn plan_auth_round_trips_without_a_key_and_forget_deletes_the_plan_file() {
     let (vault, _dir, path) = file_vault();
+    let staged = path.parent().unwrap().join("staged-xai.json");
     let plan_path = path.parent().unwrap().join("xai-auth.json");
     std::fs::write(
-        &plan_path,
+        &staged,
         br#"{"access_token":"xai-plan-access-do-not-echo"}"#,
     )
     .unwrap();
-    vault
-        .put(ProviderConnection::with_plan(
-            ProviderKind::Xai,
-            "grok-4.6",
-            Some(plan_path.clone()),
-        ))
-        .unwrap();
+    vault.install_plan(ProviderKind::Xai, &staged).unwrap();
+    assert!(plan_path.exists());
+    assert!(!staged.exists());
 
     let reloaded = ProviderVault::open(path.clone()).expect("reload");
     let stored = reloaded.selected_connection().expect("plan");
@@ -181,15 +178,33 @@ fn plan_auth_round_trips_without_a_key_and_forget_deletes_the_plan_file() {
 }
 
 #[test]
-fn a_retired_chatgpt_plan_model_is_replaced_on_read() {
-    let vault = ProviderVault::in_memory();
+fn api_key_insertion_removes_the_prior_plan_file() {
+    let (vault, _dir, path) = file_vault();
+    let staged = path.parent().unwrap().join("staged-xai.json");
+    let plan_path = path.parent().unwrap().join("xai-auth.json");
+    std::fs::write(&staged, br#"{"access_token":"plan-token"}"#).unwrap();
+    vault.install_plan(ProviderKind::Xai, &staged).unwrap();
+
     vault
-        .put(ProviderConnection::with_plan(
-            ProviderKind::OpenaiCodex,
-            "gpt-5.1-codex",
-            None,
-        ))
+        .insert_api_key(connection(ProviderKind::Xai, "grok-4.6"))
         .unwrap();
+
+    assert!(!plan_path.exists());
+    let stored = vault.selected_connection().expect("api key");
+    assert_eq!(stored.auth, AuthMethod::ApiKey);
+    assert_eq!(stored.api_key.expose(), SECRET);
+}
+
+#[test]
+fn a_retired_chatgpt_plan_model_is_replaced_on_read() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    std::fs::write(
+        &path,
+        br#"{"version":1,"selected":"openai-codex","providers":[{"kind":"openai-codex","auth":"plan","model":"gpt-5.1-codex"}]}"#,
+    )
+    .unwrap();
+    let vault = ProviderVault::open(path).expect("vault");
     assert_eq!(
         vault.selected_connection().map(|item| item.model),
         Some("gpt-5.6-sol".to_owned())
@@ -201,6 +216,68 @@ fn a_retired_chatgpt_plan_model_is_replaced_on_read() {
             .find(|item| item.kind == ProviderKind::OpenaiCodex)
             .map(|item| item.model),
         Some("gpt-5.6-sol".to_owned())
+    );
+}
+
+#[test]
+fn plan_installation_restores_metadata_and_files_after_persist_failure() {
+    let (vault, _dir, path) = file_vault();
+    vault
+        .put(connection(ProviderKind::Xai, "grok-4.6"))
+        .unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    let staged = path.parent().unwrap().join("staged-xai.json");
+    let plan_path = path.parent().unwrap().join("xai-auth.json");
+    std::fs::write(
+        &staged,
+        br#"{"access_token":"xai-plan-access-do-not-echo"}"#,
+    )
+    .unwrap();
+
+    vault.fail_after_next_persist();
+    assert_eq!(
+        vault.install_plan(ProviderKind::Xai, &staged).err(),
+        Some(VaultError::Persist)
+    );
+
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert_eq!(
+        std::fs::read(&staged).unwrap(),
+        br#"{"access_token":"xai-plan-access-do-not-echo"}"#
+    );
+    assert!(!plan_path.exists());
+    let stored = vault.selected_connection().expect("api key");
+    assert_eq!(stored.auth, AuthMethod::ApiKey);
+    assert_eq!(stored.api_key.expose(), SECRET);
+}
+
+#[test]
+fn failed_plan_replacement_restores_the_prior_plan_file() {
+    let (vault, _dir, path) = file_vault();
+    let first = path.parent().unwrap().join("first-xai.json");
+    let second = path.parent().unwrap().join("second-xai.json");
+    let plan_path = path.parent().unwrap().join("xai-auth.json");
+    std::fs::write(&first, br#"{"access_token":"first-token"}"#).unwrap();
+    vault.install_plan(ProviderKind::Xai, &first).unwrap();
+    let previous_metadata = std::fs::read(&path).unwrap();
+    let previous_plan = std::fs::read(&plan_path).unwrap();
+    std::fs::write(&second, br#"{"access_token":"second-token"}"#).unwrap();
+
+    vault.fail_after_next_persist();
+    assert_eq!(
+        vault.install_plan(ProviderKind::Xai, &second).err(),
+        Some(VaultError::Persist)
+    );
+
+    assert_eq!(std::fs::read(&path).unwrap(), previous_metadata);
+    assert_eq!(std::fs::read(&plan_path).unwrap(), previous_plan);
+    assert_eq!(
+        std::fs::read(&second).unwrap(),
+        br#"{"access_token":"second-token"}"#
+    );
+    assert_eq!(
+        vault.selected_connection().map(|stored| stored.auth),
+        Some(AuthMethod::Plan)
     );
 }
 

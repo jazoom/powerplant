@@ -1,6 +1,8 @@
 use std::fs;
 
-use super::{ensure_private_dir, write_private};
+use super::{
+    create_unique_private, ensure_private_dir, remove_private, rename_in_dir, write_private,
+};
 
 #[test]
 fn write_private_replaces_bytes_and_leaves_no_temporary_files() {
@@ -161,4 +163,86 @@ fn bounded_logger_uses_private_permissions() {
     logger.append(b"secret").expect("append");
     let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn unique_private_files_are_distinct_and_keep_their_bytes() {
+    let dir = tempfile::tempdir().expect("dir");
+    let first = create_unique_private(dir.path(), b"{}").expect("first");
+    let second = create_unique_private(dir.path(), b"other").expect("second");
+    assert_ne!(first, second);
+    assert_eq!(fs::read(&first).expect("read first"), b"{}");
+    assert_eq!(fs::read(&second).expect("read second"), b"other");
+}
+
+#[cfg(unix)]
+#[test]
+fn unique_private_files_use_owner_read_write_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("dir");
+    let path = create_unique_private(dir.path(), b"{}").expect("create");
+    let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn rename_in_dir_replaces_the_destination_in_the_same_directory() {
+    let dir = tempfile::tempdir().expect("dir");
+    let from = dir.path().join("from.json");
+    let to = dir.path().join("to.json");
+    fs::write(&from, b"staged").expect("from");
+    fs::write(&to, b"old").expect("to");
+    rename_in_dir(&from, &to).expect("rename");
+    assert!(!from.exists());
+    assert_eq!(fs::read(&to).expect("read"), b"staged");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&to).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}
+
+#[test]
+fn rename_in_dir_rejects_a_different_parent() {
+    let first = tempfile::tempdir().expect("first");
+    let second = tempfile::tempdir().expect("second");
+    let from = first.path().join("from.json");
+    let to = second.path().join("to.json");
+    fs::write(&from, b"staged").expect("from");
+    assert!(rename_in_dir(&from, &to).is_err());
+    assert_eq!(fs::read(&from).expect("read"), b"staged");
+}
+
+#[test]
+fn remove_private_ignores_an_absent_file() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("missing.json");
+    remove_private(&path).expect("absent");
+}
+
+#[cfg(unix)]
+#[test]
+fn private_paths_reject_symbolic_links() {
+    let dir = tempfile::tempdir().expect("dir");
+    let target = dir.path().join("target.json");
+    let link = dir.path().join("link.json");
+    fs::write(&target, b"keep").expect("target");
+    std::os::unix::fs::symlink(&target, &link).expect("link");
+    let dest = dir.path().join("dest.json");
+    assert!(rename_in_dir(&link, &dest).is_err());
+    assert!(remove_private(&link).is_err());
+
+    let source = dir.path().join("source.json");
+    fs::write(&source, b"source").expect("source");
+    assert!(rename_in_dir(&source, &link).is_err());
+    assert_eq!(fs::read(&source).expect("source bytes"), b"source");
+
+    let private_link = dir.path().join("private-link");
+    std::os::unix::fs::symlink(dir.path(), &private_link).expect("directory link");
+    assert!(ensure_private_dir(&private_link).is_err());
+    assert_eq!(fs::read(&target).expect("read"), b"keep");
+    assert!(link.exists());
 }

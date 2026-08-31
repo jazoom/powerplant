@@ -101,6 +101,8 @@ pub(crate) struct DeskProvider {
 pub(crate) struct ProviderVault {
     path: Option<PathBuf>,
     inner: Mutex<VaultState>,
+    #[cfg(test)]
+    fail_after_next_persist: Mutex<bool>,
 }
 
 impl ProviderVault {
@@ -109,6 +111,7 @@ impl ProviderVault {
         Self {
             path: None,
             inner: Mutex::new(VaultState::default()),
+            fail_after_next_persist: Mutex::new(false),
         }
     }
 
@@ -117,6 +120,8 @@ impl ProviderVault {
         Ok(Self {
             path: Some(path),
             inner: Mutex::new(state),
+            #[cfg(test)]
+            fail_after_next_persist: Mutex::new(false),
         })
     }
 
@@ -157,31 +162,126 @@ impl ProviderVault {
             .collect()
     }
 
+    pub(crate) fn insert_api_key(&self, connection: ProviderConnection) -> Result<(), VaultError> {
+        if connection.auth != AuthMethod::ApiKey {
+            return Err(VaultError::Persist);
+        }
+        let mut state = self.lock();
+        let plan_path = plan_file_path(self.path.as_deref(), connection.kind);
+        let previous_plan = plan_path
+            .as_deref()
+            .map(read_existing_plan)
+            .transpose()?
+            .flatten();
+        let previous = state.clone();
+        let (model, favourites) = state
+            .providers
+            .get(&connection.kind)
+            .map(|stored| (stored.model.clone(), stored.favourites.clone()))
+            .unwrap_or((connection.model, Vec::new()));
+        state.providers.insert(
+            connection.kind,
+            StoredProvider {
+                auth: AuthMethod::ApiKey,
+                api_key: connection.api_key,
+                model,
+                favourites,
+            },
+        );
+        state.selected = Some(connection.kind);
+        if self.commit(&state).is_err() {
+            *state = previous;
+            self.commit(&state)?;
+            return Err(VaultError::Persist);
+        }
+        if let Some(plan_path) = plan_path.as_deref()
+            && crate::storage::remove_private(plan_path).is_err()
+        {
+            restore_plan_file(plan_path, previous_plan.as_deref())?;
+            *state = previous;
+            self.commit(&state)?;
+            return Err(VaultError::Persist);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn put(&self, connection: ProviderConnection) -> Result<(), VaultError> {
-        self.mutate(|state| {
-            let (model, favourites) = state
-                .providers
-                .get(&connection.kind)
-                .map(|stored| (stored.model.clone(), stored.favourites.clone()))
-                .unwrap_or((connection.model, Vec::new()));
-            if connection.auth == AuthMethod::ApiKey {
-                delete_plan_file(self.path.as_deref(), connection.kind);
+        self.insert_api_key(connection)
+    }
+
+    pub(crate) fn install_plan(&self, kind: ProviderKind, staged: &Path) -> Result<(), VaultError> {
+        if !kind.supports_plan() {
+            return Err(VaultError::Persist);
+        }
+        let final_path = plan_file_path(self.path.as_deref(), kind).ok_or(VaultError::Persist)?;
+        let mut state = self.lock();
+        let previous = state.clone();
+        let previous_plan = stage_existing_plan(&final_path)?;
+        if crate::storage::rename_in_dir(staged, &final_path).is_err() {
+            return_plan_to_stage_if_moved(&final_path, staged)?;
+            restore_plan_backup(&final_path, previous_plan.as_deref())?;
+            return Err(VaultError::Persist);
+        }
+        let (model, favourites) = state
+            .providers
+            .get(&kind)
+            .map(|stored| (stored.model.clone(), stored.favourites.clone()))
+            .unwrap_or_else(|| (kind.default_model().to_owned(), Vec::new()));
+        state.providers.insert(
+            kind,
+            StoredProvider {
+                auth: AuthMethod::Plan,
+                api_key: SecretString::new(String::new()),
+                model,
+                favourites,
+            },
+        );
+        state.selected = Some(kind);
+        if self.commit(&state).is_err() {
+            self.rollback_plan_install(
+                &mut state,
+                previous,
+                &final_path,
+                staged,
+                previous_plan.as_deref(),
+            )?;
+            return Err(VaultError::Persist);
+        }
+        if let Some(previous_plan) = previous_plan.as_deref()
+            && crate::storage::remove_private(previous_plan).is_err()
+        {
+            match fs::symlink_metadata(previous_plan) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                _ => {
+                    self.rollback_plan_install(
+                        &mut state,
+                        previous,
+                        &final_path,
+                        staged,
+                        Some(previous_plan),
+                    )?;
+                    return Err(VaultError::Persist);
+                }
             }
-            state.providers.insert(
-                connection.kind,
-                StoredProvider {
-                    auth: connection.auth,
-                    api_key: connection.api_key,
-                    model,
-                    favourites,
-                },
-            );
-            state.selected = Some(connection.kind);
-        })
+        }
+        Ok(())
+    }
+
+    pub(crate) fn provider_dir(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.parent()?.to_path_buf())
     }
 
     pub(crate) fn plan_file(&self, kind: ProviderKind) -> Option<PathBuf> {
         plan_file_path(self.path.as_deref(), kind)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_after_next_persist(&self) {
+        *self
+            .fail_after_next_persist
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
 
     pub(crate) fn forget(&self, kind: ProviderKind) -> Result<(), VaultError> {
@@ -237,11 +337,44 @@ impl ProviderVault {
         let mut state = self.lock();
         let previous = state.clone();
         let value = edit(&mut state);
-        if let Err(error) = persist(self.path.as_deref(), &state) {
+        if let Err(error) = self.commit(&state) {
             *state = previous;
             return Err(error);
         }
         Ok(value)
+    }
+
+    fn rollback_plan_install(
+        &self,
+        state: &mut VaultState,
+        previous: VaultState,
+        final_path: &Path,
+        staged: &Path,
+        previous_plan: Option<&Path>,
+    ) -> Result<(), VaultError> {
+        *state = previous;
+        if crate::storage::rename_in_dir(final_path, staged).is_err() {
+            return_plan_to_stage_if_moved(final_path, staged)?;
+        }
+        restore_plan_backup(final_path, previous_plan)?;
+        self.commit(state)
+    }
+
+    fn commit(&self, state: &VaultState) -> Result<(), VaultError> {
+        let result = persist(self.path.as_deref(), state);
+        #[cfg(test)]
+        {
+            let mut failure = self
+                .fail_after_next_persist
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *failure {
+                *failure = false;
+                result?;
+                return Err(VaultError::Persist);
+            }
+        }
+        result
     }
 
     fn lock(&self) -> MutexGuard<'_, VaultState> {
@@ -387,6 +520,55 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
         fs::create_dir_all(parent).map_err(|_| VaultError::Persist)?;
     }
     crate::storage::write_private(path, &bytes).map_err(|_| VaultError::Persist)
+}
+
+fn read_existing_plan(final_path: &Path) -> Result<Option<Vec<u8>>, VaultError> {
+    match fs::symlink_metadata(final_path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(VaultError::Persist),
+        Ok(_) => crate::storage::read_private(final_path)
+            .map(Some)
+            .map_err(|_| VaultError::Persist),
+    }
+}
+
+fn stage_existing_plan(final_path: &Path) -> Result<Option<PathBuf>, VaultError> {
+    let Some(bytes) = read_existing_plan(final_path)? else {
+        return Ok(None);
+    };
+    let dir = final_path.parent().ok_or(VaultError::Persist)?;
+    crate::storage::create_unique_private(dir, &bytes)
+        .map(Some)
+        .map_err(|_| VaultError::Persist)
+}
+
+fn return_plan_to_stage_if_moved(final_path: &Path, staged: &Path) -> Result<(), VaultError> {
+    match fs::symlink_metadata(staged) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(final_path) {
+                Ok(_) => crate::storage::rename_in_dir(final_path, staged)
+                    .map_err(|_| VaultError::Persist),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(_) => Err(VaultError::Persist),
+            }
+        }
+        Err(_) => Err(VaultError::Persist),
+    }
+}
+
+fn restore_plan_backup(final_path: &Path, backup: Option<&Path>) -> Result<(), VaultError> {
+    if let Some(backup) = backup {
+        crate::storage::rename_in_dir(backup, final_path).map_err(|_| VaultError::Persist)?;
+    }
+    Ok(())
+}
+
+fn restore_plan_file(final_path: &Path, bytes: Option<&[u8]>) -> Result<(), VaultError> {
+    if let Some(bytes) = bytes {
+        crate::storage::write_private(final_path, bytes).map_err(|_| VaultError::Persist)?;
+    }
+    Ok(())
 }
 
 fn plan_file_path(vault_path: Option<&Path>, kind: ProviderKind) -> Option<PathBuf> {
