@@ -15,13 +15,14 @@ use axum::{
 use hypergraft::{CommandGraft, GraftRequest, PatchSet, PatchStatus};
 
 use crate::{
-    agents::{AgentId, AgentRecord, DirectoryPolicy},
+    agents::{AgentId, AgentRecord, DirectoryGrant, DirectoryPolicy},
     error::AppResult,
+    projects::ProjectRecord,
     responses,
     sessions::{self, BeginTurnError, JobIdError, OptionalSession, SessionId, SessionSnapshot},
     state::AppState,
     workflows::{
-        self, ResolveWorkflowError, WorkflowJob, WorkflowRun, WorkflowSelection,
+        self, ResolveWorkflowError, RunKind, WorkflowJob, WorkflowRun, WorkflowSelection,
         definition_fits_agent,
     },
 };
@@ -43,6 +44,22 @@ pub(super) fn router() -> Router<AppState> {
 
 fn parse_agent(raw: &str) -> Option<AgentId> {
     AgentId::parse(raw)
+}
+
+fn selected_project(
+    state: &AppState,
+    agent: &AgentRecord,
+) -> Option<(ProjectRecord, DirectoryGrant)> {
+    let primary = agent
+        .directories
+        .iter()
+        .find(|grant| grant.alias == agent.primary_directory)?;
+    let project = state
+        .projects
+        .list()
+        .into_iter()
+        .find(|project| project.host_path == primary.host_path)?;
+    Some((project, primary.clone()))
 }
 
 async fn require_chat(
@@ -188,6 +205,17 @@ async fn send(
         )
         .await;
     }
+    let Some((project, grant)) = selected_project(&state, &record) else {
+        return reject_chat_input(
+            &state,
+            graft,
+            &record,
+            &snapshot,
+            "Register this directory as a project first.",
+            &form.message,
+        )
+        .await;
+    };
     let resolved = match state.workflows.resolve(&selection) {
         Ok(resolved) => resolved,
         Err(error) => {
@@ -277,7 +305,15 @@ async fn send(
             ));
         }
     };
-    let run = WorkflowRun::create(run_id, workflows::now_ms(), record.id, pinned, environments);
+    let run = WorkflowRun::create(
+        run_id,
+        workflows::now_ms(),
+        project.id,
+        record.id,
+        RunKind::Configured,
+        pinned,
+        environments,
+    );
     if let Err(error) = state.workflow_runs.create(run) {
         let _ = state
             .sessions
@@ -294,7 +330,11 @@ async fn send(
         WorkflowJob {
             run_id,
             session_id: session,
+            project_id: project.id,
             agent_id: record.id,
+            agent_revision: record.revision,
+            grant_alias: grant.alias,
+            grant_access: grant.access,
             connection,
             host_policy: policy,
             turns: started.turns.clone(),

@@ -47,7 +47,7 @@ fn fixture(
 ) {
     let definition = crate::workflows::definition::test_named_definition("Diff");
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create(
+    let mut run = crate::workflows::WorkflowRun::create_for_test(
         crate::workflows::RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),

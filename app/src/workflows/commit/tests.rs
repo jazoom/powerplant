@@ -54,7 +54,7 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
     let store = store();
     let definition = correctness_security_definition(test_environment_id());
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create(
+    let mut run = WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),

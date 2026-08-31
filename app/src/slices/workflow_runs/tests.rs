@@ -48,13 +48,37 @@ fn connected(state: &AppState) -> String {
     token.raw().as_str().to_owned()
 }
 
+fn git_init(path: &std::path::Path) {
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(path)
+            .status()
+            .expect("git")
+            .success()
+    );
+}
+
 fn stored_run(state: &AppState) -> RunId {
+    let dir = tempfile::tempdir().expect("dir");
+    git_init(dir.path());
+    let project = state
+        .projects
+        .create("Harbour".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
     let definition = one_agent_definition(crate::workflows::definition::test_environment_id());
     let environments = crate::workflows::test_environment_set(&definition);
     let run = WorkflowRun::create(
         RunId::generate().expect("run"),
         1,
+        project.id,
         crate::agents::AgentId::generate().expect("agent"),
+        crate::workflows::RunKind::Configured,
         PinnedWorkflowDefinition::pin(None, definition),
         environments,
     );
@@ -85,6 +109,8 @@ async fn a_runs_document_uses_chat_main() {
     assert_eq!(text.matches("id=\"chat-main\"").count(), 1);
     assert!(text.contains("href=\"/runs/"));
     assert!(text.contains("data-graft"));
+    assert!(text.contains("Harbour"));
+    assert!(text.contains("href=\"/projects/"));
 }
 
 #[tokio::test]
@@ -150,6 +176,8 @@ async fn a_detail_document_uses_chat_main() {
     assert!(text.contains("<!doctype html>"));
     assert_eq!(text.matches("id=\"run-detail\"").count(), 1);
     assert!(text.contains("Refresh"));
+    assert!(text.contains("Harbour"));
+    assert!(text.contains("href=\"/projects/"));
 }
 
 #[tokio::test]
@@ -222,6 +250,8 @@ fn review_verdict_skips_candidate_outputs_from_fixing_reviews() {
 fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
     let view = super::page::RunDetailView {
         run_id: "run".to_owned(),
+        project_href: String::new(),
+        project_name: String::new(),
         name: "Sequential team".to_owned(),
         name_href: String::new(),
         catalogue_note: String::new(),

@@ -3,6 +3,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::environments::EnvironmentCatalogue;
+use crate::projects::ProjectStore;
 use crate::workflows::{RunSummary, WorkflowCatalogue, WorkflowRun};
 
 pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
@@ -69,6 +70,8 @@ pub(super) struct RunIndexView {
 
 pub(super) struct IndexRow {
     pub(super) id: String,
+    pub(super) project_href: String,
+    pub(super) project_name: String,
     pub(super) uncatalogued: bool,
     pub(super) name: String,
     pub(super) version: String,
@@ -79,19 +82,25 @@ pub(super) struct IndexRow {
 }
 
 impl RunIndexView {
-    pub(super) fn from_summaries(summaries: &[RunSummary]) -> Self {
+    pub(super) fn from_summaries(summaries: &[RunSummary], projects: &ProjectStore) -> Self {
         Self {
             runs: summaries
                 .iter()
-                .map(|summary| IndexRow {
-                    id: summary.id.as_hex(),
-                    uncatalogued: summary.workflow_id.is_none(),
-                    name: summary.name.clone(),
-                    version: summary.version.as_hex(),
-                    state: summary.state.clone(),
-                    created: format_time(summary.created_at_ms),
-                    current_step: summary.current_step.clone(),
-                    latest_attempt: summary.latest_attempt.clone(),
+                .map(|summary| {
+                    let (project_href, project_name) =
+                        project_presentation(summary.project_id, projects);
+                    IndexRow {
+                        id: summary.id.as_hex(),
+                        project_href,
+                        project_name,
+                        uncatalogued: summary.workflow_id.is_none(),
+                        name: summary.name.clone(),
+                        version: summary.version.as_hex(),
+                        state: summary.state.clone(),
+                        created: format_time(summary.created_at_ms),
+                        current_step: summary.current_step.clone(),
+                        latest_attempt: summary.latest_attempt.clone(),
+                    }
                 })
                 .collect(),
         }
@@ -102,6 +111,8 @@ impl RunIndexView {
 #[template(path = "workflow_runs/templates/detail.html")]
 pub(super) struct RunDetailView {
     pub(super) run_id: String,
+    pub(super) project_href: String,
+    pub(super) project_name: String,
     pub(super) name: String,
     pub(super) name_href: String,
     pub(super) catalogue_note: String,
@@ -128,6 +139,8 @@ pub(super) struct ArtefactRow {
 #[template(path = "workflow_runs/templates/detail.html", block = "run_detail")]
 pub(super) struct RunDetailContents<'a> {
     pub(super) run_id: &'a str,
+    pub(super) project_href: &'a str,
+    pub(super) project_name: &'a str,
     pub(super) name: &'a str,
     pub(super) name_href: &'a str,
     pub(super) catalogue_note: &'a str,
@@ -146,10 +159,14 @@ impl RunDetailView {
         run: &WorkflowRun,
         workflows: &WorkflowCatalogue,
         environments: &EnvironmentCatalogue,
+        projects: &ProjectStore,
     ) -> Self {
         let (name_href, catalogue_note) = catalogue_presentation(run, workflows);
+        let (project_href, project_name) = project_presentation(run.project_id, projects);
         Self {
             run_id: run.id.as_hex(),
+            project_href,
+            project_name,
             name: run.pinned.definition.name().to_owned(),
             name_href,
             catalogue_note,
@@ -314,6 +331,8 @@ impl RunDetailView {
     pub(super) fn contents(&self) -> RunDetailContents<'_> {
         RunDetailContents {
             run_id: &self.run_id,
+            project_href: &self.project_href,
+            project_name: &self.project_name,
             name: &self.name,
             name_href: &self.name_href,
             catalogue_note: &self.catalogue_note,
@@ -473,6 +492,16 @@ fn pinned_environments(
             }
         })
         .collect()
+}
+
+fn project_presentation(
+    project_id: crate::projects::ProjectId,
+    projects: &ProjectStore,
+) -> (String, String) {
+    match projects.get(&project_id) {
+        Some(project) => (format!("/projects/{}", project.id.as_hex()), project.name),
+        None => (String::new(), "Unknown project".to_owned()),
+    }
 }
 
 fn catalogue_presentation(run: &WorkflowRun, catalogue: &WorkflowCatalogue) -> (String, String) {

@@ -180,7 +180,7 @@ fn fixing_publication_fixture() -> (
     )
     .expect("definition");
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create(
+    let mut run = crate::workflows::WorkflowRun::create_for_test(
         crate::workflows::RunId::generate().expect("run"),
         1,
         AgentId::generate().expect("agent"),
@@ -235,7 +235,11 @@ fn fixing_publication_fixture() -> (
     let job = crate::workflows::WorkflowJob {
         run_id,
         session_id: token.id(),
+        project_id: crate::projects::ProjectId::generate().expect("project"),
         agent_id: AgentId::generate().expect("agent"),
+        agent_revision: 1,
+        grant_alias: "project".to_owned(),
+        grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
             crate::providers::ProviderKind::Xai,
             "key",
@@ -268,7 +272,7 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
         .map(|_| {
             let definition = crate::workflows::definition::test_named_definition("Interrupt");
             let environments = crate::workflows::test_environment_set(&definition);
-            crate::workflows::WorkflowRun::create(
+            crate::workflows::WorkflowRun::create_for_test(
                 crate::workflows::RunId::generate().expect("run"),
                 1,
                 AgentId::generate().expect("agent"),
@@ -291,7 +295,11 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
         let job = crate::workflows::WorkflowJob {
             run_id,
             session_id: session,
+            project_id: crate::projects::ProjectId::generate().expect("project"),
             agent_id: AgentId::generate().expect("agent"),
+            agent_revision: 1,
+            grant_alias: "project".to_owned(),
+            grant_access: AccessMode::ReadWrite,
             connection: crate::providers::ProviderConnection::with_key(provider, "key", "model"),
             host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
             turns: Vec::new(),
@@ -326,7 +334,11 @@ fn final_gate_completion_settles_the_session_job_successfully() {
     let workflow = crate::workflows::WorkflowJob {
         run_id,
         session_id,
+        project_id: crate::projects::ProjectId::generate().expect("project"),
         agent_id,
+        agent_revision: 1,
+        grant_alias: "project".to_owned(),
+        grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
             crate::providers::ProviderKind::Xai,
             "key",
@@ -487,7 +499,7 @@ fn failed_capture_records_unknown_observed_source() {
     let definition = crate::workflows::definition::test_named_definition("Work");
     let environments = crate::workflows::test_environment_set(&definition);
     let run_id = crate::workflows::RunId::generate().expect("run");
-    let mut run = crate::workflows::run::WorkflowRun::create(
+    let mut run = crate::workflows::run::WorkflowRun::create_for_test(
         run_id,
         1,
         crate::agents::AgentId::generate().expect("agent"),
@@ -612,7 +624,7 @@ fn step_output_resolution_uses_the_latest_completed_producer_attempt() {
         crate::workflows::definition::test_environment_id(),
     );
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create(
+    let mut run = crate::workflows::WorkflowRun::create_for_test(
         crate::workflows::RunId::generate().expect("run"),
         1,
         AgentId::generate().expect("agent"),
@@ -751,6 +763,13 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
                 primary_directory: "project".to_owned(),
             })
             .expect("agent");
+        let project_record = state
+            .projects
+            .create(
+                format!("Recovery {reference_updated}"),
+                agent.directories[0].host_path.clone(),
+            )
+            .expect("project");
         let definition = crate::workflows::seeds::correctness_security_definition(
             crate::workflows::definition::test_environment_id(),
         );
@@ -758,7 +777,9 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
         let mut run = crate::workflows::WorkflowRun::create(
             crate::workflows::RunId::generate().expect("run"),
             1,
+            project_record.id,
             agent.id,
+            crate::workflows::RunKind::Configured,
             crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
             environments,
         );
@@ -1107,5 +1128,171 @@ fn review_record(
             candidate,
             verdict: crate::workflows::artefacts::ReviewVerdict::Approved,
         },
+    }
+}
+
+fn git_worktree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("dir");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .expect("git")
+            .success()
+    );
+    dir
+}
+
+fn test_job(
+    project_id: crate::projects::ProjectId,
+    agent: &crate::agents::AgentRecord,
+) -> crate::workflows::WorkflowJob {
+    let run_id = crate::workflows::RunId::generate().expect("run");
+    crate::workflows::WorkflowJob {
+        run_id,
+        session_id: crate::sessions::generate_session_token()
+            .expect("session")
+            .id(),
+        project_id,
+        agent_id: agent.id,
+        agent_revision: agent.revision,
+        grant_alias: agent.directories[0].alias.clone(),
+        grant_access: agent.directories[0].access,
+        connection: crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "key",
+            "model",
+        ),
+        host_policy: DirectoryPolicy::from_record(agent),
+        turns: Vec::new(),
+        job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
+        eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+    }
+}
+
+#[test]
+fn source_capture_rejects_a_stale_agent_revision() {
+    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let agent = state
+        .agents
+        .create(crate::agents::AgentDraft {
+            name: "Desk agent".to_owned(),
+            instructions: String::new(),
+            tools: crate::agents::ToolId::ALL.to_vec(),
+            directories: vec![crate::agents::DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: project.host_path.clone(),
+                access: AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent");
+    let job = test_job(project.id, &agent);
+    super::confirm_run_authority(&state, &job).expect("current");
+    state
+        .agents
+        .update(
+            &agent.id,
+            agent.revision,
+            crate::agents::AgentDraft {
+                name: agent.name.clone(),
+                instructions: agent.instructions.clone(),
+                tools: agent.tools.clone(),
+                directories: agent.directories.clone(),
+                primary_directory: agent.primary_directory.clone(),
+            },
+        )
+        .expect("update");
+    assert_eq!(
+        super::confirm_run_authority(&state, &job).unwrap_err(),
+        "The agent configuration changed. Try again."
+    );
+}
+
+#[test]
+fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
+    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Recover".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let agent = state
+        .agents
+        .create(crate::agents::AgentDraft {
+            name: "Recovery agent".to_owned(),
+            instructions: String::new(),
+            tools: crate::agents::ToolId::ALL.to_vec(),
+            directories: vec![crate::agents::DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: project.host_path.clone(),
+                access: AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent");
+    let definition = crate::workflows::definition::test_named_definition("Recover");
+    let environments = crate::workflows::test_environment_set(&definition);
+    let run = crate::workflows::WorkflowRun::create(
+        crate::workflows::RunId::generate().expect("run"),
+        1,
+        project.id,
+        agent.id,
+        crate::workflows::RunKind::Configured,
+        crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    assert_eq!(
+        super::recovery_project_path(&state, &run),
+        Ok(project.host_path.clone())
+    );
+
+    let other = git_worktree();
+    let changed = state
+        .agents
+        .update(
+            &agent.id,
+            agent.revision,
+            crate::agents::AgentDraft {
+                name: agent.name.clone(),
+                instructions: agent.instructions.clone(),
+                tools: agent.tools.clone(),
+                directories: vec![crate::agents::DirectoryGrant {
+                    alias: "project".to_owned(),
+                    host_path: other.path().to_path_buf(),
+                    access: AccessMode::ReadWrite,
+                }],
+                primary_directory: "project".to_owned(),
+            },
+        )
+        .expect("change grant");
+    assert!(super::recovery_project_path(&state, &run).is_err());
+
+    state
+        .agents
+        .update(
+            &agent.id,
+            changed.revision,
+            crate::agents::AgentDraft {
+                name: agent.name,
+                instructions: agent.instructions,
+                tools: agent.tools,
+                directories: agent.directories,
+                primary_directory: agent.primary_directory,
+            },
+        )
+        .expect("restore grant");
+    #[cfg(unix)]
+    {
+        let git = dir.path().join(".git");
+        std::fs::rename(&git, dir.path().join(".git-original")).expect("move git directory");
+        std::os::unix::fs::symlink(other.path().join(".git"), git).expect("link git directory");
+        assert!(super::recovery_project_path(&state, &run).is_err());
     }
 }

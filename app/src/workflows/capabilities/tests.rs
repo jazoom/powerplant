@@ -107,6 +107,8 @@ fn capability_policy_table() {
         &connection,
     )
     .expect("planner");
+    assert_eq!(planner.schema, super::CAPABILITY_SCHEMA);
+    assert_eq!(planner.agent_revision, ceiling.revision);
     assert_eq!(
         planner.primary().map(|directory| directory.access),
         Some(AccessMode::ReadOnly)

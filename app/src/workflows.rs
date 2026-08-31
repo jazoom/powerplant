@@ -31,5 +31,5 @@ pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
 #[cfg(test)]
 pub(crate) use resolve::test_set as test_environment_set;
 pub(crate) use resolve::{preview_environments, resolve_environments};
-pub(crate) use run::{RunSource, WorkflowRun, now_ms};
+pub(crate) use run::{RunKind, RunSource, WorkflowRun, now_ms};
 pub(crate) use store::{RunSummary, WorkflowRunStore};

@@ -5,6 +5,7 @@ use crate::environments::snapshot::{OciManifestDigest, RecordedIntegrity, Snapsh
 use crate::environments::{
     EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
 };
+use crate::projects::ProjectId;
 
 use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::capabilities::{
@@ -20,12 +21,14 @@ use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
 use super::id::{AttemptId, GateId, RunId, WorkflowId};
 use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
-pub(crate) const RUN_RECORD_VERSION: u32 = 1;
+pub(crate) const RUN_RECORD_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowRun {
     pub(crate) id: RunId,
     pub(crate) created_at_ms: u64,
+    pub(crate) project_id: ProjectId,
+    pub(crate) kind: RunKind,
     pub(crate) agent_id: AgentId,
     pub(crate) pinned: PinnedWorkflowDefinition,
     pub(crate) environments: ResolvedEnvironmentSet,
@@ -34,6 +37,29 @@ pub(crate) struct WorkflowRun {
     pub(crate) artefacts: Vec<ArtefactRecord>,
     pub(crate) attempts: Vec<AttemptRecord>,
     pub(crate) gates: Vec<HumanGateRecord>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RunKind {
+    Configured,
+    QuickTask,
+}
+
+impl RunKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::QuickTask => "quick-task",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "configured" => Some(Self::Configured),
+            "quick-task" => Some(Self::QuickTask),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -206,6 +232,8 @@ pub(super) struct RunFile {
     record_version: u32,
     id: String,
     created_at_ms: u64,
+    project_id: String,
+    kind: String,
     agent_id: String,
     workflow_id: Option<String>,
     version: String,
@@ -309,6 +337,8 @@ struct CommitResultFile {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct AttemptCapabilitiesFile {
+    schema: u32,
+    agent_revision: u32,
     tools: Vec<String>,
     directories: Vec<CapabilityDirectoryFile>,
     git_admin: String,
@@ -512,7 +542,9 @@ impl WorkflowRun {
     pub(crate) fn create(
         id: RunId,
         created_at_ms: u64,
+        project_id: ProjectId,
         agent_id: AgentId,
+        kind: RunKind,
         pinned: PinnedWorkflowDefinition,
         environments: ResolvedEnvironmentSet,
     ) -> Self {
@@ -520,6 +552,8 @@ impl WorkflowRun {
         Self {
             id,
             created_at_ms,
+            project_id,
+            kind,
             agent_id,
             pinned,
             environments,
@@ -529,6 +563,25 @@ impl WorkflowRun {
             attempts: Vec::new(),
             gates: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_for_test(
+        id: RunId,
+        created_at_ms: u64,
+        agent_id: AgentId,
+        pinned: PinnedWorkflowDefinition,
+        environments: ResolvedEnvironmentSet,
+    ) -> Self {
+        Self::create(
+            id,
+            created_at_ms,
+            ProjectId::generate().expect("project"),
+            agent_id,
+            RunKind::Configured,
+            pinned,
+            environments,
+        )
     }
 
     pub(crate) fn record_initial_candidate(
@@ -1215,6 +1268,8 @@ impl WorkflowRun {
             record_version: RUN_RECORD_VERSION,
             id: self.id.as_hex(),
             created_at_ms: self.created_at_ms,
+            project_id: self.project_id.as_hex(),
+            kind: self.kind.as_str().to_owned(),
             agent_id: self.agent_id.as_hex(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
             version: self.pinned.version.as_hex(),
@@ -1233,6 +1288,8 @@ impl WorkflowRun {
             return Err(RunRecordError::Corrupt);
         }
         let id = RunId::parse(&file.id).ok_or(RunRecordError::Corrupt)?;
+        let project_id = ProjectId::parse(&file.project_id).ok_or(RunRecordError::Corrupt)?;
+        let kind = RunKind::parse(&file.kind).ok_or(RunRecordError::Corrupt)?;
         let agent_id = AgentId::parse(&file.agent_id).ok_or(RunRecordError::Corrupt)?;
         let workflow_id = match file.workflow_id {
             Some(value) => Some(WorkflowId::parse(&value).ok_or(RunRecordError::Corrupt)?),
@@ -1267,6 +1324,8 @@ impl WorkflowRun {
         let run = Self {
             id,
             created_at_ms: file.created_at_ms,
+            project_id,
+            kind,
             agent_id,
             pinned: PinnedWorkflowDefinition {
                 workflow_id,
@@ -2738,6 +2797,11 @@ fn valid_git_object_id(value: &str) -> bool {
 }
 
 fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefinition) -> bool {
+    if capabilities.schema != crate::workflows::capabilities::CAPABILITY_SCHEMA
+        || capabilities.agent_revision == 0
+    {
+        return false;
+    }
     match &step.action {
         StepAction::Agent(action) => {
             let primary = capabilities
@@ -2805,6 +2869,8 @@ fn valid_guest_path(path: &str) -> bool {
 
 fn capabilities_to_file(capabilities: &AttemptCapabilities) -> AttemptCapabilitiesFile {
     AttemptCapabilitiesFile {
+        schema: capabilities.schema,
+        agent_revision: capabilities.agent_revision,
         tools: capabilities
             .tools
             .iter()
@@ -2830,6 +2896,10 @@ fn capabilities_to_file(capabilities: &AttemptCapabilities) -> AttemptCapabiliti
 fn capabilities_from_file(
     file: AttemptCapabilitiesFile,
 ) -> Result<AttemptCapabilities, RunRecordError> {
+    if file.schema != crate::workflows::capabilities::CAPABILITY_SCHEMA || file.agent_revision == 0
+    {
+        return Err(RunRecordError::Corrupt);
+    }
     let git_admin = AccessMode::parse(&file.git_admin).ok_or(RunRecordError::Corrupt)?;
     let source_location =
         PrimarySourceLocation::parse(&file.source_location).ok_or(RunRecordError::Corrupt)?;
@@ -2859,6 +2929,8 @@ fn capabilities_from_file(
         });
     }
     Ok(AttemptCapabilities {
+        schema: file.schema,
+        agent_revision: file.agent_revision,
         tools,
         directories,
         source_location,

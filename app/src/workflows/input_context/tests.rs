@@ -19,7 +19,7 @@ fn store() -> WorkflowArtefactRepository {
 fn run() -> WorkflowRun {
     let definition = sequential_team_definition(test_environment_id());
     let environments = crate::workflows::test_environment_set(&definition);
-    WorkflowRun::create(
+    WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),
@@ -253,7 +253,7 @@ fn current_candidate_inputs_match_the_exact_accepted_reference() {
     let definition =
         crate::workflows::seeds::review_until_approved_definition(test_environment_id());
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create(
+    let mut run = WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),

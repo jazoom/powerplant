@@ -6,8 +6,12 @@ use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 use crate::workflows::definition::PRIMARY_SOURCE_ALIAS;
 use crate::workflows::definition::{StepAction, StepDefinition};
 
+pub(crate) const CAPABILITY_SCHEMA: u32 = 2;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AttemptCapabilities {
+    pub(crate) schema: u32,
+    pub(crate) agent_revision: u32,
     pub(crate) tools: Vec<ToolId>,
     pub(crate) directories: Vec<CapabilityDirectory>,
     pub(crate) source_location: PrimarySourceLocation,
@@ -102,6 +106,8 @@ impl AttemptCapabilities {
                     });
                 }
                 Ok(Self {
+                    schema: CAPABILITY_SCHEMA,
+                    agent_revision: agent.revision,
                     tools: action.authority.tools.clone(),
                     directories,
                     source_location: PrimarySourceLocation::AttemptWorkspace,
@@ -236,6 +242,8 @@ impl SecretPresence {
 fn commit_or_read_only(command: SystemCommandId, agent: &AgentRecord) -> AttemptCapabilities {
     if command.contract().source_effect == CommandSourceEffect::Commit {
         AttemptCapabilities {
+            schema: CAPABILITY_SCHEMA,
+            agent_revision: agent.revision,
             tools: Vec::new(),
             directories: vec![CapabilityDirectory {
                 alias: agent.primary_directory.clone(),
@@ -250,6 +258,8 @@ fn commit_or_read_only(command: SystemCommandId, agent: &AgentRecord) -> Attempt
         }
     } else {
         AttemptCapabilities {
+            schema: CAPABILITY_SCHEMA,
+            agent_revision: agent.revision,
             tools: Vec::new(),
             directories: vec![primary_read_only(agent)],
             source_location: PrimarySourceLocation::AttemptWorkspace,
@@ -297,6 +307,8 @@ use crate::agents::GUEST_PROJECT;
 #[cfg(test)]
 pub(crate) fn test_agent_capabilities() -> AttemptCapabilities {
     AttemptCapabilities {
+        schema: CAPABILITY_SCHEMA,
+        agent_revision: 1,
         tools: vec![ToolId::List],
         directories: vec![CapabilityDirectory {
             alias: PRIMARY_SOURCE_ALIAS.to_owned(),
@@ -314,6 +326,8 @@ pub(crate) fn test_agent_capabilities() -> AttemptCapabilities {
 #[cfg(test)]
 pub(crate) fn test_command_capabilities() -> AttemptCapabilities {
     AttemptCapabilities {
+        schema: CAPABILITY_SCHEMA,
+        agent_revision: 1,
         tools: Vec::new(),
         directories: vec![CapabilityDirectory {
             alias: PRIMARY_SOURCE_ALIAS.to_owned(),

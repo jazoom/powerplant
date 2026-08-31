@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::agents::{AccessMode, DirectoryPolicy, LeaseGuard, PolicyGrant};
+use crate::projects::ProjectId;
 use crate::providers::{ChatTurn, ProviderConnection};
 use crate::sandbox::{CommandEvent, GUEST_PROJECT, GuestExec, GuestSandbox};
 use crate::sessions::{Job, JobStatus, SessionId};
@@ -101,7 +102,11 @@ impl WorkflowContinuationRegistry {
 pub(crate) struct WorkflowJob {
     pub(crate) run_id: RunId,
     pub(crate) session_id: SessionId,
+    pub(crate) project_id: ProjectId,
     pub(crate) agent_id: crate::agents::AgentId,
+    pub(crate) agent_revision: u32,
+    pub(crate) grant_alias: String,
+    pub(crate) grant_access: AccessMode,
     pub(crate) connection: ProviderConnection,
     pub(crate) host_policy: DirectoryPolicy,
     pub(crate) turns: Vec<ChatTurn>,
@@ -1980,15 +1985,35 @@ fn attempt_spec(
     })
 }
 
+fn confirm_run_authority(
+    state: &AppState,
+    job: &WorkflowJob,
+) -> Result<std::path::PathBuf, String> {
+    let Some(project) = state.projects.get(&job.project_id) else {
+        return Err("That project is not in the catalogue.".to_owned());
+    };
+    let Some(agent) = state.agents.get(&job.agent_id) else {
+        return Err("That agent is not in the catalogue.".to_owned());
+    };
+    if agent.revision != job.agent_revision {
+        return Err("The agent configuration changed. Try again.".to_owned());
+    }
+    let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
+        return Err("This agent no longer has access to that project.".to_owned());
+    };
+    if grant.alias != job.grant_alias || grant.access != job.grant_access {
+        return Err("This agent no longer has access to that project.".to_owned());
+    }
+    if !project.host_path_is_available() || grant.host_path != project.host_path {
+        return Err("A granted directory is no longer at the saved path.".to_owned());
+    }
+    Ok(project.host_path)
+}
+
 async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(), String> {
-    let host = job
-        .host_policy
-        .grants()
-        .iter()
-        .find(|grant| grant.alias == job.host_policy.primary_alias())
-        .ok_or_else(|| "Choose a project directory.".to_owned())?;
+    let host_path = confirm_run_authority(state, job)?;
     let captured = match crate::workflows::artefacts::CandidateCapture::capture_host(
-        &host.host_path,
+        &host_path,
         &state.workflow_artefacts,
     ) {
         Ok(captured) => captured,
@@ -2676,6 +2701,29 @@ fn settle_with_reply(
     let _ = job.finish(status, error);
 }
 
+fn recovery_project_path(
+    state: &AppState,
+    run: &crate::workflows::WorkflowRun,
+) -> Result<std::path::PathBuf, &'static str> {
+    let error = "Power Plant could not recover a commit transaction.";
+    let Some(project) = state.projects.get(&run.project_id) else {
+        return Err(error);
+    };
+    let Some(agent) = state.agents.get(&run.agent_id) else {
+        return Err(error);
+    };
+    let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
+        return Err(error);
+    };
+    if !grant.access.is_writable()
+        || !project.host_path_is_available()
+        || crate::workflows::artefacts::inspect_supported_worktree(&project.host_path).is_err()
+    {
+        return Err(error);
+    }
+    Ok(project.host_path)
+}
+
 pub(crate) fn recover_commit_transactions(state: &AppState) -> Result<(), &'static str> {
     for run in state.workflow_runs.active_runs() {
         let Some(attempt_id) = run.active_attempt() else {
@@ -2687,17 +2735,7 @@ pub(crate) fn recover_commit_transactions(state: &AppState) -> Result<(), &'stat
         let Some(transaction) = attempt.commit_transaction.clone() else {
             continue;
         };
-        let Some(agent) = state.agents.get(&run.agent_id) else {
-            return Err("Power Plant could not recover a commit transaction.");
-        };
-        let Some(project) = agent
-            .directories
-            .iter()
-            .find(|directory| directory.alias == agent.primary_directory)
-            .map(|directory| directory.host_path.clone())
-        else {
-            return Err("Power Plant could not recover a commit transaction.");
-        };
+        let project = recovery_project_path(state, &run)?;
         if current_reference(&project).ok().as_deref() != Some(&transaction.expected_reference) {
             return Err("Power Plant could not recover a commit transaction.");
         }

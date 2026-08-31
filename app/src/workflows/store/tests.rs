@@ -31,7 +31,7 @@ fn run_named(name: &str, created_at_ms: u64) -> WorkflowRun {
 fn run_with_id(name: &str, id: RunId, created_at_ms: u64) -> WorkflowRun {
     let definition = definition(name);
     let environments = crate::workflows::test_environment_set(&definition);
-    WorkflowRun::create(
+    WorkflowRun::create_for_test(
         id,
         created_at_ms,
         crate::agents::AgentId::generate().expect("agent"),
@@ -48,7 +48,7 @@ fn a_pinned_version_one_definition_survives_a_source_edit() {
     let version = first.version();
     let environments = crate::workflows::test_environment_set(&first);
     let run = store
-        .create(WorkflowRun::create(
+        .create(WorkflowRun::create_for_test(
             RunId::generate().expect("run"),
             1,
             crate::agents::AgentId::generate().expect("agent"),
@@ -80,7 +80,7 @@ fn summaries_keep_the_newest_fifty_runs() {
     let mut created = Vec::new();
     for created_at_ms in 1..=BROWSER_SUMMARY_LIMIT as u64 + 1 {
         let run = store
-            .create(WorkflowRun::create(
+            .create(WorkflowRun::create_for_test(
                 RunId::generate().expect("run"),
                 created_at_ms,
                 crate::agents::AgentId::generate().expect("agent"),
@@ -398,4 +398,67 @@ fn owner_only_permissions_cover_the_run_directory() {
         let mode = fs::metadata(&runs).expect("meta").permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
     }
+}
+
+#[test]
+fn summaries_include_project_identity() {
+    let store = WorkflowRunStore::in_memory();
+    let project_id = crate::projects::ProjectId::generate().expect("project");
+    let definition = definition("Named");
+    let environments = crate::workflows::test_environment_set(&definition);
+    let run = store
+        .create(WorkflowRun::create(
+            RunId::generate().expect("run"),
+            1,
+            project_id,
+            crate::agents::AgentId::generate().expect("agent"),
+            crate::workflows::RunKind::Configured,
+            crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
+            environments,
+        ))
+        .expect("create");
+    let summaries = store.summaries();
+    assert_eq!(summaries[0].id, run.id);
+    assert_eq!(summaries[0].project_id, project_id);
+}
+
+#[test]
+fn an_old_run_schema_fails_startup() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
+    let run = store.create(run_named("Named", 1)).expect("create");
+    let path = dir.path().join(format!("{}.json", run.id.as_hex()));
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
+    value["record-version"] = serde_json::json!(1);
+    value.as_object_mut().expect("object").remove("project-id");
+    value.as_object_mut().expect("object").remove("kind");
+    fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
+    assert_eq!(
+        WorkflowRunStore::open(dir.path().to_path_buf()).err(),
+        Some(StoreError::Corrupt)
+    );
+}
+
+#[test]
+fn a_capability_record_without_agent_revision_fails_startup() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
+    let run = store.create(run_named("Named", 1)).expect("create");
+    let attempt = AttemptId::generate().expect("attempt");
+    store
+        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
+        .expect("start");
+    let path = dir.path().join(format!("{}.json", run.id.as_hex()));
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
+    value["attempts"][0]["capabilities"]
+        .as_object_mut()
+        .expect("capabilities")
+        .remove("agent-revision");
+    fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
+    assert_eq!(
+        WorkflowRunStore::open(dir.path().to_path_buf()).err(),
+        Some(StoreError::Corrupt)
+    );
 }

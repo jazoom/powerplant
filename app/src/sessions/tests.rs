@@ -32,7 +32,7 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
 
     let definition = crate::workflows::definition::test_named_definition(name);
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create(
+    let mut run = crate::workflows::WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         1,
         AgentId::generate().expect("agent"),
@@ -45,7 +45,11 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
     let continuation = crate::workflows::WorkflowJob {
         run_id,
         session_id: session,
+        project_id: crate::projects::ProjectId::generate().expect("project"),
         agent_id: AgentId::generate().expect("agent"),
+        agent_revision: 1,
+        grant_alias: "project".to_owned(),
+        grant_access: crate::agents::AccessMode::ReadWrite,
         connection: ProviderConnection::with_key(ProviderKind::Xai, "key", "model"),
         host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
         turns: Vec::new(),

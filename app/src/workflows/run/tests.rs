@@ -79,7 +79,7 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
 fn new_run() -> WorkflowRun {
     let definition = definition();
     let environments = crate::workflows::test_environment_set(&definition);
-    WorkflowRun::create(
+    WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -226,7 +226,7 @@ fn completed_fixing_review_run() -> WorkflowRun {
     )
     .expect("definition");
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create(
+    let mut run = WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -439,7 +439,7 @@ fn mutations_after_a_terminal_state_are_rejected() {
 fn completed_attempts_advance_by_vector_position() {
     let definition = two_step(true);
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create(
+    let mut run = WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -567,7 +567,7 @@ fn review_loop_run() -> WorkflowRun {
 
 fn review_run(definition: WorkflowDefinition) -> WorkflowRun {
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create(
+    let mut run = WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -990,7 +990,7 @@ fn durable_commit_transactions_preserve_every_review_reference() {
 }
 
 #[test]
-fn version_one_run_records_round_trip() {
+fn version_two_run_records_round_trip() {
     let mut run = new_run();
     let attempt = start(&mut run);
     complete(&mut run, attempt, 12);
@@ -1017,20 +1017,73 @@ fn version_one_run_records_round_trip() {
 }
 
 #[test]
-fn version_one_run_json_omits_the_transition_array() {
+fn version_two_run_json_omits_the_transition_array() {
     let mut run = new_run();
     let attempt = start(&mut run);
     complete(&mut run, attempt, 12);
     let value = serde_json::to_value(run.to_file()).expect("json");
-    assert_eq!(value["record-version"], 1);
+    assert_eq!(value["record-version"], 2);
+    assert_eq!(value["kind"], "configured");
+    assert!(value.get("project-id").is_some());
     assert!(value.get("transitions").is_none());
     assert!(value["attempts"][0].get("review-route").is_none());
 }
 
 #[test]
 fn obsolete_run_record_versions_are_rejected() {
+    for version in [1, 3] {
+        let mut file = new_run().to_file();
+        file.record_version = version;
+        assert_eq!(
+            WorkflowRun::from_file(file).err(),
+            Some(super::RunRecordError::Corrupt)
+        );
+    }
+}
+
+#[test]
+fn project_identity_and_run_kind_round_trip() {
+    for kind in [super::RunKind::Configured, super::RunKind::QuickTask] {
+        let project_id = crate::projects::ProjectId::generate().expect("project");
+        let definition = definition();
+        let environments = crate::workflows::test_environment_set(&definition);
+        let run = WorkflowRun::create(
+            RunId::generate().expect("run"),
+            10,
+            project_id,
+            crate::agents::AgentId::generate().expect("agent"),
+            kind,
+            PinnedWorkflowDefinition::pin(None, definition),
+            environments,
+        );
+        let loaded = WorkflowRun::from_file(run.to_file()).expect("load");
+        assert_eq!(loaded.project_id, project_id);
+        assert_eq!(loaded.kind, kind);
+    }
+}
+
+#[test]
+fn missing_or_unknown_project_identity_fails_load() {
     let mut file = new_run().to_file();
-    file.record_version = 3;
+    file.project_id = "not-a-project-id".to_owned();
+    assert_eq!(
+        WorkflowRun::from_file(file).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+    let mut file = new_run().to_file();
+    file.kind = "chat".to_owned();
+    assert_eq!(
+        WorkflowRun::from_file(file).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
+fn obsolete_capability_schemas_are_rejected() {
+    let mut run = new_run();
+    let _attempt = start(&mut run);
+    let mut file = run.to_file();
+    file.attempts[0].capabilities.schema = 1;
     assert_eq!(
         WorkflowRun::from_file(file).err(),
         Some(super::RunRecordError::Corrupt)
@@ -1097,7 +1150,7 @@ fn snapshot_contradictions_fail_load() {
 
     let definition = two_step(true);
     let environments = crate::workflows::test_environment_set(&definition);
-    let mut missing_predecessor = WorkflowRun::create(
+    let mut missing_predecessor = WorkflowRun::create_for_test(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),

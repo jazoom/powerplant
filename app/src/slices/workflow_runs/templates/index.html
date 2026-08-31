@@ -25,6 +25,18 @@
               class="link link-hover font-medium"
               >{{ run.name }}</a
             >
+            {% if run.project_href != "" %}
+              <p class="text-sm">
+                <a
+                  href="{{ run.project_href }}"
+                  data-graft
+                  class="link link-hover"
+                  >{{ run.project_name }}</a
+                >
+              </p>
+            {% else if run.project_name != "" %}
+              <p class="text-sm">{{ run.project_name }}</p>
+            {% endif %}
             {% if run.uncatalogued %}
               <p class="text-quiet text-xs">Uncatalogued definition</p>
             {% endif %}

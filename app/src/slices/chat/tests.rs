@@ -90,6 +90,11 @@ async fn connected(state: &AppState) -> String {
             primary_directory: "project".to_owned(),
         })
         .expect("agent");
+    let host = state.agents.list()[0].directories[0].host_path.clone();
+    state
+        .projects
+        .create("Test project".to_owned(), host)
+        .expect("project");
     state
         .scratch
         .lock()
@@ -1424,6 +1429,13 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
         })
         .expect("second agent");
     state
+        .projects
+        .create(
+            "Reader project".to_owned(),
+            second.directories[0].host_path.clone(),
+        )
+        .expect("second project");
+    state
         .scratch
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1599,6 +1611,10 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
     let run = &state.workflow_runs.summaries()[0];
     assert_eq!(run.workflow_id, Some(record.id));
     assert_eq!(run.version, record.definition_version);
+    assert_eq!(run.project_id, state.projects.list()[0].id);
+    let stored = state.workflow_runs.get(&run.id).expect("run");
+    assert_eq!(stored.kind, crate::workflows::RunKind::Configured);
+    assert_eq!(stored.project_id, run.project_id);
     state
         .workflows
         .update(

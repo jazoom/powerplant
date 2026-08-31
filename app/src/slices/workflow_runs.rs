@@ -29,7 +29,7 @@ async fn index(
     _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    let view = RunIndexView::from_summaries(&state.workflow_runs.summaries());
+    let view = RunIndexView::from_summaries(&state.workflow_runs.summaries(), &state.projects);
     match graft {
         PageGraft::Document => {
             let mut response =
@@ -57,7 +57,8 @@ async fn detail(
     let Some(run) = state.workflow_runs.get(&id) else {
         return Ok(responses::graft_redirect(graft, "/runs"));
     };
-    let view = RunDetailView::from_run(&run, &state.workflows, &state.environments);
+    let view =
+        RunDetailView::from_run(&run, &state.workflows, &state.environments, &state.projects);
     match graft {
         GraftRequest::Document => {
             let mut response =

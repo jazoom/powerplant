@@ -159,6 +159,13 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
         })
         .expect("agent");
     state
+        .projects
+        .create(
+            "Connect project".to_owned(),
+            record.directories[0].host_path.clone(),
+        )
+        .expect("project");
+    state
         .scratch
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

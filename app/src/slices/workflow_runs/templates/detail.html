@@ -15,6 +15,15 @@
               {{ name }}
             {% endif %}
           </h1>
+          {% if project_href != "" %}
+            <p class="mt-1 text-sm">
+              <a href="{{ project_href }}" data-graft class="link link-hover"
+                >{{ project_name }}</a
+              >
+            </p>
+          {% else if project_name != "" %}
+            <p class="mt-1 text-sm">{{ project_name }}</p>
+          {% endif %}
           {% if catalogue_note != "" %}
             <p class="text-quiet mt-1 text-sm">{{ catalogue_note }}</p>
           {% endif %}

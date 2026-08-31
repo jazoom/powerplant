@@ -7,12 +7,14 @@ use std::sync::{Mutex, MutexGuard};
 use super::definition::DefinitionVersion;
 use super::id::{RunId, WorkflowId};
 use super::run::{AttemptRecord, RunRecordError, WorkflowRun, now_ms};
+use crate::projects::ProjectId;
 
 pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RunSummary {
     pub(crate) id: RunId,
+    pub(crate) project_id: ProjectId,
     pub(crate) workflow_id: Option<WorkflowId>,
     pub(crate) name: String,
     pub(crate) version: DefinitionVersion,
@@ -175,6 +177,7 @@ impl WorkflowRunStore {
 fn summary_of(run: &WorkflowRun) -> RunSummary {
     RunSummary {
         id: run.id,
+        project_id: run.project_id,
         workflow_id: run.pinned.workflow_id,
         name: run.pinned.definition.name().to_owned(),
         version: run.pinned.version,
