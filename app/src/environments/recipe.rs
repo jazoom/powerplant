@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 
 use microsandbox::sandbox::{IntoImage, RootfsSource};
 
+use crate::hex;
+
 pub(crate) const MAXIMUM_NAME_BYTES: usize = 80;
 pub(crate) const MAXIMUM_IMAGE_BYTES: usize = 512;
 pub(crate) const MAXIMUM_SCRIPT_BYTES: usize = 65_536;
@@ -110,23 +112,11 @@ impl EnvironmentRecipeVersion {
     }
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
-        if value.len() != 64 {
-            return None;
-        }
-        let mut bytes = [0u8; 32];
-        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-            bytes[index] = decode_hex_byte(chunk[0], chunk[1])?;
-        }
-        Some(Self(bytes))
+        hex::decode(value).map(Self)
     }
 
     pub(crate) fn as_hex(&self) -> String {
-        let mut out = String::with_capacity(64);
-        for byte in self.0 {
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-        out
+        hex::encode(&self.0)
     }
 
     pub(crate) fn as_digest(&self) -> String {
@@ -152,8 +142,6 @@ struct RecipeCanonical<'a> {
     oci_image: &'a str,
     setup_script: &'a str,
 }
-
-const HEX: &[u8; 16] = b"0123456789abcdef";
 
 pub(crate) fn normalise_name(raw: &str) -> Result<String, RecipeError> {
     let name = raw.trim();
@@ -183,18 +171,6 @@ fn has_disk_image_extension(value: &str) -> bool {
         || lowered.ends_with(".raw")
         || lowered.ends_with(".vmdk")
         || lowered.ends_with(".img")
-}
-
-fn decode_hex_byte(high: u8, low: u8) -> Option<u8> {
-    Some((decode_hex_nibble(high)? << 4) | decode_hex_nibble(low)?)
-}
-
-fn decode_hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

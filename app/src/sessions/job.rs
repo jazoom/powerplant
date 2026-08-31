@@ -11,11 +11,11 @@ use rand::rand_core::TryRng;
 use rand::rngs::SysRng;
 use tokio::sync::Notify;
 
+use crate::hex;
 use crate::workflows::RunId;
 
+#[cfg(test)]
 pub(crate) const JOB_ID_LENGTH: usize = 32;
-
-const HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct JobId([u8; 16]);
@@ -30,23 +30,11 @@ impl JobId {
     }
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
-        if value.len() != JOB_ID_LENGTH {
-            return None;
-        }
-        let mut bytes = [0u8; 16];
-        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-            bytes[index] = decode_hex_byte(chunk[0], chunk[1])?;
-        }
-        Some(Self(bytes))
+        hex::decode(value).map(Self)
     }
 
     pub(crate) fn as_hex(&self) -> String {
-        let mut out = String::with_capacity(JOB_ID_LENGTH);
-        for byte in self.0 {
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-        out
+        hex::encode(&self.0)
     }
 }
 
@@ -381,17 +369,5 @@ impl Job {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-}
-
-fn decode_hex_byte(high: u8, low: u8) -> Option<u8> {
-    Some((decode_hex_nibble(high)? << 4) | decode_hex_nibble(low)?)
-}
-
-fn decode_hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
     }
 }

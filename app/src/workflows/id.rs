@@ -1,9 +1,10 @@
 use rand::rand_core::TryRng;
 use rand::rngs::SysRng;
 
-pub(crate) const WORKFLOW_ID_LENGTH: usize = 32;
+use crate::hex;
 
-const HEX: &[u8; 16] = b"0123456789abcdef";
+#[cfg(test)]
+pub(crate) const WORKFLOW_ID_LENGTH: usize = 32;
 
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct HexId([u8; 16]);
@@ -18,23 +19,11 @@ impl HexId {
     }
 
     fn parse(value: &str) -> Option<Self> {
-        if value.len() != WORKFLOW_ID_LENGTH {
-            return None;
-        }
-        let mut bytes = [0u8; 16];
-        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-            bytes[index] = decode_hex_byte(chunk[0], chunk[1])?;
-        }
-        Some(Self(bytes))
+        hex::decode(value).map(Self)
     }
 
     fn as_hex(&self) -> String {
-        let mut out = String::with_capacity(WORKFLOW_ID_LENGTH);
-        for byte in self.0 {
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-        out
+        hex::encode(&self.0)
     }
 }
 
@@ -118,18 +107,6 @@ impl std::fmt::Display for IdError {
 }
 
 impl std::error::Error for IdError {}
-
-fn decode_hex_byte(high: u8, low: u8) -> Option<u8> {
-    Some((decode_hex_nibble(high)? << 4) | decode_hex_nibble(low)?)
-}
-
-fn decode_hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
-    }
-}
 
 #[cfg(test)]
 mod tests;

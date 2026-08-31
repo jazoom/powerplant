@@ -5,6 +5,7 @@ mod assets;
 mod config;
 mod environments;
 mod error;
+mod hex;
 mod markdown;
 mod models;
 mod plan_login;
