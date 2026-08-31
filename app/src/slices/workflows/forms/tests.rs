@@ -1,4 +1,4 @@
-use super::{FormError, FormIntent, WorkflowFormState, can_move_step};
+use super::{FormError, FormIntent, WorkflowFormState, can_move_step, can_remove_step};
 
 fn pair(key: &str, value: &str) -> (String, String) {
     (key.to_owned(), value.to_owned())
@@ -19,10 +19,7 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("step_0_key", "work-on-task"),
         pair("step_0_name", "Work on task"),
         pair("step_0_action", "agent"),
-        pair("step_0_exit", "normal"),
-        pair("step_0_report-output", ""),
-        pair("step_0_revision-target", ""),
-        pair("step_0_attempt-limit", "3"),
+        pair("step_0_review-policy", "none"),
         pair("step_0_role", "coding-agent"),
         pair("step_0_candidate-access", "edit-candidate"),
         pair("step_0_tool_list", "on"),
@@ -51,7 +48,7 @@ fn review_pairs() -> Vec<(String, String)> {
         pair("step_1_key", "review"),
         pair("step_1_name", "Review"),
         pair("step_1_action", "agent"),
-        pair("step_1_exit", "review-verdict"),
+        pair("step_1_review-policy", "review-verdict"),
         pair("step_1_report-output", "review"),
         pair("step_1_revision-target", "work-on-task"),
         pair("step_1_attempt-limit", "3"),
@@ -259,20 +256,67 @@ fn add_role_preserves_incomplete_fields() {
 }
 
 #[test]
-fn review_fields_are_required_and_bounded() {
-    for missing in [
-        "step_0_exit",
-        "step_0_report-output",
-        "step_0_revision-target",
-        "step_0_attempt-limit",
-    ] {
+fn review_policy_values_are_strict_and_bounded() {
+    let mut missing_policy = valid_pairs();
+    missing_policy.retain(|(key, _)| key != "step_0_review-policy");
+    assert_eq!(
+        WorkflowFormState::parse(missing_policy).err(),
+        Some(FormError::MissingField)
+    );
+
+    for value in ["normal", "conditional", "graph", ""] {
         let mut pairs = valid_pairs();
-        pairs.retain(|(key, _)| key != missing);
+        pairs
+            .iter_mut()
+            .find(|(key, _)| key == "step_0_review-policy")
+            .expect("policy")
+            .1 = value.to_owned();
         assert_eq!(
             WorkflowFormState::parse(pairs).err(),
-            Some(FormError::MissingField)
+            Some(FormError::ReviewPolicy)
         );
     }
+
+    let mut stale_details_on_none = valid_pairs();
+    stale_details_on_none.extend([
+        pair("step_0_report-output", "review"),
+        pair("step_0_revision-target", "work-on-task"),
+        pair("step_0_attempt-limit", "3"),
+    ]);
+    let (form, _) = WorkflowFormState::parse(stale_details_on_none).expect("remove policy");
+    assert!(form.steps[0].review_policy.is_none());
+
+    let mut partial_review = review_pairs();
+    partial_review.retain(|(key, _)| key != "step_1_attempt-limit");
+    assert_eq!(
+        WorkflowFormState::parse(partial_review).err(),
+        Some(FormError::MissingField)
+    );
+
+    let mut omitted_review_details = review_pairs();
+    omitted_review_details.retain(|(key, _)| {
+        key != "step_1_report-output"
+            && key != "step_1_revision-target"
+            && key != "step_1_attempt-limit"
+    });
+    let (form, _) = WorkflowFormState::parse(omitted_review_details).expect("parse");
+    let errors = form.to_definition().expect_err("details");
+    assert!(!errors.steps[1].report_output.is_empty());
+
+    let mut update_policy = review_pairs();
+    update_policy[0] = pair("intent", "update-review-policy:1");
+    update_policy.retain(|(key, _)| {
+        key != "step_1_report-output"
+            && key != "step_1_revision-target"
+            && key != "step_1_attempt-limit"
+    });
+    let (mut form, intent) = WorkflowFormState::parse(update_policy).expect("update policy");
+    assert_eq!(intent, FormIntent::UpdateReviewPolicy(1));
+    form.apply(intent).expect("apply policy");
+    let policy = form.steps[1].review_policy.as_ref().expect("review policy");
+    assert!(policy.report_output.is_empty());
+    assert!(policy.revision_target.is_empty());
+    assert_eq!(policy.attempt_limit, "3");
 
     for limit in ["0", "9", "-1", "many"] {
         let mut pairs = review_pairs();
@@ -288,19 +332,6 @@ fn review_fields_are_required_and_bounded() {
                 .is_empty()
         );
     }
-
-    let mut unknown_exit = valid_pairs();
-    unknown_exit
-        .iter_mut()
-        .find(|(key, _)| key == "step_0_exit")
-        .expect("exit")
-        .1 = "conditional".to_owned();
-    let (form, _) = WorkflowFormState::parse(unknown_exit).expect("parse");
-    assert!(
-        !form.to_definition().expect_err("exit").steps[0]
-            .exit
-            .is_empty()
-    );
 
     let mut stale_target = review_pairs();
     stale_target
@@ -320,7 +351,12 @@ fn step_moves_preserve_review_targets_or_fail() {
     let (mut form, _) = WorkflowFormState::parse(review_pairs()).expect("parse");
     form.to_definition().expect("valid review loop");
     let original_keys: Vec<_> = form.steps.iter().map(|step| step.key.clone()).collect();
-    let revision_target = form.steps[1].revision_target.clone();
+    let revision_target = form.steps[1]
+        .review_policy
+        .as_ref()
+        .expect("review policy")
+        .revision_target
+        .clone();
 
     assert!(!can_move_step(&form.steps, 1, true));
     assert_eq!(
@@ -334,14 +370,61 @@ fn step_moves_preserve_review_targets_or_fail() {
             .collect::<Vec<_>>(),
         original_keys
     );
-    assert_eq!(form.steps[1].exit, "review-verdict");
-    assert_eq!(form.steps[1].revision_target, revision_target);
+    assert_eq!(
+        form.steps[1]
+            .review_policy
+            .as_ref()
+            .expect("review policy")
+            .revision_target,
+        revision_target
+    );
 
     let mut trailing = form.steps[0].clone();
     trailing.key = "trailing".to_owned();
+    trailing.review_policy = None;
     form.steps.push(trailing);
     assert!(can_move_step(&form.steps, 1, false));
     form.apply(FormIntent::MoveStepDown(1)).expect("valid move");
-    assert_eq!(form.steps[2].exit, "review-verdict");
-    assert_eq!(form.steps[2].revision_target, "work-on-task");
+    assert_eq!(
+        form.steps[2]
+            .review_policy
+            .as_ref()
+            .expect("review policy")
+            .revision_target,
+        "work-on-task"
+    );
+}
+
+#[test]
+fn step_removals_preserve_review_targets_or_fail() {
+    let (mut form, _) = WorkflowFormState::parse(review_pairs()).expect("parse");
+    let original_keys: Vec<_> = form.steps.iter().map(|step| step.key.clone()).collect();
+
+    assert!(!can_remove_step(&form.steps, 0));
+    assert_eq!(
+        form.apply(FormIntent::RemoveStep(0)),
+        Err(FormError::ReviewTarget)
+    );
+    assert_eq!(
+        form.steps
+            .iter()
+            .map(|step| step.key.clone())
+            .collect::<Vec<_>>(),
+        original_keys
+    );
+    assert_eq!(
+        form.steps[1]
+            .review_policy
+            .as_ref()
+            .expect("review policy")
+            .revision_target,
+        "work-on-task"
+    );
+
+    assert!(can_remove_step(&form.steps, 1));
+    form.apply(FormIntent::RemoveStep(1))
+        .expect("remove review step");
+    assert_eq!(form.steps.len(), 1);
+    assert_eq!(form.steps[0].key, "work-on-task");
+    assert!(form.steps[0].review_policy.is_none());
 }

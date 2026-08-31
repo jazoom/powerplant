@@ -80,10 +80,7 @@ fn create_body(environment_id: crate::environments::EnvironmentId) -> String {
         "step_0_key=work-on-task",
         "step_0_name=Work+on+task",
         "step_0_action=agent",
-        "step_0_exit=normal",
-        "step_0_report-output=",
-        "step_0_revision-target=",
-        "step_0_attempt-limit=3",
+        "step_0_review-policy=none",
         "step_0_role=coding-agent",
         "step_0_candidate-access=edit-candidate",
         "step_0_tool_list=on",
@@ -96,6 +93,61 @@ fn create_body(environment_id: crate::environments::EnvironmentId) -> String {
         "step_0_output_1_kind=candidate-revision",
     ]
     .join("&")
+}
+
+fn review_body(
+    environment_id: crate::environments::EnvironmentId,
+    revision: Option<u64>,
+) -> String {
+    let environment = format!("default-environment={}", environment_id.as_hex());
+    let mut fields = vec![
+        "intent=save".to_owned(),
+        "name=Review+loop".to_owned(),
+        environment,
+        "role_0_key=coding-agent".to_owned(),
+        "role_0_name=Coding+agent".to_owned(),
+        "role_0_expertise=".to_owned(),
+        "role_0_prompt=".to_owned(),
+        "role_1_key=reviewer".to_owned(),
+        "role_1_name=Reviewer".to_owned(),
+        "role_1_expertise=".to_owned(),
+        "role_1_prompt=".to_owned(),
+        "step_0_key=work-on-task".to_owned(),
+        "step_0_name=Work+on+task".to_owned(),
+        "step_0_action=agent".to_owned(),
+        "step_0_review-policy=none".to_owned(),
+        "step_0_role=coding-agent".to_owned(),
+        "step_0_candidate-access=edit-candidate".to_owned(),
+        "step_0_tool_list=on".to_owned(),
+        "step_0_input_0_key=candidate".to_owned(),
+        "step_0_input_0_kind=candidate-revision".to_owned(),
+        "step_0_input_0_source=run-current-candidate".to_owned(),
+        "step_0_output_0_key=assistant-reply".to_owned(),
+        "step_0_output_0_kind=assistant-reply".to_owned(),
+        "step_0_output_1_key=candidate".to_owned(),
+        "step_0_output_1_kind=candidate-revision".to_owned(),
+        "step_1_key=review".to_owned(),
+        "step_1_name=Review".to_owned(),
+        "step_1_action=agent".to_owned(),
+        "step_1_review-policy=review-verdict".to_owned(),
+        "step_1_report-output=review".to_owned(),
+        "step_1_revision-target=work-on-task".to_owned(),
+        "step_1_attempt-limit=3".to_owned(),
+        "step_1_role=reviewer".to_owned(),
+        "step_1_candidate-access=read-only".to_owned(),
+        "step_1_tool_list=on".to_owned(),
+        "step_1_input_0_key=candidate".to_owned(),
+        "step_1_input_0_kind=candidate-revision".to_owned(),
+        "step_1_input_0_source=run-current-candidate".to_owned(),
+        "step_1_output_0_key=assistant-reply".to_owned(),
+        "step_1_output_0_kind=assistant-reply".to_owned(),
+        "step_1_output_1_key=review".to_owned(),
+        "step_1_output_1_kind=review-report".to_owned(),
+    ];
+    if let Some(revision) = revision {
+        fields.push(format!("revision={revision}"));
+    }
+    fields.join("&")
 }
 
 #[tokio::test]
@@ -189,6 +241,38 @@ async fn create_redirects_to_configuration() {
     assert!(location.starts_with("/workflows/"));
     assert!(location.ends_with("/configuration"));
     assert_eq!(state.workflows.list()[0].definition.name(), "One step");
+}
+
+#[tokio::test]
+async fn create_rejects_a_malformed_review_policy() {
+    let state = test_state();
+    let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
+    let body = create_body(environment)
+        .replace("step_0_review-policy=none", "step_0_review-policy=normal");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("malformed policy");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"workflow-form\""));
+    assert!(text.contains("That review policy is not valid."));
+    assert!(state.workflows.list().is_empty());
 }
 
 #[tokio::test]
@@ -290,6 +374,90 @@ async fn stale_updates_return_conflict() {
         .await
         .expect("stale");
     assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn edit_saves_a_review_policy() {
+    let state = test_state();
+    let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
+    let record = state
+        .workflows
+        .create(one_agent_definition(environment))
+        .expect("create");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/workflows/{}/configuration", record.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(review_body(environment, Some(record.revision))))
+                .unwrap(),
+        )
+        .await
+        .expect("edit");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"workflow-form\""));
+    let updated = state.workflows.get(&record.id).expect("updated");
+    assert_eq!(updated.definition.name(), "Review loop");
+    assert_eq!(updated.definition.steps().len(), 2);
+    assert!(updated.definition.steps()[0].review.is_none());
+    let policy = updated.definition.steps()[1]
+        .review
+        .as_ref()
+        .expect("policy");
+    assert_eq!(policy.report_output.as_str(), "review");
+    assert_eq!(policy.revision_target.as_str(), "work-on-task");
+    assert_eq!(policy.attempt_limit, 3);
+}
+
+#[tokio::test]
+async fn edit_rejects_a_malformed_review_policy() {
+    let state = test_state();
+    let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
+    let record = state
+        .workflows
+        .create(one_agent_definition(environment))
+        .expect("create");
+    let body = format!(
+        "{}&revision={}",
+        create_body(environment).replace(
+            "step_0_review-policy=none",
+            "step_0_review-policy=conditional",
+        ),
+        record.revision
+    );
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/workflows/{}/configuration", record.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("malformed policy");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"workflow-form\""));
+    assert!(text.contains("That review policy is not valid."));
+    let stored = state.workflows.get(&record.id).expect("unchanged");
+    assert_eq!(stored.definition.name(), "One agent");
+    assert_eq!(stored.revision, record.revision);
 }
 
 #[tokio::test]

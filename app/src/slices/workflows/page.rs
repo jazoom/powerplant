@@ -6,7 +6,9 @@ use crate::agents::ToolId;
 use crate::workflows::WorkflowRecord;
 use crate::workflows::definition::{MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS};
 
-use super::forms::{FormErrors, RoleDraft, StepDraft, WorkflowFormState, can_move_step};
+use super::forms::{
+    FormErrors, RoleDraft, StepDraft, WorkflowFormState, can_move_step, can_remove_step,
+};
 
 pub(super) struct EnvironmentOption {
     pub(super) id: String,
@@ -92,6 +94,16 @@ pub(super) struct OutputRow {
     pub(super) can_remove: bool,
 }
 
+pub(super) struct ReviewPolicyRow {
+    pub(super) report_output: String,
+    pub(super) report_output_error: &'static str,
+    pub(super) revision_target: String,
+    pub(super) revision_target_error: &'static str,
+    pub(super) attempt_limit: String,
+    pub(super) attempt_limit_error: &'static str,
+    pub(super) revision_options: Vec<SourceOption>,
+}
+
 pub(super) struct RoleRow {
     pub(super) index: usize,
     pub(super) key: String,
@@ -140,15 +152,8 @@ pub(super) struct StepRow {
     pub(super) outputs: Vec<OutputRow>,
     pub(super) can_add_output: bool,
     pub(super) transition: &'static str,
-    pub(super) exit: String,
-    pub(super) exit_error: &'static str,
-    pub(super) report_output: String,
-    pub(super) report_output_error: &'static str,
-    pub(super) revision_target: String,
-    pub(super) revision_target_error: &'static str,
-    pub(super) attempt_limit: String,
-    pub(super) attempt_limit_error: &'static str,
-    pub(super) revision_options: Vec<SourceOption>,
+    pub(super) review_policy: Option<ReviewPolicyRow>,
+    pub(super) review_policy_error: &'static str,
     pub(super) can_review_gate: bool,
     pub(super) phase: usize,
     pub(super) can_move_up: bool,
@@ -516,31 +521,32 @@ fn step_row(
         } else {
             "Complete run"
         },
-        exit: step.exit.clone(),
-        exit_error: errors.exit,
-        report_output: step.report_output.clone(),
-        report_output_error: errors.report_output,
-        revision_target: step.revision_target.clone(),
-        revision_target_error: errors.revision_target,
-        attempt_limit: step.attempt_limit.clone(),
-        attempt_limit_error: errors.attempt_limit,
-        revision_options: earlier
-            .iter()
-            .map(|item| SourceOption {
-                value: item.key.clone(),
-                label: item.name.clone(),
-                selected: item.key == step.revision_target,
-            })
-            .collect(),
+        review_policy: step.review_policy.as_ref().map(|policy| ReviewPolicyRow {
+            report_output: policy.report_output.clone(),
+            report_output_error: errors.report_output,
+            revision_target: policy.revision_target.clone(),
+            revision_target_error: errors.revision_target,
+            attempt_limit: policy.attempt_limit.clone(),
+            attempt_limit_error: errors.attempt_limit,
+            revision_options: earlier
+                .iter()
+                .map(|item| SourceOption {
+                    value: item.key.clone(),
+                    label: item.name.clone(),
+                    selected: item.key == policy.revision_target,
+                })
+                .collect(),
+        }),
+        review_policy_error: errors.review_policy,
         can_review_gate: is_agent && !earlier.is_empty(),
         phase: earlier
             .iter()
-            .filter(|item| item.exit == "review-verdict")
+            .filter(|item| item.review_policy.is_some())
             .count()
             + 1,
         can_move_up: can_move_step(steps, index, true),
         can_move_down: can_move_step(steps, index, false),
-        can_remove: count > 1,
+        can_remove: can_remove_step(steps, index),
     }
 }
 

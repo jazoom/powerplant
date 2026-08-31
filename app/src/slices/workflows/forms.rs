@@ -21,6 +21,7 @@ pub(super) enum FormError {
     Sparse,
     Excessive,
     Revision,
+    ReviewPolicy,
     ReviewTarget,
 }
 
@@ -35,6 +36,7 @@ pub(super) enum FormIntent {
     RemoveStep(usize),
     MoveStepUp(usize),
     MoveStepDown(usize),
+    UpdateReviewPolicy(usize),
     AddOutput(usize),
     RemoveOutput { step: usize, output: usize },
     MoveOutputUp { step: usize, output: usize },
@@ -71,6 +73,13 @@ pub(super) struct InputDraft {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ReviewPolicyDraft {
+    pub(super) report_output: String,
+    pub(super) revision_target: String,
+    pub(super) attempt_limit: String,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct StepDraft {
     pub(super) key: String,
     pub(super) name: String,
@@ -83,10 +92,7 @@ pub(super) struct StepDraft {
     pub(super) directories: Vec<DirectoryDraft>,
     pub(super) inputs: Vec<InputDraft>,
     pub(super) outputs: Vec<OutputDraft>,
-    pub(super) exit: String,
-    pub(super) report_output: String,
-    pub(super) revision_target: String,
-    pub(super) attempt_limit: String,
+    pub(super) review_policy: Option<ReviewPolicyDraft>,
 }
 
 #[derive(Clone, Debug)]
@@ -133,7 +139,7 @@ pub(super) struct StepErrors {
     pub(super) role: &'static str,
     pub(super) candidate_access: &'static str,
     pub(super) command: &'static str,
-    pub(super) exit: &'static str,
+    pub(super) review_policy: &'static str,
     pub(super) report_output: &'static str,
     pub(super) revision_target: &'static str,
     pub(super) attempt_limit: &'static str,
@@ -155,6 +161,7 @@ impl FormError {
     pub(super) fn message(self) -> &'static str {
         match self {
             Self::Intent => "That form action is not valid.",
+            Self::ReviewPolicy => "That review policy is not valid.",
             Self::Index => "That form row is not valid.",
             Self::UnknownField => "That form includes an unknown field.",
             Self::DuplicateField => "That form includes a duplicate field.",
@@ -162,7 +169,7 @@ impl FormError {
             Self::Sparse => "That form row is not valid.",
             Self::Excessive => "That form has too many rows.",
             Self::Revision => "Reload the workflow and try again.",
-            Self::ReviewTarget => "That move would invalidate a review revision target.",
+            Self::ReviewTarget => "That action would invalidate a review revision target.",
         }
     }
 }
@@ -214,7 +221,7 @@ impl FormErrors {
                     || !step.role.is_empty()
                     || !step.candidate_access.is_empty()
                     || !step.command.is_empty()
-                    || !step.exit.is_empty()
+                    || !step.review_policy.is_empty()
                     || !step.report_output.is_empty()
                     || !step.revision_target.is_empty()
                     || !step.attempt_limit.is_empty()
@@ -434,11 +441,20 @@ impl WorkflowFormState {
                 if self.steps.len() <= 1 || index >= self.steps.len() {
                     return Err(FormError::Index);
                 }
+                if !can_remove_step(&self.steps, index) {
+                    return Err(FormError::ReviewTarget);
+                }
                 self.steps.remove(index);
                 Ok(())
             }
             FormIntent::MoveStepUp(index) => move_step(&mut self.steps, index, true),
             FormIntent::MoveStepDown(index) => move_step(&mut self.steps, index, false),
+            FormIntent::UpdateReviewPolicy(index) => {
+                if index >= self.steps.len() {
+                    return Err(FormError::Index);
+                }
+                Ok(())
+            }
             FormIntent::AddInput(step) => {
                 if step >= self.steps.len() {
                     return Err(FormError::Index);
@@ -537,8 +553,8 @@ impl WorkflowFormState {
             return Err(errors);
         }
         for (index, (step, draft)) in steps.iter_mut().zip(&self.steps).enumerate() {
-            step.review = if draft.exit == "review-verdict" {
-                let report_output = match OutputKey::parse(&draft.report_output) {
+            step.review = if let Some(policy) = &draft.review_policy {
+                let report_output = match OutputKey::parse(&policy.report_output) {
                     Ok(key) => key,
                     Err(error) => {
                         errors.steps[index].report_output = error.message();
@@ -546,7 +562,7 @@ impl WorkflowFormState {
                         return Err(errors);
                     }
                 };
-                let revision_target = match StepKey::parse(&draft.revision_target) {
+                let revision_target = match StepKey::parse(&policy.revision_target) {
                     Ok(key) => key,
                     Err(error) => {
                         errors.steps[index].revision_target = error.message();
@@ -554,7 +570,7 @@ impl WorkflowFormState {
                         return Err(errors);
                     }
                 };
-                let attempt_limit = match draft.attempt_limit.parse::<u8>() {
+                let attempt_limit = match policy.attempt_limit.parse::<u8>() {
                     Ok(limit)
                         if (crate::workflows::definition::MINIMUM_REVIEW_ATTEMPTS
                             ..=crate::workflows::definition::MAXIMUM_REVIEW_ATTEMPTS)
@@ -574,12 +590,8 @@ impl WorkflowFormState {
                     revision_target,
                     attempt_limit,
                 })
-            } else if draft.exit == "normal" {
-                None
             } else {
-                errors.steps[index].exit = "Choose an exit type.";
-                errors.summary = "Fix the highlighted fields.";
-                return Err(errors);
+                None
             };
         }
         let default_environment =
@@ -642,7 +654,7 @@ enum StepPart {
     Role,
     CandidateAccess,
     Command,
-    Exit,
+    ReviewPolicy,
     ReportOutput,
     RevisionTarget,
     AttemptLimit,
@@ -709,7 +721,7 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("role") => StepPart::Role,
                 Some("candidate-access") => StepPart::CandidateAccess,
                 Some("command") => StepPart::Command,
-                Some("exit") => StepPart::Exit,
+                Some("review-policy") => StepPart::ReviewPolicy,
                 Some("report-output") => StepPart::ReportOutput,
                 Some("revision-target") => StepPart::RevisionTarget,
                 Some("attempt-limit") => StepPart::AttemptLimit,
@@ -806,6 +818,14 @@ fn parse_revision(raw: &str) -> Result<u64, FormError> {
     raw.parse().map_err(|_| FormError::Revision)
 }
 
+fn parse_review_policy(raw: &str) -> Result<bool, FormError> {
+    match raw {
+        "none" => Ok(false),
+        "review-verdict" => Ok(true),
+        _ => Err(FormError::ReviewPolicy),
+    }
+}
+
 fn parse_intent(raw: &str) -> Result<FormIntent, FormError> {
     match raw {
         "save" => Ok(FormIntent::Save),
@@ -826,6 +846,9 @@ fn parse_indexed_intent(raw: &str) -> Result<FormIntent, FormError> {
         "remove-step" if parts.next().is_none() => Ok(FormIntent::RemoveStep(first)),
         "move-step-up" if parts.next().is_none() => Ok(FormIntent::MoveStepUp(first)),
         "move-step-down" if parts.next().is_none() => Ok(FormIntent::MoveStepDown(first)),
+        "update-review-policy" if parts.next().is_none() => {
+            Ok(FormIntent::UpdateReviewPolicy(first))
+        }
         "add-input" if parts.next().is_none() => Ok(FormIntent::AddInput(first)),
         "remove-input" => {
             let input = parse_index(parts.next().ok_or(FormError::Intent)?)?;
@@ -904,7 +927,9 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
     let mut dir_seen = vec![Vec::<usize>::new(); count];
     let mut input_seen = vec![Vec::<usize>::new(); count];
     let mut output_seen = vec![Vec::<usize>::new(); count];
-    let mut review_fields_seen = vec![[false; 4]; count];
+    let mut review_policy = vec![None; count];
+    let mut review_drafts = vec![empty_review_policy(); count];
+    let mut review_detail_seen = vec![[false; 3]; count];
     for (index, part, value) in fields {
         let step = &mut steps[index];
         match part {
@@ -915,21 +940,20 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             StepPart::Role => step.role = value,
             StepPart::CandidateAccess => step.candidate_access = value,
             StepPart::Command => step.command = value,
-            StepPart::Exit => {
-                step.exit = value;
-                review_fields_seen[index][0] = true;
+            StepPart::ReviewPolicy => {
+                review_policy[index] = Some(parse_review_policy(&value)?);
             }
             StepPart::ReportOutput => {
-                step.report_output = value;
-                review_fields_seen[index][1] = true;
+                review_drafts[index].report_output = value;
+                review_detail_seen[index][0] = true;
             }
             StepPart::RevisionTarget => {
-                step.revision_target = value;
-                review_fields_seen[index][2] = true;
+                review_drafts[index].revision_target = value;
+                review_detail_seen[index][1] = true;
             }
             StepPart::AttemptLimit => {
-                step.attempt_limit = value;
-                review_fields_seen[index][3] = true;
+                review_drafts[index].attempt_limit = value;
+                review_detail_seen[index][2] = true;
             }
             StepPart::Tool(tool) => {
                 if is_checked(&value) && !step.tools.contains(&tool) {
@@ -982,10 +1006,19 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             }
         }
     }
-    for (index, step) in steps.iter().enumerate() {
-        if review_fields_seen[index].iter().any(|seen| !seen) {
+    for index in 0..steps.len() {
+        let Some(has_review_policy) = review_policy[index] else {
+            return Err(FormError::MissingField);
+        };
+        let details_present = review_detail_seen[index].iter().any(|seen| *seen);
+        let details_complete = review_detail_seen[index].iter().all(|seen| *seen);
+        if details_present && !details_complete {
             return Err(FormError::MissingField);
         }
+        if has_review_policy {
+            steps[index].review_policy = Some(review_drafts[index].clone());
+        }
+        let step = &steps[index];
         if !dir_seen[index].is_empty() {
             dense_count(dir_seen[index].iter().copied())?;
             if step.directories.len() > MAXIMUM_DIRECTORIES {
@@ -1154,6 +1187,14 @@ fn ensure_action_defaults(steps: &mut [StepDraft]) {
     }
 }
 
+fn empty_review_policy() -> ReviewPolicyDraft {
+    ReviewPolicyDraft {
+        report_output: String::new(),
+        revision_target: String::new(),
+        attempt_limit: "3".to_owned(),
+    }
+}
+
 fn empty_step() -> StepDraft {
     StepDraft {
         key: String::new(),
@@ -1167,10 +1208,7 @@ fn empty_step() -> StepDraft {
         directories: Vec::new(),
         inputs: Vec::new(),
         outputs: Vec::new(),
-        exit: "normal".to_owned(),
-        report_output: String::new(),
-        revision_target: String::new(),
-        attempt_limit: "3".to_owned(),
+        review_policy: None,
     }
 }
 
@@ -1188,10 +1226,7 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         tools: ToolId::ALL.to_vec(),
         directories,
         inputs: vec![input_from_required(&initial_candidate_input())],
-        exit: "normal".to_owned(),
-        report_output: String::new(),
-        revision_target: String::new(),
-        attempt_limit: "3".to_owned(),
+        review_policy: None,
         outputs: vec![
             OutputDraft {
                 key: "assistant-reply".to_owned(),
@@ -1272,20 +1307,11 @@ fn pad_directories(directories: &mut Vec<DirectoryDraft>) {
 }
 
 fn step_from_definition(step: &StepDefinition) -> StepDraft {
-    let (exit, report_output, revision_target, attempt_limit) = match &step.review {
-        Some(policy) => (
-            "review-verdict".to_owned(),
-            policy.report_output.as_str().to_owned(),
-            policy.revision_target.as_str().to_owned(),
-            policy.attempt_limit.to_string(),
-        ),
-        None => (
-            "normal".to_owned(),
-            String::new(),
-            String::new(),
-            "3".to_owned(),
-        ),
-    };
+    let review_policy = step.review.as_ref().map(|policy| ReviewPolicyDraft {
+        report_output: policy.report_output.as_str().to_owned(),
+        revision_target: policy.revision_target.as_str().to_owned(),
+        attempt_limit: policy.attempt_limit.to_string(),
+    });
     match &step.action {
         StepAction::Agent(action) => {
             let mut directories: Vec<DirectoryDraft> = action
@@ -1314,10 +1340,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                     .iter()
                     .map(output_from_required)
                     .collect(),
-                exit: exit.clone(),
-                report_output: report_output.clone(),
-                revision_target: revision_target.clone(),
-                attempt_limit: attempt_limit.clone(),
+                review_policy: review_policy.clone(),
             }
         }
         StepAction::SystemCommand(action) => StepDraft {
@@ -1336,10 +1359,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 .iter()
                 .map(output_from_required)
                 .collect(),
-            exit: exit.clone(),
-            report_output: report_output.clone(),
-            revision_target: revision_target.clone(),
-            attempt_limit: attempt_limit.clone(),
+            review_policy: review_policy.clone(),
         },
         StepAction::HumanGate(action) => StepDraft {
             key: step.key.as_str().to_owned(),
@@ -1353,10 +1373,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             directories: Vec::new(),
             inputs: step.inputs.iter().map(input_from_required).collect(),
             outputs: vec![output_from_required(&action.required_output)],
-            exit,
-            report_output,
-            revision_target,
-            attempt_limit,
+            review_policy,
         },
     }
 }
@@ -1716,6 +1733,15 @@ pub(super) fn can_move_step(steps: &[StepDraft], index: usize, up: bool) -> bool
     review_targets_are_earlier(&moved)
 }
 
+pub(super) fn can_remove_step(steps: &[StepDraft], index: usize) -> bool {
+    if steps.len() <= 1 || index >= steps.len() {
+        return false;
+    }
+    let mut remaining = steps.to_vec();
+    remaining.remove(index);
+    review_targets_are_earlier(&remaining)
+}
+
 fn move_step(steps: &mut [StepDraft], index: usize, up: bool) -> Result<(), FormError> {
     let target = move_target(steps.len(), index, up)?;
     if !can_move_step(steps, index, up) {
@@ -1727,10 +1753,11 @@ fn move_step(steps: &mut [StepDraft], index: usize, up: bool) -> Result<(), Form
 
 fn review_targets_are_earlier(steps: &[StepDraft]) -> bool {
     steps.iter().enumerate().all(|(index, step)| {
-        step.exit != "review-verdict"
-            || steps[..index]
+        step.review_policy.as_ref().is_none_or(|policy| {
+            steps[..index]
                 .iter()
-                .any(|candidate| candidate.key == step.revision_target)
+                .any(|candidate| candidate.key == policy.revision_target)
+        })
     })
 }
 
