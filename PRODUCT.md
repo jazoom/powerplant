@@ -18,7 +18,7 @@ Power Plant is a local coding agent. The user runs a web server on their machine
 
 The Power Plant process stays on the host. It owns model calls, credentials, and sandbox lifecycle. Agent tools run only inside a guest virtual machine.
 
-The product stays local and account-free. The user brings a key or a plan login. The chat surface stays thin.
+The product stays local and account-free. The user brings a key or a plan login. A chat turn starts a workflow run against a project directory.
 
 Success is a project file that an agent changes.
 
@@ -28,7 +28,7 @@ Power Plant is a thin local desk for coding agents. It is not an IDE. It is not 
 
 The user brings the provider key or plan login. Power Plant does not sell model access and does not create an account.
 
-Agents work in sandboxes on the local machine. The chat surface stays a transcript plus composer.
+The user configures agents, environments and workflows on this machine. Agents work in sandboxes on the local machine. The chat surface stays a transcript plus composer.
 
 ## Operating Context
 
@@ -38,15 +38,25 @@ They open that origin in a browser. They add a key or a plan login for a provide
 
 They choose the provider and model in chat. They can keep the provider default.
 
-They choose a project directory. Power Plant bind-mounts that directory into a guest sandbox. Chat runs one built-in coding agent on that sandbox and project.
+They create agents in the local catalogue. Each agent has a name, instructions, tools and host directory grants. One grant is the primary project. Power Plant exposes it at `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`. The primary project directory must be a supported Git worktree.
 
-They send chat turns. Rig streams the model reply on the host. The agent can list, read and write files, run a command, and run git status, diff and commit. Those tools run only in the guest. The transcript shows the reply as HTML. Tool traces appear in the transcript.
+They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. A workflow can use only a ready snapshot.
+
+They create workflow definitions with a default environment, roles and ordered steps. A new installation includes starter workflow definitions. A step can run an agent, a registered system command or a human gate.
+
+They open an agent desk from the catalogue. They choose a workflow and send a chat turn. That turn starts a local run for the selected workflow and primary project.
+
+Each run pins the workflow definition and prepared environments. Run records track attempts, artefact references and human gates. Artefacts store candidate revisions and typed workflow outputs, such as plans, reviews, tests and human decisions.
+
+A human-gate step pauses the run for a decision about an immutable candidate diff. The user can approve the candidate, request a revision or cancel the run. The run list shows the newest fifty runs.
+
+Rig streams model replies on the host. An agent step can use the allowed list, read, write and run tools. Those tools run only in the guest. The transcript shows the reply as HTML. Tool traces appear in the transcript.
 
 Forget removes one provider. The connect page stays available so they can add another provider.
 
 Hypergraft updates page fragments. Ordinary links still work without it.
 
-Browser sessions hold the transcript in memory. Projects, sandboxes, and agent records belong on disk.
+Workflow definitions, agent records, environments, artefacts, and run records persist locally. Browser transcripts remain memory-only.
 
 ## Capabilities and Constraints
 
@@ -56,27 +66,45 @@ Current capabilities:
 - Sign in with a ChatGPT plan or a SuperGrok plan from the connect page.
 - Store more than one provider on the local machine.
 - Choose the provider and model in chat.
+- Create agents in the local catalogue.
+- Edit and delete agents.
+- Grant host directories to each agent.
+- Configure the list, read, write and run tools for each agent.
+- Create environment recipes from an OCI image and a setup script.
+- Edit and delete environment recipes.
+- Prepare environment snapshots for workflow use.
+- Create workflow definitions.
+- Edit and delete workflow definitions.
+- Select a workflow on the chat desk.
 - Send chat turns through Rig.
 - Stream the reply into the transcript as HTML.
-- Choose a project directory and bind-mount it into the sandbox.
-- Run one built-in coding agent on the sandbox and project.
+- Run sandbox-backed workflow steps in isolated guests.
+- Expose the primary project at `/project` during sandbox-backed steps.
+- Expose selected secondary directory grants as read-only context.
 - List, read and write project files in the guest.
 - Run a command in the guest.
-- Run git status, diff and commit in the guest.
+- Store run records, artefacts and human gate decisions on the local machine.
+- Inspect run records and their artefacts.
+- Show the newest fifty runs in the run list.
+- Show a candidate diff at a human gate.
+- Approve a candidate at a human gate.
+- Request a revision at a human gate.
+- Cancel a run at a human gate.
 - Show tool traces in the transcript.
 
 Current constraints:
 
-- Do not create user accounts.
+- The product does not create user accounts.
 - The chat surface stays a transcript plus composer.
-- Tools run only in the guest. The guest does not receive a raw provider key or plan token. Microsandbox secrets inject placeholders. Substitution and outbound network traffic are limited to the selected provider host. Model inference stays on the host through Rig.
-- Do not persist the transcript across process restarts.
-- One chat job runs at a time.
+- Agent tools run only in the guest. The guest does not receive a raw provider key or plan token. Microsandbox secrets inject placeholders. During agent steps, Power Plant limits outbound network access to the selected provider host. System-command steps have no network access. Model inference stays on the host through Rig.
+- Browser transcripts remain memory-only. The product does not persist the transcript across process restarts.
+- One chat job can be active per browser session.
+- One workflow execution can be active process-wide.
 
 Later work:
 
-- Several agents, task boards, and handoffs wait until one agent can change a repository.
-- Custom images, user-supplied tools, persisted run history, and microsandbox cloud wait as well.
+- Task boards
+- Parallel workflow execution
 
 ## Brand Commitments
 
@@ -88,7 +116,7 @@ UI copy uses Australian English. Capitalise only the first letter of a title, bu
 
 There are no testimonials, customers, benchmarks or launch claims. Do not invent them.
 
-The running product has a connect surface and a chat surface. The logo file exists.
+The product has connect, chat, agent, workflow, environment and run surfaces. The logo file exists.
 
 ## Product Principles
 
