@@ -76,7 +76,9 @@ fn create_and_update_persist_and_bump_revision() {
     assert_eq!(created.revision, 1);
     let mut next = draft(dir.path(), "Two");
     next.instructions = "Keep interfaces stable.".to_owned();
-    let updated = store.update(&created.id, next).expect("update");
+    let updated = store
+        .update(&created.id, created.revision, next)
+        .expect("update");
     assert_eq!(updated.revision, 2);
     assert_eq!(updated.name, "Two");
     assert_eq!(
@@ -102,4 +104,40 @@ fn catalogue_count_is_bounded() {
         Some(AgentError::Full)
     );
     drop(dirs);
+}
+
+#[test]
+fn stale_update_preserves_the_latest_record() {
+    let store = AgentStore::in_memory();
+    let dir = tempfile::tempdir().expect("dir");
+    let created = store.create(draft(dir.path(), "One")).expect("create");
+    let updated = store
+        .update(&created.id, created.revision, draft(dir.path(), "Two"))
+        .expect("update");
+    assert_eq!(
+        store
+            .update(&created.id, created.revision, draft(dir.path(), "Three"))
+            .err(),
+        Some(AgentError::Conflict)
+    );
+    let current = store.get(&created.id).expect("current");
+    assert_eq!(current.revision, updated.revision);
+    assert_eq!(current.name, "Two");
+}
+
+#[test]
+fn stale_delete_preserves_the_latest_record() {
+    let store = AgentStore::in_memory();
+    let dir = tempfile::tempdir().expect("dir");
+    let created = store.create(draft(dir.path(), "One")).expect("create");
+    let updated = store
+        .update(&created.id, created.revision, draft(dir.path(), "Two"))
+        .expect("update");
+    assert_eq!(
+        store.delete(&created.id, created.revision).err(),
+        Some(AgentError::Conflict)
+    );
+    let current = store.get(&created.id).expect("current");
+    assert_eq!(current.revision, updated.revision);
+    assert_eq!(current.name, "Two");
 }

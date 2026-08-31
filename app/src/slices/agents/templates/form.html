@@ -19,6 +19,9 @@
         <p>{{ error }}</p>
       </div>
     {% endif %}
+    {% if revision != "" %}
+      <input type="hidden" name="revision" value="{{ revision }}" />
+    {% endif %}
     <label class="flex flex-col gap-1">
       <span class="text-sm">Name</span>
       <input
@@ -115,6 +118,7 @@
   </form>
   {% if show_delete %}
     <form data-graft method="post" action="/agents/{{ agent_id }}/delete">
+      <input type="hidden" name="revision" value="{{ revision }}" />
       <button class="btn btn-error btn-outline btn-sm" type="submit">
         Delete agent
       </button>

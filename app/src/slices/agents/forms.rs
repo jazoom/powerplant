@@ -8,6 +8,8 @@ use crate::agents::{
     MAXIMUM_NAME_BYTES, MAXIMUM_PATH_BYTES, ToolId,
 };
 
+pub(super) const REVISION_MESSAGE: &str = "Reload the agent and try again.";
+
 #[derive(Deserialize)]
 pub(super) struct AgentForm {
     #[serde(default)]
@@ -16,11 +18,17 @@ pub(super) struct AgentForm {
     pub(super) instructions: String,
     #[serde(default)]
     pub(super) primary: String,
+    #[serde(default)]
+    pub(super) revision: String,
     #[serde(flatten)]
     extra: HashMap<String, String>,
 }
 
 impl AgentForm {
+    pub(super) fn revision(&self) -> Result<Option<u32>, &'static str> {
+        parse_revision(&self.revision)
+    }
+
     pub(super) fn draft(&self) -> Result<AgentDraft, AgentError> {
         if self.name.len() > MAXIMUM_NAME_BYTES {
             return Err(AgentError::Name);
@@ -86,6 +94,20 @@ impl AgentForm {
         }
         Ok(grants)
     }
+}
+
+fn parse_revision(raw: &str) -> Result<Option<u32>, &'static str> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    if raw == "0" || (raw.len() > 1 && raw.starts_with('0')) {
+        return Err(REVISION_MESSAGE);
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(REVISION_MESSAGE);
+    }
+    raw.parse().map(Some).map_err(|_| REVISION_MESSAGE)
 }
 
 #[derive(Deserialize)]

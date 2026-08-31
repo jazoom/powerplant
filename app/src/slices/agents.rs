@@ -13,15 +13,15 @@ use axum::{
 use hypergraft::{CommandGraft, GraftRequest, PatchStatus};
 
 use crate::{
-    agents::{AgentId, AgentRecord},
-    error::AppResult,
+    agents::{AgentError, AgentId, AgentRecord},
+    error::{AppError, AppResult},
     responses,
     sessions::RequiredSession,
     state::AppState,
 };
 
 use self::{
-    forms::{AgentForm, OrphanForm},
+    forms::{AgentForm, OrphanForm, REVISION_MESSAGE},
     page::{AgentFormView, CatalogueView},
 };
 
@@ -96,6 +96,9 @@ async fn create(
             graft,
             &format!("/agents/{}", record.id.as_hex()),
         )),
+        Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
+            Err(AppError::new("store agent", error))
+        }
         Err(error) => render_form(
             &state,
             graft.into(),
@@ -143,6 +146,18 @@ async fn update_configuration(
             AgentFormView::edit(&record, "Wait until this reply finishes."),
         );
     };
+    let revision = match form.revision() {
+        Ok(Some(revision)) => revision,
+        Ok(None) | Err(_) => {
+            return render_form(
+                &state,
+                graft.into(),
+                PatchStatus::UnprocessableEntity,
+                page::CONFIG_TITLE,
+                AgentFormView::edit(&record, REVISION_MESSAGE),
+            );
+        }
+    };
     let draft = match form.draft() {
         Ok(draft) => draft,
         Err(error) => {
@@ -155,7 +170,7 @@ async fn update_configuration(
             );
         }
     };
-    match state.agents.update(&record.id, draft) {
+    match state.agents.update(&record.id, revision, draft) {
         Ok(updated) => render_form(
             &state,
             graft.into(),
@@ -163,13 +178,7 @@ async fn update_configuration(
             page::CONFIG_TITLE,
             AgentFormView::edit(&updated, ""),
         ),
-        Err(error) => render_form(
-            &state,
-            graft.into(),
-            PatchStatus::UnprocessableEntity,
-            page::CONFIG_TITLE,
-            AgentFormView::edit(&record, error.message()),
-        ),
+        Err(error) => render_configuration_error(&state, graft, record, error),
     }
 }
 
@@ -178,6 +187,7 @@ async fn delete_agent(
     _session: RequiredSession,
     graft: CommandGraft,
     Path(agent_id): Path<String>,
+    Form(form): Form<AgentForm>,
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
@@ -191,15 +201,22 @@ async fn delete_agent(
             AgentFormView::edit(&record, "Wait until this reply finishes."),
         );
     };
-    if let Err(error) = state.agents.delete(&record.id) {
-        return render_catalogue(
-            &state,
-            graft.into(),
-            PatchStatus::UnprocessableEntity,
-            error.message(),
-        );
+    let revision = match form.revision() {
+        Ok(Some(revision)) => revision,
+        Ok(None) | Err(_) => {
+            return render_form(
+                &state,
+                graft.into(),
+                PatchStatus::UnprocessableEntity,
+                page::CONFIG_TITLE,
+                AgentFormView::edit(&record, REVISION_MESSAGE),
+            );
+        }
+    };
+    match state.agents.delete(&record.id, revision) {
+        Ok(()) => Ok(responses::graft_redirect(graft, "/agents")),
+        Err(error) => render_configuration_error(&state, graft, record, error),
     }
-    Ok(responses::graft_redirect(graft, "/agents"))
 }
 
 async fn remove_orphan(
@@ -222,6 +239,35 @@ async fn remove_orphan(
 
 fn load_agent(state: &AppState, raw: &str) -> Option<AgentRecord> {
     AgentId::parse(raw).and_then(|id| state.agents.get(&id))
+}
+
+fn render_configuration_error(
+    state: &AppState,
+    graft: CommandGraft,
+    record: AgentRecord,
+    error: AgentError,
+) -> AppResult<Response> {
+    if matches!(error, AgentError::Missing) {
+        return Ok(responses::graft_redirect(graft, "/agents"));
+    }
+    let status = match error {
+        AgentError::Persist | AgentError::Random | AgentError::Corrupt => {
+            return Err(AppError::new("store agent", error));
+        }
+        AgentError::Conflict => PatchStatus::Conflict,
+        _ => PatchStatus::UnprocessableEntity,
+    };
+    let latest = match error {
+        AgentError::Conflict => state.agents.get(&record.id).unwrap_or(record),
+        _ => record,
+    };
+    render_form(
+        state,
+        graft.into(),
+        status,
+        page::CONFIG_TITLE,
+        AgentFormView::edit(&latest, error.message()),
+    )
 }
 
 fn render_catalogue(

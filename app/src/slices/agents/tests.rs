@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, header},
@@ -6,7 +8,7 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
-    agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
+    agents::{AccessMode, AgentDraft, AgentError, AgentRecord, AgentStore, DirectoryGrant, ToolId},
     config::RuntimeConfig,
     providers::{ProviderConnection, ProviderKind},
     sessions,
@@ -166,6 +168,49 @@ async fn create_redirects_to_the_new_agent() {
 }
 
 #[tokio::test]
+async fn create_persistence_failure_returns_internal_error() {
+    let mut state = test_state();
+    let data = tempfile::tempdir().expect("data");
+    let agents_dir = data.path().join("agents");
+    state.agents = Arc::new(
+        AgentStore::open(agents_dir.clone(), &data.path().join("project.json")).expect("store"),
+    );
+    std::fs::remove_dir(&agents_dir).expect("remove agents directory");
+    std::fs::write(&agents_dir, b"not a directory").expect("block agents directory");
+    let token = connected(&state);
+    let project = tempfile::tempdir().expect("project");
+    let encoded = project
+        .path()
+        .canonicalize()
+        .expect("canonical")
+        .to_string_lossy()
+        .replace(' ', "%20");
+
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("create");
+
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&body[..], b"Internal error");
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
 async fn configuration_patch_returns_a_hypergraft_patch() {
     let state = test_state();
     let token = connected(&state);
@@ -199,7 +244,8 @@ async fn configuration_patch_returns_a_hypergraft_patch() {
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
-                    "name=After&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
+                    "name=After&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write&revision={}",
+                    record.revision
                 )))
                 .unwrap(),
         )
@@ -247,7 +293,8 @@ async fn delete_redirects_to_the_catalogue() {
                 .method("POST")
                 .uri(format!("/agents/{}/delete", record.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("revision={}", record.revision)))
                 .unwrap(),
         )
         .await
@@ -255,6 +302,155 @@ async fn delete_redirects_to_the_catalogue() {
     assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
     assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
     assert!(state.agents.list().is_empty());
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+}
+
+fn seed_agent(state: &AppState, name: &str) -> (tempfile::TempDir, AgentRecord) {
+    let dir = tempfile::tempdir().expect("dir");
+    let record = state
+        .agents
+        .create(AgentDraft {
+            name: name.to_owned(),
+            instructions: String::new(),
+            tools: vec![ToolId::List],
+            directories: vec![DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: dir.path().to_path_buf(),
+                access: AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent");
+    (dir, record)
+}
+
+fn configuration_body(path: &std::path::Path, name: &str, revision: u32) -> String {
+    let encoded = path
+        .canonicalize()
+        .expect("canonical")
+        .to_string_lossy()
+        .replace(' ', "%20");
+    format!(
+        "name={name}&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write&revision={revision}"
+    )
+}
+
+#[tokio::test]
+async fn stale_update_returns_conflict() {
+    let state = test_state();
+    let token = connected(&state);
+    let (dir, record) = seed_agent(&state, "Before");
+    let updated = state
+        .agents
+        .update(
+            &record.id,
+            record.revision,
+            AgentDraft {
+                name: "After".to_owned(),
+                instructions: String::new(),
+                tools: vec![ToolId::List],
+                directories: vec![DirectoryGrant {
+                    alias: "project".to_owned(),
+                    host_path: dir.path().to_path_buf(),
+                    access: AccessMode::ReadWrite,
+                }],
+                primary_directory: "project".to_owned(),
+            },
+        )
+        .expect("update");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{}/configuration", record.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(configuration_body(
+                    dir.path(),
+                    "Stale",
+                    record.revision,
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("stale");
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        hypergraft::MEDIA_TYPE
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains(AgentError::Conflict.message()));
+    assert!(text.contains("After"));
+    assert!(text.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
+    let current = state.agents.get(&record.id).expect("current");
+    assert_eq!(current.name, "After");
+    assert_eq!(current.revision, updated.revision);
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+}
+
+#[tokio::test]
+async fn stale_delete_returns_conflict() {
+    let state = test_state();
+    let token = connected(&state);
+    let (dir, record) = seed_agent(&state, "Kept");
+    let updated = state
+        .agents
+        .update(
+            &record.id,
+            record.revision,
+            AgentDraft {
+                name: "Kept".to_owned(),
+                instructions: "Newer".to_owned(),
+                tools: vec![ToolId::List],
+                directories: vec![DirectoryGrant {
+                    alias: "project".to_owned(),
+                    host_path: dir.path().to_path_buf(),
+                    access: AccessMode::ReadWrite,
+                }],
+                primary_directory: "project".to_owned(),
+            },
+        )
+        .expect("update");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{}/delete", record.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!("revision={}", record.revision)))
+                .unwrap(),
+        )
+        .await
+        .expect("stale");
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        hypergraft::MEDIA_TYPE
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains(AgentError::Conflict.message()));
+    assert!(text.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
+    let current = state.agents.get(&record.id).expect("current");
+    assert_eq!(current.revision, updated.revision);
+    assert_eq!(current.instructions, "Newer");
     state
         .scratch
         .lock()

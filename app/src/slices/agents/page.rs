@@ -66,6 +66,7 @@ pub(super) struct AgentFormView {
     pub(super) grants: Vec<GrantRow>,
     pub(super) error: &'static str,
     pub(super) agent_id: String,
+    pub(super) revision: String,
     pub(super) show_delete: bool,
 }
 
@@ -150,6 +151,9 @@ impl AgentFormView {
             grants,
             error,
             agent_id: record.map(|record| record.id.as_hex()).unwrap_or_default(),
+            revision: record
+                .map(|record| record.revision.to_string())
+                .unwrap_or_default(),
             show_delete: record.is_some(),
         }
     }

@@ -91,6 +91,7 @@ impl AgentStore {
     pub(crate) fn update(
         &self,
         id: &AgentId,
+        expected_revision: u32,
         draft: AgentDraft,
     ) -> Result<AgentRecord, AgentError> {
         let draft = draft.validate()?;
@@ -98,6 +99,9 @@ impl AgentStore {
         let Some(current) = agents.get(id).cloned() else {
             return Err(AgentError::Missing);
         };
+        if current.revision != expected_revision {
+            return Err(AgentError::Conflict);
+        }
         let revision = current
             .revision
             .checked_add(1)
@@ -116,10 +120,13 @@ impl AgentStore {
         Ok(record)
     }
 
-    pub(crate) fn delete(&self, id: &AgentId) -> Result<(), AgentError> {
+    pub(crate) fn delete(&self, id: &AgentId, expected_revision: u32) -> Result<(), AgentError> {
         let mut agents = self.lock();
-        if !agents.contains_key(id) {
+        let Some(current) = agents.get(id) else {
             return Err(AgentError::Missing);
+        };
+        if current.revision != expected_revision {
+            return Err(AgentError::Conflict);
         }
         if let Some(dir) = &self.dir {
             remove_file(&dir.join(format!("{}.json", id.as_hex())))?;

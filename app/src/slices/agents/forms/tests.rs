@@ -16,6 +16,7 @@ fn agent_form_reads_tools_and_grants() {
         name: "Maintainer".to_owned(),
         instructions: String::new(),
         primary: "project".to_owned(),
+        revision: String::new(),
         extra,
     };
     let draft = form.draft().expect("draft");
@@ -30,7 +31,40 @@ fn oversized_name_is_rejected() {
         name: "a".repeat(crate::agents::MAXIMUM_NAME_BYTES + 1),
         instructions: String::new(),
         primary: "project".to_owned(),
+        revision: String::new(),
         extra: HashMap::new(),
     };
     assert_eq!(form.draft().err(), Some(AgentError::Name));
+}
+
+fn revision_form(revision: &str) -> AgentForm {
+    AgentForm {
+        name: String::new(),
+        instructions: String::new(),
+        primary: String::new(),
+        revision: revision.to_owned(),
+        extra: HashMap::new(),
+    }
+}
+
+#[test]
+fn revision_parser_accepts_positive_decimals() {
+    assert_eq!(revision_form("1").revision(), Ok(Some(1)));
+    assert_eq!(
+        revision_form(&u32::MAX.to_string()).revision(),
+        Ok(Some(u32::MAX))
+    );
+    assert_eq!(revision_form("").revision(), Ok(None));
+    assert_eq!(revision_form(" 2 ").revision(), Ok(Some(2)));
+}
+
+#[test]
+fn revision_parser_rejects_malformed_and_excessive_values() {
+    for value in ["0", "01", "1a", "4294967296", "1.0", "-1"] {
+        assert_eq!(
+            revision_form(value).revision(),
+            Err(super::REVISION_MESSAGE),
+            "{value}"
+        );
+    }
 }
