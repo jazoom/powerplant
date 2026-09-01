@@ -388,8 +388,18 @@
               </div>
             </div>
           {% else %}
-            {% if job_error != "" || run_id != "" %}
+            {% if job_error != "" || run_id != "" || review_href != "" %}
               <div class="mb-3">
+                {% if review_href != "" %}
+                  <p class="text-sm">
+                    <a
+                      href="{{ review_href }}"
+                      data-graft
+                      class="btn btn-primary btn-sm"
+                      >Review changes</a
+                    >
+                  </p>
+                {% endif %}
                 {% if run_id != "" %}
                   <p class="text-sm">
                     {% if workflow_name != "" %}

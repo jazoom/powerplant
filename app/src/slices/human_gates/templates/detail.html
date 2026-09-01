@@ -3,9 +3,20 @@
   class="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
 >
   <p class="text-sm">
-    <a href="/runs/{{ run_id }}" data-graft class="link">Back to run detail</a>
+    {% if quick_task %}
+      <a href="{{ desk_href }}" data-graft class="link">Back to project desk</a>
+    {% else %}
+      <a href="/runs/{{ run_id }}" data-graft class="link"
+        >Back to run detail</a
+      >
+    {% endif %}
   </p>
-  <div id="gate-detail" class="space-y-6">
+  <div
+    id="gate-detail"
+    class="space-y-6"
+    data-run-kind="{{ run_kind }}"
+    data-project="{{ project_id }}"
+  >
     <div class="page-intro">
       <div>
         <h1>{{ gate_name }}</h1>
@@ -35,7 +46,9 @@
       </p>
 
       {% if awaiting %}
-        <div class="grid gap-4 pt-2 lg:grid-cols-3">
+        <div
+          class="{% if quick_task %}lg:grid-cols-2{% else %}lg:grid-cols-3{% endif %} grid gap-4 pt-2"
+        >
           <form
             method="post"
             action="/runs/{{ run_id }}/gates/{{ gate_id }}/approve"
@@ -45,30 +58,36 @@
             <input type="hidden" name="gate-revision" value="{{ revision }}" />
             <input type="hidden" name="candidate" value="{{ target }}" />
             <button type="submit" class="btn btn-primary w-full">
-              Approve candidate
+              {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
             </button>
           </form>
-          <form
-            method="post"
-            action="/runs/{{ run_id }}/gates/{{ gate_id }}/request-revision"
-            data-graft
-            class="space-y-2"
-          >
-            <input type="hidden" name="gate-revision" value="{{ revision }}" />
-            <input type="hidden" name="candidate" value="{{ target }}" />
-            <label class="form-control gap-1">
-              <span class="text-sm">Revision note</span>
-              <textarea
-                name="note"
-                required
-                maxlength="65536"
-                class="textarea textarea-bordered min-h-24"
-              ></textarea>
-            </label>
-            <button type="submit" class="btn btn-outline w-full">
-              Request revision
-            </button>
-          </form>
+          {% if !quick_task %}
+            <form
+              method="post"
+              action="/runs/{{ run_id }}/gates/{{ gate_id }}/request-revision"
+              data-graft
+              class="space-y-2"
+            >
+              <input
+                type="hidden"
+                name="gate-revision"
+                value="{{ revision }}"
+              />
+              <input type="hidden" name="candidate" value="{{ target }}" />
+              <label class="form-control gap-1">
+                <span class="text-sm">Revision note</span>
+                <textarea
+                  name="note"
+                  required
+                  maxlength="65536"
+                  class="textarea textarea-bordered min-h-24"
+                ></textarea>
+              </label>
+              <button type="submit" class="btn btn-outline w-full">
+                Request revision
+              </button>
+            </form>
+          {% endif %}
           <form
             method="post"
             action="/runs/{{ run_id }}/gates/{{ gate_id }}/cancel"
@@ -77,11 +96,17 @@
           >
             <input type="hidden" name="gate-revision" value="{{ revision }}" />
             <input type="hidden" name="candidate" value="{{ target }}" />
-            <p class="text-warning text-sm">
-              Cancel the run only when no later step must start.
-            </p>
-            <button type="submit" class="btn btn-error btn-outline w-full">
-              Cancel run
+            {% if !quick_task %}
+              <p class="text-warning text-sm">
+                Cancel the run only when no later step must start.
+              </p>
+            {% endif %}
+            <button
+              type="submit"
+              class="btn {% if quick_task %}btn-outline{% else %}btn-error
+              btn-outline{% endif %} w-full"
+            >
+              {% if quick_task %}Discard changes{% else %}Cancel run{% endif %}
             </button>
           </form>
         </div>

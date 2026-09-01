@@ -19,9 +19,11 @@ use crate::{
     error::AppResult,
     projects::{ProjectId, ProjectRecord, eligibility, eligible_agents},
     responses,
-    sessions::{ConversationKey, OptionalSession, SessionId, SessionSnapshot},
+    sessions::{
+        ConversationKey, JobSnapshot, JobStatus, OptionalSession, SessionId, SessionSnapshot,
+    },
     state::AppState,
-    workflows::{self, WorkflowSelection},
+    workflows::{self, RunKind, WorkflowSelection},
 };
 
 use self::{
@@ -258,6 +260,7 @@ pub(crate) async fn observe(
         return refresh_composer(state, page).await;
     };
     Ok(observe_response(
+        state.clone(),
         job,
         cursor,
         crate::projects::desk_path(&page.project.id, &page.agent.id),
@@ -395,7 +398,31 @@ pub(crate) async fn view(
     attach_environment_preview(state, &mut rendered).await;
     rendered.quick_ready =
         workflows::alpine_git_is_ready(&state.environments, &state.environment_snapshots).await;
+    if let Some(job) = page.snapshot.job.as_ref() {
+        rendered.review_href = review_href_for(state, job);
+    }
     rendered
+}
+
+pub(super) fn review_href_for(state: &AppState, job: &JobSnapshot) -> String {
+    if job.status != JobStatus::AwaitingDecision {
+        return String::new();
+    }
+    let Some(run) = state.workflow_runs.get(&job.run_id) else {
+        return String::new();
+    };
+    if run.kind != RunKind::QuickTask {
+        return String::new();
+    }
+    let Some(gate) = run
+        .gates
+        .iter()
+        .rev()
+        .find(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
+    else {
+        return String::new();
+    };
+    format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex())
 }
 
 async fn attach_environment_preview(state: &AppState, page: &mut ChatViewModel) {

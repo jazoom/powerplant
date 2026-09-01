@@ -2685,6 +2685,10 @@ pub(crate) fn settle_completed_job(state: &AppState, workflow: &WorkflowJob) {
     settle_job(state, workflow, JobStatus::Completed, None);
 }
 
+pub(crate) fn settle_cancelled_job(state: &AppState, workflow: &WorkflowJob) {
+    settle_job(state, workflow, JobStatus::Cancelled, None);
+}
+
 fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error: Option<&str>) {
     let eligible = workflow
         .eligible_reply

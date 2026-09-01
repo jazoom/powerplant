@@ -71,12 +71,13 @@ enum ProgressOffer {
 }
 
 pub(super) fn observe_response(
+    state: AppState,
     job: Arc<Job>,
     cursor: u64,
     desk_href: String,
 ) -> axum::response::Response {
     let (tx, rx) = mpsc::channel::<hypergraft::StreamFrame>(4);
-    tokio::spawn(observe_segment(tx, job, cursor, desk_href));
+    tokio::spawn(observe_segment(tx, state, job, cursor, desk_href));
     let frames = futures_util::stream::unfold(rx, |mut rx| async {
         rx.recv().await.map(|item| (item, rx))
     });
@@ -453,6 +454,7 @@ fn progress_due(output_visible: bool, last_emit: Instant) -> bool {
 
 async fn observe_segment(
     tx: mpsc::Sender<hypergraft::StreamFrame>,
+    state: AppState,
     job: Arc<Job>,
     cursor: u64,
     desk_href: String,
@@ -519,7 +521,16 @@ async fn observe_segment(
         }
     }
 
-    send_observe_final(&tx, &job, &job_id, sent, assistant_visible, &desk_href).await;
+    send_observe_final(
+        &tx,
+        &state,
+        &job,
+        &job_id,
+        sent,
+        assistant_visible,
+        &desk_href,
+    )
+    .await;
 }
 
 fn should_keep_open(job: &Job, started: Instant) -> bool {
@@ -585,13 +596,14 @@ async fn offer_progress(
 
 async fn send_observe_final(
     tx: &mpsc::Sender<hypergraft::StreamFrame>,
+    state: &AppState,
     job: &Job,
     job_id: &str,
     cursor: u64,
     assistant_visible: bool,
     desk_href: &str,
 ) {
-    match encode_observe_final(job, job_id, cursor, assistant_visible, desk_href) {
+    match encode_observe_final(state, job, job_id, cursor, assistant_visible, desk_href) {
         Ok(frame) => {
             let _ = tx.send(frame).await;
         }
@@ -600,7 +612,7 @@ async fn send_observe_final(
                 "construct job observation final",
                 &build_error,
             );
-            match encode_observe_final(job, job_id, cursor, false, desk_href) {
+            match encode_observe_final(state, job, job_id, cursor, false, desk_href) {
                 Ok(frame) => {
                     let _ = tx.send(frame).await;
                 }
@@ -616,6 +628,7 @@ async fn send_observe_final(
 }
 
 fn encode_observe_final(
+    state: &AppState,
     job: &Job,
     job_id: &str,
     cursor: u64,
@@ -655,9 +668,17 @@ fn encode_observe_final(
         )?;
     } else {
         let error = snapshot.error.as_deref().unwrap_or("");
+        let review_href = super::review_href_for(state, &snapshot);
         patches.children(
             "job-observe",
-            &JobObserveContents::idle(error, desk_href, &run_id, run_step, workflow_name),
+            &JobObserveContents::idle(
+                error,
+                desk_href,
+                &run_id,
+                run_step,
+                workflow_name,
+                &review_href,
+            ),
         )?;
     }
     let status = match snapshot.status {

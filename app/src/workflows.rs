@@ -26,7 +26,8 @@ pub(crate) use commit::CommitJournals;
 pub(crate) use execution::WorkflowExecution;
 pub(crate) use executor::{
     WorkflowContinuationRegistry, WorkflowJob, execute_run, interrupt_provider_continuations,
-    interrupt_session_continuations, recover_commit_transactions, settle_completed_job,
+    interrupt_session_continuations, recover_commit_transactions, settle_cancelled_job,
+    settle_completed_job,
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
 pub(crate) use quick::{alpine_git_id, alpine_git_is_ready, pin_quick_task};

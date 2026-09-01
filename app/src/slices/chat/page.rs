@@ -72,6 +72,7 @@ pub(crate) struct ChatViewModel {
     pub(crate) environment_preview_error: &'static str,
     pub(crate) preview_ready: bool,
     pub(crate) quick_ready: bool,
+    pub(crate) review_href: String,
 }
 
 pub(crate) struct PreviewLine {
@@ -205,6 +206,7 @@ impl ChatViewModel {
             environment_preview_error: "",
             preview_ready: false,
             quick_ready: false,
+            review_href: String::new(),
         }
     }
 
@@ -295,6 +297,7 @@ impl ChatViewModel {
             run_id: &self.run_id,
             run_step: &self.run_step,
             workflow_name: &self.workflow_name,
+            review_href: &self.review_href,
         }
     }
 }
@@ -386,6 +389,7 @@ pub(crate) struct JobObserveContents<'a> {
     pub(crate) run_id: &'a str,
     pub(crate) run_step: &'a str,
     pub(crate) workflow_name: &'a str,
+    pub(crate) review_href: &'a str,
 }
 
 impl<'a> JobObserveContents<'a> {
@@ -395,6 +399,7 @@ impl<'a> JobObserveContents<'a> {
         run_id: &'a str,
         run_step: &'a str,
         workflow_name: &'a str,
+        review_href: &'a str,
     ) -> Self {
         Self {
             job_error: error,
@@ -406,6 +411,7 @@ impl<'a> JobObserveContents<'a> {
             run_id,
             run_step,
             workflow_name,
+            review_href,
         }
     }
 
@@ -430,6 +436,7 @@ impl<'a> JobObserveContents<'a> {
             run_id,
             run_step,
             workflow_name,
+            review_href: "",
         }
     }
 }

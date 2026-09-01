@@ -1,8 +1,8 @@
 use askama::Template;
 
-use crate::workflows::WorkflowRun;
 use crate::workflows::artefacts::diff::{CandidateDiff, MANIFEST_PAGE_SIZE, TEXT_PAGE_FRAGMENTS};
 use crate::workflows::gates::HumanGateRecord;
+use crate::workflows::{RunKind, WorkflowRun};
 
 pub(super) const TITLE: &str = "Human gate | Power Plant";
 
@@ -46,6 +46,10 @@ pub(super) struct GatePage {
     pub(super) text_too_large: bool,
     pub(super) awaiting: bool,
     pub(super) error: &'static str,
+    pub(super) run_kind: &'static str,
+    pub(super) project_id: String,
+    pub(super) desk_href: String,
+    pub(super) quick_task: bool,
 }
 
 impl GatePage {
@@ -160,6 +164,10 @@ impl GatePage {
             text_too_large,
             awaiting: gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision,
             error,
+            run_kind: run.kind.as_str(),
+            project_id: run.project_id.as_hex(),
+            desk_href: crate::projects::desk_path(&run.project_id, &run.agent_id),
+            quick_task: run.kind == RunKind::QuickTask,
         })
     }
 }

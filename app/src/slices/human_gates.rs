@@ -19,7 +19,7 @@ use crate::{
     responses,
     sessions::{JobStatus, RequiredSession, SessionId},
     state::AppState,
-    workflows::{GateId, RunId},
+    workflows::{GateId, RunId, RunKind, settle_cancelled_job},
 };
 
 #[derive(serde::Deserialize)]
@@ -272,6 +272,14 @@ async fn decide(
         );
     };
 
+    if matches!(action, DecisionAction::Revision) && run.kind == RunKind::QuickTask {
+        return command_error(
+            graft,
+            PatchStatus::Conflict,
+            "That gate page is stale. Reload it.",
+        );
+    }
+    let destination = decision_destination(&run);
     let leases = if matches!(action, DecisionAction::Approve) {
         let Ok(execution) = state.workflow_execution.acquire() else {
             return command_error(
@@ -298,6 +306,22 @@ async fn decide(
         state.gate_continuations.put_back(continuation);
         return command_error(graft, PatchStatus::Conflict, "That gate is unavailable.");
     }
+    if matches!(action, DecisionAction::Approve) {
+        match continuation_authority(&state, &run, &continuation) {
+            ContinuationAuthority::Ready => {}
+            ContinuationAuthority::Unavailable => {
+                state.gate_continuations.put_back(continuation);
+                return command_error(
+                    graft,
+                    PatchStatus::Conflict,
+                    "A granted directory is no longer at the saved path.",
+                );
+            }
+            ContinuationAuthority::Stale => {
+                return interrupt_and_redirect(state, continuation, run_id, graft, &destination);
+            }
+        }
+    }
 
     if matches!(action, DecisionAction::Cancel) {
         let result = state.workflow_runs.mutate(&run_id, |run| {
@@ -311,17 +335,18 @@ async fn decide(
                 "That gate page is stale. Reload it.",
             );
         }
-        let _ = state.sessions.fail_turn(
-            &session,
-            &continuation.conversation_key(),
-            &continuation.job.id(),
-            String::new(),
-        );
-        continuation.job.finish(JobStatus::Cancelled, None);
-        return Ok(hypergraft::outcome::redirect(
-            graft,
-            format!("/runs/{}", run_id.as_hex()),
-        )?);
+        if run.kind == RunKind::QuickTask {
+            settle_cancelled_job(&state, &continuation);
+        } else {
+            let _ = state.sessions.fail_turn(
+                &session,
+                &continuation.conversation_key(),
+                &continuation.job.id(),
+                String::new(),
+            );
+            continuation.job.finish(JobStatus::Cancelled, None);
+        }
+        return Ok(hypergraft::outcome::redirect(graft, destination)?);
     }
 
     let kind = if matches!(action, DecisionAction::Approve) {
@@ -406,10 +431,7 @@ async fn decide(
             .job
             .finish(JobStatus::Failed, Some("Revision requested"));
     }
-    Ok(hypergraft::outcome::redirect(
-        graft,
-        format!("/runs/{}", run_id.as_hex()),
-    )?)
+    Ok(hypergraft::outcome::redirect(graft, destination)?)
 }
 
 fn decision_record(
@@ -505,6 +527,93 @@ fn command_error(
             &view,
         )?),
     }
+}
+
+fn decision_destination(run: &crate::workflows::WorkflowRun) -> String {
+    match run.kind {
+        RunKind::QuickTask => crate::projects::desk_path(&run.project_id, &run.agent_id),
+        RunKind::Configured => format!("/runs/{}", run.id.as_hex()),
+    }
+}
+
+enum ContinuationAuthority {
+    Ready,
+    Unavailable,
+    Stale,
+}
+
+fn continuation_authority(
+    state: &AppState,
+    run: &crate::workflows::WorkflowRun,
+    continuation: &crate::workflows::WorkflowJob,
+) -> ContinuationAuthority {
+    if continuation.run_id != run.id
+        || continuation.project_id != run.project_id
+        || continuation.agent_id != run.agent_id
+    {
+        return ContinuationAuthority::Stale;
+    }
+    let Some(project) = state.projects.get(&run.project_id) else {
+        return ContinuationAuthority::Stale;
+    };
+    let Some(agent) = state.agents.get(&run.agent_id) else {
+        return ContinuationAuthority::Stale;
+    };
+    if agent.revision != continuation.agent_revision {
+        return ContinuationAuthority::Stale;
+    }
+    let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
+        return ContinuationAuthority::Stale;
+    };
+    let pinned = continuation
+        .host_policy
+        .grants()
+        .iter()
+        .find(|item| item.alias == continuation.grant_alias);
+    let Some(pinned) = pinned else {
+        return ContinuationAuthority::Stale;
+    };
+    if continuation.host_policy.primary_alias() != continuation.grant_alias
+        || grant.alias != continuation.grant_alias
+        || grant.access != continuation.grant_access
+        || pinned.host_path != project.host_path
+        || pinned.access != continuation.grant_access
+    {
+        return ContinuationAuthority::Stale;
+    }
+    if !project.host_path_is_available() || grant.host_path != project.host_path {
+        return ContinuationAuthority::Unavailable;
+    }
+    ContinuationAuthority::Ready
+}
+
+fn interrupt_and_redirect(
+    state: AppState,
+    continuation: crate::workflows::WorkflowJob,
+    run_id: RunId,
+    graft: CommandGraft,
+    destination: &str,
+) -> AppResult<Response> {
+    if state
+        .workflow_runs
+        .mutate(&run_id, |run| run.interrupt(crate::workflows::now_ms()))
+        .is_err()
+    {
+        state.gate_continuations.put_back(continuation);
+        return command_error(
+            graft,
+            PatchStatus::Conflict,
+            "That gate page is stale. Reload it.",
+        );
+    }
+    let _ = state.sessions.fail_turn(
+        &continuation.session_id,
+        &continuation.conversation_key(),
+        &continuation.job.id(),
+        String::new(),
+    );
+    continuation.job.finish(JobStatus::Cancelled, None);
+    Ok(hypergraft::outcome::redirect(graft, destination)?)
 }
 
 async fn object(
