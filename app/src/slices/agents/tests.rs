@@ -141,7 +141,7 @@ async fn create_redirects_to_the_new_agent() {
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
-                    "name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
+                    "intent=save&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
                 )))
                 .unwrap(),
         )
@@ -191,7 +191,7 @@ async fn create_persistence_failure_returns_internal_error() {
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
-                    "name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
+                    "intent=save&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
                 )))
                 .unwrap(),
         )
@@ -241,7 +241,7 @@ async fn configuration_patch_returns_a_hypergraft_patch() {
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
-                    "name=After&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write&revision={}",
+                    "intent=save&name=After&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write&revision={}",
                     record.revision
                 )))
                 .unwrap(),
@@ -256,7 +256,7 @@ async fn configuration_patch_returns_a_hypergraft_patch() {
     );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains("target=\"agent-form\""));
     assert_eq!(state.agents.get(&record.id).expect("updated").name, "After");
     state
         .scratch
@@ -332,7 +332,7 @@ fn configuration_body(path: &std::path::Path, name: &str, revision: u32) -> Stri
         .to_string_lossy()
         .replace(' ', "%20");
     format!(
-        "name={name}&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write&revision={revision}"
+        "intent=save&name={name}&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write&revision={revision}"
     )
 }
 
@@ -384,7 +384,7 @@ async fn stale_update_returns_conflict() {
     );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains("target=\"agent-form\""));
     assert!(text.contains(AgentError::Conflict.message()));
     assert!(text.contains("After"));
     assert!(text.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
@@ -442,7 +442,7 @@ async fn stale_delete_returns_conflict() {
     );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains("target=\"agent-form\""));
     assert!(text.contains(AgentError::Conflict.message()));
     assert!(text.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
     let current = state.agents.get(&record.id).expect("current");
@@ -453,6 +453,292 @@ async fn stale_delete_returns_conflict() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(dir);
+}
+
+fn encoded_path(path: &std::path::Path) -> String {
+    path.canonicalize()
+        .expect("canonical")
+        .to_string_lossy()
+        .replace(' ', "%20")
+}
+
+#[tokio::test]
+async fn new_agent_document_renders_one_directory_row() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/agents/new")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("new agent");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<!doctype html>"));
+    assert!(text.contains("id=\"agent-form\""));
+    assert!(text.contains("name=\"alias_0\""));
+    assert!(!text.contains("name=\"alias_1\""));
+    assert!(text.contains("value=\"add-directory\""));
+    assert!(text.contains("value=\"save\""));
+    assert!(!text.contains("value=\"remove-directory:0\""));
+}
+
+#[tokio::test]
+async fn configuration_document_renders_stored_directory_rows() {
+    let state = test_state();
+    let token = connected(&state);
+    let (dir, record) = seed_agent(&state, "Reader");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{}/configuration", record.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("configuration");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("id=\"agent-form\""));
+    assert!(text.contains("name=\"alias_0\""));
+    assert!(!text.contains("name=\"alias_1\""));
+    assert!(text.contains("value=\"add-directory\""));
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+}
+
+#[tokio::test]
+async fn add_directory_returns_a_native_document_without_saving() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "intent=add-directory&name=Reader&instructions=Be+careful&primary=project&tool_list=on&alias_0=project&path_0=%2Ftmp%2Fapp&access_0=read-write",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("add");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<!doctype html>"));
+    assert!(text.contains("id=\"agent-form\""));
+    assert!(text.contains("value=\"Reader\""));
+    assert!(text.contains("Be careful"));
+    assert!(text.contains("name=\"alias_1\""));
+    assert!(text.contains("value=\"remove-directory:0\""));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn add_directory_returns_an_agent_form_patch() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(
+                    "intent=add-directory&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0=%2Ftmp%2Fapp&access_0=read-write",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("add patch");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        hypergraft::MEDIA_TYPE
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"agent-form\""));
+    assert!(text.contains("name=\"alias_1\""));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn add_directory_preserves_project_query_context() {
+    let state = test_state();
+    let token = connected(&state);
+    let project = "0123456789abcdef0123456789abcdef";
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents?project={project}"))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(
+                    "intent=add-directory&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0=%2Ftmp%2Fapp&access_0=read-write",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("add with project");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(&format!("action=\"/agents?project={project}\"")));
+    assert!(text.contains("name=\"alias_1\""));
+}
+
+#[tokio::test]
+async fn remove_directory_on_configuration_keeps_revision_and_does_not_save() {
+    let state = test_state();
+    let token = connected(&state);
+    let first = tempfile::tempdir().expect("first");
+    let second = tempfile::tempdir().expect("second");
+    let record = state
+        .agents
+        .create(AgentDraft {
+            name: "Two".to_owned(),
+            instructions: "Stay".to_owned(),
+            tools: vec![ToolId::List],
+            directories: vec![
+                DirectoryGrant {
+                    alias: "project".to_owned(),
+                    host_path: first.path().to_path_buf(),
+                    access: AccessMode::ReadWrite,
+                },
+                DirectoryGrant {
+                    alias: "docs".to_owned(),
+                    host_path: second.path().to_path_buf(),
+                    access: AccessMode::ReadOnly,
+                },
+            ],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent");
+    let first_path = encoded_path(first.path());
+    let second_path = encoded_path(second.path());
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{}/configuration", record.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "intent=remove-directory:0&name=Two&instructions=Stay&primary=project&tool_list=on&alias_0=project&path_0={first_path}&access_0=read-write&alias_1=docs&path_1={second_path}&access_1=read-only&revision={}",
+                    record.revision
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("remove");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"agent-form\""));
+    assert!(text.contains("name=\"alias_0\""));
+    assert!(text.contains("value=\"docs\""));
+    assert!(!text.contains("name=\"alias_1\""));
+    assert!(text.contains(&format!("name=\"revision\" value=\"{}\"", record.revision)));
+    let current = state.agents.get(&record.id).expect("current");
+    assert_eq!(current.directories.len(), 2);
+    assert_eq!(current.revision, record.revision);
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(first);
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(second);
+}
+
+#[tokio::test]
+async fn save_validation_preserves_submitted_form_state() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(
+                    "intent=save&name=Reader&instructions=Be+careful&primary=project&tool_list=on&alias_0=project&path_0=relative%2Fpath&access_0=read-write",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("invalid save");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"agent-form\""));
+    assert!(text.contains(AgentError::Path.message()));
+    assert!(text.contains("value=\"Reader\""));
+    assert!(text.contains("Be careful"));
+    assert!(text.contains("value=\"relative/path\""));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn sparse_directory_rows_are_rejected_without_saving() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(
+                    "intent=save&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0=%2Ftmp%2Fapp&access_0=read-write&alias_2=docs&path_2=%2Ftmp%2Fdocs&access_2=read-only",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("sparse");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"agent-form\""));
+    assert!(text.contains("That form row is not valid."));
+    assert!(state.agents.list().is_empty());
 }
 
 #[tokio::test]

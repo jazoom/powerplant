@@ -1,8 +1,10 @@
 use askama::Template;
 
-use crate::agents::{AccessMode, AgentRecord, ToolId};
+use crate::agents::{AgentRecord, MAXIMUM_GRANTS, ToolId};
 use crate::projects::{ProjectRecord, unique_desk_path};
 use crate::sandbox::OrphanSandbox;
+
+use super::forms::AgentFormState;
 
 pub(super) const CATALOGUE_TITLE: &str = "Agents | Power Plant";
 pub(super) const NEW_TITLE: &str = "New agent | Power Plant";
@@ -18,7 +20,8 @@ pub(super) struct GrantRow {
     pub(super) index: usize,
     pub(super) alias: String,
     pub(super) path: String,
-    pub(super) read_write: bool,
+    pub(super) access: String,
+    pub(super) can_remove: bool,
 }
 
 pub(super) struct ToolRow {
@@ -68,97 +71,122 @@ pub(super) struct AgentFormView {
     pub(super) primary: String,
     pub(super) tools: Vec<ToolRow>,
     pub(super) grants: Vec<GrantRow>,
+    pub(super) can_add: bool,
     pub(super) error: &'static str,
     pub(super) agent_id: String,
     pub(super) revision: String,
     pub(super) show_delete: bool,
 }
 
-impl AgentFormView {
-    pub(super) fn create(error: &'static str) -> Self {
-        Self::from_record(None, "/agents", "Create agent", error)
-    }
+#[derive(Template)]
+#[template(path = "agents/templates/form.html", block = "agent_form")]
+pub(super) struct AgentFormContents<'a> {
+    pub(super) action: &'a str,
+    pub(super) submit: &'static str,
+    pub(super) name: &'a str,
+    pub(super) instructions: &'a str,
+    pub(super) primary: &'a str,
+    pub(super) tools: &'a [ToolRow],
+    pub(super) grants: &'a [GrantRow],
+    pub(super) can_add: bool,
+    pub(super) error: &'static str,
+    pub(super) agent_id: &'a str,
+    pub(super) revision: &'a str,
+    pub(super) show_delete: bool,
+}
 
-    pub(super) fn edit(record: &AgentRecord, error: &'static str) -> Self {
-        Self::from_record(
-            Some(record),
-            &format!("/agents/{}/configuration", record.id.as_hex()),
-            "Save",
+impl AgentFormView {
+    pub(super) fn create(state: AgentFormState, error: &'static str, project: &str) -> Self {
+        Self::from_state(
+            "New agent",
+            &create_action(project),
+            "Create agent",
+            state,
             error,
+            "",
+            false,
         )
     }
 
-    fn from_record(
-        record: Option<&AgentRecord>,
+    pub(super) fn edit(record: &AgentRecord, state: AgentFormState, error: &'static str) -> Self {
+        Self::from_state(
+            "Configure agent",
+            &format!("/agents/{}/configuration", record.id.as_hex()),
+            "Save",
+            state,
+            error,
+            &record.id.as_hex(),
+            true,
+        )
+    }
+
+    fn from_state(
+        title: &'static str,
         action: &str,
         submit: &'static str,
+        state: AgentFormState,
         error: &'static str,
+        agent_id: &str,
+        show_delete: bool,
     ) -> Self {
-        let selected: &[ToolId] = match record {
-            Some(record) => record.tools.as_slice(),
-            None => &ToolId::ALL,
-        };
-        let mut grants = record
-            .map(|record| {
-                record
-                    .directories
-                    .iter()
-                    .enumerate()
-                    .map(|(index, grant)| GrantRow {
-                        index,
-                        alias: grant.alias.clone(),
-                        path: grant.host_path.to_string_lossy().into_owned(),
-                        read_write: grant.access == AccessMode::ReadWrite,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| {
-                vec![GrantRow {
-                    index: 0,
-                    alias: "project".to_owned(),
-                    path: String::new(),
-                    read_write: true,
-                }]
-            });
-        while grants.len() < crate::agents::MAXIMUM_GRANTS {
-            let index = grants.len();
-            grants.push(GrantRow {
-                index,
-                alias: String::new(),
-                path: String::new(),
-                read_write: true,
-            });
-        }
+        let grant_count = state.directories.len();
         Self {
-            title: if record.is_some() {
-                "Configure agent"
-            } else {
-                "New agent"
-            },
+            title,
             action: action.to_owned(),
             submit,
-            name: record.map(|record| record.name.clone()).unwrap_or_default(),
-            instructions: record
-                .map(|record| record.instructions.clone())
-                .unwrap_or_default(),
-            primary: record
-                .map(|record| record.primary_directory.clone())
-                .unwrap_or_else(|| "project".to_owned()),
+            name: state.name,
+            instructions: state.instructions,
+            primary: state.primary,
             tools: ToolId::ALL
                 .into_iter()
                 .map(|tool| ToolRow {
                     name: tool.as_str(),
                     label: tool.label(),
-                    checked: selected.contains(&tool),
+                    checked: state.tools.contains(&tool),
                 })
                 .collect(),
-            grants,
+            grants: state
+                .directories
+                .into_iter()
+                .enumerate()
+                .map(|(index, grant)| GrantRow {
+                    index,
+                    alias: grant.alias,
+                    path: grant.path,
+                    access: grant.access,
+                    can_remove: grant_count > 1,
+                })
+                .collect(),
+            can_add: grant_count < MAXIMUM_GRANTS,
             error,
-            agent_id: record.map(|record| record.id.as_hex()).unwrap_or_default(),
-            revision: record
-                .map(|record| record.revision.to_string())
-                .unwrap_or_default(),
-            show_delete: record.is_some(),
+            agent_id: agent_id.to_owned(),
+            revision: state.revision,
+            show_delete,
         }
+    }
+
+    pub(super) fn contents(&self) -> AgentFormContents<'_> {
+        AgentFormContents {
+            action: &self.action,
+            submit: self.submit,
+            name: &self.name,
+            instructions: &self.instructions,
+            primary: &self.primary,
+            tools: &self.tools,
+            grants: &self.grants,
+            can_add: self.can_add,
+            error: self.error,
+            agent_id: &self.agent_id,
+            revision: &self.revision,
+            show_delete: self.show_delete,
+        }
+    }
+}
+
+fn create_action(project: &str) -> String {
+    if project.is_empty() {
+        "/agents".to_owned()
+    } else {
+        format!("/agents?project={project}")
     }
 }

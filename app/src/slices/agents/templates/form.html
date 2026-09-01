@@ -8,120 +8,159 @@
       <p>Set the agent instructions, tools and project directories.</p>
     </div>
   </div>
-  <form
-    data-graft
-    method="post"
-    action="{{ action }}"
-    class="flex flex-col gap-4"
-  >
-    {% if error != "" %}
-      <div class="alert alert-error" role="alert" tabindex="-1">
-        <p>{{ error }}</p>
-      </div>
-    {% endif %}
-    {% if revision != "" %}
-      <input type="hidden" name="revision" value="{{ revision }}" />
-    {% endif %}
-    <label class="flex flex-col gap-1">
-      <span class="text-sm">Name</span>
-      <input
-        class="input input-bordered"
-        name="name"
-        required
-        maxlength="80"
-        value="{{ name }}"
-      />
-    </label>
-    <label class="flex flex-col gap-1">
-      <span class="text-sm">Instructions</span>
-      <textarea
-        class="textarea textarea-bordered min-h-32"
-        name="instructions"
-        maxlength="32768"
+  <div id="agent-form">
+    {% block agent_form %}
+      <form
+        data-graft
+        method="post"
+        action="{{ action }}"
+        class="flex flex-col gap-4"
       >
-{{- instructions -}}</textarea>
-    </label>
-    <fieldset class="space-y-2">
-      <legend class="text-sm">Tools</legend>
-      {% for tool in tools %}
-        <label class="flex items-center gap-2">
+        <button
+          type="submit"
+          name="intent"
+          value="save"
+          hidden
+          aria-hidden="true"
+          tabindex="-1"
+        ></button>
+        {% if error != "" %}
+          <div class="alert alert-error" role="alert" tabindex="-1">
+            <p>{{ error }}</p>
+          </div>
+        {% endif %}
+        {% if revision != "" %}
+          <input type="hidden" name="revision" value="{{ revision }}" />
+        {% endif %}
+        <label class="flex flex-col gap-1">
+          <span class="text-sm">Name</span>
           <input
-            class="checkbox checkbox-sm"
-            type="checkbox"
-            name="tool_{{ tool.name }}"
-            {% if tool.checked %}checked{% endif %}
+            class="input input-bordered"
+            name="name"
+            required
+            maxlength="80"
+            value="{{ name }}"
           />
-          <span>{{ tool.label }}</span>
         </label>
-      {% endfor %}
-    </fieldset>
-    <fieldset class="space-y-3">
-      <legend class="text-sm">Directories</legend>
-      <label class="flex flex-col gap-1">
-        <span class="text-sm">Primary alias</span>
-        <input
-          class="input input-bordered input-sm font-mono"
-          name="primary"
-          required
-          maxlength="32"
-          value="{{ primary }}"
-        />
-      </label>
-      {% for grant in grants %}
-        <div
-          class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-3"
-        >
+        <label class="flex flex-col gap-1">
+          <span class="text-sm">Instructions</span>
+          <textarea
+            class="textarea textarea-bordered min-h-32"
+            name="instructions"
+            maxlength="32768"
+          >
+{{- instructions -}}</textarea>
+        </label>
+        <fieldset class="space-y-2">
+          <legend class="text-sm">Tools</legend>
+          {% for tool in tools %}
+            <label class="flex items-center gap-2">
+              <input
+                class="checkbox checkbox-sm"
+                type="checkbox"
+                name="tool_{{ tool.name }}"
+                {% if tool.checked %}checked{% endif %}
+              />
+              <span>{{ tool.label }}</span>
+            </label>
+          {% endfor %}
+        </fieldset>
+        <fieldset class="space-y-3">
+          <legend class="text-sm">Directories</legend>
           <label class="flex flex-col gap-1">
-            <span class="text-quiet text-xs">Alias</span>
+            <span class="text-sm">Primary alias</span>
             <input
               class="input input-bordered input-sm font-mono"
-              name="alias_{{ grant.index }}"
+              name="primary"
+              required
               maxlength="32"
-              value="{{ grant.alias }}"
+              value="{{ primary }}"
             />
           </label>
-          <label class="flex flex-col gap-1 sm:col-span-1">
-            <span class="text-quiet text-xs">Host path</span>
-            <input
-              class="input input-bordered input-sm font-mono"
-              name="path_{{ grant.index }}"
-              maxlength="4096"
-              value="{{ grant.path }}"
-            />
-          </label>
-          <label class="flex flex-col gap-1">
-            <span class="text-quiet text-xs">Access</span>
-            <select
-              class="select select-bordered select-sm"
-              name="access_{{ grant.index }}"
+          {% for grant in grants %}
+            <div class="border-base-300 space-y-2 rounded-sm border p-3">
+              <div class="grid gap-2 sm:grid-cols-3">
+                <label class="flex flex-col gap-1">
+                  <span class="text-quiet text-xs">Alias</span>
+                  <input
+                    class="input input-bordered input-sm font-mono"
+                    name="alias_{{ grant.index }}"
+                    maxlength="32"
+                    value="{{ grant.alias }}"
+                  />
+                </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-quiet text-xs">Host path</span>
+                  <input
+                    class="input input-bordered input-sm font-mono"
+                    name="path_{{ grant.index }}"
+                    maxlength="4096"
+                    value="{{ grant.path }}"
+                  />
+                </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-quiet text-xs">Access</span>
+                  <select
+                    class="select select-bordered select-sm"
+                    name="access_{{ grant.index }}"
+                  >
+                    <option
+                      value="read-write"
+                      {% if grant.access == "read-write" %}selected{% endif %}
+                    >
+                      Read-write
+                    </option>
+                    <option
+                      value="read-only"
+                      {% if grant.access == "read-only" %}selected{% endif %}
+                    >
+                      Read-only
+                    </option>
+                  </select>
+                </label>
+              </div>
+              {% if grant.can_remove %}
+                <button
+                  class="btn btn-ghost btn-sm"
+                  type="submit"
+                  formnovalidate
+                  name="intent"
+                  value="remove-directory:{{ grant.index }}"
+                >
+                  Remove directory
+                </button>
+              {% endif %}
+            </div>
+          {% endfor %}
+          {% if can_add %}
+            <button
+              class="btn btn-outline btn-sm self-start"
+              type="submit"
+              formnovalidate
+              name="intent"
+              value="add-directory"
             >
-              <option
-                value="read-write"
-                {% if grant.read_write %}selected{% endif %}
-              >
-                Read-write
-              </option>
-              <option
-                value="read-only"
-                {% if !grant.read_write %}selected{% endif %}
-              >
-                Read-only
-              </option>
-            </select>
-          </label>
-        </div>
-      {% endfor %}
-    </fieldset>
-    <button class="btn btn-primary self-start" type="submit">
-      {{ submit }}
-    </button>
-  </form>
-  {% if show_delete %}
-    <form data-graft method="post" action="/agents/{{ agent_id }}/delete">
-      <input type="hidden" name="revision" value="{{ revision }}" />
-      <button class="btn btn-error btn-outline btn-sm" type="submit">
-        Delete agent
-      </button>
-    </form>
-  {% endif %}
+              Add another directory
+            </button>
+          {% endif %}
+        </fieldset>
+        <button
+          class="btn btn-primary self-start"
+          type="submit"
+          name="intent"
+          value="save"
+        >
+          {{ submit }}
+        </button>
+      </form>
+      {% if show_delete %}
+        <form data-graft method="post" action="/agents/{{ agent_id }}/delete">
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <button class="btn btn-error btn-outline btn-sm" type="submit">
+            Delete agent
+          </button>
+        </form>
+      {% endif %}
+    {% endblock %}
+  </div>
 </main>

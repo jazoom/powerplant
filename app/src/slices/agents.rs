@@ -6,22 +6,24 @@ mod tests;
 
 use axum::{
     Form, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Response,
     routing::{get, post},
 };
 use hypergraft::{CommandGraft, GraftRequest, PatchStatus};
+use serde::Deserialize;
 
 use crate::{
     agents::{AgentError, AgentId, AgentRecord},
     error::{AppError, AppResult},
+    projects::ProjectId,
     responses,
     sessions::RequiredSession,
     state::AppState,
 };
 
 use self::{
-    forms::{AgentForm, OrphanForm, REVISION_MESSAGE},
+    forms::{AgentFormState, DeleteForm, FormIntent, OrphanForm, REVISION_MESSAGE},
     page::{AgentFormView, CatalogueView},
 };
 
@@ -36,6 +38,12 @@ pub(super) fn router() -> Router<AppState> {
             get(show_configuration).post(update_configuration),
         )
         .route("/agents/{agent_id}/delete", post(delete_agent))
+}
+
+#[derive(Default, Deserialize)]
+struct AgentQuery {
+    #[serde(default)]
+    project: String,
 }
 
 async fn root(
@@ -65,13 +73,18 @@ async fn new_agent(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: GraftRequest,
+    Query(query): Query<AgentQuery>,
 ) -> AppResult<Response> {
-    render_form(
+    render_form_page(
         &state,
         graft,
         PatchStatus::Ok,
         page::NEW_TITLE,
-        AgentFormView::create(""),
+        AgentFormView::create(
+            AgentFormState::blank(),
+            "",
+            &preserved_project(&query.project),
+        ),
     )
 }
 
@@ -79,17 +92,49 @@ async fn create(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: CommandGraft,
-    Form(form): Form<AgentForm>,
+    Query(query): Query<AgentQuery>,
+    Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
+    let project = preserved_project(&query.project);
+    let (mut form, intent) = match AgentFormState::parse(pairs) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return render_form_command(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                page::NEW_TITLE,
+                AgentFormView::create(AgentFormState::blank(), error.message(), &project),
+            );
+        }
+    };
+    if intent != FormIntent::Save {
+        if let Err(error) = form.apply(intent) {
+            return render_form_command(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                page::NEW_TITLE,
+                AgentFormView::create(form, error.message(), &project),
+            );
+        }
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Ok,
+            page::NEW_TITLE,
+            AgentFormView::create(form, "", &project),
+        );
+    }
     let draft = match form.draft() {
         Ok(draft) => draft,
         Err(error) => {
-            return render_form(
+            return render_form_command(
                 &state,
-                graft.into(),
+                graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                AgentFormView::create(error.message()),
+                AgentFormView::create(form, error.message(), &project),
             );
         }
     };
@@ -102,12 +147,12 @@ async fn create(
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
         }
-        Err(error) => render_form(
+        Err(error) => render_form_command(
             &state,
-            graft.into(),
+            graft,
             PatchStatus::UnprocessableEntity,
             page::NEW_TITLE,
-            AgentFormView::create(error.message()),
+            AgentFormView::create(form, error.message(), &project),
         ),
     }
 }
@@ -121,12 +166,12 @@ async fn show_configuration(
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
-    render_form(
+    render_form_page(
         &state,
         graft,
         PatchStatus::Ok,
         page::CONFIG_TITLE,
-        AgentFormView::edit(&record, ""),
+        AgentFormView::edit(&record, AgentFormState::from_record(&record), ""),
     )
 }
 
@@ -135,53 +180,87 @@ async fn update_configuration(
     _session: RequiredSession,
     graft: CommandGraft,
     Path(agent_id): Path<String>,
-    Form(form): Form<AgentForm>,
+    Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
-    let Ok(_operation) = state.agent_leases.acquire(record.id) else {
-        return render_form(
+    let (mut form, intent) = match AgentFormState::parse(pairs) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return render_form_command(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                page::CONFIG_TITLE,
+                AgentFormView::edit(
+                    &record,
+                    AgentFormState::from_record(&record),
+                    error.message(),
+                ),
+            );
+        }
+    };
+    if intent != FormIntent::Save {
+        if let Err(error) = form.apply(intent) {
+            return render_form_command(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                page::CONFIG_TITLE,
+                AgentFormView::edit(&record, form, error.message()),
+            );
+        }
+        return render_form_command(
             &state,
-            graft.into(),
+            graft,
+            PatchStatus::Ok,
+            page::CONFIG_TITLE,
+            AgentFormView::edit(&record, form, ""),
+        );
+    }
+    let Ok(_operation) = state.agent_leases.acquire(record.id) else {
+        return render_form_command(
+            &state,
+            graft,
             PatchStatus::UnprocessableEntity,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&record, "Wait until this reply finishes."),
+            AgentFormView::edit(&record, form, "Wait until this reply finishes."),
         );
     };
     let revision = match form.revision() {
         Ok(Some(revision)) => revision,
         Ok(None) | Err(_) => {
-            return render_form(
+            return render_form_command(
                 &state,
-                graft.into(),
+                graft,
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
-                AgentFormView::edit(&record, REVISION_MESSAGE),
+                AgentFormView::edit(&record, form, REVISION_MESSAGE),
             );
         }
     };
     let draft = match form.draft() {
         Ok(draft) => draft,
         Err(error) => {
-            return render_form(
+            return render_form_command(
                 &state,
-                graft.into(),
+                graft,
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
-                AgentFormView::edit(&record, error.message()),
+                AgentFormView::edit(&record, form, error.message()),
             );
         }
     };
     match state.agents.update(&record.id, revision, draft) {
-        Ok(updated) => render_form(
+        Ok(updated) => render_form_command(
             &state,
-            graft.into(),
+            graft,
             PatchStatus::Ok,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&updated, ""),
+            AgentFormView::edit(&updated, AgentFormState::from_record(&updated), ""),
         ),
-        Err(error) => render_configuration_error(&state, graft, record, error),
+        Err(error) => render_configuration_error(&state, graft, record, form, error),
     }
 }
 
@@ -190,35 +269,46 @@ async fn delete_agent(
     _session: RequiredSession,
     graft: CommandGraft,
     Path(agent_id): Path<String>,
-    Form(form): Form<AgentForm>,
+    Form(form): Form<DeleteForm>,
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::graft_redirect(graft, "/agents"));
     };
     let Ok(_operation) = state.agent_leases.acquire(record.id) else {
-        return render_form(
+        return render_form_command(
             &state,
-            graft.into(),
+            graft,
             PatchStatus::UnprocessableEntity,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&record, "Wait until this reply finishes."),
+            AgentFormView::edit(
+                &record,
+                AgentFormState::from_record(&record),
+                "Wait until this reply finishes.",
+            ),
         );
     };
     let revision = match form.revision() {
         Ok(Some(revision)) => revision,
         Ok(None) | Err(_) => {
-            return render_form(
+            return render_form_command(
                 &state,
-                graft.into(),
+                graft,
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
-                AgentFormView::edit(&record, REVISION_MESSAGE),
+                AgentFormView::edit(
+                    &record,
+                    AgentFormState::from_record(&record),
+                    REVISION_MESSAGE,
+                ),
             );
         }
     };
     match state.agents.delete(&record.id, revision) {
         Ok(()) => Ok(responses::graft_redirect(graft, "/agents")),
-        Err(error) => render_configuration_error(&state, graft, record, error),
+        Err(error) => {
+            let form = AgentFormState::from_record(&record);
+            render_configuration_error(&state, graft, record, form, error)
+        }
     }
 }
 
@@ -244,10 +334,17 @@ fn load_agent(state: &AppState, raw: &str) -> Option<AgentRecord> {
     AgentId::parse(raw).and_then(|id| state.agents.get(&id))
 }
 
+fn preserved_project(raw: &str) -> String {
+    ProjectId::parse(raw)
+        .map(|id| id.as_hex())
+        .unwrap_or_default()
+}
+
 fn render_configuration_error(
     state: &AppState,
     graft: CommandGraft,
     record: AgentRecord,
+    form: AgentFormState,
     error: AgentError,
 ) -> AppResult<Response> {
     if matches!(error, AgentError::Missing) {
@@ -260,17 +357,18 @@ fn render_configuration_error(
         AgentError::Conflict => PatchStatus::Conflict,
         _ => PatchStatus::UnprocessableEntity,
     };
-    let latest = match error {
-        AgentError::Conflict => state.agents.get(&record.id).unwrap_or(record),
-        _ => record,
+    let view = match error {
+        AgentError::Conflict => {
+            let latest = state.agents.get(&record.id).unwrap_or(record);
+            AgentFormView::edit(
+                &latest,
+                AgentFormState::from_record(&latest),
+                error.message(),
+            )
+        }
+        _ => AgentFormView::edit(&record, form, error.message()),
     };
-    render_form(
-        state,
-        graft.into(),
-        status,
-        page::CONFIG_TITLE,
-        AgentFormView::edit(&latest, error.message()),
-    )
+    render_form_command(state, graft, status, page::CONFIG_TITLE, view)
 }
 
 fn render_catalogue(
@@ -288,14 +386,47 @@ fn render_catalogue(
     render_desk(state, graft, status, page::CATALOGUE_TITLE, &view)
 }
 
-fn render_form(
+fn render_form_page(
     state: &AppState,
     graft: GraftRequest,
     status: PatchStatus,
     title: &str,
     view: AgentFormView,
 ) -> AppResult<Response> {
-    render_desk(state, graft, status, title, &view)
+    match graft {
+        GraftRequest::Document => {
+            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(title, "chat-main", &view)?),
+        GraftRequest::Patch => Ok(hypergraft::outcome::children_patch(
+            status,
+            "agent-form",
+            &view.contents(),
+        )?),
+    }
+}
+
+fn render_form_command(
+    state: &AppState,
+    graft: CommandGraft,
+    status: PatchStatus,
+    title: &str,
+    view: AgentFormView,
+) -> AppResult<Response> {
+    match graft {
+        CommandGraft::Document => {
+            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+            status,
+            "agent-form",
+            &view.contents(),
+        )?),
+    }
 }
 
 fn render_desk<T: askama::Template>(

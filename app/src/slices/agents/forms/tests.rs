@@ -1,24 +1,28 @@
-use super::AgentForm;
+use super::{AgentFormState, FormError, FormIntent};
 use crate::agents::{AccessMode, AgentError, ToolId};
-use std::collections::HashMap;
+
+fn pair(key: &str, value: &str) -> (String, String) {
+    (key.to_owned(), value.to_owned())
+}
+
+fn valid_pairs() -> Vec<(String, String)> {
+    vec![
+        pair("intent", "save"),
+        pair("name", "Maintainer"),
+        pair("instructions", "Keep going"),
+        pair("primary", "project"),
+        pair("tool_list", "on"),
+        pair("tool_read", "on"),
+        pair("alias_0", "project"),
+        pair("path_0", "/tmp/app"),
+        pair("access_0", "read-write"),
+    ]
+}
 
 #[test]
 fn agent_form_reads_tools_and_grants() {
-    let mut extra = HashMap::new();
-    extra.insert("tool_list".to_owned(), "on".to_owned());
-    extra.insert("tool_read".to_owned(), "on".to_owned());
-    extra.insert("alias_0".to_owned(), "project".to_owned());
-    extra.insert("path_0".to_owned(), "/tmp/app".to_owned());
-    extra.insert("access_0".to_owned(), "read-write".to_owned());
-    extra.insert("alias_1".to_owned(), String::new());
-    extra.insert("path_1".to_owned(), String::new());
-    let form = AgentForm {
-        name: "Maintainer".to_owned(),
-        instructions: String::new(),
-        primary: "project".to_owned(),
-        revision: String::new(),
-        extra,
-    };
+    let (form, intent) = AgentFormState::parse(valid_pairs()).expect("parse");
+    assert_eq!(intent, FormIntent::Save);
     let draft = form.draft().expect("draft");
     assert_eq!(draft.tools, [ToolId::List, ToolId::Read]);
     assert_eq!(draft.directories.len(), 1);
@@ -27,24 +31,151 @@ fn agent_form_reads_tools_and_grants() {
 
 #[test]
 fn oversized_name_is_rejected() {
-    let form = AgentForm {
-        name: "a".repeat(crate::agents::MAXIMUM_NAME_BYTES + 1),
-        instructions: String::new(),
-        primary: "project".to_owned(),
-        revision: String::new(),
-        extra: HashMap::new(),
-    };
+    let mut pairs = valid_pairs();
+    pairs[1] = pair("name", &"a".repeat(crate::agents::MAXIMUM_NAME_BYTES + 1));
+    let (form, _) = AgentFormState::parse(pairs).expect("parse");
     assert_eq!(form.draft().err(), Some(AgentError::Name));
 }
 
-fn revision_form(revision: &str) -> AgentForm {
-    AgentForm {
-        name: String::new(),
-        instructions: String::new(),
-        primary: String::new(),
-        revision: revision.to_owned(),
-        extra: HashMap::new(),
+#[test]
+fn unknown_intents_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "explode");
+    assert_eq!(AgentFormState::parse(pairs).err(), Some(FormError::Intent));
+}
+
+#[test]
+fn missing_intent_is_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.remove(0);
+    assert_eq!(AgentFormState::parse(pairs).err(), Some(FormError::Intent));
+}
+
+#[test]
+fn unknown_fields_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.push(pair("shell", "rm -rf /"));
+    assert_eq!(
+        AgentFormState::parse(pairs).err(),
+        Some(FormError::UnknownField)
+    );
+}
+
+#[test]
+fn duplicate_fields_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.push(pair("name", "Other"));
+    assert_eq!(
+        AgentFormState::parse(pairs).err(),
+        Some(FormError::DuplicateField)
+    );
+}
+
+#[test]
+fn sparse_directory_indices_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.push(pair("alias_2", "docs"));
+    pairs.push(pair("path_2", "/tmp/docs"));
+    pairs.push(pair("access_2", "read-only"));
+    assert_eq!(AgentFormState::parse(pairs).err(), Some(FormError::Sparse));
+}
+
+#[test]
+fn malformed_indices_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.push(pair("alias_01", "padded"));
+    assert_eq!(AgentFormState::parse(pairs).err(), Some(FormError::Index));
+}
+
+#[test]
+fn excessive_directory_indices_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.push(pair(
+        &format!("alias_{}", crate::agents::MAXIMUM_GRANTS),
+        "extra",
+    ));
+    assert_eq!(
+        AgentFormState::parse(pairs).err(),
+        Some(FormError::Excessive)
+    );
+}
+
+#[test]
+fn add_directory_appends_a_blank_row_without_path_validation() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "add-directory");
+    let (mut form, intent) = AgentFormState::parse(pairs).expect("parse");
+    assert_eq!(intent, FormIntent::AddDirectory);
+    form.apply(intent).expect("apply");
+    assert_eq!(form.directories.len(), 2);
+    assert_eq!(form.directories[0].alias, "project");
+    assert_eq!(form.directories[0].path, "/tmp/app");
+    assert_eq!(form.directories[1].alias, "");
+    assert_eq!(form.directories[1].path, "");
+    assert_eq!(form.directories[1].access, "read-write");
+    assert_eq!(form.name, "Maintainer");
+    assert_eq!(form.instructions, "Keep going");
+    assert_eq!(form.primary, "project");
+    assert_eq!(form.tools, [ToolId::List, ToolId::Read]);
+}
+
+#[test]
+fn add_directory_is_rejected_at_the_grant_limit() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "add-directory");
+    for index in 1..crate::agents::MAXIMUM_GRANTS {
+        pairs.push(pair(&format!("alias_{index}"), "docs"));
+        pairs.push(pair(&format!("path_{index}"), "/tmp/docs"));
+        pairs.push(pair(&format!("access_{index}"), "read-only"));
     }
+    let (mut form, intent) = AgentFormState::parse(pairs).expect("parse");
+    assert_eq!(form.directories.len(), crate::agents::MAXIMUM_GRANTS);
+    assert_eq!(form.apply(intent).err(), Some(FormError::Excessive));
+}
+
+#[test]
+fn remove_directory_compacts_later_rows_and_keeps_state() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "remove-directory:0");
+    pairs.push(pair("alias_1", "docs"));
+    pairs.push(pair("path_1", "/tmp/docs"));
+    pairs.push(pair("access_1", "read-only"));
+    let (mut form, intent) = AgentFormState::parse(pairs).expect("parse");
+    form.apply(intent).expect("apply");
+    assert_eq!(form.directories.len(), 1);
+    assert_eq!(form.directories[0].alias, "docs");
+    assert_eq!(form.directories[0].path, "/tmp/docs");
+    assert_eq!(form.directories[0].access, "read-only");
+    assert_eq!(form.primary, "docs");
+    assert_eq!(form.name, "Maintainer");
+}
+
+#[test]
+fn remove_directory_keeps_primary_when_another_row_owns_it() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "remove-directory:1");
+    pairs.push(pair("alias_1", "docs"));
+    pairs.push(pair("path_1", "/tmp/docs"));
+    pairs.push(pair("access_1", "read-only"));
+    let (mut form, intent) = AgentFormState::parse(pairs).expect("parse");
+    form.apply(intent).expect("apply");
+    assert_eq!(form.directories.len(), 1);
+    assert_eq!(form.primary, "project");
+}
+
+#[test]
+fn remove_directory_rejects_the_last_row() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "remove-directory:0");
+    let (mut form, intent) = AgentFormState::parse(pairs).expect("parse");
+    assert_eq!(form.apply(intent).err(), Some(FormError::Index));
+    assert_eq!(form.directories.len(), 1);
+}
+
+fn revision_form(revision: &str) -> AgentFormState {
+    let mut form = AgentFormState::blank();
+    form.revision = revision.to_owned();
+    form
 }
 
 #[test]
