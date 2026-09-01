@@ -71,6 +71,7 @@ pub(crate) struct ChatViewModel {
     pub(crate) environment_preview: Vec<PreviewLine>,
     pub(crate) environment_preview_error: &'static str,
     pub(crate) preview_ready: bool,
+    pub(crate) quick_ready: bool,
 }
 
 pub(crate) struct PreviewLine {
@@ -203,6 +204,7 @@ impl ChatViewModel {
             environment_preview: Vec::new(),
             environment_preview_error: "",
             preview_ready: false,
+            quick_ready: false,
         }
     }
 
@@ -264,6 +266,7 @@ impl ChatViewModel {
             environment_preview: &self.environment_preview,
             environment_preview_error: self.environment_preview_error,
             preview_ready: self.preview_ready,
+            quick_ready: self.quick_ready,
         }
     }
 
@@ -272,9 +275,8 @@ impl ChatViewModel {
             providers: &self.providers,
             project_name: &self.project_name,
             project_available: self.project_available,
-            workflow_options: &self.workflow_options,
-            workflow_empty: self.workflow_empty,
-            preview_ready: self.preview_ready,
+            agent_name: &self.agent_name,
+            quick_ready: self.quick_ready,
         }
     }
 
@@ -351,9 +353,8 @@ pub(crate) struct ReadinessRouteContents<'a> {
     pub(crate) providers: &'a [DeskProviderOption],
     pub(crate) project_name: &'a str,
     pub(crate) project_available: bool,
-    pub(crate) workflow_options: &'a [WorkflowOption],
-    pub(crate) workflow_empty: bool,
-    pub(crate) preview_ready: bool,
+    pub(crate) agent_name: &'a str,
+    pub(crate) quick_ready: bool,
 }
 
 #[derive(Template)]
@@ -370,6 +371,7 @@ pub(crate) struct ComposerContents<'a> {
     pub(crate) environment_preview: &'a [PreviewLine],
     pub(crate) environment_preview_error: &'static str,
     pub(crate) preview_ready: bool,
+    pub(crate) quick_ready: bool,
 }
 
 #[derive(Template)]

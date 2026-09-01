@@ -18,9 +18,15 @@ use crate::{
 };
 
 use crate::slices::chat::{
-    ChatForm, DeskPage, ObserveQuery, accept_job_patch, navigate_page, observe, reject_chat_input,
-    reject_chat_selection, reject_parallel_command, render_document, view,
+    ChatForm, DeskMode, DeskPage, ObserveQuery, accept_job_patch, navigate_page, observe,
+    reject_chat_input, reject_chat_selection, reject_parallel_command, render_document, view,
 };
+
+#[derive(Default, serde::Deserialize)]
+pub(super) struct SendQuery {
+    #[serde(default)]
+    workflow: String,
+}
 
 struct DeskContext {
     session: SessionId,
@@ -76,6 +82,7 @@ pub(super) async fn send(
     session: crate::sessions::RequiredSession,
     graft: CommandGraft,
     Path((project_id, agent_id)): Path<(String, String)>,
+    Query(query): Query<SendQuery>,
     Form(form): Form<ChatForm>,
 ) -> AppResult<Response> {
     let desk = match require_desk(&state, session.0, &project_id, &agent_id, graft).await {
@@ -96,18 +103,35 @@ pub(super) async fn send(
         )
         .await;
     }
-    let selection = match form.workflow_selection() {
-        Ok(selection) => selection,
+    let mode = match form.mode() {
+        Ok(mode) => mode,
         Err(_) => {
             return reject_chat_input(
                 &state,
                 graft,
                 desk.page(),
-                "Choose a workflow.",
+                "Choose a run mode.",
                 &form.message,
             )
             .await;
         }
+    };
+    let configured_selection = if mode == DeskMode::Configured {
+        match form.workflow_selection(&query.workflow) {
+            Ok(selection) => Some(selection),
+            Err(_) => {
+                return reject_chat_input(
+                    &state,
+                    graft,
+                    desk.page(),
+                    "Choose a workflow.",
+                    &form.message,
+                )
+                .await;
+            }
+        }
+    } else {
+        None
     };
     if desk.snapshot.session_busy {
         return reject_parallel_command(&state, graft, desk.page()).await;
@@ -196,86 +220,149 @@ pub(super) async fn send(
         )
         .await;
     }
-    let resolved = match state.workflows.resolve(&selection) {
-        Ok(resolved) => resolved,
-        Err(error) => {
-            let status = match error {
-                ResolveWorkflowError::Missing | ResolveWorkflowError::Changed => {
-                    PatchStatus::Conflict
-                }
-                ResolveWorkflowError::Invalid => PatchStatus::UnprocessableEntity,
-            };
-            return reject_chat_selection(
-                &state,
-                graft,
-                DeskPage {
-                    project: &project,
-                    agent: &record,
-                    eligible: &eligible,
-                    snapshot: &desk.snapshot,
-                },
-                error.message(),
-                &form.message,
-                status,
-            )
-            .await;
-        }
-    };
     let directories: Vec<(String, crate::agents::AccessMode)> = record
         .directories
         .iter()
         .map(|grant| (grant.alias.clone(), grant.access))
         .collect();
-    if !definition_fits_agent(
-        &resolved.pinned.definition,
-        &record.tools,
-        &directories,
-        &grant.alias,
-    ) {
-        return reject_chat_input(
-            &state,
-            graft,
-            DeskPage {
-                project: &project,
-                agent: &record,
-                eligible: &eligible,
-                snapshot: &desk.snapshot,
-            },
-            "That workflow needs access this agent does not allow.",
-            &form.message,
-        )
-        .await;
-    }
-    let environments = match workflows::resolve_environments(
-        &resolved.pinned.definition,
-        &state.environments,
-        &state.environment_snapshots,
-    )
-    .await
-    {
-        Ok(environments) => environments,
-        Err(error) => {
-            return reject_chat_input(
-                &state,
-                graft,
-                DeskPage {
-                    project: &project,
-                    agent: &record,
-                    eligible: &eligible,
-                    snapshot: &desk.snapshot,
-                },
-                error.message(),
-                &form.message,
+    let latest_page = DeskPage {
+        project: &project,
+        agent: &record,
+        eligible: &eligible,
+        snapshot: &desk.snapshot,
+    };
+    let (kind, pinned, environments) = match configured_selection {
+        Some(ref selection) => {
+            let resolved = match state.workflows.resolve(selection) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    let status = match error {
+                        ResolveWorkflowError::Missing | ResolveWorkflowError::Changed => {
+                            PatchStatus::Conflict
+                        }
+                        ResolveWorkflowError::Invalid => PatchStatus::UnprocessableEntity,
+                    };
+                    return reject_chat_selection(
+                        &state,
+                        graft,
+                        latest_page,
+                        error.message(),
+                        &form.message,
+                        status,
+                    )
+                    .await;
+                }
+            };
+            if !definition_fits_agent(
+                &resolved.pinned.definition,
+                &record.tools,
+                &directories,
+                &grant.alias,
+            ) {
+                return reject_chat_input(
+                    &state,
+                    graft,
+                    latest_page,
+                    "That workflow needs access this agent does not allow.",
+                    &form.message,
+                )
+                .await;
+            }
+            let environments = match workflows::resolve_environments(
+                &resolved.pinned.definition,
+                &state.environments,
+                &state.environment_snapshots,
             )
-            .await;
+            .await
+            {
+                Ok(environments) => environments,
+                Err(error) => {
+                    return reject_chat_input(
+                        &state,
+                        graft,
+                        latest_page,
+                        error.message(),
+                        &form.message,
+                    )
+                    .await;
+                }
+            };
+            (RunKind::Configured, resolved.pinned, environments)
+        }
+        None => {
+            let environment_id = match workflows::alpine_git_id(&state.environments) {
+                Ok(id) => id,
+                Err(error) => {
+                    return reject_chat_input(
+                        &state,
+                        graft,
+                        latest_page,
+                        error.message(),
+                        &form.message,
+                    )
+                    .await;
+                }
+            };
+            let pinned = match workflows::pin_quick_task(
+                grant.access,
+                &record.tools,
+                &record.instructions,
+                environment_id,
+            ) {
+                Ok(pinned) => pinned,
+                Err(error) => {
+                    return reject_chat_input(
+                        &state,
+                        graft,
+                        latest_page,
+                        error.message(),
+                        &form.message,
+                    )
+                    .await;
+                }
+            };
+            if !definition_fits_agent(
+                &pinned.definition,
+                &record.tools,
+                &directories,
+                &grant.alias,
+            ) {
+                return reject_chat_input(
+                    &state,
+                    graft,
+                    latest_page,
+                    "That workflow needs access this agent does not allow.",
+                    &form.message,
+                )
+                .await;
+            }
+            let environments = match workflows::resolve_environments(
+                &pinned.definition,
+                &state.environments,
+                &state.environment_snapshots,
+            )
+            .await
+            {
+                Ok(environments) => environments,
+                Err(error) => {
+                    return reject_chat_input(
+                        &state,
+                        graft,
+                        latest_page,
+                        error.message(),
+                        &form.message,
+                    )
+                    .await;
+                }
+            };
+            (RunKind::QuickTask, pinned, environments)
         }
     };
 
     let message = form.message.trim().to_owned();
     let run_id = workflows::RunId::generate()
         .map_err(|error| crate::error::AppError::new("create workflow run identifier", error))?;
-    let workflow_name = resolved.pinned.definition.name().to_owned();
-    let pinned = resolved.pinned;
+    let workflow_name = pinned.definition.name().to_owned();
     let key = ConversationKey {
         project_id: project.id,
         agent_id: record.id,
@@ -316,7 +403,7 @@ pub(super) async fn send(
         workflows::now_ms(),
         project.id,
         record.id,
-        RunKind::Configured,
+        kind,
         pinned,
         environments,
     );
@@ -326,9 +413,11 @@ pub(super) async fn send(
             .rollback_turn(&desk.session, &key, &started.job.id());
         return Err(crate::error::AppError::new("store workflow run", error));
     }
-    state
-        .sessions
-        .set_preferred_workflow(&desk.session, key, selection.workflow_id);
+    if let Some(selection) = configured_selection {
+        state
+            .sessions
+            .set_preferred_workflow(&desk.session, key, selection.workflow_id);
+    }
     state.sessions.remember_conversation(&desk.session, key);
     started.job.set_workflow_name(workflow_name);
     started.job.set_step_label("Source capture".to_owned());

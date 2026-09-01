@@ -9,6 +9,7 @@ fn rejects_empty_and_oversized_messages() {
     assert!(
         !ChatForm {
             message: "   ".to_owned(),
+            mode: String::new(),
             workflow: String::new(),
         }
         .is_bounded()
@@ -16,6 +17,7 @@ fn rejects_empty_and_oversized_messages() {
     assert!(
         !ChatForm {
             message: "a".repeat(MAXIMUM_MESSAGE_BYTES + 1),
+            mode: String::new(),
             workflow: String::new(),
         }
         .is_bounded()
@@ -23,9 +25,71 @@ fn rejects_empty_and_oversized_messages() {
     assert!(
         ChatForm {
             message: "  hello  ".to_owned(),
+            mode: String::new(),
             workflow: String::new(),
         }
         .is_bounded()
+    );
+}
+
+#[test]
+fn accepts_quick_and_configured_modes() {
+    use super::{DeskMode, DeskModeError};
+
+    assert_eq!(
+        ChatForm {
+            message: "hello".to_owned(),
+            mode: "quick".to_owned(),
+            workflow: String::new(),
+        }
+        .mode(),
+        Ok(DeskMode::Quick)
+    );
+    assert_eq!(
+        ChatForm {
+            message: "hello".to_owned(),
+            mode: " configured ".to_owned(),
+            workflow: String::new(),
+        }
+        .mode(),
+        Ok(DeskMode::Configured)
+    );
+    assert_eq!(
+        ChatForm {
+            message: "hello".to_owned(),
+            mode: String::new(),
+            workflow: String::new(),
+        }
+        .mode(),
+        Err(DeskModeError::Absent)
+    );
+    assert_eq!(
+        ChatForm {
+            message: "hello".to_owned(),
+            mode: "chat".to_owned(),
+            workflow: String::new(),
+        }
+        .mode(),
+        Err(DeskModeError::Malformed)
+    );
+}
+
+#[test]
+fn workflow_selection_accepts_one_source_and_rejects_conflicts() {
+    use super::WorkflowTokenError;
+
+    let first = format!("{}:{}", "a".repeat(32), "b".repeat(64));
+    let second = format!("{}:{}", "c".repeat(32), "d".repeat(64));
+    let mut form = ChatForm {
+        message: "hello".to_owned(),
+        mode: "configured".to_owned(),
+        workflow: String::new(),
+    };
+    assert!(form.workflow_selection(&first).is_ok());
+    form.workflow = first;
+    assert_eq!(
+        form.workflow_selection(&second),
+        Err(WorkflowTokenError::Malformed)
     );
 }
 

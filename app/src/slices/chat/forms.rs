@@ -12,7 +12,21 @@ pub(crate) struct ChatForm {
     #[serde(default)]
     pub(crate) message: String,
     #[serde(default)]
+    pub(crate) mode: String,
+    #[serde(default)]
     pub(crate) workflow: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeskMode {
+    Quick,
+    Configured,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeskModeError {
+    Absent,
+    Malformed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,8 +41,29 @@ impl ChatForm {
         !message.is_empty() && message.len() <= MAXIMUM_MESSAGE_BYTES
     }
 
-    pub(crate) fn workflow_selection(&self) -> Result<WorkflowSelection, WorkflowTokenError> {
-        let token = self.workflow.trim();
+    pub(crate) fn mode(&self) -> Result<DeskMode, DeskModeError> {
+        match self.mode.trim() {
+            "" => Err(DeskModeError::Absent),
+            "quick" => Ok(DeskMode::Quick),
+            "configured" => Ok(DeskMode::Configured),
+            _ => Err(DeskModeError::Malformed),
+        }
+    }
+
+    pub(crate) fn workflow_selection(
+        &self,
+        query_workflow: &str,
+    ) -> Result<WorkflowSelection, WorkflowTokenError> {
+        let submitted = self.workflow.trim();
+        let query = query_workflow.trim();
+        if !submitted.is_empty() && !query.is_empty() && submitted != query {
+            return Err(WorkflowTokenError::Malformed);
+        }
+        let token = if submitted.is_empty() {
+            query
+        } else {
+            submitted
+        };
         if token.is_empty() {
             return Err(WorkflowTokenError::Absent);
         }

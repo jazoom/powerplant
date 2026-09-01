@@ -218,6 +218,21 @@ impl EnvironmentCatalogue {
         records
     }
 
+    #[cfg(test)]
+    pub(crate) fn apply_production_seeds(&self) {
+        let mut state = self.lock();
+        let mut next = state.clone_state();
+        let changed =
+            apply_absent_seeds(&mut next, &super::seeds::production_seeds()).expect("seeds");
+        if !changed {
+            return;
+        }
+        persist(self.path.as_deref(), &next).expect("persist");
+        *state = next;
+        drop(state);
+        self.bump_refresh();
+    }
+
     pub(crate) fn seed_id(&self, key: &str) -> Option<EnvironmentId> {
         let key = SeedKey::parse(key)?;
         self.lock()

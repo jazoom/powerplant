@@ -1471,21 +1471,28 @@ async fn run_agent_step(
             };
         }
     };
-    let Some(role) = state
-        .workflow_runs
-        .get(&job.run_id)
-        .and_then(|run| run.pinned.definition.role(&action.role).cloned())
-    else {
+    let Some((run_kind, role)) = state.workflow_runs.get(&job.run_id).and_then(|run| {
+        run.pinned
+            .definition
+            .role(&action.role)
+            .cloned()
+            .map(|role| (run.kind, role))
+    }) else {
         return StepOutcome::Failed {
             category: FailureCategory::Definition,
             error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
         };
     };
-    let agent_instructions = state
-        .agents
-        .get(&job.agent_id)
-        .map(|record| record.instructions)
-        .unwrap_or_default();
+    // Quick task pins agent instructions in the role. A live record can duplicate or change the pinned prompt.
+    let agent_instructions = if run_kind == crate::workflows::RunKind::QuickTask {
+        String::new()
+    } else {
+        state
+            .agents
+            .get(&job.agent_id)
+            .map(|record| record.instructions)
+            .unwrap_or_default()
+    };
     let instructions = match (
         role.prompt_defaults.trim().is_empty(),
         agent_instructions.trim().is_empty(),

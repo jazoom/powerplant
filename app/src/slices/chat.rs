@@ -30,7 +30,7 @@ use self::{
     page::{ChatViewModel, JobObserveContents, TranscriptContents},
 };
 
-pub(crate) use forms::{ChatForm, ObserveQuery};
+pub(crate) use forms::{ChatForm, DeskMode, ObserveQuery};
 pub(crate) use job::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action};
 
 #[derive(Clone, Copy)]
@@ -393,6 +393,8 @@ pub(crate) async fn view(
     .with_project(page.project, page.agent, page.eligible);
     attach_workflow_ui(state, page.snapshot, &mut rendered, workflow_query);
     attach_environment_preview(state, &mut rendered).await;
+    rendered.quick_ready =
+        workflows::alpine_git_is_ready(&state.environments, &state.environment_snapshots).await;
     rendered
 }
 

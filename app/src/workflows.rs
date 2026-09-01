@@ -9,6 +9,7 @@ mod executor;
 pub(crate) mod gates;
 mod id;
 mod input_context;
+mod quick;
 mod resolve;
 pub(crate) mod run;
 
@@ -28,6 +29,7 @@ pub(crate) use executor::{
     interrupt_session_continuations, recover_commit_transactions, settle_completed_job,
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
+pub(crate) use quick::{alpine_git_id, alpine_git_is_ready, pin_quick_task};
 #[cfg(test)]
 pub(crate) use resolve::test_set as test_environment_set;
 pub(crate) use resolve::{preview_environments, resolve_environments};

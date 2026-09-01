@@ -1000,7 +1000,6 @@ impl std::fmt::Debug for DefinitionVersion {
 }
 
 impl PinnedWorkflowDefinition {
-    #[cfg(test)]
     pub(crate) fn pin(workflow_id: Option<WorkflowId>, definition: WorkflowDefinition) -> Self {
         let version = definition.version();
         Self {

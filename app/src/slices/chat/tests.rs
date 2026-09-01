@@ -122,30 +122,37 @@ async fn connected(state: &AppState) -> String {
 }
 
 async fn seed_ready_workflow(state: &AppState) {
-    let (environment, preparation) = state
+    state.environments.apply_production_seeds();
+    let environment_id = crate::workflows::alpine_git_id(&state.environments).expect("alpine-git");
+    let environment = state
         .environments
-        .create(crate::environments::EnvironmentDraft {
-            name: "Alpine Git".to_owned(),
-            oci_image: "alpine/git".to_owned(),
-            setup_script: String::new(),
-        })
+        .get(&environment_id)
         .expect("environment");
-    state.environments.claim_oldest_queued().expect("claim");
-    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
-    state.environment_snapshots.mark(
-        snapshot.artifact_key.clone(),
-        crate::environments::SnapshotAvailability::Available,
-    );
-    state
-        .environments
-        .finish_ready(&preparation.id, snapshot, preparation.log)
-        .expect("ready");
-    state
-        .workflows
-        .create(crate::workflows::seeds::one_agent_definition(
-            environment.id,
-        ))
-        .expect("workflow");
+    if environment.ready_preparation.is_none() {
+        let preparation = state
+            .environments
+            .claim_oldest_queued()
+            .expect("claim")
+            .expect("queued");
+        let snapshot =
+            crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+        state.environment_snapshots.mark(
+            snapshot.artifact_key.clone(),
+            crate::environments::SnapshotAvailability::Available,
+        );
+        state
+            .environments
+            .finish_ready(&preparation.id, snapshot, preparation.log)
+            .expect("ready");
+    }
+    if state.workflows.list().is_empty() {
+        state
+            .workflows
+            .create(crate::workflows::seeds::one_agent_definition(
+                environment.id,
+            ))
+            .expect("workflow");
+    }
 }
 
 fn workflow_token(state: &AppState) -> String {
@@ -166,7 +173,7 @@ fn patch_send_message(state: &AppState, token: &str, message: &str) -> Request<B
         .header(hypergraft::GRAFT_REQUEST, "patch")
         .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
         .body(Body::from(format!(
-            "message={message}&workflow={}",
+            "message={message}&mode=configured&workflow={}",
             workflow_token(state)
         )))
         .unwrap()
@@ -209,6 +216,34 @@ fn cookie(token: &str) -> String {
 
 fn patch_send(state: &AppState, token: &str) -> Request<Body> {
     patch_send_message(state, token, "Hello")
+}
+
+fn patch_send_quick(state: &AppState, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(chat_path(state))
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from("message=Hello&mode=quick"))
+        .unwrap()
+}
+
+fn patch_send_configured(state: &AppState, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(format!(
+            "{}?workflow={}",
+            chat_path(state),
+            workflow_token(state)
+        ))
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from("message=Hello&mode=configured"))
+        .unwrap()
 }
 
 fn document_show(state: &AppState, token: &str) -> Request<Body> {
@@ -481,10 +516,7 @@ async fn a_document_send_returns_the_page_before_the_job_finishes() {
                 .uri(chat_path(&state))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(Body::from(format!(
-                    "message=Hello&workflow={}",
-                    workflow_token(&state)
-                )))
+                .body(Body::from("message=Hello&mode=quick".to_owned()))
                 .unwrap(),
         )
         .await
@@ -1266,7 +1298,9 @@ async fn a_missing_environment_rejects_a_task_before_a_run_starts() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(format!("message=ls&workflow={selection}")))
+                .body(Body::from(format!(
+                    "message=ls&mode=configured&workflow={selection}"
+                )))
                 .unwrap(),
         )
         .await
@@ -1516,7 +1550,9 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(format!("message=Hello&workflow={reader_token}")))
+                .body(Body::from(format!(
+                    "message=Hello&mode=configured&workflow={reader_token}"
+                )))
                 .unwrap(),
         )
         .await
@@ -1574,7 +1610,7 @@ async fn a_second_session_cannot_start_while_a_workflow_runs() {
 }
 
 #[tokio::test]
-async fn a_missing_workflow_token_is_rejected_before_a_job_starts() {
+async fn a_missing_run_mode_is_rejected_before_a_job_starts() {
     let state = test_state();
     let token = connected(&state).await;
     let response = app(&state)
@@ -1587,6 +1623,40 @@ async fn a_missing_workflow_token_is_rejected_before_a_job_starts() {
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from("message=Hello"))
+                .unwrap(),
+        )
+        .await
+        .expect("send");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.contains("Choose a run mode."));
+    assert!(session_snapshot(&state, &token).job.is_none());
+    assert!(state.workflow_runs.summaries().is_empty());
+}
+
+#[tokio::test]
+async fn a_configured_send_without_a_workflow_is_rejected() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(chat_path(&state))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("message=Hello&mode=configured"))
                 .unwrap(),
         )
         .await
@@ -1636,7 +1706,9 @@ async fn a_stale_workflow_selection_is_a_conflict() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(format!("message=Hello&workflow={stale}")))
+                .body(Body::from(format!(
+                    "message=Hello&mode=configured&workflow={stale}"
+                )))
                 .unwrap(),
         )
         .await
@@ -1651,7 +1723,7 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
     let token = connected(&state).await;
     let record = state.workflows.list().into_iter().next().expect("workflow");
     let _ = app(&state)
-        .oneshot(patch_send(&state, &token))
+        .oneshot(patch_send_configured(&state, &token))
         .await
         .expect("send");
     wait_until_job_idle(&state, &token).await;
@@ -1679,4 +1751,213 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
     let stored = state.workflow_runs.get(&run.id).expect("run");
     assert_eq!(stored.pinned.definition.name(), "One agent");
     assert_eq!(stored.pinned.workflow_id, Some(record.id));
+}
+
+#[tokio::test]
+async fn a_quick_task_send_pins_the_system_definition() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    wait_until_job_idle(&state, &token).await;
+    let run = state
+        .workflow_runs
+        .get(&state.workflow_runs.summaries()[0].id)
+        .expect("run");
+    assert_eq!(run.kind, crate::workflows::RunKind::QuickTask);
+    assert_eq!(run.pinned.workflow_id, None);
+    assert_eq!(run.pinned.definition.name(), "Quick task");
+    assert_eq!(run.project_id, state.projects.list()[0].id);
+}
+
+#[tokio::test]
+async fn a_quick_task_uses_the_pinned_agent_instructions_once() {
+    let backend = ScriptedBackend::accept();
+    let state = state_with_backend(backend.clone());
+    let token = connected(&state).await;
+    let agent = state.agents.list()[0].clone();
+    state
+        .agents
+        .update(
+            &agent.id,
+            agent.revision,
+            AgentDraft {
+                name: agent.name,
+                instructions: "Keep this exact instruction.".to_owned(),
+                tools: agent.tools,
+                directories: agent.directories,
+                primary_directory: agent.primary_directory,
+            },
+        )
+        .expect("update agent");
+
+    let response = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    wait_until_job_idle(&state, &token).await;
+
+    let preamble = backend.last_preamble().expect("preamble");
+    assert_eq!(preamble.matches("Keep this exact instruction.").count(), 1);
+}
+
+#[tokio::test]
+async fn a_quick_task_does_not_need_a_workflow_catalogue() {
+    let state = test_state();
+    let token = connected(&state).await;
+    for record in state.workflows.list() {
+        state
+            .workflows
+            .delete(&record.id, record.revision)
+            .expect("delete workflow");
+    }
+    assert!(state.workflows.list().is_empty());
+    let response = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    wait_until_job_idle(&state, &token).await;
+    let run = state
+        .workflow_runs
+        .get(&state.workflow_runs.summaries()[0].id)
+        .expect("run");
+    assert_eq!(run.kind, crate::workflows::RunKind::QuickTask);
+    assert_eq!(run.pinned.workflow_id, None);
+}
+
+#[tokio::test]
+async fn an_unavailable_alpine_git_seed_rejects_a_quick_task() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let environment_id = crate::workflows::alpine_git_id(&state.environments).expect("alpine-git");
+    let environment = state
+        .environments
+        .get(&environment_id)
+        .expect("environment");
+    state
+        .environments
+        .delete(&environment_id, environment.revision)
+        .expect("retire alpine-git");
+    let response = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.contains("That environment is no longer in the catalogue."));
+    assert!(session_snapshot(&state, &token).job.is_none());
+    assert!(state.workflow_runs.summaries().is_empty());
+}
+
+#[tokio::test]
+async fn a_read_only_quick_task_omits_the_gate_and_commit() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let dir = tempfile::tempdir().expect("reader");
+    git_init(dir.path());
+    let agent = state
+        .agents
+        .create(AgentDraft {
+            name: "Reader".to_owned(),
+            instructions: "Only read files.".to_owned(),
+            tools: vec![ToolId::List, ToolId::Read],
+            directories: vec![DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: dir.path().to_path_buf(),
+                access: AccessMode::ReadOnly,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("reader");
+    let project = state
+        .projects
+        .create(
+            "Reader project".to_owned(),
+            agent.directories[0].host_path.clone(),
+        )
+        .expect("project");
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/projects/{}/agents/{}",
+                    project.id.as_hex(),
+                    agent.id.as_hex()
+                ))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("message=Explain&mode=quick"))
+                .unwrap(),
+        )
+        .await
+        .expect("send");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    for _ in 0..2_000 {
+        if state
+            .sessions
+            .snapshot(
+                &session_id(&token),
+                &crate::sessions::ConversationKey {
+                    project_id: project.id,
+                    agent_id: agent.id,
+                },
+            )
+            .expect("session")
+            .job
+            .is_some_and(|job| job.status != JobStatus::Running)
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let run = state
+        .workflow_runs
+        .get(&state.workflow_runs.summaries()[0].id)
+        .expect("run");
+    assert_eq!(run.kind, crate::workflows::RunKind::QuickTask);
+    assert_eq!(run.pinned.definition.steps().len(), 1);
+}
+
+#[tokio::test]
+async fn a_desk_document_uses_quick_task_as_the_default_send() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(document_show(&state, &token))
+        .await
+        .expect("document");
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.contains("name=\"mode\""));
+    assert!(text.contains("value=\"quick\""));
+    assert!(text.contains("value=\"configured\""));
+    assert!(text.contains("Configured workflow"));
+    assert!(text.contains("Alpine Git"));
 }

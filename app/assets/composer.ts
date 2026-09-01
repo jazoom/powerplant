@@ -40,7 +40,13 @@ export function initComposer(
             return;
         }
         event.preventDefault();
-        root.requestSubmit();
+        const submitter = root.querySelector<HTMLButtonElement>(
+            'button[type="submit"][name="mode"][value="quick"]',
+        );
+        if (!submitter || submitter.disabled) {
+            return;
+        }
+        root.requestSubmit(submitter);
     };
 
     root.addEventListener("keydown", onKeyDown, { signal });

@@ -213,7 +213,9 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(format!("message=Hello&workflow={token_value}")))
+                .body(Body::from(format!(
+                    "message=Hello&mode=configured&workflow={token_value}"
+                )))
                 .unwrap(),
         )
         .await
