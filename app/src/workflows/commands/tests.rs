@@ -56,3 +56,30 @@ fn command_contract_table() {
         commit_contract.required_inputs
     ));
 }
+
+#[test]
+fn commit_contract_accepts_review_and_decision_authority() {
+    let commit = SystemCommandId::parse("commit-candidate")
+        .expect("commit")
+        .contract();
+    let outputs = [OutputKind::CandidateRevision];
+    let candidate = ArtefactKind::CandidateRevision;
+    let review = ArtefactKind::ReviewReport;
+    let decision = ArtefactKind::HumanDecision;
+
+    assert!(commit.accepts(&[candidate, review], &outputs));
+    assert!(commit.accepts(&[candidate, review, review], &outputs));
+    assert!(commit.accepts(&[candidate, decision], &outputs));
+    assert!(commit.accepts(&[candidate, review, decision], &outputs));
+    assert!(commit.accepts(&[candidate, review, review, decision], &outputs));
+
+    assert!(!commit.accepts(&[candidate], &outputs));
+    assert!(!commit.accepts(&[review], &outputs));
+    assert!(!commit.accepts(&[decision], &outputs));
+    assert!(!commit.accepts(&[candidate, candidate, review], &outputs));
+    assert!(!commit.accepts(&[candidate, decision, decision], &outputs));
+    assert!(!commit.accepts(&[candidate, ArtefactKind::Plan], &outputs));
+    assert!(!commit.accepts(&[candidate, ArtefactKind::TestReport], &outputs));
+    assert!(!commit.accepts(&[candidate, review, ArtefactKind::Plan], &outputs));
+    assert!(!commit.accepts(&[], &outputs));
+}

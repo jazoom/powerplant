@@ -39,8 +39,8 @@ impl SystemCommandContract {
                 .filter(|kind| **kind == ArtefactKind::HumanDecision)
                 .count();
             return candidates == 1
-                && reviews >= 1
                 && decisions <= 1
+                && (reviews >= 1 || decisions == 1)
                 && candidates + reviews + decisions == inputs.len();
         }
         kinds_match(inputs, self.required_inputs)

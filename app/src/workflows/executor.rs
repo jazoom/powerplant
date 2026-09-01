@@ -285,7 +285,7 @@ pub(crate) async fn execute_run(
                 if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
         );
         let commit_precondition = if commit_step {
-            crate::workflows::commit::require_approved_review(
+            crate::workflows::commit::require_commit_approval(
                 &run,
                 &step,
                 &inputs,
@@ -1072,17 +1072,12 @@ async fn execute_commit_transaction(
             &initial_bytes,
         )
         .ok_or(CommitError::Operational)?;
-    let live = crate::workflows::artefacts::CandidateCapture::capture_host(
+    crate::workflows::commit::require_unchanged_project(
         user_project,
+        &initial,
+        &target.artefact,
         &state.workflow_artefacts,
-    )
-    .map_err(|_| CommitError::Preflight)?;
-    if live != initial
-        || target.artefact.repository != initial.repository
-        || target.artefact.git_admin != initial.git_admin
-    {
-        return Err(CommitError::Preflight);
-    }
+    )?;
     let expected_reference = current_reference(user_project)?;
     let candidate = inputs
         .iter()
@@ -1098,15 +1093,15 @@ async fn execute_commit_transaction(
         })
         .map(|input| input.artefact.clone())
         .collect();
-    if reviews.is_empty() {
-        return Err(CommitError::Assurance);
-    }
     let approval = inputs
         .iter()
         .find(|input| {
             input.artefact.kind == crate::workflows::definition::ArtefactKind::HumanDecision
         })
         .map(|input| input.artefact.clone());
+    if reviews.is_empty() && approval.is_none() {
+        return Err(CommitError::Assurance);
+    }
     let timestamp = crate::workflows::commit::utc_timestamp(now_ms());
     let mut transaction = CommitTransaction {
         state: CommitTransactionState::Prepared,

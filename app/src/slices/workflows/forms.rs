@@ -1119,21 +1119,24 @@ fn ensure_action_defaults(steps: &mut [StepDraft]) {
         let existing_inputs = std::mem::take(&mut steps[index].inputs);
         let mut required_inputs = contract.required_inputs.to_vec();
         if command == SystemCommandId::CommitCandidate {
-            let extra_reviews = existing_inputs
+            let review_count = existing_inputs
                 .iter()
                 .filter(|input| {
                     ArtefactKind::parse(&input.kind) == Some(ArtefactKind::ReviewReport)
                 })
-                .count()
-                .saturating_sub(1);
-            required_inputs.extend(std::iter::repeat_n(
-                ArtefactKind::ReviewReport,
-                extra_reviews,
-            ));
-            if existing_inputs
+                .count();
+            let has_decision = existing_inputs
                 .iter()
-                .any(|input| ArtefactKind::parse(&input.kind) == Some(ArtefactKind::HumanDecision))
-            {
+                .any(|input| ArtefactKind::parse(&input.kind) == Some(ArtefactKind::HumanDecision));
+            if has_decision && review_count == 0 {
+                required_inputs.retain(|kind| *kind != ArtefactKind::ReviewReport);
+            } else {
+                required_inputs.extend(std::iter::repeat_n(
+                    ArtefactKind::ReviewReport,
+                    review_count.saturating_sub(1),
+                ));
+            }
+            if has_decision {
                 required_inputs.push(ArtefactKind::HumanDecision);
             }
         }

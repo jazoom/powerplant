@@ -990,6 +990,66 @@ fn durable_commit_transactions_preserve_every_review_reference() {
 }
 
 #[test]
+fn durable_commit_transactions_record_an_approved_human_decision() {
+    let candidate = reference_for(ArtefactKind::CandidateRevision, b"candidate");
+    let approval = reference_for(ArtefactKind::HumanDecision, b"decision");
+    let attempt = AttemptRecord {
+        id: AttemptId::generate().expect("attempt"),
+        step: StepKey::parse("commit").expect("step"),
+        ordinal: 1,
+        action_kind: ActionKind::SystemCommand,
+        started_at_ms: 1,
+        finished_at_ms: None,
+        state: AttemptState::Active,
+        result: None,
+        review_route: None,
+        inputs: vec![
+            super::AttemptArtefactInput {
+                key: InputKey::parse("candidate").expect("input"),
+                artefact: candidate.clone(),
+            },
+            super::AttemptArtefactInput {
+                key: InputKey::parse("decision").expect("input"),
+                artefact: approval.clone(),
+            },
+        ],
+        outputs: Vec::new(),
+        capabilities: test_command_capabilities(),
+        sandbox: AttemptSandboxRecord {
+            kind: AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: crate::environments::SnapshotDigest::parse(&format!(
+                "sha256:{}",
+                "a".repeat(64)
+            ))
+            .expect("digest"),
+        },
+        cleanup: AttemptCleanupRecord::Pending,
+        commit_transaction: None,
+        commit_result: None,
+    };
+    let transaction = crate::workflows::commit::CommitTransaction {
+        state: crate::workflows::commit::CommitTransactionState::Prepared,
+        candidate,
+        reviews: Vec::new(),
+        approval: Some(approval.clone()),
+        expected_reference: "refs/heads/main".to_owned(),
+        old_object: None,
+        target_tree: None,
+        expected_commit: None,
+        timestamp: "1700000000 +0000".to_owned(),
+    };
+    assert!(super::valid_commit_transaction(&attempt, &transaction));
+
+    let mut missing = transaction.clone();
+    missing.approval = None;
+    assert!(!super::valid_commit_transaction(&attempt, &missing));
+
+    let mut other = transaction;
+    other.approval = Some(reference_for(ArtefactKind::HumanDecision, b"other"));
+    assert!(!super::valid_commit_transaction(&attempt, &other));
+}
+
+#[test]
 fn version_two_run_records_round_trip() {
     let mut run = new_run();
     let attempt = start(&mut run);

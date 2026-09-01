@@ -1,17 +1,20 @@
 use super::{
     CommitError, NON_APPROVED_MESSAGE, commit_tree_command, hash_object_command,
-    index_info_command, parse_object_id, require_approved_review, utc_timestamp,
-    write_tree_command,
+    index_info_command, parse_object_id, require_commit_approval, require_unchanged_project,
+    utc_timestamp, write_tree_command,
 };
 use crate::workflows::artefacts::candidate::GitObjectFormat;
 use crate::workflows::artefacts::{
     ArtefactProducer, ArtefactProvenance, ArtefactRecord, ArtefactReference, ArtefactSummary,
-    ProductionDisposition, ReviewVerdict, WorkflowArtefactRepository, artefact_hash_for, payload,
+    CandidateHash, ProductionDisposition, ReviewVerdict, WorkflowArtefactRepository,
+    artefact_hash_for, payload,
 };
 use crate::workflows::definition::{
-    ArtefactKind, OutputKey, PinnedWorkflowDefinition, StepKey, test_environment_id,
+    ArtefactKind, ArtefactSource, InputKey, OutputKey, PinnedWorkflowDefinition, RequiredInput,
+    StepDefinition, StepKey, test_environment_id,
 };
-use crate::workflows::id::{ArtefactId, AttemptId, RunId};
+use crate::workflows::gates::{GateRevision, HumanDecisionKind, HumanGateRecord, HumanGateState};
+use crate::workflows::id::{ArtefactId, AttemptId, GateId, RunId};
 use crate::workflows::run::{
     AttemptArtefactInput, ObservedCandidate, RunSource, RunSourceState, WorkflowRun,
 };
@@ -182,7 +185,7 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
     ];
     let commit_step = run.pinned.definition.steps().iter().find(|step| matches!(&step.action, crate::workflows::definition::StepAction::SystemCommand(action) if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate)).expect("commit step");
     assert_eq!(
-        require_approved_review(&run, commit_step, &inputs, &store).err(),
+        require_commit_approval(&run, commit_step, &inputs, &store).err(),
         Some(CommitError::Assurance)
     );
     assert_eq!(CommitError::Assurance.message(), NON_APPROVED_MESSAGE);
@@ -214,10 +217,619 @@ fn command_contract_rejects_non_approved_and_stale_reviews() {
             input.artefact.artefact_hash = hash;
         }
         assert_eq!(
-            require_approved_review(&run, commit_step, &inputs, &store).is_ok(),
+            require_commit_approval(&run, commit_step, &inputs, &store).is_ok(),
             accepted
         );
     }
+}
+
+fn captured_candidate(
+    store: &WorkflowArtefactRepository,
+) -> (
+    WorkflowRun,
+    ArtefactRecord,
+    ArtefactReference,
+    crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+    tempfile::TempDir,
+) {
+    let definition = correctness_security_definition(test_environment_id());
+    let environments = crate::workflows::test_environment_set(&definition);
+    let mut run = WorkflowRun::create_for_test(
+        RunId::generate().expect("run"),
+        1,
+        crate::agents::AgentId::generate().expect("agent"),
+        PinnedWorkflowDefinition::pin(None, definition),
+        environments,
+    );
+    let dir = tempfile::tempdir().expect("git");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .expect("git")
+            .success()
+    );
+    let captured = crate::workflows::artefacts::CandidateCapture::capture_host(dir.path(), store)
+        .expect("capture");
+    let bytes = captured.manifest_bytes().expect("manifest");
+    let object = store.publish(&bytes).expect("object");
+    let candidate = ArtefactRecord {
+        id: ArtefactId::generate().expect("id"),
+        kind: ArtefactKind::CandidateRevision,
+        artefact_hash: artefact_hash_for(
+            ArtefactKind::CandidateRevision,
+            crate::workflows::artefacts::CANDIDATE_SCHEMA,
+            &bytes,
+        ),
+        object_hash: object,
+        payload_bytes: bytes.len() as u64,
+        created_at_ms: 1,
+        provenance: ArtefactProvenance {
+            run_id: run.id,
+            producer: ArtefactProducer::StepAttempt {
+                attempt_id: AttemptId::generate().expect("attempt"),
+                step: StepKey::parse("implementer").expect("step"),
+                output: Some(OutputKey::parse("candidate").expect("output")),
+                disposition: ProductionDisposition::RequiredOutput,
+            },
+            inputs: Vec::new(),
+        },
+        summary: ArtefactSummary::Candidate {
+            candidate: captured.candidate_hash,
+            entries: 0,
+            bytes: 0,
+            disposition: ProductionDisposition::RequiredOutput,
+        },
+    };
+    let reference = ArtefactReference {
+        id: candidate.id,
+        kind: candidate.kind,
+        artefact_hash: candidate.artefact_hash,
+    };
+    run.artefacts.push(candidate.clone());
+    run.source = RunSource::Captured {
+        source: RunSourceState {
+            initial: reference.clone(),
+            accepted: reference.clone(),
+            observed: ObservedCandidate::Exact {
+                artefact: reference.clone(),
+            },
+        },
+    };
+    (run, candidate, reference, captured, dir)
+}
+
+fn commit_step(run: &WorkflowRun) -> StepDefinition {
+    run.pinned
+        .definition
+        .steps()
+        .iter()
+        .find(|step| {
+            matches!(
+                &step.action,
+                crate::workflows::definition::StepAction::SystemCommand(action)
+                    if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
+            )
+        })
+        .expect("commit step")
+        .clone()
+}
+
+fn decision_input() -> RequiredInput {
+    RequiredInput {
+        key: InputKey::parse("decision").expect("key"),
+        kind: ArtefactKind::HumanDecision,
+        source: ArtefactSource::StepOutput {
+            step: StepKey::parse("approve").expect("step"),
+            output: OutputKey::parse("decision").expect("output"),
+        },
+    }
+}
+
+fn with_decision_input(mut step: StepDefinition) -> StepDefinition {
+    step.inputs.push(decision_input());
+    step
+}
+
+fn decision_only_step(mut step: StepDefinition) -> StepDefinition {
+    step.inputs
+        .retain(|input| input.kind == ArtefactKind::CandidateRevision);
+    with_decision_input(step)
+}
+
+fn approved_review(
+    run: &WorkflowRun,
+    candidate: &ArtefactReference,
+    hash: CandidateHash,
+    step: &str,
+    store: &WorkflowArtefactRepository,
+) -> ArtefactRecord {
+    let (bytes, object, artefact_hash) =
+        payload::encode_review(hash, ReviewVerdict::Approved, "approved", None).expect("review");
+    store.publish(&bytes).expect("store");
+    ArtefactRecord {
+        id: ArtefactId::generate().expect("id"),
+        kind: ArtefactKind::ReviewReport,
+        artefact_hash,
+        object_hash: object,
+        payload_bytes: bytes.len() as u64,
+        created_at_ms: 1,
+        provenance: ArtefactProvenance {
+            run_id: run.id,
+            producer: ArtefactProducer::StepAttempt {
+                attempt_id: AttemptId::generate().expect("attempt"),
+                step: StepKey::parse(step).expect("step"),
+                output: Some(OutputKey::parse("review").expect("output")),
+                disposition: ProductionDisposition::RequiredOutput,
+            },
+            inputs: vec![candidate.clone()],
+        },
+        summary: ArtefactSummary::Review {
+            candidate: hash,
+            verdict: ReviewVerdict::Approved,
+        },
+    }
+}
+
+fn approved_decision(
+    run: &WorkflowRun,
+    candidate: &ArtefactReference,
+    candidate_hash: CandidateHash,
+    diff_base: CandidateHash,
+    store: &WorkflowArtefactRepository,
+) -> (ArtefactRecord, HumanGateRecord, ArtefactReference) {
+    let gate_id = GateId::generate().expect("gate");
+    let (bytes, object, artefact_hash) = payload::encode_human_decision(
+        candidate_hash,
+        diff_base,
+        HumanDecisionKind::Approved,
+        None,
+        2,
+        None,
+    )
+    .expect("decision");
+    store.publish(&bytes).expect("store");
+    let reference = ArtefactReference {
+        id: ArtefactId::generate().expect("id"),
+        kind: ArtefactKind::HumanDecision,
+        artefact_hash,
+    };
+    let record = ArtefactRecord {
+        id: reference.id,
+        kind: ArtefactKind::HumanDecision,
+        artefact_hash,
+        object_hash: object,
+        payload_bytes: bytes.len() as u64,
+        created_at_ms: 2,
+        provenance: ArtefactProvenance {
+            run_id: run.id,
+            producer: ArtefactProducer::HumanGate {
+                gate_id,
+                step: StepKey::parse("approve").expect("step"),
+                output: OutputKey::parse("decision").expect("output"),
+            },
+            inputs: vec![candidate.clone()],
+        },
+        summary: ArtefactSummary::HumanDecision {
+            candidate: candidate_hash,
+            diff_base,
+            decision: HumanDecisionKind::Approved,
+        },
+    };
+    let gate = HumanGateRecord {
+        id: gate_id,
+        step: StepKey::parse("approve").expect("step"),
+        sequence: 1,
+        revision: GateRevision::new(1).expect("revision"),
+        opened_at_ms: 1,
+        closed_at_ms: Some(2),
+        candidate: candidate.clone(),
+        diff_base: candidate.clone(),
+        state: HumanGateState::Approved,
+        decision: Some(reference.clone()),
+        output: OutputKey::parse("decision").expect("output"),
+    };
+    (record, gate, reference)
+}
+
+fn candidate_input(reference: &ArtefactReference) -> AttemptArtefactInput {
+    AttemptArtefactInput {
+        key: InputKey::parse("candidate").expect("key"),
+        artefact: reference.clone(),
+    }
+}
+
+fn review_input(key: &str, record: &ArtefactRecord) -> AttemptArtefactInput {
+    AttemptArtefactInput {
+        key: InputKey::parse(key).expect("key"),
+        artefact: ArtefactReference {
+            id: record.id,
+            kind: record.kind,
+            artefact_hash: record.artefact_hash,
+        },
+    }
+}
+
+fn decision_attempt_input(reference: &ArtefactReference) -> AttemptArtefactInput {
+    AttemptArtefactInput {
+        key: InputKey::parse("decision").expect("key"),
+        artefact: reference.clone(),
+    }
+}
+
+#[test]
+fn commit_approval_accepts_review_and_decision_shapes() {
+    let store = store();
+    let (mut run, _, reference, captured, _dir) = captured_candidate(&store);
+    let correctness = approved_review(
+        &run,
+        &reference,
+        captured.candidate_hash,
+        "correctness-review",
+        &store,
+    );
+    let security = approved_review(
+        &run,
+        &reference,
+        captured.candidate_hash,
+        "security-review",
+        &store,
+    );
+    let (decision, gate, decision_reference) = approved_decision(
+        &run,
+        &reference,
+        captured.candidate_hash,
+        captured.candidate_hash,
+        &store,
+    );
+    run.artefacts
+        .extend([correctness.clone(), security.clone(), decision.clone()]);
+    run.gates.push(gate);
+
+    let reviews = vec![
+        candidate_input(&reference),
+        review_input("correctness-review", &correctness),
+        review_input("security-review", &security),
+    ];
+    assert!(require_commit_approval(&run, &commit_step(&run), &reviews, &store).is_ok());
+
+    let decision_only = vec![
+        candidate_input(&reference),
+        decision_attempt_input(&decision_reference),
+    ];
+    assert!(
+        require_commit_approval(
+            &run,
+            &decision_only_step(commit_step(&run)),
+            &decision_only,
+            &store
+        )
+        .is_ok()
+    );
+
+    let mut both = reviews;
+    both.push(decision_attempt_input(&decision_reference));
+    assert!(
+        require_commit_approval(&run, &with_decision_input(commit_step(&run)), &both, &store)
+            .is_ok()
+    );
+}
+
+#[test]
+fn commit_approval_rejects_missing_and_unrelated_authority() {
+    let store = store();
+    let (mut run, _, reference, captured, _dir) = captured_candidate(&store);
+    let (decision, gate, decision_reference) = approved_decision(
+        &run,
+        &reference,
+        captured.candidate_hash,
+        captured.candidate_hash,
+        &store,
+    );
+    run.artefacts.push(decision);
+    run.gates.push(gate);
+    let step = decision_only_step(commit_step(&run));
+    let decision_input = decision_attempt_input(&decision_reference);
+    let candidate = candidate_input(&reference);
+
+    assert_eq!(
+        require_commit_approval(&run, &step, std::slice::from_ref(&candidate), &store).err(),
+        Some(CommitError::Assurance)
+    );
+    assert_eq!(
+        require_commit_approval(&run, &step, &[candidate.clone(), candidate.clone()], &store).err(),
+        Some(CommitError::Assurance)
+    );
+    assert_eq!(
+        require_commit_approval(
+            &run,
+            &step,
+            &[
+                candidate.clone(),
+                decision_input.clone(),
+                decision_input.clone(),
+            ],
+            &store
+        )
+        .err(),
+        Some(CommitError::Assurance)
+    );
+    let plan = AttemptArtefactInput {
+        key: InputKey::parse("plan").expect("key"),
+        artefact: ArtefactReference {
+            id: ArtefactId::generate().expect("id"),
+            kind: ArtefactKind::Plan,
+            artefact_hash: reference.artefact_hash,
+        },
+    };
+    assert_eq!(
+        require_commit_approval(&run, &step, &[candidate.clone(), plan.clone()], &store).err(),
+        Some(CommitError::Assurance)
+    );
+    let test = AttemptArtefactInput {
+        key: InputKey::parse("test").expect("key"),
+        artefact: ArtefactReference {
+            id: ArtefactId::generate().expect("id"),
+            kind: ArtefactKind::TestReport,
+            artefact_hash: reference.artefact_hash,
+        },
+    };
+    assert_eq!(
+        require_commit_approval(&run, &step, &[candidate, decision_input, test], &store).err(),
+        Some(CommitError::Assurance)
+    );
+}
+
+#[test]
+fn commit_approval_rejects_decision_provenance_mismatches() {
+    let store = store();
+    let (run, _, reference, captured, _dir) = captured_candidate(&store);
+    let (decision, gate, decision_reference) = approved_decision(
+        &run,
+        &reference,
+        captured.candidate_hash,
+        captured.candidate_hash,
+        &store,
+    );
+    let step = decision_only_step(commit_step(&run));
+    let inputs = vec![
+        candidate_input(&reference),
+        decision_attempt_input(&decision_reference),
+    ];
+
+    let mut other_run = run.clone();
+    let mut foreign = decision.clone();
+    foreign.provenance.run_id = RunId::generate().expect("other run");
+    other_run.artefacts.push(foreign);
+    other_run.gates.push(gate.clone());
+    assert_eq!(
+        require_commit_approval(&other_run, &step, &inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut other_gate = run.clone();
+    let mut misplaced = decision.clone();
+    if let ArtefactProducer::HumanGate { gate_id, .. } = &mut misplaced.provenance.producer {
+        *gate_id = GateId::generate().expect("other gate");
+    }
+    other_gate.artefacts.push(misplaced);
+    other_gate.gates.push(gate.clone());
+    assert_eq!(
+        require_commit_approval(&other_gate, &step, &inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut other_output = run.clone();
+    let mut renamed = decision.clone();
+    if let ArtefactProducer::HumanGate { output, .. } = &mut renamed.provenance.producer {
+        *output = OutputKey::parse("other").expect("output");
+    }
+    other_output.artefacts.push(renamed);
+    other_output.gates.push(gate.clone());
+    assert_eq!(
+        require_commit_approval(&other_output, &step, &inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut undeclared = step.clone();
+    undeclared.inputs.last_mut().expect("decision").source = ArtefactSource::RunCurrentCandidate;
+    let mut named = run.clone();
+    named.artefacts.push(decision.clone());
+    named.gates.push(gate.clone());
+    assert_eq!(
+        require_commit_approval(&named, &undeclared, &inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut unclosed = run.clone();
+    let mut open = gate.clone();
+    open.closed_at_ms = None;
+    unclosed.artefacts.push(decision.clone());
+    unclosed.gates.push(open);
+    assert_eq!(
+        require_commit_approval(&unclosed, &step, &inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let wrong_hash = artefact_hash_for(ArtefactKind::HumanDecision, 1, b"wrong object identity");
+    let mut wrong_identity = run.clone();
+    let mut mismatched = decision.clone();
+    mismatched.artefact_hash = wrong_hash;
+    let mut mismatched_gate = gate.clone();
+    mismatched_gate.decision = Some(ArtefactReference {
+        id: mismatched.id,
+        kind: mismatched.kind,
+        artefact_hash: wrong_hash,
+    });
+    let mismatched_inputs = vec![
+        candidate_input(&reference),
+        AttemptArtefactInput {
+            key: InputKey::parse("decision").expect("key"),
+            artefact: ArtefactReference {
+                id: mismatched.id,
+                kind: mismatched.kind,
+                artefact_hash: wrong_hash,
+            },
+        },
+    ];
+    wrong_identity.artefacts.push(mismatched);
+    wrong_identity.gates.push(mismatched_gate);
+    assert_eq!(
+        require_commit_approval(&wrong_identity, &step, &mismatched_inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut revision = run.clone();
+    let (bytes, object, hash) = payload::encode_human_decision(
+        captured.candidate_hash,
+        captured.candidate_hash,
+        HumanDecisionKind::RevisionRequested,
+        Some("change this"),
+        2,
+        None,
+    )
+    .expect("revision");
+    store.publish(&bytes).expect("store revision");
+    let mut requested = decision.clone();
+    requested.object_hash = object;
+    requested.artefact_hash = hash;
+    requested.summary = ArtefactSummary::HumanDecision {
+        candidate: captured.candidate_hash,
+        diff_base: captured.candidate_hash,
+        decision: HumanDecisionKind::RevisionRequested,
+    };
+    let mut requested_gate = gate.clone();
+    requested_gate.state = HumanGateState::RevisionRequested;
+    requested_gate.decision = Some(ArtefactReference {
+        id: requested.id,
+        kind: requested.kind,
+        artefact_hash: hash,
+    });
+    let requested_inputs = vec![
+        candidate_input(&reference),
+        AttemptArtefactInput {
+            key: InputKey::parse("decision").expect("key"),
+            artefact: ArtefactReference {
+                id: requested.id,
+                kind: requested.kind,
+                artefact_hash: hash,
+            },
+        },
+    ];
+    revision.artefacts.push(requested);
+    revision.gates.push(requested_gate);
+    assert_eq!(
+        require_commit_approval(&revision, &step, &requested_inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut other_candidate = run.clone();
+    let stale = CandidateHash::of(b"stale");
+    let (bytes, object, hash) = payload::encode_human_decision(
+        stale,
+        captured.candidate_hash,
+        HumanDecisionKind::Approved,
+        None,
+        2,
+        None,
+    )
+    .expect("stale candidate");
+    store.publish(&bytes).expect("store stale");
+    let mut bound = decision.clone();
+    bound.object_hash = object;
+    bound.artefact_hash = hash;
+    bound.summary = ArtefactSummary::HumanDecision {
+        candidate: stale,
+        diff_base: captured.candidate_hash,
+        decision: HumanDecisionKind::Approved,
+    };
+    let mut bound_gate = gate.clone();
+    bound_gate.decision = Some(ArtefactReference {
+        id: bound.id,
+        kind: bound.kind,
+        artefact_hash: hash,
+    });
+    let bound_inputs = vec![
+        candidate_input(&reference),
+        AttemptArtefactInput {
+            key: InputKey::parse("decision").expect("key"),
+            artefact: ArtefactReference {
+                id: bound.id,
+                kind: bound.kind,
+                artefact_hash: hash,
+            },
+        },
+    ];
+    other_candidate.artefacts.push(bound);
+    other_candidate.gates.push(bound_gate);
+    assert_eq!(
+        require_commit_approval(&other_candidate, &step, &bound_inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+
+    let mut other_base = run.clone();
+    let (bytes, object, hash) = payload::encode_human_decision(
+        captured.candidate_hash,
+        stale,
+        HumanDecisionKind::Approved,
+        None,
+        2,
+        None,
+    )
+    .expect("stale base");
+    store.publish(&bytes).expect("store base");
+    let mut base = decision;
+    base.object_hash = object;
+    base.artefact_hash = hash;
+    base.summary = ArtefactSummary::HumanDecision {
+        candidate: captured.candidate_hash,
+        diff_base: stale,
+        decision: HumanDecisionKind::Approved,
+    };
+    let mut base_gate = gate;
+    base_gate.decision = Some(ArtefactReference {
+        id: base.id,
+        kind: base.kind,
+        artefact_hash: hash,
+    });
+    let base_inputs = vec![
+        candidate_input(&reference),
+        AttemptArtefactInput {
+            key: InputKey::parse("decision").expect("key"),
+            artefact: ArtefactReference {
+                id: base.id,
+                kind: base.kind,
+                artefact_hash: hash,
+            },
+        },
+    ];
+    other_base.artefacts.push(base);
+    other_base.gates.push(base_gate);
+    assert_eq!(
+        require_commit_approval(&other_base, &step, &base_inputs, &store).err(),
+        Some(CommitError::Assurance)
+    );
+}
+
+#[test]
+fn project_drift_stops_a_commit_before_host_application() {
+    let store = store();
+    let (_, _, _, initial, dir) = captured_candidate(&store);
+    std::fs::write(dir.path().join("file.txt"), b"target").expect("target");
+    let target = crate::workflows::artefacts::CandidateCapture::capture_host(dir.path(), &store)
+        .expect("target");
+    std::fs::write(dir.path().join("file.txt"), b"drifted").expect("drift");
+    let before = std::fs::read(dir.path().join("file.txt")).expect("before");
+
+    assert_eq!(
+        require_unchanged_project(dir.path(), &initial, &target, &store),
+        Err(CommitError::Preflight)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("file.txt")).expect("after"),
+        before
+    );
 }
 
 fn run_git(project: &std::path::Path, exec: crate::sandbox::GuestExec) -> String {

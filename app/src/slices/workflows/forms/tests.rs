@@ -177,6 +177,34 @@ fn a_row_action_normalises_a_step_after_a_system_command_switch() {
 }
 
 #[test]
+fn a_human_decision_commit_does_not_force_a_review() {
+    let mut pairs = valid_pairs();
+    pairs[0] = pair("intent", "add-role");
+    pairs
+        .iter_mut()
+        .find(|(key, _)| key == "step_0_action")
+        .expect("action")
+        .1 = "system-command".to_owned();
+    pairs.extend([
+        pair("step_0_command", "commit-candidate"),
+        pair("step_0_input_1_key", "decision"),
+        pair("step_0_input_1_kind", "human-decision"),
+        pair("step_0_input_1_source", "step-output:approve:decision"),
+    ]);
+
+    let (form, _) = WorkflowFormState::parse(pairs).expect("parse");
+
+    assert_eq!(
+        form.steps[0]
+            .inputs
+            .iter()
+            .map(|input| input.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["candidate-revision", "human-decision"]
+    );
+}
+
+#[test]
 fn candidate_access_conflicts_have_field_errors() {
     let mut read_only = valid_pairs();
     read_only

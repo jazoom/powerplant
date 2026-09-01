@@ -2725,39 +2725,35 @@ fn validate_attempt_isolation(
 }
 
 fn valid_commit_transaction(attempt: &AttemptRecord, transaction: &CommitTransaction) -> bool {
+    let expected_reviews: Vec<_> = attempt
+        .inputs
+        .iter()
+        .filter(|input| {
+            input.artefact.kind == crate::workflows::definition::ArtefactKind::ReviewReport
+        })
+        .map(|input| &input.artefact)
+        .collect();
+    let expected_approval = attempt.inputs.iter().find_map(|input| {
+        (input.artefact.kind == crate::workflows::definition::ArtefactKind::HumanDecision)
+            .then_some(&input.artefact)
+    });
     if transaction.candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
-        || transaction.reviews.is_empty()
+        || (expected_reviews.is_empty() && expected_approval.is_none())
         || transaction
             .reviews
             .iter()
             .any(|review| review.kind != crate::workflows::definition::ArtefactKind::ReviewReport)
-        || transaction.approval.as_ref().is_some_and(|approval| {
-            approval.kind != crate::workflows::definition::ArtefactKind::HumanDecision
-                || !attempt
-                    .inputs
-                    .iter()
-                    .any(|input| input.artefact == *approval)
-        })
+        || transaction.approval.as_ref() != expected_approval
         || !attempt
             .inputs
             .iter()
             .any(|input| input.artefact == transaction.candidate)
-        || {
-            let expected_reviews: Vec<_> = attempt
-                .inputs
-                .iter()
-                .filter(|input| {
-                    input.artefact.kind == crate::workflows::definition::ArtefactKind::ReviewReport
-                })
-                .map(|input| &input.artefact)
-                .collect();
-            transaction.reviews.len() != expected_reviews.len()
-                || transaction
-                    .reviews
-                    .iter()
-                    .zip(expected_reviews)
-                    .any(|(stored, expected)| stored != expected)
-        }
+        || transaction.reviews.len() != expected_reviews.len()
+        || transaction
+            .reviews
+            .iter()
+            .zip(expected_reviews)
+            .any(|(stored, expected)| stored != expected)
         || transaction.expected_reference.is_empty()
         || transaction.timestamp.split_once(' ').is_none()
         || transaction

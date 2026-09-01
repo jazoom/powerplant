@@ -74,7 +74,7 @@ impl CommitError {
     }
 }
 
-pub(crate) fn require_approved_review(
+pub(crate) fn require_commit_approval(
     run: &WorkflowRun,
     commit_step: &crate::workflows::definition::StepDefinition,
     inputs: &[AttemptArtefactInput],
@@ -87,6 +87,16 @@ pub(crate) fn require_approved_review(
     ),
     CommitError,
 > {
+    if inputs.iter().any(|input| {
+        !matches!(
+            input.artefact.kind,
+            ArtefactKind::CandidateRevision
+                | ArtefactKind::ReviewReport
+                | ArtefactKind::HumanDecision
+        )
+    }) {
+        return Err(CommitError::Assurance);
+    }
     let mut candidates = inputs
         .iter()
         .filter(|input| input.artefact.kind == ArtefactKind::CandidateRevision);
@@ -98,7 +108,11 @@ pub(crate) fn require_approved_review(
         .iter()
         .filter(|input| input.artefact.kind == ArtefactKind::ReviewReport)
         .collect();
-    if review_inputs.is_empty() {
+    let decision_inputs: Vec<_> = inputs
+        .iter()
+        .filter(|input| input.artefact.kind == ArtefactKind::HumanDecision)
+        .collect();
+    if decision_inputs.len() > 1 || (review_inputs.is_empty() && decision_inputs.is_empty()) {
         return Err(CommitError::Assurance);
     }
     let candidate_record = run
@@ -192,33 +206,49 @@ pub(crate) fn require_approved_review(
             _ => return Err(CommitError::Assurance),
         }
     }
-    let decisions: Vec<_> = inputs
-        .iter()
-        .filter(|input| input.artefact.kind == ArtefactKind::HumanDecision)
-        .collect();
-    if decisions.len() > 1 {
-        return Err(CommitError::Assurance);
-    }
-    if let Some(input) = decisions.first() {
+    if let Some(input) = decision_inputs.first() {
         let record = run
             .artefact(&input.artefact.id)
             .ok_or(CommitError::Assurance)?;
+        if record.artefact_hash != input.artefact.artefact_hash
+            || record.provenance.run_id != run.id
+            || !record
+                .provenance
+                .inputs
+                .iter()
+                .any(|item| item == &candidate_input.artefact)
+        {
+            return Err(CommitError::Assurance);
+        }
         let bytes = store
             .get(&record.object_hash)
             .map_err(|_| CommitError::Assurance)?;
+        if crate::workflows::artefacts::ObjectHash::of(&bytes) != record.object_hash {
+            return Err(CommitError::Assurance);
+        }
         let TypedPayload::HumanDecision(decision) =
             parse_typed_payload(ArtefactKind::HumanDecision, &bytes)
                 .map_err(|_| CommitError::Assurance)?
         else {
             return Err(CommitError::Assurance);
         };
+        if artefact_hash_for(ArtefactKind::HumanDecision, decision.format_version, &bytes)
+            != record.artefact_hash
+        {
+            return Err(CommitError::Assurance);
+        }
         let base = run
             .artefact(&source.initial.id)
             .and_then(ArtefactRecord::candidate_hash)
             .ok_or(CommitError::Assurance)?;
         let (bound, diff_base) =
             crate::workflows::gates::hashes(&decision).ok_or(CommitError::Assurance)?;
-        let ArtefactProducer::HumanGate { gate_id, .. } = &record.provenance.producer else {
+        let ArtefactProducer::HumanGate {
+            gate_id,
+            step,
+            output,
+        } = &record.provenance.producer
+        else {
             return Err(CommitError::Assurance);
         };
         let gate = run
@@ -226,16 +256,49 @@ pub(crate) fn require_approved_review(
             .iter()
             .find(|gate| gate.id == *gate_id)
             .ok_or(CommitError::Assurance)?;
+        let declared_source = commit_step
+            .inputs
+            .iter()
+            .find(|declared| declared.key == input.key)
+            .map(|declared| &declared.source);
+        let named_gate_output = matches!(
+            declared_source,
+            Some(crate::workflows::definition::ArtefactSource::StepOutput {
+                step: declared_step,
+                output: declared_output,
+            }) if declared_step == step && declared_output == output
+        );
         if decision.decision != crate::workflows::gates::HumanDecisionKind::Approved
             || gate.state != crate::workflows::gates::HumanGateState::Approved
+            || gate.closed_at_ms.is_none()
             || gate.decision.as_ref() != Some(&input.artefact)
+            || gate.step != *step
+            || gate.output != *output
             || bound != candidate.candidate_hash
             || diff_base != base
+            || !named_gate_output
         {
             return Err(CommitError::Assurance);
         }
     }
     Ok((candidate_record, review_records, candidate))
+}
+
+pub(crate) fn require_unchanged_project(
+    project: &std::path::Path,
+    initial: &CandidateRevisionArtefact,
+    target: &CandidateRevisionArtefact,
+    store: &WorkflowArtefactRepository,
+) -> Result<(), CommitError> {
+    let live = crate::workflows::artefacts::CandidateCapture::capture_host(project, store)
+        .map_err(|_| CommitError::Preflight)?;
+    if live != *initial
+        || target.repository != initial.repository
+        || target.git_admin != initial.git_admin
+    {
+        return Err(CommitError::Preflight);
+    }
+    Ok(())
 }
 
 impl CommitTransactionState {
