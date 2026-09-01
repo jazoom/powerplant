@@ -3,7 +3,7 @@ use super::{
     AttemptSandboxRecord, AttemptState, EscalationReason, FailureCategory, ReviewRoute, RunState,
     TransitionError, WorkflowRun, next_ordinal_for,
 };
-use crate::agents::ToolId;
+use crate::agents::{AccessMode, ToolId};
 use crate::workflows::capabilities::{test_agent_capabilities, test_command_capabilities};
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
@@ -1235,5 +1235,217 @@ fn snapshot_contradictions_fail_load() {
     assert_eq!(
         WorkflowRun::from_file(missing_predecessor).err(),
         Some(super::RunRecordError::Corrupt)
+    );
+}
+
+fn quick_task_run(kind: super::RunKind) -> WorkflowRun {
+    let pinned = crate::workflows::pin_quick_task(
+        AccessMode::ReadWrite,
+        &[ToolId::List],
+        "Do the work.",
+        test_environment_id(),
+    )
+    .expect("quick task");
+    let environments = crate::workflows::test_environment_set(&pinned.definition);
+    WorkflowRun::create(
+        RunId::generate().expect("run"),
+        10,
+        crate::projects::ProjectId::generate().expect("project"),
+        crate::agents::AgentId::generate().expect("agent"),
+        kind,
+        pinned,
+        environments,
+    )
+}
+
+fn candidate_artefact(
+    run_id: RunId,
+    producer: crate::workflows::artefacts::ArtefactProducer,
+    inputs: Vec<crate::workflows::artefacts::ArtefactReference>,
+    seed: &[u8],
+) -> crate::workflows::artefacts::ArtefactRecord {
+    crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().expect("artefact"),
+        kind: ArtefactKind::CandidateRevision,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::of(seed, b"candidate"),
+        object_hash: crate::workflows::artefacts::ObjectHash::of(seed),
+        payload_bytes: 1,
+        created_at_ms: 11,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id,
+            producer,
+            inputs,
+        },
+        summary: crate::workflows::artefacts::ArtefactSummary::Candidate {
+            candidate: crate::workflows::artefacts::CandidateHash::of(seed),
+            entries: 0,
+            bytes: 0,
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+    }
+}
+
+fn reach_quick_task_gate(run: &mut WorkflowRun, produced_seed: &[u8], exact_observed: bool) {
+    let initial = candidate_artefact(
+        run.id,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+        b"initial-tree",
+    );
+    let initial_ref = artefact_reference(&initial);
+    run.record_initial_candidate(initial).expect("initial");
+    let step = StepKey::parse("work").expect("work");
+    let attempt = AttemptId::generate().expect("attempt");
+    run.start_attempt(
+        attempt,
+        vec![super::AttemptArtefactInput {
+            key: InputKey::parse("candidate").expect("input"),
+            artefact: initial_ref.clone(),
+        }],
+        test_agent_capabilities(),
+        step_sandbox(run, &step),
+        11,
+    )
+    .expect("start");
+    let produced = candidate_artefact(
+        run.id,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: attempt,
+            step: step.clone(),
+            output: Some(OutputKey::parse("candidate").expect("output")),
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+        vec![initial_ref],
+        produced_seed,
+    );
+    let produced_ref = artefact_reference(&produced);
+    run.record_attempt_outputs(
+        attempt,
+        vec![produced],
+        vec![super::AttemptArtefactOutput {
+            key: OutputKey::parse("candidate").expect("output"),
+            artefact: produced_ref.clone(),
+        }],
+        Some(produced_ref.clone()),
+        if exact_observed {
+            super::ObservedCandidate::Exact {
+                artefact: produced_ref,
+            }
+        } else {
+            super::ObservedCandidate::Unknown
+        },
+    )
+    .expect("outputs");
+    run.record_cleanup(attempt, AttemptCleanupRecord::Complete)
+        .expect("cleanup");
+    run.complete_attempt(attempt, 12).expect("complete work");
+}
+
+#[test]
+fn an_unchanged_quick_task_completes_without_a_gate() {
+    let mut run = quick_task_run(super::RunKind::QuickTask);
+    reach_quick_task_gate(&mut run, b"initial-tree", true);
+    assert!(matches!(run.state, RunState::Ready { ref step } if step.as_str() == "gate"));
+    run.complete_unchanged_quick_task()
+        .expect("complete unchanged");
+    assert_eq!(run.state, RunState::Completed);
+    assert!(run.gates.is_empty());
+    let loaded = WorkflowRun::from_file(run.to_file()).expect("round trip");
+    assert_eq!(loaded, run);
+}
+
+#[test]
+fn a_changed_quick_task_stays_at_the_human_gate() {
+    let mut run = quick_task_run(super::RunKind::QuickTask);
+    reach_quick_task_gate(&mut run, b"changed-tree", true);
+    assert_eq!(
+        run.complete_unchanged_quick_task(),
+        Err(TransitionError::Invalid)
+    );
+    assert!(matches!(run.state, RunState::Ready { ref step } if step.as_str() == "gate"));
+    assert!(run.gates.is_empty());
+    run.state = RunState::Completed;
+    assert_eq!(
+        WorkflowRun::from_file(run.to_file()).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
+fn a_configured_run_cannot_skip_its_human_gate() {
+    let mut run = quick_task_run(super::RunKind::Configured);
+    reach_quick_task_gate(&mut run, b"initial-tree", true);
+    assert_eq!(
+        run.complete_unchanged_quick_task(),
+        Err(TransitionError::Invalid)
+    );
+    assert!(matches!(run.state, RunState::Ready { ref step } if step.as_str() == "gate"));
+    run.state = RunState::Completed;
+    assert_eq!(
+        WorkflowRun::from_file(run.to_file()).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
+fn unchanged_quick_task_completion_rejects_missing_and_unknown_candidates() {
+    let mut missing = quick_task_run(super::RunKind::QuickTask);
+    let initial = candidate_artefact(
+        missing.id,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+        b"initial-tree",
+    );
+    let initial_ref = artefact_reference(&initial);
+    missing.record_initial_candidate(initial).expect("initial");
+    let step = StepKey::parse("work").expect("work");
+    let attempt = AttemptId::generate().expect("attempt");
+    missing
+        .start_attempt(
+            attempt,
+            vec![super::AttemptArtefactInput {
+                key: InputKey::parse("candidate").expect("input"),
+                artefact: initial_ref,
+            }],
+            test_agent_capabilities(),
+            step_sandbox(&missing, &step),
+            11,
+        )
+        .expect("start");
+    missing
+        .record_cleanup(attempt, AttemptCleanupRecord::Complete)
+        .expect("cleanup");
+    missing
+        .complete_attempt(attempt, 12)
+        .expect("complete work");
+    assert_eq!(
+        missing.complete_unchanged_quick_task(),
+        Err(TransitionError::Invalid)
+    );
+
+    let mut unknown = quick_task_run(super::RunKind::QuickTask);
+    reach_quick_task_gate(&mut unknown, b"initial-tree", false);
+    assert_eq!(
+        unknown.complete_unchanged_quick_task(),
+        Err(TransitionError::Invalid)
+    );
+
+    let mut mismatched = quick_task_run(super::RunKind::QuickTask);
+    reach_quick_task_gate(&mut mismatched, b"initial-tree", true);
+    let super::RunSource::Captured { source } = &mut mismatched.source else {
+        panic!("captured source");
+    };
+    source.observed = super::ObservedCandidate::Exact {
+        artefact: source.initial.clone(),
+    };
+    assert_eq!(
+        mismatched.complete_unchanged_quick_task(),
+        Err(TransitionError::Invalid)
+    );
+
+    let mut ready = quick_task_run(super::RunKind::QuickTask);
+    assert_eq!(
+        ready.complete_unchanged_quick_task(),
+        Err(TransitionError::Invalid)
     );
 }

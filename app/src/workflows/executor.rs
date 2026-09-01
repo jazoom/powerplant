@@ -223,6 +223,20 @@ pub(crate) async fn execute_run(
             return;
         }
         if matches!(step.action, StepAction::HumanGate(_)) {
+            match state
+                .workflow_runs
+                .mutate(&job.run_id, |run| run.complete_unchanged_quick_task())
+            {
+                Ok(_) => {
+                    settle_completed_job(&state, &job);
+                    return;
+                }
+                Err(StoreError::Conflict) => {}
+                Err(_) => {
+                    fail_operational(&state, &job);
+                    return;
+                }
+            }
             let Some(candidate) = inputs
                 .iter()
                 .find(|input| {

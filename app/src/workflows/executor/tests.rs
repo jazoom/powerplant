@@ -1322,3 +1322,306 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
         assert!(super::recovery_project_path(&state, &run).is_err());
     }
 }
+
+enum GateCandidate {
+    Unchanged,
+    Changed,
+}
+
+fn published_gate_candidate(
+    run: &crate::workflows::WorkflowRun,
+    captured: &crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+    store: &crate::workflows::WorkflowArtefactRepository,
+    producer: crate::workflows::artefacts::ArtefactProducer,
+    inputs: Vec<crate::workflows::artefacts::ArtefactReference>,
+) -> crate::workflows::artefacts::ArtefactRecord {
+    let bytes = captured.manifest_bytes().expect("manifest");
+    let object = store.publish(&bytes).expect("publish");
+    crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().expect("artefact"),
+        kind: crate::workflows::definition::ArtefactKind::CandidateRevision,
+        artefact_hash: crate::workflows::artefacts::artefact_hash_for(
+            crate::workflows::definition::ArtefactKind::CandidateRevision,
+            captured.format_version,
+            &bytes,
+        ),
+        object_hash: object,
+        payload_bytes: bytes.len() as u64,
+        created_at_ms: 1,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id: run.id,
+            producer,
+            inputs,
+        },
+        summary: crate::workflows::artefacts::ArtefactSummary::Candidate {
+            candidate: captured.candidate_hash,
+            entries: captured.entries.len() as u64,
+            bytes: 0,
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+    }
+}
+
+fn gate_ready_fixture(
+    kind: crate::workflows::RunKind,
+    candidate: GateCandidate,
+) -> (
+    crate::state::AppState,
+    crate::workflows::WorkflowJob,
+    crate::sessions::SessionId,
+    crate::sessions::ConversationKey,
+) {
+    use crate::workflows::definition::{InputKey, OutputKey, StepKey};
+
+    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let project = git_worktree();
+    std::fs::write(project.path().join("file.txt"), b"candidate\n").expect("source");
+    let initial_capture = crate::workflows::artefacts::CandidateCapture::capture_host(
+        project.path(),
+        &state.workflow_artefacts,
+    )
+    .expect("initial capture");
+    let produced_capture = match candidate {
+        GateCandidate::Unchanged => initial_capture.clone(),
+        GateCandidate::Changed => {
+            std::fs::write(project.path().join("file.txt"), b"changed\n").expect("change");
+            crate::workflows::artefacts::CandidateCapture::capture_host(
+                project.path(),
+                &state.workflow_artefacts,
+            )
+            .expect("changed capture")
+        }
+    };
+    let pinned = crate::workflows::pin_quick_task(
+        AccessMode::ReadWrite,
+        &[crate::agents::ToolId::List],
+        "Do the work.",
+        crate::workflows::definition::test_environment_id(),
+    )
+    .expect("quick task");
+    let environments = crate::workflows::test_environment_set(&pinned.definition);
+    let mut run = crate::workflows::WorkflowRun::create(
+        crate::workflows::RunId::generate().expect("run"),
+        1,
+        crate::projects::ProjectId::generate().expect("project"),
+        AgentId::generate().expect("agent"),
+        kind,
+        pinned,
+        environments,
+    );
+    let initial = published_gate_candidate(
+        &run,
+        &initial_capture,
+        &state.workflow_artefacts,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+    );
+    let initial_ref = crate::workflows::artefacts::ArtefactReference {
+        id: initial.id,
+        kind: initial.kind,
+        artefact_hash: initial.artefact_hash,
+    };
+    run.record_initial_candidate(initial).expect("initial");
+    let work = StepKey::parse("work").expect("work");
+    let attempt = crate::workflows::AttemptId::generate().expect("attempt");
+    run.start_attempt(
+        attempt,
+        vec![crate::workflows::run::AttemptArtefactInput {
+            key: InputKey::parse("candidate").expect("input"),
+            artefact: initial_ref.clone(),
+        }],
+        crate::workflows::capabilities::test_agent_capabilities(),
+        crate::workflows::run::AttemptSandboxRecord {
+            kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: run
+                .environments
+                .steps
+                .iter()
+                .find(|binding| binding.step == work)
+                .expect("work environment")
+                .snapshot_digest
+                .clone(),
+        },
+        2,
+    )
+    .expect("start");
+    let produced = published_gate_candidate(
+        &run,
+        &produced_capture,
+        &state.workflow_artefacts,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: attempt,
+            step: work.clone(),
+            output: Some(OutputKey::parse("candidate").expect("output")),
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+        vec![initial_ref],
+    );
+    let produced_ref = crate::workflows::artefacts::ArtefactReference {
+        id: produced.id,
+        kind: produced.kind,
+        artefact_hash: produced.artefact_hash,
+    };
+    run.record_attempt_outputs(
+        attempt,
+        vec![produced],
+        vec![crate::workflows::run::AttemptArtefactOutput {
+            key: OutputKey::parse("candidate").expect("output"),
+            artefact: produced_ref.clone(),
+        }],
+        Some(produced_ref.clone()),
+        crate::workflows::run::ObservedCandidate::Exact {
+            artefact: produced_ref,
+        },
+    )
+    .expect("outputs");
+    run.record_cleanup(
+        attempt,
+        crate::workflows::run::AttemptCleanupRecord::Complete,
+    )
+    .expect("cleanup");
+    run.complete_attempt(attempt, 3).expect("complete work");
+    let run_id = run.id;
+    let project_id = run.project_id;
+    let agent_id = run.agent_id;
+    state.workflow_runs.create(run).expect("store run");
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(project);
+    let token = crate::sessions::generate_session_token().expect("token");
+    let session_id = token.id();
+    let key = crate::sessions::ConversationKey {
+        project_id,
+        agent_id,
+    };
+    state.sessions.insert(session_id);
+    let begun = state
+        .sessions
+        .begin_turn(&session_id, key, run_id, "Hello".to_owned())
+        .expect("turn");
+    let job = crate::workflows::WorkflowJob {
+        run_id,
+        session_id,
+        project_id,
+        agent_id,
+        agent_revision: 1,
+        grant_alias: "project".to_owned(),
+        grant_access: AccessMode::ReadWrite,
+        connection: crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "key",
+            "model",
+        ),
+        host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
+        turns: begun.turns,
+        job: begun.job,
+        eligible_reply: std::sync::Arc::new(std::sync::Mutex::new("No files changed.".to_owned())),
+    };
+    (state, job, session_id, key)
+}
+
+async fn execute_gate_run(state: crate::state::AppState, job: crate::workflows::WorkflowJob) {
+    let lease = state.agent_leases.acquire(job.agent_id).expect("lease");
+    let execution = state.workflow_execution.acquire().expect("execution");
+    super::execute_run(state, job, lease, execution).await;
+}
+
+#[tokio::test]
+async fn execute_run_completes_an_unchanged_quick_task_without_a_gate() {
+    let (state, job, session_id, key) = gate_ready_fixture(
+        crate::workflows::RunKind::QuickTask,
+        GateCandidate::Unchanged,
+    );
+    let run_id = job.run_id;
+    let job_id = job.job.id();
+    execute_gate_run(state.clone(), job).await;
+    let run = state.workflow_runs.get(&run_id).expect("run");
+    assert_eq!(run.state, crate::workflows::run::RunState::Completed);
+    assert!(run.gates.is_empty());
+    assert!(
+        run.attempts
+            .iter()
+            .all(|attempt| attempt.step.as_str() != "commit")
+    );
+    assert!(run.artefacts.iter().all(|artefact| {
+        artefact.kind != crate::workflows::definition::ArtefactKind::HumanDecision
+    }));
+    assert!(!state.gate_continuations.available(&run_id, &session_id));
+    let snapshot = state.sessions.snapshot(&session_id, &key).expect("session");
+    assert!(!snapshot.session_busy);
+    assert_eq!(
+        snapshot.turns.last().map(|turn| turn.text.as_str()),
+        Some("No files changed.")
+    );
+    let job = state.sessions.job(&session_id, &key, &job_id).expect("job");
+    assert_eq!(job.snapshot().status, JobStatus::Completed);
+}
+
+#[tokio::test]
+async fn a_store_failure_does_not_open_a_gate_for_an_unchanged_quick_task() {
+    let (state, job, session_id, key) = gate_ready_fixture(
+        crate::workflows::RunKind::QuickTask,
+        GateCandidate::Unchanged,
+    );
+    let run_id = job.run_id;
+    let job_id = job.job.id();
+    state.workflow_runs.fail_next_mutation();
+    execute_gate_run(state.clone(), job).await;
+    let run = state.workflow_runs.get(&run_id).expect("run");
+    assert!(matches!(
+        run.state,
+        crate::workflows::run::RunState::Ready { .. }
+    ));
+    assert!(run.gates.is_empty());
+    assert!(!state.gate_continuations.available(&run_id, &session_id));
+    let snapshot = state.sessions.snapshot(&session_id, &key).expect("session");
+    assert!(!snapshot.session_busy);
+    let job = state.sessions.job(&session_id, &key, &job_id).expect("job");
+    assert_eq!(job.snapshot().status, JobStatus::Failed);
+}
+
+#[tokio::test]
+async fn execute_run_opens_a_gate_for_a_changed_quick_task() {
+    let (state, job, session_id, key) =
+        gate_ready_fixture(crate::workflows::RunKind::QuickTask, GateCandidate::Changed);
+    let run_id = job.run_id;
+    execute_gate_run(state.clone(), job).await;
+    let run = state.workflow_runs.get(&run_id).expect("run");
+    assert!(matches!(
+        run.state,
+        crate::workflows::run::RunState::AwaitingHuman { .. }
+    ));
+    assert_eq!(run.gates.len(), 1);
+    assert!(state.gate_continuations.available(&run_id, &session_id));
+    let snapshot = state.sessions.snapshot(&session_id, &key).expect("session");
+    assert!(snapshot.session_busy);
+    assert_eq!(
+        snapshot.job.map(|job| job.status),
+        Some(JobStatus::AwaitingDecision)
+    );
+}
+
+#[tokio::test]
+async fn execute_run_opens_a_gate_for_an_unchanged_configured_candidate() {
+    let (state, job, session_id, key) = gate_ready_fixture(
+        crate::workflows::RunKind::Configured,
+        GateCandidate::Unchanged,
+    );
+    let run_id = job.run_id;
+    execute_gate_run(state.clone(), job).await;
+    let run = state.workflow_runs.get(&run_id).expect("run");
+    assert!(matches!(
+        run.state,
+        crate::workflows::run::RunState::AwaitingHuman { .. }
+    ));
+    assert_eq!(run.gates.len(), 1);
+    assert!(state.gate_continuations.available(&run_id, &session_id));
+    let snapshot = state.sessions.snapshot(&session_id, &key).expect("session");
+    assert!(snapshot.session_busy);
+    assert_eq!(
+        snapshot.job.map(|job| job.status),
+        Some(JobStatus::AwaitingDecision)
+    );
+}

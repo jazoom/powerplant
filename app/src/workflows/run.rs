@@ -635,6 +635,17 @@ impl WorkflowRun {
             .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
     }
 
+    pub(crate) fn complete_unchanged_quick_task(&mut self) -> Result<(), TransitionError> {
+        let RunState::Ready { step } = &self.state else {
+            return Err(TransitionError::Invalid);
+        };
+        if !unchanged_quick_task_gate(self, step) {
+            return Err(TransitionError::Invalid);
+        }
+        self.state = RunState::Completed;
+        Ok(())
+    }
+
     pub(crate) fn open_gate(
         &mut self,
         gate_id: GateId,
@@ -2315,6 +2326,71 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn unchanged_quick_task_gate(run: &WorkflowRun, step: &StepKey) -> bool {
+    if run.kind != RunKind::QuickTask || run.pinned.workflow_id.is_some() {
+        return false;
+    }
+    let Some(definition) = run.pinned.definition.step(step) else {
+        return false;
+    };
+    if !super::quick::is_expected_gate_step(definition) {
+        return false;
+    }
+    let RunSource::Captured { source } = &run.source else {
+        return false;
+    };
+    let ObservedCandidate::Exact { artefact: observed } = &source.observed else {
+        return false;
+    };
+    let Some(candidate) = gate_input_candidate(run, definition) else {
+        return false;
+    };
+    if observed != &candidate {
+        return false;
+    }
+    let initial = run
+        .artefact(&source.initial.id)
+        .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash);
+    let candidate = run
+        .artefact(&candidate.id)
+        .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash);
+    initial.is_some() && candidate == initial
+}
+
+fn gate_input_candidate(run: &WorkflowRun, step: &StepDefinition) -> Option<ArtefactReference> {
+    let input = step.inputs.first()?;
+    Some(match &input.source {
+        crate::workflows::definition::ArtefactSource::RunInitialCandidate => {
+            let RunSource::Captured { source } = &run.source else {
+                return None;
+            };
+            source.initial.clone()
+        }
+        crate::workflows::definition::ArtefactSource::RunCurrentCandidate => {
+            let RunSource::Captured { source } = &run.source else {
+                return None;
+            };
+            source.accepted.clone()
+        }
+        crate::workflows::definition::ArtefactSource::StepOutput {
+            step: source_step,
+            output,
+        } => run
+            .attempts
+            .iter()
+            .rev()
+            .find(|attempt| {
+                attempt.step == *source_step
+                    && matches!(attempt.result, Some(AttemptResult::Completed { .. }))
+            })?
+            .outputs
+            .iter()
+            .find(|item| item.key == *output)?
+            .artefact
+            .clone(),
+    })
+}
+
 fn advanced_state(
     definition: &WorkflowDefinition,
     key: &StepKey,
@@ -3127,6 +3203,12 @@ fn validate_state_facts(run: &WorkflowRun) -> Result<(), RunRecordError> {
     if run.state == expected
         || matches!(expected, RunState::Ready { .. })
             && matches!(run.state, RunState::Failed | RunState::Cancelled)
+    {
+        return Ok(());
+    }
+    if let RunState::Ready { step } = &expected
+        && run.state == RunState::Completed
+        && unchanged_quick_task_gate(run, step)
     {
         return Ok(());
     }

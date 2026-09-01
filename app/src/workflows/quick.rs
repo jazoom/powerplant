@@ -90,6 +90,25 @@ fn agent_step(access: AccessMode, tools: &[ToolId]) -> Result<StepDefinition, De
     })
 }
 
+pub(super) fn is_expected_gate_step(step: &StepDefinition) -> bool {
+    step.key.as_str() == GATE_STEP_KEY
+        && step.inputs.len() == 1
+        && step.inputs[0].key.as_str() == "candidate"
+        && step.inputs[0].kind == ArtefactKind::CandidateRevision
+        && matches!(
+            &step.inputs[0].source,
+            ArtefactSource::StepOutput { step, output }
+                if step.as_str() == AGENT_STEP_KEY && output.as_str() == "candidate"
+        )
+        && matches!(
+            &step.action,
+            StepAction::HumanGate(action)
+                if action.required_output.key.as_str() == DECISION_OUTPUT_KEY
+                    && action.required_output.kind == OutputKind::HumanDecision
+        )
+        && step.review.is_none()
+}
+
 fn gate_step() -> StepDefinition {
     StepDefinition {
         key: StepKey::parse(GATE_STEP_KEY).expect("quick task gate"),
