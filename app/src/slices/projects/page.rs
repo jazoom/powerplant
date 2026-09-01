@@ -1,6 +1,7 @@
 use askama::Template;
 
-use crate::projects::ProjectRecord;
+use crate::agents::AgentRecord;
+use crate::projects::{ProjectRecord, desk_path};
 
 pub(super) const INDEX_TITLE: &str = "Projects | Power Plant";
 pub(super) const NEW_TITLE: &str = "New project | Power Plant";
@@ -35,6 +36,11 @@ impl CatalogueView {
     }
 }
 
+pub(super) struct EligibleAgentLink {
+    pub(super) name: String,
+    pub(super) href: String,
+}
+
 #[derive(Template)]
 #[template(path = "projects/templates/detail.html")]
 pub(super) struct DetailView {
@@ -43,16 +49,24 @@ pub(super) struct DetailView {
     pub(super) name: String,
     pub(super) path: String,
     pub(super) available: bool,
+    pub(super) agents: Vec<EligibleAgentLink>,
 }
 
 impl DetailView {
-    pub(super) fn from_record(record: &ProjectRecord) -> Self {
+    pub(super) fn from_record(record: &ProjectRecord, agents: &[AgentRecord]) -> Self {
         Self {
             document_title: format!("{} | Power Plant", record.name),
             id: record.id.as_hex(),
             name: record.name.clone(),
             path: record.host_path.to_string_lossy().into_owned(),
             available: record.host_path_is_available(),
+            agents: agents
+                .iter()
+                .map(|agent| EligibleAgentLink {
+                    name: agent.name.clone(),
+                    href: desk_path(&record.id, &agent.id),
+                })
+                .collect(),
         }
     }
 }

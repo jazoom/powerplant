@@ -66,11 +66,11 @@ async fn root_redirects_to_the_catalogue_when_no_agent_exists() {
 }
 
 #[tokio::test]
-async fn root_redirects_to_the_sole_agent() {
+async fn root_redirects_to_the_catalogue_when_the_sole_agent_has_no_project() {
     let state = test_state();
     let token = connected(&state);
     let dir = tempfile::tempdir().expect("dir");
-    let record = state
+    state
         .agents
         .create(AgentDraft {
             name: "Only".to_owned(),
@@ -100,10 +100,7 @@ async fn root_redirects_to_the_sole_agent() {
         .await
         .expect("root");
     assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        format!("/agents/{}", record.id.as_hex()).as_str()
-    );
+    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
 }
 
 #[tokio::test]

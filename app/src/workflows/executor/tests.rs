@@ -64,6 +64,29 @@ fn candidate_authority_keeps_the_project_mount_read_only() {
 }
 
 #[test]
+fn selected_primary_cannot_also_be_secondary_context() {
+    let host = DirectoryPolicy::from_grants(
+        vec![PolicyGrant {
+            alias: "docs".to_owned(),
+            guest_path: GUEST_PROJECT.to_owned(),
+            host_path: PathBuf::from("/host/docs"),
+            access: AccessMode::ReadWrite,
+        }],
+        "docs".to_owned(),
+    );
+    let authority = AgentAuthority::new(
+        Vec::new(),
+        vec![GuestDirectoryAccess {
+            alias: "docs".to_owned(),
+            access: AccessMode::ReadOnly,
+        }],
+    )
+    .expect("authority");
+
+    assert!(intersect_authority(CandidateAuthority::ReadOnly, &authority, &host).is_err());
+}
+
+#[test]
 fn fixing_review_publication_is_atomic_across_failures() {
     enum Failure {
         CandidatePublication,
@@ -325,16 +348,21 @@ fn final_gate_completion_settles_the_session_job_successfully() {
     let token = crate::sessions::generate_session_token().expect("token");
     let session_id = token.id();
     let agent_id = AgentId::generate().expect("agent");
+    let project_id = crate::projects::ProjectId::generate().expect("project");
     let run_id = crate::workflows::RunId::generate().expect("run");
+    let key = crate::sessions::ConversationKey {
+        project_id,
+        agent_id,
+    };
     state.sessions.insert(session_id);
     let begun = state
         .sessions
-        .begin_turn(&session_id, agent_id, run_id, "Hello".to_owned())
+        .begin_turn(&session_id, key, run_id, "Hello".to_owned())
         .expect("turn");
     let workflow = crate::workflows::WorkflowJob {
         run_id,
         session_id,
-        project_id: crate::projects::ProjectId::generate().expect("project"),
+        project_id,
         agent_id,
         agent_revision: 1,
         grant_alias: "project".to_owned(),
@@ -352,10 +380,7 @@ fn final_gate_completion_settles_the_session_job_successfully() {
 
     super::settle_completed_job(&state, &workflow);
 
-    let snapshot = state
-        .sessions
-        .snapshot(&session_id, &agent_id)
-        .expect("session");
+    let snapshot = state.sessions.snapshot(&session_id, &key).expect("session");
     assert!(!snapshot.session_busy);
     assert_eq!(begun.job.snapshot().status, JobStatus::Completed);
 }
@@ -828,6 +853,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
         let capabilities = crate::workflows::capabilities::AttemptCapabilities::derive(
             &commit_step,
             &agent,
+            &agent.primary_directory,
             &crate::providers::ProviderConnection::with_key(
                 crate::providers::ProviderKind::Xai,
                 "key",
@@ -1164,7 +1190,7 @@ fn test_job(
             "key",
             "model",
         ),
-        host_policy: DirectoryPolicy::from_record(agent),
+        host_policy: DirectoryPolicy::from_record_with_primary(agent, &agent.primary_directory),
         turns: Vec::new(),
         job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
         eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),

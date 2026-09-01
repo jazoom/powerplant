@@ -19,20 +19,21 @@ pub(crate) struct DirectoryPolicy {
 }
 
 impl DirectoryPolicy {
-    pub(crate) fn from_record(record: &AgentRecord) -> Self {
+    // The selected project grant is /project even when another grant is the saved primary.
+    pub(crate) fn from_record_with_primary(record: &AgentRecord, primary_alias: &str) -> Self {
         let grants = record
             .directories
             .iter()
             .map(|grant| PolicyGrant {
                 alias: grant.alias.clone(),
-                guest_path: guest_path_for(&grant.alias, &record.primary_directory),
+                guest_path: guest_path_for(&grant.alias, primary_alias),
                 host_path: grant.host_path.clone(),
                 access: grant.access,
             })
             .collect();
         Self {
             grants,
-            primary_alias: record.primary_directory.clone(),
+            primary_alias: primary_alias.to_owned(),
         }
     }
 

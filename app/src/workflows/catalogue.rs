@@ -659,6 +659,11 @@ pub(crate) fn definition_fits_agent(
                     && (!action.candidate_authority.access().is_writable() || access.is_writable())
             });
             primary_fits
+                && !action
+                    .authority
+                    .directories
+                    .iter()
+                    .any(|directory| directory.alias == primary_directory)
                 && action.authority.allowed_by(
                     tools,
                     directories
@@ -666,6 +671,12 @@ pub(crate) fn definition_fits_agent(
                         .map(|(alias, access)| (alias.as_str(), *access)),
                 )
         }
-        StepAction::SystemCommand(_) | StepAction::HumanGate(_) => true,
+        StepAction::SystemCommand(action) => {
+            action.command.contract().source_effect != super::commands::CommandSourceEffect::Commit
+                || directories
+                    .iter()
+                    .any(|(alias, access)| alias == primary_directory && access.is_writable())
+        }
+        StepAction::HumanGate(_) => true,
     })
 }

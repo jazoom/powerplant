@@ -313,7 +313,7 @@ async fn decide(
         }
         let _ = state.sessions.fail_turn(
             &session,
-            &continuation.agent_id,
+            &continuation.conversation_key(),
             &continuation.job.id(),
             String::new(),
         );
@@ -398,7 +398,7 @@ async fn decide(
         let note = form.note.unwrap_or_default();
         let _ = state.sessions.fail_turn(
             &session,
-            &continuation.agent_id,
+            &continuation.conversation_key(),
             &continuation.job.id(),
             note,
         );

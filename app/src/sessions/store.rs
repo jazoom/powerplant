@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     agents::AgentId,
+    projects::{MAXIMUM_PROJECTS, ProjectId},
     providers::{ChatTurn, Role},
     sessions::{
         SESSION_LIFETIME,
@@ -50,10 +51,18 @@ struct Conversation {
     preferred_workflow: Option<WorkflowId>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct ConversationKey {
+    pub(crate) project_id: ProjectId,
+    pub(crate) agent_id: AgentId,
+}
+
 struct StoredSession {
-    conversations: HashMap<AgentId, Conversation>,
+    conversations: HashMap<ConversationKey, Conversation>,
     // One in-flight command per session. finish_turn and fail_turn clear it.
-    active: Option<(AgentId, JobId)>,
+    active: Option<(ConversationKey, JobId)>,
+    last_agents: HashMap<ProjectId, AgentId>,
+    recent_projects: Vec<ProjectId>,
     expires_at: Instant,
 }
 
@@ -92,6 +101,8 @@ impl SessionStore {
             StoredSession {
                 conversations: HashMap::new(),
                 active: None,
+                last_agents: HashMap::new(),
+                recent_projects: Vec::new(),
                 expires_at,
             },
         );
@@ -113,15 +124,19 @@ impl SessionStore {
         live(&mut sessions, id, self.clock.now()).is_some_and(|session| session.active.is_some())
     }
 
-    pub(crate) fn snapshot(&self, id: &SessionId, agent: &AgentId) -> Option<SessionSnapshot> {
+    pub(crate) fn snapshot(
+        &self,
+        id: &SessionId,
+        key: &ConversationKey,
+    ) -> Option<SessionSnapshot> {
         let mut sessions = self.lock();
-        live(&mut sessions, id, self.clock.now()).map(|session| snapshot_session(agent, session))
+        live(&mut sessions, id, self.clock.now()).map(|session| snapshot_session(key, session))
     }
 
     pub(crate) fn set_preferred_workflow(
         &self,
         id: &SessionId,
-        agent: AgentId,
+        key: ConversationKey,
         workflow: WorkflowId,
     ) {
         let mut sessions = self.lock();
@@ -130,7 +145,7 @@ impl SessionStore {
         };
         let conversation = session
             .conversations
-            .entry(agent)
+            .entry(key)
             .or_insert_with(|| Conversation {
                 turns: Vec::new(),
                 job: None,
@@ -139,10 +154,47 @@ impl SessionStore {
         conversation.preferred_workflow = Some(workflow);
     }
 
+    pub(crate) fn remember_conversation(&self, id: &SessionId, key: ConversationKey) {
+        let mut sessions = self.lock();
+        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
+            return;
+        };
+        session.last_agents.insert(key.project_id, key.agent_id);
+        session
+            .recent_projects
+            .retain(|item| *item != key.project_id);
+        session.recent_projects.insert(0, key.project_id);
+        session.recent_projects.truncate(MAXIMUM_PROJECTS);
+        session
+            .last_agents
+            .retain(|project, _| session.recent_projects.contains(project));
+    }
+
+    pub(crate) fn last_agent(&self, id: &SessionId, project: &ProjectId) -> Option<AgentId> {
+        let mut sessions = self.lock();
+        live(&mut sessions, id, self.clock.now())
+            .and_then(|session| session.last_agents.get(project).copied())
+    }
+
+    pub(crate) fn forget_last_agent(&self, id: &SessionId, project: &ProjectId) {
+        let mut sessions = self.lock();
+        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
+            return;
+        };
+        session.last_agents.remove(project);
+    }
+
+    pub(crate) fn recent_projects(&self, id: &SessionId) -> Vec<ProjectId> {
+        let mut sessions = self.lock();
+        live(&mut sessions, id, self.clock.now())
+            .map(|session| session.recent_projects.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn begin_turn(
         &self,
         id: &SessionId,
-        agent: AgentId,
+        key: ConversationKey,
         run_id: RunId,
         message: String,
     ) -> Result<BegunTurn, BeginTurnError> {
@@ -155,7 +207,7 @@ impl SessionStore {
         let job_id = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
         let conversation = session
             .conversations
-            .entry(agent)
+            .entry(key)
             .or_insert_with(|| Conversation {
                 turns: Vec::new(),
                 job: None,
@@ -167,7 +219,7 @@ impl SessionStore {
         });
         let job = Job::new(job_id, run_id, conversation.turns.len());
         conversation.job = Some(job.clone());
-        session.active = Some((agent, job_id));
+        session.active = Some((key, job_id));
         Ok(BegunTurn {
             job,
             turns: conversation.turns.clone(),
@@ -177,32 +229,37 @@ impl SessionStore {
     pub(crate) fn finish_turn(
         &self,
         id: &SessionId,
-        agent: &AgentId,
+        key: &ConversationKey,
         job_id: &JobId,
         reply: String,
     ) -> bool {
-        self.complete_turn(id, agent, job_id, reply)
+        self.complete_turn(id, key, job_id, reply)
     }
 
     pub(crate) fn fail_turn(
         &self,
         id: &SessionId,
-        agent: &AgentId,
+        key: &ConversationKey,
         job_id: &JobId,
         partial: String,
     ) -> bool {
-        self.complete_turn(id, agent, job_id, partial)
+        self.complete_turn(id, key, job_id, partial)
     }
 
-    pub(crate) fn rollback_turn(&self, id: &SessionId, agent: &AgentId, job_id: &JobId) -> bool {
+    pub(crate) fn rollback_turn(
+        &self,
+        id: &SessionId,
+        key: &ConversationKey,
+        job_id: &JobId,
+    ) -> bool {
         let mut sessions = self.lock();
         let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
             return false;
         };
-        if session.active != Some((*agent, *job_id)) {
+        if session.active != Some((*key, *job_id)) {
             return false;
         }
-        if let Some(conversation) = session.conversations.get_mut(agent) {
+        if let Some(conversation) = session.conversations.get_mut(key) {
             conversation.turns.pop();
             if conversation
                 .job
@@ -216,12 +273,17 @@ impl SessionStore {
         true
     }
 
-    pub(crate) fn job(&self, id: &SessionId, agent: &AgentId, job_id: &JobId) -> Option<Arc<Job>> {
+    pub(crate) fn job(
+        &self,
+        id: &SessionId,
+        key: &ConversationKey,
+        job_id: &JobId,
+    ) -> Option<Arc<Job>> {
         let mut sessions = self.lock();
         live(&mut sessions, id, self.clock.now()).and_then(|session| {
             session
                 .conversations
-                .get(agent)
+                .get(key)
                 .and_then(|conversation| conversation.job.as_ref())
                 .filter(|job| job.id() == *job_id)
                 .cloned()
@@ -269,7 +331,7 @@ impl SessionStore {
     fn complete_turn(
         &self,
         id: &SessionId,
-        agent: &AgentId,
+        key: &ConversationKey,
         job_id: &JobId,
         reply: String,
     ) -> bool {
@@ -277,10 +339,10 @@ impl SessionStore {
         let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
             return false;
         };
-        if session.active != Some((*agent, *job_id)) {
+        if session.active != Some((*key, *job_id)) {
             return false;
         }
-        if let Some(conversation) = session.conversations.get_mut(agent)
+        if let Some(conversation) = session.conversations.get_mut(key)
             && !reply.trim().is_empty()
         {
             conversation.turns.push(ChatTurn {
@@ -299,8 +361,8 @@ impl SessionStore {
     }
 }
 
-fn snapshot_session(agent: &AgentId, session: &StoredSession) -> SessionSnapshot {
-    let conversation = session.conversations.get(agent);
+fn snapshot_session(key: &ConversationKey, session: &StoredSession) -> SessionSnapshot {
+    let conversation = session.conversations.get(key);
     SessionSnapshot {
         turns: conversation
             .map(|conversation| conversation.turns.clone())

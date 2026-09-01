@@ -4,74 +4,88 @@ use crate::{
     agents::AgentRecord,
     markdown,
     models::ModelCatalogue,
+    projects::ProjectRecord,
     providers::{ChatTurn, Role},
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
 
-pub(super) const DOCUMENT_TITLE: &str = "Chat | Power Plant";
+pub(crate) const DOCUMENT_TITLE: &str = "Chat | Power Plant";
 
-pub(super) struct TurnView {
-    pub(super) id: String,
-    pub(super) is_user: bool,
-    pub(super) html: String,
+pub(crate) struct TurnView {
+    pub(crate) id: String,
+    pub(crate) is_user: bool,
+    pub(crate) html: String,
 }
 
-pub(super) struct DeskProviderOption {
-    pub(super) value: &'static str,
-    pub(super) label: &'static str,
-    pub(super) model: String,
-    pub(super) selected: bool,
+pub(crate) struct DeskProviderOption {
+    pub(crate) value: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) model: String,
+    pub(crate) selected: bool,
 }
 
-pub(super) struct ModelOption {
-    pub(super) id: String,
-    pub(super) selected: bool,
+pub(crate) struct ModelOption {
+    pub(crate) id: String,
+    pub(crate) selected: bool,
+}
+
+pub(crate) struct AgentChoice {
+    pub(crate) name: String,
+    pub(crate) href: String,
+    pub(crate) selected: bool,
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html")]
-pub(super) struct ChatViewModel {
-    pub(super) providers: Vec<DeskProviderOption>,
-    pub(super) model: String,
-    pub(super) favourite_models: Vec<ModelOption>,
-    pub(super) catalogue_models: Vec<ModelOption>,
-    pub(super) catalogue_pending: bool,
-    pub(super) desk_error: &'static str,
-    pub(super) turns: Vec<TurnView>,
-    pub(super) error: &'static str,
-    pub(super) job_error: &'static str,
-    pub(super) job_id: String,
-    pub(super) cursor: u64,
-    pub(super) job_active: bool,
-    pub(super) job_status: String,
-    pub(super) session_busy: bool,
-    pub(super) agent_id: String,
-    pub(super) agent_name: String,
-    pub(super) run_id: String,
-    pub(super) run_step: String,
-    pub(super) workflow_name: String,
-    pub(super) workflow_options: Vec<WorkflowOption>,
-    pub(super) workflow_empty: bool,
-    pub(super) draft_message: String,
-    pub(super) environment_preview: Vec<PreviewLine>,
-    pub(super) environment_preview_error: &'static str,
-    pub(super) preview_ready: bool,
+#[template(path = "projects/templates/desk.html")]
+pub(crate) struct ChatViewModel {
+    pub(crate) document_title: String,
+    pub(crate) providers: Vec<DeskProviderOption>,
+    pub(crate) model: String,
+    pub(crate) favourite_models: Vec<ModelOption>,
+    pub(crate) catalogue_models: Vec<ModelOption>,
+    pub(crate) catalogue_pending: bool,
+    pub(crate) desk_error: &'static str,
+    pub(crate) turns: Vec<TurnView>,
+    pub(crate) error: &'static str,
+    pub(crate) job_error: &'static str,
+    pub(crate) job_id: String,
+    pub(crate) cursor: u64,
+    pub(crate) job_active: bool,
+    pub(crate) job_status: String,
+    pub(crate) session_busy: bool,
+    pub(crate) project_id: String,
+    pub(crate) project_name: String,
+    pub(crate) project_path: String,
+    pub(crate) project_available: bool,
+    pub(crate) desk_href: String,
+    pub(crate) agent_id: String,
+    pub(crate) agent_name: String,
+    pub(crate) agent_choices: Vec<AgentChoice>,
+    pub(crate) run_id: String,
+    pub(crate) run_step: String,
+    pub(crate) workflow_name: String,
+    pub(crate) workflow_options: Vec<WorkflowOption>,
+    pub(crate) workflow_empty: bool,
+    pub(crate) draft_message: String,
+    pub(crate) environment_preview: Vec<PreviewLine>,
+    pub(crate) environment_preview_error: &'static str,
+    pub(crate) preview_ready: bool,
 }
 
-pub(super) struct PreviewLine {
-    pub(super) text: String,
+pub(crate) struct PreviewLine {
+    pub(crate) text: String,
 }
 
-pub(super) struct WorkflowOption {
-    pub(super) token: String,
-    pub(super) label: String,
-    pub(super) policy: String,
-    pub(super) selected: bool,
+pub(crate) struct WorkflowOption {
+    pub(crate) token: String,
+    pub(crate) label: String,
+    pub(crate) policy: String,
+    pub(crate) selected: bool,
 }
 
 impl ChatViewModel {
-    pub(super) fn from_session(
+    pub(crate) fn from_session(
         record: &AgentRecord,
         session: &SessionSnapshot,
         vault: &ProviderVault,
@@ -87,32 +101,6 @@ impl ChatViewModel {
             session.job.as_ref(),
             session.session_busy,
             error,
-            desk_error,
-        )
-    }
-
-    pub(super) fn desk_only(
-        vault: &ProviderVault,
-        catalogue: &ModelCatalogue,
-        session_busy: bool,
-        desk_error: &'static str,
-    ) -> Self {
-        Self::from_parts(
-            &AgentRecord {
-                id: crate::agents::AgentId::parse(&"0".repeat(32)).expect("zero id"),
-                revision: 1,
-                name: String::new(),
-                instructions: String::new(),
-                tools: Vec::new(),
-                directories: Vec::new(),
-                primary_directory: String::new(),
-            },
-            &vault.desk_providers(),
-            catalogue,
-            &[],
-            None,
-            session_busy,
-            "",
             desk_error,
         )
     }
@@ -197,8 +185,15 @@ impl ChatViewModel {
             job_active,
             job_status,
             session_busy,
+            document_title: DOCUMENT_TITLE.to_owned(),
+            project_id: String::new(),
+            project_name: String::new(),
+            project_path: String::new(),
+            project_available: true,
+            desk_href: String::new(),
             agent_id: record.id.as_hex(),
             agent_name: record.name.clone(),
+            agent_choices: Vec::new(),
             run_id,
             run_step,
             workflow_name,
@@ -211,7 +206,30 @@ impl ChatViewModel {
         }
     }
 
-    pub(super) fn desk_settings(&self) -> DeskSettingsContents<'_> {
+    pub(crate) fn with_project(
+        mut self,
+        project: &ProjectRecord,
+        record: &AgentRecord,
+        eligible: &[AgentRecord],
+    ) -> Self {
+        self.document_title = format!("{} | Power Plant", project.name);
+        self.project_id = project.id.as_hex();
+        self.project_name = project.name.clone();
+        self.project_path = project.host_path.to_string_lossy().into_owned();
+        self.project_available = project.host_path_is_available();
+        self.desk_href = crate::projects::desk_path(&project.id, &record.id);
+        self.agent_choices = eligible
+            .iter()
+            .map(|agent| AgentChoice {
+                name: agent.name.clone(),
+                href: crate::projects::desk_path(&project.id, &agent.id),
+                selected: agent.id == record.id,
+            })
+            .collect();
+        self
+    }
+
+    pub(crate) fn desk_settings(&self) -> DeskSettingsContents<'_> {
         DeskSettingsContents {
             providers: &self.providers,
             model: &self.model,
@@ -220,10 +238,12 @@ impl ChatViewModel {
             catalogue_pending: self.catalogue_pending,
             desk_error: self.desk_error,
             job_active: self.session_busy,
+            project_id: &self.project_id,
+            agent_id: &self.agent_id,
         }
     }
 
-    pub(super) fn desk_model_catalogue(&self) -> DeskModelCatalogueContents<'_> {
+    pub(crate) fn desk_model_catalogue(&self) -> DeskModelCatalogueContents<'_> {
         DeskModelCatalogueContents {
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
@@ -231,11 +251,13 @@ impl ChatViewModel {
         }
     }
 
-    pub(super) fn composer(&self) -> ComposerContents<'_> {
+    pub(crate) fn composer(&self) -> ComposerContents<'_> {
         ComposerContents {
             error: self.error,
             session_busy: self.session_busy,
-            agent_id: &self.agent_id,
+            project_id: &self.project_id,
+            project_available: self.project_available,
+            desk_href: &self.desk_href,
             workflow_options: &self.workflow_options,
             workflow_empty: self.workflow_empty,
             draft_message: &self.draft_message,
@@ -245,27 +267,29 @@ impl ChatViewModel {
         }
     }
 
-    pub(super) fn readiness_route(&self) -> ReadinessRouteContents<'_> {
+    pub(crate) fn readiness_route(&self) -> ReadinessRouteContents<'_> {
         ReadinessRouteContents {
             providers: &self.providers,
+            project_name: &self.project_name,
+            project_available: self.project_available,
             workflow_options: &self.workflow_options,
             workflow_empty: self.workflow_empty,
             preview_ready: self.preview_ready,
         }
     }
 
-    pub(super) fn job_observe(&self) -> JobObserveContents<'_> {
+    pub(crate) fn job_observe(&self) -> JobObserveContents<'_> {
         self.job_observe_with("")
     }
 
-    pub(super) fn job_observe_with<'a>(&'a self, job_error: &'a str) -> JobObserveContents<'a> {
+    pub(crate) fn job_observe_with<'a>(&'a self, job_error: &'a str) -> JobObserveContents<'a> {
         JobObserveContents {
             job_error,
             job_id: &self.job_id,
             cursor: self.cursor,
             job_active: self.job_active,
             job_status: &self.job_status,
-            agent_id: &self.agent_id,
+            desk_href: &self.desk_href,
             run_id: &self.run_id,
             run_step: &self.run_step,
             workflow_name: &self.workflow_name,
@@ -273,7 +297,7 @@ impl ChatViewModel {
     }
 }
 
-pub(super) fn user_turn(index: usize, text: &str) -> TurnView {
+pub(crate) fn user_turn(index: usize, text: &str) -> TurnView {
     TurnView {
         id: turn_id(index),
         is_user: true,
@@ -281,7 +305,7 @@ pub(super) fn user_turn(index: usize, text: &str) -> TurnView {
     }
 }
 
-pub(super) fn assistant_turn(index: usize, text: &str) -> TurnView {
+pub(crate) fn assistant_turn(index: usize, text: &str) -> TurnView {
     TurnView {
         id: turn_id(index),
         is_user: false,
@@ -289,77 +313,83 @@ pub(super) fn assistant_turn(index: usize, text: &str) -> TurnView {
     }
 }
 
-pub(super) fn turn_id(index: usize) -> String {
+pub(crate) fn turn_id(index: usize) -> String {
     format!("turn-{}", index + 1)
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "desk_settings")]
-pub(super) struct DeskSettingsContents<'a> {
-    pub(super) providers: &'a [DeskProviderOption],
-    pub(super) model: &'a str,
-    pub(super) favourite_models: &'a [ModelOption],
-    pub(super) catalogue_models: &'a [ModelOption],
-    pub(super) catalogue_pending: bool,
-    pub(super) desk_error: &'a str,
-    pub(super) job_active: bool,
+#[template(path = "projects/templates/desk.html", block = "desk_settings")]
+pub(crate) struct DeskSettingsContents<'a> {
+    pub(crate) providers: &'a [DeskProviderOption],
+    pub(crate) model: &'a str,
+    pub(crate) favourite_models: &'a [ModelOption],
+    pub(crate) catalogue_models: &'a [ModelOption],
+    pub(crate) catalogue_pending: bool,
+    pub(crate) desk_error: &'a str,
+    pub(crate) job_active: bool,
+    pub(crate) project_id: &'a str,
+    pub(crate) agent_id: &'a str,
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "desk_model_catalogue")]
-pub(super) struct DeskModelCatalogueContents<'a> {
-    pub(super) favourite_models: &'a [ModelOption],
-    pub(super) catalogue_models: &'a [ModelOption],
-    pub(super) catalogue_pending: bool,
+#[template(path = "projects/templates/desk.html", block = "desk_model_catalogue")]
+pub(crate) struct DeskModelCatalogueContents<'a> {
+    pub(crate) favourite_models: &'a [ModelOption],
+    pub(crate) catalogue_models: &'a [ModelOption],
+    pub(crate) catalogue_pending: bool,
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "transcript")]
-pub(super) struct TranscriptContents<'a> {
-    pub(super) turns: &'a [TurnView],
+#[template(path = "projects/templates/desk.html", block = "transcript")]
+pub(crate) struct TranscriptContents<'a> {
+    pub(crate) turns: &'a [TurnView],
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "readiness_route")]
-pub(super) struct ReadinessRouteContents<'a> {
-    pub(super) providers: &'a [DeskProviderOption],
-    pub(super) workflow_options: &'a [WorkflowOption],
-    pub(super) workflow_empty: bool,
-    pub(super) preview_ready: bool,
+#[template(path = "projects/templates/desk.html", block = "readiness_route")]
+pub(crate) struct ReadinessRouteContents<'a> {
+    pub(crate) providers: &'a [DeskProviderOption],
+    pub(crate) project_name: &'a str,
+    pub(crate) project_available: bool,
+    pub(crate) workflow_options: &'a [WorkflowOption],
+    pub(crate) workflow_empty: bool,
+    pub(crate) preview_ready: bool,
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "composer")]
-pub(super) struct ComposerContents<'a> {
-    pub(super) error: &'a str,
-    pub(super) session_busy: bool,
-    pub(super) agent_id: &'a str,
-    pub(super) workflow_options: &'a [WorkflowOption],
-    pub(super) workflow_empty: bool,
-    pub(super) draft_message: &'a str,
-    pub(super) environment_preview: &'a [PreviewLine],
-    pub(super) environment_preview_error: &'static str,
-    pub(super) preview_ready: bool,
+#[template(path = "projects/templates/desk.html", block = "composer")]
+pub(crate) struct ComposerContents<'a> {
+    pub(crate) error: &'a str,
+    pub(crate) session_busy: bool,
+    pub(crate) project_id: &'a str,
+    pub(crate) project_available: bool,
+    pub(crate) desk_href: &'a str,
+    pub(crate) workflow_options: &'a [WorkflowOption],
+    pub(crate) workflow_empty: bool,
+    pub(crate) draft_message: &'a str,
+    pub(crate) environment_preview: &'a [PreviewLine],
+    pub(crate) environment_preview_error: &'static str,
+    pub(crate) preview_ready: bool,
 }
 
 #[derive(Template)]
-#[template(path = "chat/templates/chat.html", block = "job_observe")]
-pub(super) struct JobObserveContents<'a> {
-    pub(super) job_error: &'a str,
-    pub(super) job_id: &'a str,
-    pub(super) cursor: u64,
-    pub(super) job_active: bool,
-    pub(super) job_status: &'a str,
-    pub(super) agent_id: &'a str,
-    pub(super) run_id: &'a str,
-    pub(super) run_step: &'a str,
-    pub(super) workflow_name: &'a str,
+#[template(path = "projects/templates/desk.html", block = "job_observe")]
+pub(crate) struct JobObserveContents<'a> {
+    pub(crate) job_error: &'a str,
+    pub(crate) job_id: &'a str,
+    pub(crate) cursor: u64,
+    pub(crate) job_active: bool,
+    pub(crate) job_status: &'a str,
+    pub(crate) desk_href: &'a str,
+    pub(crate) run_id: &'a str,
+    pub(crate) run_step: &'a str,
+    pub(crate) workflow_name: &'a str,
 }
 
 impl<'a> JobObserveContents<'a> {
-    pub(super) fn idle(
+    pub(crate) fn idle(
         error: &'a str,
-        agent_id: &'a str,
+        desk_href: &'a str,
         run_id: &'a str,
         run_step: &'a str,
         workflow_name: &'a str,
@@ -370,7 +400,7 @@ impl<'a> JobObserveContents<'a> {
             cursor: 0,
             job_active: false,
             job_status: "",
-            agent_id,
+            desk_href,
             run_id,
             run_step,
             workflow_name,
@@ -378,12 +408,12 @@ impl<'a> JobObserveContents<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn observing(
+    pub(crate) fn observing(
         job_id: &'a str,
         cursor: u64,
         status: &'a str,
         error: &'a str,
-        agent_id: &'a str,
+        desk_href: &'a str,
         run_id: &'a str,
         run_step: &'a str,
         workflow_name: &'a str,
@@ -394,7 +424,7 @@ impl<'a> JobObserveContents<'a> {
             cursor,
             job_active: true,
             job_status: status,
-            agent_id,
+            desk_href,
             run_id,
             run_step,
             workflow_name,
@@ -404,21 +434,21 @@ impl<'a> JobObserveContents<'a> {
 
 #[derive(Template)]
 #[template(path = "chat/templates/job_cursor.html")]
-pub(super) struct JobCursorContents<'a> {
-    pub(super) job_id: &'a str,
-    pub(super) cursor: u64,
+pub(crate) struct JobCursorContents<'a> {
+    pub(crate) job_id: &'a str,
+    pub(crate) cursor: u64,
 }
 
 #[derive(Template)]
 #[template(path = "chat/templates/turn_article.html")]
-pub(super) struct TurnArticle<'a> {
-    pub(super) turn: &'a TurnView,
+pub(crate) struct TurnArticle<'a> {
+    pub(crate) turn: &'a TurnView,
 }
 
 #[derive(Template)]
 #[template(path = "chat/templates/turn_body.html")]
-pub(super) struct TurnBody<'a> {
-    pub(super) turn: &'a TurnView,
+pub(crate) struct TurnBody<'a> {
+    pub(crate) turn: &'a TurnView,
 }
 
 fn model_options(

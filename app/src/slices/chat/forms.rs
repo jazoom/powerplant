@@ -4,30 +4,30 @@ use crate::providers::{ProviderKind, model_is_bounded, resolve_model};
 use crate::sessions::JobId;
 use crate::workflows::WorkflowSelection;
 
-pub(super) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
-pub(super) const MAXIMUM_CURSOR: u64 = 1_000_000;
+pub(crate) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
+pub(crate) const MAXIMUM_CURSOR: u64 = 1_000_000;
 
 #[derive(Deserialize)]
-pub(super) struct ChatForm {
+pub(crate) struct ChatForm {
     #[serde(default)]
-    pub(super) message: String,
+    pub(crate) message: String,
     #[serde(default)]
-    pub(super) workflow: String,
+    pub(crate) workflow: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum WorkflowTokenError {
+pub(crate) enum WorkflowTokenError {
     Absent,
     Malformed,
 }
 
 impl ChatForm {
-    pub(super) fn is_bounded(&self) -> bool {
+    pub(crate) fn is_bounded(&self) -> bool {
         let message = self.message.trim();
         !message.is_empty() && message.len() <= MAXIMUM_MESSAGE_BYTES
     }
 
-    pub(super) fn workflow_selection(&self) -> Result<WorkflowSelection, WorkflowTokenError> {
+    pub(crate) fn workflow_selection(&self) -> Result<WorkflowSelection, WorkflowTokenError> {
         let token = self.workflow.trim();
         if token.is_empty() {
             return Err(WorkflowTokenError::Absent);
@@ -37,29 +37,33 @@ impl ChatForm {
 }
 
 #[derive(Deserialize)]
-pub(super) struct ModelForm {
+pub(crate) struct ModelForm {
     #[serde(default)]
-    pub(super) provider: String,
+    pub(crate) provider: String,
     #[serde(default)]
-    pub(super) model: String,
+    pub(crate) model: String,
     #[serde(default)]
-    pub(super) favourite: Option<String>,
+    pub(crate) favourite: Option<String>,
     #[serde(default)]
-    pub(super) provider_model_synced: bool,
+    pub(crate) provider_model_synced: bool,
+    #[serde(default)]
+    pub(crate) project: String,
+    #[serde(default)]
+    pub(crate) agent: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ModelError {
+pub(crate) enum ModelError {
     Provider,
     Model,
 }
 
 impl ModelForm {
-    pub(super) fn wants_favourite_toggle(&self) -> bool {
+    pub(crate) fn wants_favourite_toggle(&self) -> bool {
         self.favourite.is_some()
     }
 
-    pub(super) fn validate(
+    pub(crate) fn validate(
         &self,
         stored: impl Fn(ProviderKind) -> bool,
     ) -> Result<(ProviderKind, String), ModelError> {
@@ -70,7 +74,7 @@ impl ModelForm {
         Ok((kind, resolve_model(kind, &self.model)))
     }
 
-    pub(super) fn validate_favourite(
+    pub(crate) fn validate_favourite(
         &self,
         stored: impl Fn(ProviderKind) -> bool,
     ) -> Result<(ProviderKind, String), ModelError> {
@@ -97,32 +101,32 @@ impl ModelForm {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(super) struct ObserveQuery {
+pub(crate) struct ObserveQuery {
     #[serde(default)]
-    pub(super) job: String,
+    pub(crate) job: String,
     #[serde(default)]
-    pub(super) cursor: String,
+    pub(crate) cursor: String,
     #[serde(default)]
-    pub(super) workflow: String,
+    pub(crate) workflow: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum CursorError {
+pub(crate) enum CursorError {
     Malformed,
     Excessive,
 }
 
 impl ObserveQuery {
-    pub(super) fn job_id(&self) -> Option<JobId> {
+    pub(crate) fn job_id(&self) -> Option<JobId> {
         JobId::parse(self.job.trim())
     }
 
-    pub(super) fn cursor(&self) -> Result<u64, CursorError> {
+    pub(crate) fn cursor(&self) -> Result<u64, CursorError> {
         parse_cursor(&self.cursor)
     }
 }
 
-pub(super) fn parse_cursor(raw: &str) -> Result<u64, CursorError> {
+pub(crate) fn parse_cursor(raw: &str) -> Result<u64, CursorError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(0);

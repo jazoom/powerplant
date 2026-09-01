@@ -28,6 +28,31 @@
     </div>
   {% endif %}
 
+  {% if agents.is_empty() %}
+    <section class="file-section space-y-3">
+      <h2 class="text-lg font-semibold">No agent</h2>
+      <p class="text-quiet max-w-[60ch]">
+        No current agent has an exact directory grant for this project path.
+      </p>
+    </section>
+  {% else %}
+    <section class="file-section space-y-3">
+      <h2 class="text-lg font-semibold">Choose an agent</h2>
+      <ul class="record-list">
+        {% for agent in agents %}
+          <li class="record-row">
+            <a
+              href="{{ agent.href }}"
+              data-graft
+              class="link link-hover font-medium"
+              >{{ agent.name }}</a
+            >
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
   <p>
     <a href="/projects" data-graft class="link link-hover">All projects</a>
   </p>

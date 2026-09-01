@@ -18,7 +18,7 @@ fn composed_preamble_omits_host_paths() {
         }],
         primary_directory: "project".to_owned(),
     };
-    let policy = DirectoryPolicy::from_record(&record);
+    let policy = DirectoryPolicy::from_record_with_primary(&record, &record.primary_directory);
     let preamble = compose_role(
         &record.name,
         "",

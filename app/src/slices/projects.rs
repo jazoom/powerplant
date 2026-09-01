@@ -1,3 +1,4 @@
+mod desk;
 mod forms;
 mod page;
 
@@ -8,13 +9,13 @@ use axum::{
     Form, Router,
     extract::{Path, State},
     response::Response,
-    routing::get,
+    routing::{get, post},
 };
 use hypergraft::{CommandGraft, GraftRequest, PageGraft, PatchStatus};
 
 use crate::{
     error::{AppError, AppResult},
-    projects::{ProjectError, ProjectId, ProjectRecord},
+    projects::{ProjectError, ProjectId, ProjectRecord, desk_path, eligible_agents},
     responses,
     sessions::RequiredSession,
     state::AppState,
@@ -34,14 +35,22 @@ pub(super) fn router() -> Router<AppState> {
             "/projects/{project_id}/configuration",
             get(show_configuration).post(update_configuration),
         )
+        .route(
+            "/projects/{project_id}/agents/{agent_id}",
+            get(desk::show).post(desk::send),
+        )
+        .route(
+            "/projects/{project_id}/agents/{agent_id}/jobs/{job_id}/cancel",
+            post(desk::cancel),
+        )
 }
 
 async fn catalogue(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    render_catalogue(&state, graft)
+    render_catalogue(&state, session.0, graft)
 }
 
 async fn new_project(
@@ -108,14 +117,28 @@ async fn create(
 
 async fn detail(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     graft: PageGraft,
     Path(project_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(record) = load_project(&state, &project_id) else {
         return Ok(responses::graft_redirect(graft, "/projects"));
     };
-    let view = DetailView::from_record(&record);
+    let eligible = eligible_agents(&state.agents.list(), &record);
+    let remembered = state.sessions.last_agent(&session.0, &record.id);
+    let remembered_eligible =
+        remembered.filter(|agent_id| eligible.iter().any(|agent| agent.id == *agent_id));
+    if remembered.is_some() && remembered_eligible.is_none() {
+        state.sessions.forget_last_agent(&session.0, &record.id);
+    }
+    let destination = match eligible.as_slice() {
+        [agent] => Some(desk_path(&record.id, &agent.id)),
+        _ => remembered_eligible.map(|agent_id| desk_path(&record.id, &agent_id)),
+    };
+    if let Some(destination) = destination {
+        return Ok(responses::graft_redirect(graft, &destination));
+    }
+    let view = DetailView::from_record(&record, &eligible);
     match graft {
         PageGraft::Document => {
             let mut response =
@@ -240,8 +263,12 @@ fn render_configuration_error(
     )
 }
 
-fn render_catalogue(state: &AppState, graft: PageGraft) -> AppResult<Response> {
-    let view = CatalogueView::from_records(&state.projects.list());
+fn render_catalogue(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    graft: PageGraft,
+) -> AppResult<Response> {
+    let view = CatalogueView::from_records(&ordered_projects(state, session));
     match graft {
         PageGraft::Document => {
             let mut response =
@@ -298,4 +325,21 @@ fn render_form_command(
             &view.contents(),
         )?),
     }
+}
+
+fn ordered_projects(state: &AppState, session: crate::sessions::SessionId) -> Vec<ProjectRecord> {
+    let recent = state.sessions.recent_projects(&session);
+    let mut listed = state.projects.list();
+    listed.sort_by(|left, right| {
+        match (
+            recent.iter().position(|id| *id == left.id),
+            recent.iter().position(|id| *id == right.id),
+        ) {
+            (Some(left_rank), Some(right_rank)) => left_rank.cmp(&right_rank),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+    listed
 }

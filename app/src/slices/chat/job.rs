@@ -73,10 +73,10 @@ enum ProgressOffer {
 pub(super) fn observe_response(
     job: Arc<Job>,
     cursor: u64,
-    agent_id: String,
+    desk_href: String,
 ) -> axum::response::Response {
     let (tx, rx) = mpsc::channel::<hypergraft::StreamFrame>(4);
-    tokio::spawn(observe_segment(tx, job, cursor, agent_id));
+    tokio::spawn(observe_segment(tx, job, cursor, desk_href));
     let frames = futures_util::stream::unfold(rx, |mut rx| async {
         rx.recv().await.map(|item| (item, rx))
     });
@@ -455,7 +455,7 @@ async fn observe_segment(
     tx: mpsc::Sender<hypergraft::StreamFrame>,
     job: Arc<Job>,
     cursor: u64,
-    agent_id: String,
+    desk_href: String,
 ) {
     let mut budget = hypergraft::StreamBudget::new();
     let mut sent = cursor;
@@ -519,7 +519,7 @@ async fn observe_segment(
         }
     }
 
-    send_observe_final(&tx, &job, &job_id, sent, assistant_visible, &agent_id).await;
+    send_observe_final(&tx, &job, &job_id, sent, assistant_visible, &desk_href).await;
 }
 
 fn should_keep_open(job: &Job, started: Instant) -> bool {
@@ -589,9 +589,9 @@ async fn send_observe_final(
     job_id: &str,
     cursor: u64,
     assistant_visible: bool,
-    agent_id: &str,
+    desk_href: &str,
 ) {
-    match encode_observe_final(job, job_id, cursor, assistant_visible, agent_id) {
+    match encode_observe_final(job, job_id, cursor, assistant_visible, desk_href) {
         Ok(frame) => {
             let _ = tx.send(frame).await;
         }
@@ -600,7 +600,7 @@ async fn send_observe_final(
                 "construct job observation final",
                 &build_error,
             );
-            match encode_observe_final(job, job_id, cursor, false, agent_id) {
+            match encode_observe_final(job, job_id, cursor, false, desk_href) {
                 Ok(frame) => {
                     let _ = tx.send(frame).await;
                 }
@@ -620,7 +620,7 @@ fn encode_observe_final(
     job_id: &str,
     cursor: u64,
     assistant_visible: bool,
-    agent_id: &str,
+    desk_href: &str,
 ) -> Result<hypergraft::StreamFrame, hypergraft::PatchBuildError> {
     let snapshot = job.snapshot();
     let more = snapshot.latest_seq > cursor || snapshot.status == JobStatus::Running;
@@ -647,7 +647,7 @@ fn encode_observe_final(
                 cursor,
                 status,
                 "",
-                agent_id,
+                desk_href,
                 &run_id,
                 run_step,
                 workflow_name,
@@ -657,7 +657,7 @@ fn encode_observe_final(
         let error = snapshot.error.as_deref().unwrap_or("");
         patches.children(
             "job-observe",
-            &JobObserveContents::idle(error, agent_id, &run_id, run_step, workflow_name),
+            &JobObserveContents::idle(error, desk_href, &run_id, run_step, workflow_name),
         )?;
     }
     let status = match snapshot.status {

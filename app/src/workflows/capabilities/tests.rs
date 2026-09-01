@@ -6,8 +6,9 @@ use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, ToolId};
 use crate::providers::{ProviderConnection, ProviderKind};
 use crate::tools::SUBMIT_WORKFLOW_OUTPUT;
 use crate::workflows::definition::{
-    AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind, RequiredOutput, RoleKey,
-    StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandId, SystemCommandStep,
+    AgentAuthority, AgentStep, CandidateAuthority, GuestDirectoryAccess, OutputKey, OutputKind,
+    RequiredOutput, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandId,
+    SystemCommandStep,
 };
 
 fn agent(tools: Vec<ToolId>, writable: bool) -> AgentRecord {
@@ -36,6 +37,14 @@ fn agent_with_primary(tools: Vec<ToolId>, writable: bool, primary: &str) -> Agen
 
 fn connection() -> ProviderConnection {
     ProviderConnection::with_key(ProviderKind::Xai, "sk-test", "grok-4.6")
+}
+
+fn derive(
+    step: &StepDefinition,
+    agent: &AgentRecord,
+    connection: &ProviderConnection,
+) -> Result<AttemptCapabilities, CapabilityError> {
+    AttemptCapabilities::derive(step, agent, &agent.primary_directory, connection)
 }
 
 fn agent_step(tools: Vec<ToolId>, writable: bool) -> StepDefinition {
@@ -97,11 +106,11 @@ fn capability_policy_table() {
 
     let over = agent_step(vec![ToolId::List, ToolId::Write], true);
     assert_eq!(
-        AttemptCapabilities::derive(&over, &agent(vec![ToolId::List], true), &connection),
+        derive(&over, &agent(vec![ToolId::List], true), &connection),
         Err(CapabilityError::Authority)
     );
 
-    let planner = AttemptCapabilities::derive(
+    let planner = derive(
         &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
         &ceiling,
         &connection,
@@ -121,7 +130,7 @@ fn capability_policy_table() {
     assert_eq!(planner.network, NetworkCapability::ProviderHost);
 
     let custom_primary = agent_with_primary(ToolId::ALL.to_vec(), true, "source");
-    let implementer = AttemptCapabilities::derive(
+    let implementer = derive(
         &agent_step(ToolId::ALL.to_vec(), true),
         &custom_primary,
         &connection,
@@ -145,7 +154,7 @@ fn capability_policy_table() {
             .any(|tool| tool.as_str() == SUBMIT_WORKFLOW_OUTPUT)
     );
 
-    let reviewer = AttemptCapabilities::derive(
+    let reviewer = derive(
         &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
         &ceiling,
         &connection,
@@ -157,8 +166,7 @@ fn capability_policy_table() {
     );
     assert_eq!(reviewer.git_admin, AccessMode::ReadOnly);
 
-    let status =
-        AttemptCapabilities::derive(&status_step(), &ceiling, &connection).expect("status");
+    let status = derive(&status_step(), &ceiling, &connection).expect("status");
     assert!(status.tools.is_empty());
     assert_eq!(status.network, NetworkCapability::None);
     assert_eq!(status.secret, SecretPresence::None);
@@ -172,8 +180,7 @@ fn capability_policy_table() {
         Some(AccessMode::ReadOnly)
     );
 
-    let commit =
-        AttemptCapabilities::derive(&commit_step(), &ceiling, &connection).expect("commit");
+    let commit = derive(&commit_step(), &ceiling, &connection).expect("commit");
     assert!(commit.tools.is_empty());
     assert_eq!(commit.network, NetworkCapability::None);
     assert_eq!(commit.secret, SecretPresence::None);
@@ -186,5 +193,77 @@ fn capability_policy_table() {
     assert_eq!(
         commit.primary().map(|directory| directory.role),
         Some(DirectoryRole::PrimarySource)
+    );
+}
+
+#[test]
+fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
+    let selected = AgentRecord {
+        id: AgentId::generate().expect("id"),
+        revision: 3,
+        name: "Agent".to_owned(),
+        instructions: String::new(),
+        tools: vec![ToolId::List],
+        directories: vec![
+            DirectoryGrant {
+                alias: "docs".to_owned(),
+                host_path: "/tmp/docs".into(),
+                access: AccessMode::ReadOnly,
+            },
+            DirectoryGrant {
+                alias: "code".to_owned(),
+                host_path: "/tmp/code".into(),
+                access: AccessMode::ReadWrite,
+            },
+        ],
+        primary_directory: "docs".to_owned(),
+    };
+    let mut step = agent_step(vec![ToolId::List], true);
+    let StepAction::Agent(action) = &mut step.action else {
+        panic!("agent step");
+    };
+    action.authority = AgentAuthority::new(
+        vec![ToolId::List],
+        vec![GuestDirectoryAccess {
+            alias: "docs".to_owned(),
+            access: AccessMode::ReadOnly,
+        }],
+    )
+    .expect("authority");
+
+    let capabilities =
+        AttemptCapabilities::derive(&step, &selected, "code", &connection()).expect("selected");
+    assert_eq!(capabilities.agent_revision, selected.revision);
+    assert_eq!(
+        capabilities
+            .directories
+            .iter()
+            .map(|directory| {
+                (
+                    directory.alias.as_str(),
+                    directory.guest_path.as_str(),
+                    directory.access,
+                    directory.role,
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            (
+                "code",
+                "/project",
+                AccessMode::ReadWrite,
+                DirectoryRole::PrimarySource,
+            ),
+            (
+                "docs",
+                "/access/docs",
+                AccessMode::ReadOnly,
+                DirectoryRole::SecondaryContext,
+            ),
+        ]
+    );
+    assert_eq!(
+        AttemptCapabilities::derive(&commit_step(), &selected, "docs", &connection()),
+        Err(CapabilityError::Authority)
     );
 }

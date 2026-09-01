@@ -8,6 +8,7 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
+    agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
     config::RuntimeConfig,
     projects::ProjectError,
     providers::{ProviderConnection, ProviderKind},
@@ -494,4 +495,315 @@ async fn a_detail_navigation_patches_chat_main() {
     let text = body_text(response).await;
     assert!(text.contains("operation=\"children\" target=\"chat-main\""));
     assert!(text.contains("Desk"));
+}
+
+fn keep_dir(state: &AppState, dir: tempfile::TempDir) {
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+}
+
+fn create_agent(state: &AppState, name: &str, path: &Path) -> crate::agents::AgentRecord {
+    state
+        .agents
+        .create(AgentDraft {
+            name: name.to_owned(),
+            instructions: String::new(),
+            tools: vec![ToolId::List],
+            directories: vec![DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: path.to_path_buf(),
+                access: AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("agent")
+}
+
+#[tokio::test]
+async fn one_eligible_agent_redirects_to_the_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Worker", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/projects/{}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("detail");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        crate::projects::desk_path(&project.id, &agent.id).as_str()
+    );
+}
+
+#[tokio::test]
+async fn a_desk_document_uses_the_project_title() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Worker", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(crate::projects::desk_path(&project.id, &agent.id))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("desk");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("<!doctype html>"));
+    assert_eq!(text.matches("id=\"chat-main\"").count(), 1);
+    assert!(text.contains("Desk"));
+    assert!(text.contains("Worker"));
+    assert!(text.contains(&project.host_path.to_string_lossy().into_owned()));
+}
+
+#[tokio::test]
+async fn a_desk_navigation_patches_chat_main() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Worker", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(crate::projects::desk_path(&project.id, &agent.id))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "navigation")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("navigation");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("operation=\"children\" target=\"chat-main\""));
+    assert!(text.contains("Desk"));
+}
+
+#[tokio::test]
+async fn a_desk_patch_refreshes_job_observe() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Worker", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(crate::projects::desk_path(&project.id, &agent.id))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("patch");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"job-observe\""));
+}
+
+#[tokio::test]
+async fn an_ineligible_agent_cannot_open_the_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(crate::projects::desk_path(&project.id, &agent.id))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("ineligible");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        format!("/projects/{}", project.id.as_hex()).as_str()
+    );
+}
+
+#[tokio::test]
+async fn a_stale_grant_cannot_open_the_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let other = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Worker", &project.host_path);
+    let session = sessions::SessionId::from_validated(
+        &sessions::ValidatedToken::parse(&token).expect("session token"),
+    );
+    state.sessions.remember_conversation(
+        &session,
+        sessions::ConversationKey {
+            project_id: project.id,
+            agent_id: agent.id,
+        },
+    );
+    state
+        .agents
+        .update(
+            &agent.id,
+            agent.revision,
+            AgentDraft {
+                name: agent.name.clone(),
+                instructions: agent.instructions.clone(),
+                tools: agent.tools.clone(),
+                directories: vec![DirectoryGrant {
+                    alias: "project".to_owned(),
+                    host_path: other.path().to_path_buf(),
+                    access: AccessMode::ReadWrite,
+                }],
+                primary_directory: "project".to_owned(),
+            },
+        )
+        .expect("update");
+    keep_dir(&state, project_dir);
+    keep_dir(&state, other);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(crate::projects::desk_path(&project.id, &agent.id))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("stale");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        format!("/projects/{}", project.id.as_hex()).as_str()
+    );
+
+    let detail = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/projects/{}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("project detail");
+    assert_eq!(detail.status(), axum::http::StatusCode::OK);
+    assert!(state.sessions.last_agent(&session, &project.id).is_none());
+}
+
+#[tokio::test]
+async fn two_eligible_agents_render_canonical_desk_links() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let first = create_agent(&state, "First", &project.host_path);
+    let second = create_agent(&state, "Second", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/projects/{}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("choice");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("Choose an agent"));
+    assert!(text.contains(&crate::projects::desk_path(&project.id, &first.id)));
+    assert!(text.contains(&crate::projects::desk_path(&project.id, &second.id)));
+    assert!(text.contains("data-graft"));
+}
+
+#[tokio::test]
+async fn a_remembered_eligible_agent_is_preferred() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let first = create_agent(&state, "First", &project.host_path);
+    let _second = create_agent(&state, "Second", &project.host_path);
+    keep_dir(&state, dir);
+    let opened = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(crate::projects::desk_path(&project.id, &first.id))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("desk");
+    assert_eq!(opened.status(), axum::http::StatusCode::OK);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/projects/{}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("detail");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        crate::projects::desk_path(&project.id, &first.id).as_str()
+    );
 }

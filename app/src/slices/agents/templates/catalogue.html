@@ -34,13 +34,18 @@
       {% for agent in agents %}
         <li class="record-row">
           <div>
-            <a
-              href="/agents/{{ agent.id }}"
-              data-graft
-              class="link link-hover font-medium"
-              >{{ agent.name }}</a
-            >
-            <p class="text-quiet text-xs">Agent desk</p>
+            {% if agent.desk_href != "" %}
+              <a
+                href="{{ agent.desk_href }}"
+                data-graft
+                class="link link-hover font-medium"
+                >{{ agent.name }}</a
+              >
+              <p class="text-quiet text-xs">Project desk</p>
+            {% else %}
+              <span class="font-medium">{{ agent.name }}</span>
+              <p class="text-quiet text-xs">No matching project</p>
+            {% endif %}
           </div>
           <a
             href="/agents/{{ agent.id }}/configuration"

@@ -3,7 +3,7 @@ use axum::Router;
 use crate::state::AppState;
 
 mod agents;
-mod chat;
+pub(crate) mod chat;
 mod connect;
 mod environments;
 mod human_gates;

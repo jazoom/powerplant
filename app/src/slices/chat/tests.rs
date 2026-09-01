@@ -48,8 +48,23 @@ fn agent_id(state: &AppState) -> crate::agents::AgentId {
     state.agents.list()[0].id
 }
 
+fn project_hex(state: &AppState) -> String {
+    state.projects.list()[0].id.as_hex()
+}
+
+fn conversation_key(state: &AppState) -> crate::sessions::ConversationKey {
+    crate::sessions::ConversationKey {
+        project_id: state.projects.list()[0].id,
+        agent_id: agent_id(state),
+    }
+}
+
 fn chat_path(state: &AppState) -> String {
-    format!("/agents/{}", agent_hex(state))
+    format!(
+        "/projects/{}/agents/{}",
+        project_hex(state),
+        agent_hex(state)
+    )
 }
 
 fn git_init(path: &std::path::Path) {
@@ -164,7 +179,7 @@ fn session_id(token: &str) -> sessions::SessionId {
 fn session_snapshot(state: &AppState, token: &str) -> sessions::SessionSnapshot {
     state
         .sessions
-        .snapshot(&session_id(token), &agent_id(state))
+        .snapshot(&session_id(token), &conversation_key(state))
         .expect("session")
 }
 
@@ -227,9 +242,13 @@ fn observe_patch(state: &AppState, token: &str, job: &str, cursor: u64) -> Reque
         .unwrap()
 }
 
-fn model_refresh_patch(token: &str) -> Request<Body> {
+fn model_refresh_patch(state: &AppState, token: &str) -> Request<Body> {
     Request::builder()
-        .uri("/model")
+        .uri(format!(
+            "/model?project={}&agent={}",
+            project_hex(state),
+            agent_hex(state)
+        ))
         .header(header::COOKIE, cookie(token))
         .header(hypergraft::GRAFT_REQUEST, "patch")
         .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
@@ -237,7 +256,7 @@ fn model_refresh_patch(token: &str) -> Request<Body> {
         .unwrap()
 }
 
-fn model_update_patch(token: &str, body: &'static str) -> Request<Body> {
+fn model_update_patch(state: &AppState, token: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri("/model")
@@ -245,7 +264,11 @@ fn model_update_patch(token: &str, body: &'static str) -> Request<Body> {
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(hypergraft::GRAFT_REQUEST, "patch")
         .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-        .body(Body::from(body))
+        .body(Body::from(format!(
+            "{body}&project={}&agent={}",
+            project_hex(state),
+            agent_hex(state)
+        )))
         .unwrap()
 }
 
@@ -882,13 +905,13 @@ async fn parallel_tabs_cannot_overwrite_a_completed_turn() {
     let job_id = stored.job.expect("job").id;
     assert!(state.sessions.finish_turn(
         &session_id(&token),
-        &agent_id(&state),
+        &conversation_key(&state),
         &job_id,
         "Done".to_owned()
     ));
     if let Some(job) = state
         .sessions
-        .job(&session_id(&token), &agent_id(&state), &job_id)
+        .job(&session_id(&token), &conversation_key(&state), &job_id)
     {
         job.finish(JobStatus::Completed, None);
     }
@@ -913,14 +936,14 @@ async fn an_oversized_navigation_falls_back_to_a_document() {
         .sessions
         .begin_turn(
             &id,
-            agent_id(&state),
+            conversation_key(&state),
             crate::workflows::RunId::generate().expect("run"),
             "Hello".to_owned(),
         )
         .expect("begin");
     assert!(state.sessions.finish_turn(
         &id,
-        &agent_id(&state),
+        &conversation_key(&state),
         &begun.job.id(),
         "a".repeat(1_200_000),
     ));
@@ -960,17 +983,11 @@ async fn an_oversized_model_name_is_rejected() {
     let token = connected(&state).await;
     let long_model = "a".repeat(crate::providers::MAXIMUM_MODEL_BYTES + 1);
     let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/model")
-                .header(header::COOKIE, cookie(&token))
-                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .header(hypergraft::GRAFT_REQUEST, "patch")
-                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(format!("provider=xai&model={long_model}")))
-                .unwrap(),
-        )
+        .oneshot(model_update_patch(
+            &state,
+            &token,
+            &format!("provider=xai&model={long_model}"),
+        ))
         .await
         .expect("model");
 
@@ -983,6 +1000,39 @@ async fn an_oversized_model_name_is_rejected() {
     assert!(text.contains("That model name is too long."));
     assert!(text.contains("target=\"desk-settings\""));
     assert!(!text.contains(&long_model));
+    assert_eq!(
+        state.vault.selected_connection().map(|item| item.model),
+        Some("grok-4.6".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn model_updates_require_an_eligible_project_and_agent_pair() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/model")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "provider=xai&model=other&project={}&agent={}",
+                    "0".repeat(32),
+                    agent_hex(&state)
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("model update");
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("navigate=\"/projects\""));
     assert_eq!(
         state.vault.selected_connection().map(|item| item.model),
         Some("grok-4.6".to_owned())
@@ -1006,7 +1056,7 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
         .set_for_test(ProviderKind::Synthetic, Vec::new(), true);
 
     let pending = app(&state)
-        .oneshot(model_refresh_patch(&token))
+        .oneshot(model_refresh_patch(&state, &token))
         .await
         .expect("pending model refresh");
     let pending_body = to_bytes(pending.into_body(), usize::MAX).await.unwrap();
@@ -1026,7 +1076,7 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
         false,
     );
     let refreshed = app(&state)
-        .oneshot(model_refresh_patch(&token))
+        .oneshot(model_refresh_patch(&state, &token))
         .await
         .expect("completed model refresh");
     let refreshed_body = to_bytes(refreshed.into_body(), usize::MAX).await.unwrap();
@@ -1071,6 +1121,7 @@ async fn multiple_synthetic_models_are_rendered_and_selectable() {
 
     let response = app(&state)
         .oneshot(model_update_patch(
+            &state,
             &token,
             "provider=synthetic&model=syn%3Alarge%3Atext",
         ))
@@ -1104,17 +1155,11 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
         .unwrap();
 
     let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/model")
-                .header(header::COOKIE, cookie(&token))
-                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .header(hypergraft::GRAFT_REQUEST, "patch")
-                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from("provider=openai-codex&model=grok-4.6"))
-                .unwrap(),
-        )
+        .oneshot(model_update_patch(
+            &state,
+            &token,
+            "provider=openai-codex&model=grok-4.6",
+        ))
         .await
         .expect("provider change");
 
@@ -1130,19 +1175,11 @@ async fn the_desk_can_toggle_a_model_favourite() {
     let token = connected(&state).await;
     for expected in [true, false] {
         let response = app(&state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/model")
-                    .header(header::COOKIE, cookie(&token))
-                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(hypergraft::GRAFT_REQUEST, "patch")
-                    .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                    .body(Body::from(
-                        "provider=xai&model=grok-4.6&favourite=grok-4-mini",
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(model_update_patch(
+                &state,
+                &token,
+                "provider=xai&model=grok-4.6&favourite=grok-4-mini",
+            ))
             .await
             .expect("favourite toggle");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -1176,17 +1213,11 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
     let state = test_state();
     let token = connected(&state).await;
     let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/model")
-                .header(header::COOKIE, cookie(&token))
-                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .header(hypergraft::GRAFT_REQUEST, "patch")
-                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from("provider=xai&model=grok-4.6&favourite="))
-                .unwrap(),
-        )
+        .oneshot(model_update_patch(
+            &state,
+            &token,
+            "provider=xai&model=grok-4.6&favourite=",
+        ))
         .await
         .expect("favourite toggle");
     assert_eq!(
@@ -1466,11 +1497,21 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
     }
     .as_token();
 
+    let reader_project = state
+        .projects
+        .list()
+        .into_iter()
+        .find(|project| project.host_path == second.directories[0].host_path)
+        .expect("reader project");
     let send = app(&state)
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{}", second.id.as_hex()))
+                .uri(format!(
+                    "/projects/{}/agents/{}",
+                    reader_project.id.as_hex(),
+                    second.id.as_hex()
+                ))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
@@ -1484,7 +1525,13 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
     for _ in 0..2_000 {
         if state
             .sessions
-            .snapshot(&session_id(&token), &second.id)
+            .snapshot(
+                &session_id(&token),
+                &crate::sessions::ConversationKey {
+                    project_id: reader_project.id,
+                    agent_id: second.id,
+                },
+            )
             .expect("second session")
             .job
             .is_some_and(|job| job.status != JobStatus::Running)

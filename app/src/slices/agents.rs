@@ -44,8 +44,10 @@ async fn root(
     graft: GraftRequest,
 ) -> AppResult<Response> {
     let agents = state.agents.list();
+    let projects = state.projects.list();
     let destination = match agents.as_slice() {
-        [agent] => format!("/agents/{}", agent.id.as_hex()),
+        [agent] => crate::projects::unique_desk_path(agent, &projects)
+            .unwrap_or_else(|| "/agents".to_owned()),
         _ => "/agents".to_owned(),
     };
     Ok(responses::graft_redirect(graft, &destination))
@@ -92,10 +94,11 @@ async fn create(
         }
     };
     match state.agents.create(draft) {
-        Ok(record) => Ok(responses::graft_redirect(
-            graft,
-            &format!("/agents/{}", record.id.as_hex()),
-        )),
+        Ok(record) => {
+            let destination = crate::projects::unique_desk_path(&record, &state.projects.list())
+                .unwrap_or_else(|| format!("/agents/{}/configuration", record.id.as_hex()));
+            Ok(responses::graft_redirect(graft, &destination))
+        }
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
         }
@@ -276,7 +279,12 @@ fn render_catalogue(
     status: PatchStatus,
     error: &'static str,
 ) -> AppResult<Response> {
-    let view = CatalogueView::from_parts(&state.agents.list(), state.sandboxes.orphans(), error);
+    let view = CatalogueView::from_parts(
+        &state.agents.list(),
+        &state.projects.list(),
+        state.sandboxes.orphans(),
+        error,
+    );
     render_desk(state, graft, status, page::CATALOGUE_TITLE, &view)
 }
 

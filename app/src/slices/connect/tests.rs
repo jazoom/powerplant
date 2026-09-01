@@ -204,7 +204,11 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{}", record.id.as_hex()))
+                .uri(format!(
+                    "/projects/{}/agents/{}",
+                    state.projects.list()[0].id.as_hex(),
+                    record.id.as_hex()
+                ))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")

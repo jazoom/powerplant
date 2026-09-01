@@ -1,4 +1,4 @@
-<main data-section="agents" class="chat-sheet">
+<main data-section="projects" class="chat-sheet">
   <div class="chat-desk-bar">
     <p class="text-quiet text-xs">
       Model desk · settings apply to this browser session
@@ -22,6 +22,8 @@
           class="grid w-full min-w-0 grid-cols-[minmax(7.5rem,0.8fr)_minmax(0,1.4fr)] items-center gap-2 sm:flex sm:w-auto"
         >
           <input type="hidden" name="provider_model_synced" value="false" />
+          <input type="hidden" name="project" value="{{ project_id }}" />
+          <input type="hidden" name="agent" value="{{ agent_id }}" />
           <button
             type="submit"
             hidden
@@ -216,7 +218,10 @@
           method="get"
           action="/model"
           hidden
-        ></form>
+        >
+          <input type="hidden" name="project" value="{{ project_id }}" />
+          <input type="hidden" name="agent" value="{{ agent_id }}" />
+        </form>
         <a href="/connect" class="btn btn-outline btn-sm">Manage providers</a>
       {% endblock %}
     </div>
@@ -224,15 +229,39 @@
 
   <div class="chat-title-row">
     <div>
-      <h1 id="chat-title">{{ agent_name }}</h1>
-      <p class="text-quiet mt-2 text-sm">
-        The agent reads and changes the project inside its sandbox.
+      <h1 id="chat-title">{{ project_name }}</h1>
+      <p class="text-quiet mt-2 font-mono text-xs break-all">
+        {{ project_path }}
       </p>
     </div>
     <div class="chat-title-actions">
       <span class="status-stamp">
         {% if job_active %}{{ job_status }}{% else %}Ready for work{% endif %}
       </span>
+      <details class="dropdown dropdown-end">
+        <summary class="btn btn-ghost h-auto min-h-11 px-3">
+          <span class="text-quiet text-xs">Agent</span>
+          <span>{{ agent_name }}</span>
+        </summary>
+        <ul
+          class="menu dropdown-content border-base-300 bg-base-100 z-40 mt-2 max-h-72 w-64 overflow-y-auto border p-1 shadow-[0_14px_32px_oklch(8%_0.01_80/0.45)]"
+        >
+          {% for choice in agent_choices %}
+            <li>
+              <a
+                href="{{ choice.href }}"
+                data-graft
+                {% if choice.selected %}aria-current="page" class="active"{% endif %}
+              >
+                <span class="min-w-0 flex-1 truncate">{{ choice.name }}</span>
+                {% if choice.selected %}
+                  <span class="badge badge-sm">Current</span>
+                {% endif %}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
       <a
         href="/agents/{{ agent_id }}/configuration"
         data-graft
@@ -243,7 +272,12 @@
     </div>
   </div>
 
-  <ol id="readiness-route" class="readiness-route" aria-label="Task readiness">
+  <ol
+    id="readiness-route"
+    class="readiness-route"
+    aria-label="Task readiness"
+    tabindex="0"
+  >
     {% block readiness_route %}
       <li>
         <span>Provider</span>
@@ -273,9 +307,11 @@
           >{% if preview_ready %}Ready{% else %}Needs preparation{% endif %}</strong
         >
       </li>
-      <li>
+      <li data-ready="{% if project_available %}true{% else %}false{% endif %}">
         <span>Project</span>
-        <strong>Guest /project</strong>
+        <strong>
+          {% if project_available %}{{ project_name }}{% else %}Unavailable{% endif %}
+        </strong>
       </li>
     {% endblock %}
   </ol>
@@ -285,6 +321,7 @@
     data-island="transcript"
     aria-labelledby="chat-title"
     class="chat-transcript"
+    tabindex="0"
   >
     {% block transcript %}
       {% if turns.is_empty() %}
@@ -339,7 +376,7 @@
                 </div>
               {% endif %}
               <div class="flex flex-wrap items-center gap-3">
-                <form data-graft method="get" action="/agents/{{ agent_id }}">
+                <form data-graft method="get" action="{{ desk_href }}">
                   <div id="job-cursor">
                     {% include "chat/templates/job_cursor.html" %}
                   </div>
@@ -348,7 +385,7 @@
                 <form
                   data-graft
                   method="post"
-                  action="/agents/{{ agent_id }}/jobs/{{ job_id }}/cancel"
+                  action="{{ desk_href }}/jobs/{{ job_id }}/cancel"
                 >
                   <button class="btn btn-outline" type="submit">Stop</button>
                 </form>
@@ -389,6 +426,19 @@
               <p>{{ error }}</p>
             </div>
           {% endif %}
+          {% if !project_available %}
+            <div class="alert alert-warning" role="status">
+              <p>
+                This project path is not available on the host.
+                <a
+                  href="/projects/{{ project_id }}/configuration"
+                  data-graft
+                  class="link"
+                  >Project configuration</a
+                >
+              </p>
+            </div>
+          {% endif %}
           {% if workflow_empty %}
             <div class="alert alert-warning" role="status">
               <p>
@@ -402,7 +452,7 @@
             <form
               data-graft
               method="get"
-              action="/agents/{{ agent_id }}"
+              action="{{ desk_href }}"
               class="mb-3 flex flex-wrap items-end gap-3"
             >
               <label class="flex min-w-0 flex-1 flex-col gap-1">
@@ -458,7 +508,7 @@
             data-graft
             data-island="composer"
             method="post"
-            action="/agents/{{ agent_id }}"
+            action="{{ desk_href }}"
           >
             {% for option in workflow_options %}
               {% if option.selected %}
@@ -478,8 +528,10 @@
                 required
                 maxlength="32768"
                 rows="3"
-                {% if session_busy || workflow_empty || !preview_ready %}disabled{% endif %}
-                placeholder="{% if workflow_empty %}
+                {% if session_busy || workflow_empty || !preview_ready || !project_available %}disabled{% endif %}
+                placeholder="{% if !project_available %}
+                  Restore the project path to send work
+                {% else if workflow_empty %}
                   Create a workflow to send work
                 {% else if !preview_ready %}
                   Choose a workflow with ready environments
@@ -491,7 +543,7 @@
               <button
                 class="btn btn-primary"
                 type="submit"
-                {% if session_busy || workflow_empty || !preview_ready %}disabled{% endif %}
+                {% if session_busy || workflow_empty || !preview_ready || !project_available %}disabled{% endif %}
               >
                 Send
               </button>

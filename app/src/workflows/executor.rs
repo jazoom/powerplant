@@ -114,6 +114,15 @@ pub(crate) struct WorkflowJob {
     pub(crate) eligible_reply: Arc<std::sync::Mutex<String>>,
 }
 
+impl WorkflowJob {
+    pub(crate) fn conversation_key(&self) -> crate::sessions::ConversationKey {
+        crate::sessions::ConversationKey {
+            project_id: self.project_id,
+            agent_id: self.agent_id,
+        }
+    }
+}
+
 pub(crate) fn interrupt_provider_continuations(
     state: &AppState,
     provider: crate::providers::ProviderKind,
@@ -142,10 +151,12 @@ fn interrupt_continuations(state: &AppState, jobs: Vec<WorkflowJob>) -> Result<(
             }
             return Err(StoreError::Persist);
         }
-        let _ =
-            state
-                .sessions
-                .fail_turn(&job.session_id, &job.agent_id, &job.job.id(), String::new());
+        let _ = state.sessions.fail_turn(
+            &job.session_id,
+            &job.conversation_key(),
+            &job.job.id(),
+            String::new(),
+        );
         job.job.finish(JobStatus::Cancelled, None);
     }
     Ok(())
@@ -306,6 +317,7 @@ pub(crate) async fn execute_run(
         let capabilities = match crate::workflows::capabilities::AttemptCapabilities::derive(
             &step,
             &agent,
+            &job.grant_alias,
             &job.connection,
         ) {
             Ok(capabilities) => capabilities,
@@ -1753,6 +1765,9 @@ fn intersect_authority(
         access: candidate_authority.access(),
     }];
     for directory in &authority.directories {
+        if directory.alias == host.primary_alias() {
+            return Err(());
+        }
         let Some(host_grant) = host
             .grants()
             .iter()
@@ -2668,7 +2683,7 @@ fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error
     settle_with_reply(
         state,
         &workflow.session_id,
-        &workflow.agent_id,
+        &workflow.conversation_key(),
         &workflow.job,
         status,
         error,
@@ -2679,7 +2694,7 @@ fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error
 fn settle_with_reply(
     state: &AppState,
     session_id: &SessionId,
-    agent_id: &crate::agents::AgentId,
+    key: &crate::sessions::ConversationKey,
     job: &Job,
     status: JobStatus,
     error: Option<&str>,
@@ -2690,12 +2705,10 @@ fn settle_with_reply(
         JobStatus::Completed => {
             let _ = state
                 .sessions
-                .finish_turn(session_id, agent_id, &job.id(), reply);
+                .finish_turn(session_id, key, &job.id(), reply);
         }
         _ => {
-            let _ = state
-                .sessions
-                .fail_turn(session_id, agent_id, &job.id(), reply);
+            let _ = state.sessions.fail_turn(session_id, key, &job.id(), reply);
         }
     }
     let _ = job.finish(status, error);

@@ -1,6 +1,7 @@
 use askama::Template;
 
 use crate::agents::{AccessMode, AgentRecord, ToolId};
+use crate::projects::{ProjectRecord, unique_desk_path};
 use crate::sandbox::OrphanSandbox;
 
 pub(super) const CATALOGUE_TITLE: &str = "Agents | Power Plant";
@@ -10,6 +11,7 @@ pub(super) const CONFIG_TITLE: &str = "Configure agent | Power Plant";
 pub(super) struct AgentListItem {
     pub(super) id: String,
     pub(super) name: String,
+    pub(super) desk_href: String,
 }
 
 pub(super) struct GrantRow {
@@ -36,6 +38,7 @@ pub(super) struct CatalogueView {
 impl CatalogueView {
     pub(super) fn from_parts(
         agents: &[AgentRecord],
+        projects: &[ProjectRecord],
         orphans: Vec<OrphanSandbox>,
         error: &'static str,
     ) -> Self {
@@ -45,6 +48,7 @@ impl CatalogueView {
                 .map(|agent| AgentListItem {
                     id: agent.id.as_hex(),
                     name: agent.name.clone(),
+                    desk_href: unique_desk_path(agent, projects).unwrap_or_default(),
                 })
                 .collect(),
             orphans,

@@ -2,26 +2,29 @@ use super::{MAXIMUM_TOOL_BYTES, mark_truncated, redact, render_trace};
 use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, DirectoryPolicy, ToolId};
 
 fn policy() -> DirectoryPolicy {
-    DirectoryPolicy::from_record(&AgentRecord {
-        id: AgentId::generate().expect("id"),
-        revision: 1,
-        name: "Agent".to_owned(),
-        instructions: String::new(),
-        tools: ToolId::ALL.to_vec(),
-        directories: vec![
-            DirectoryGrant {
-                alias: "project".to_owned(),
-                host_path: "/tmp/project".into(),
-                access: AccessMode::ReadWrite,
-            },
-            DirectoryGrant {
-                alias: "docs".to_owned(),
-                host_path: "/tmp/docs".into(),
-                access: AccessMode::ReadOnly,
-            },
-        ],
-        primary_directory: "project".to_owned(),
-    })
+    DirectoryPolicy::from_record_with_primary(
+        &AgentRecord {
+            id: AgentId::generate().expect("id"),
+            revision: 1,
+            name: "Agent".to_owned(),
+            instructions: String::new(),
+            tools: ToolId::ALL.to_vec(),
+            directories: vec![
+                DirectoryGrant {
+                    alias: "project".to_owned(),
+                    host_path: "/tmp/project".into(),
+                    access: AccessMode::ReadWrite,
+                },
+                DirectoryGrant {
+                    alias: "docs".to_owned(),
+                    host_path: "/tmp/docs".into(),
+                    access: AccessMode::ReadOnly,
+                },
+            ],
+            primary_directory: "project".to_owned(),
+        },
+        "project",
+    )
 }
 
 #[test]
