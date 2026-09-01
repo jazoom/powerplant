@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -70,6 +70,25 @@ impl AgentFormState {
                 access: AccessMode::ReadWrite.as_str().to_owned(),
             }],
         }
+    }
+
+    pub(super) fn for_project(name: &str) -> Self {
+        let mut state = Self::blank();
+        state.name = name.to_owned();
+        state
+    }
+
+    pub(super) fn assign_project_path(&mut self, path: &Path) {
+        let stored = path.to_string_lossy().into_owned();
+        if let Some(first) = self.directories.first_mut() {
+            first.path = stored;
+            return;
+        }
+        self.directories.push(DirectoryDraft {
+            alias: "project".to_owned(),
+            path: stored,
+            access: AccessMode::ReadWrite.as_str().to_owned(),
+        });
     }
 
     pub(super) fn from_record(record: &AgentRecord) -> Self {

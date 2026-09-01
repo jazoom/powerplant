@@ -21,6 +21,7 @@ pub(super) struct GrantRow {
     pub(super) alias: String,
     pub(super) path: String,
     pub(super) access: String,
+    pub(super) path_locked: bool,
     pub(super) can_remove: bool,
 }
 
@@ -108,6 +109,28 @@ impl AgentFormView {
         )
     }
 
+    pub(super) fn create_for_project(
+        mut state: AgentFormState,
+        error: &'static str,
+        project: &ProjectRecord,
+    ) -> Self {
+        state.assign_project_path(&project.host_path);
+        let mut view = Self::from_state(
+            "New agent",
+            &create_action(&project.id.as_hex()),
+            "Create agent",
+            state,
+            error,
+            "",
+            false,
+        );
+        if let Some(first) = view.grants.first_mut() {
+            first.path_locked = true;
+            first.can_remove = false;
+        }
+        view
+    }
+
     pub(super) fn edit(record: &AgentRecord, state: AgentFormState, error: &'static str) -> Self {
         Self::from_state(
             "Configure agent",
@@ -154,6 +177,7 @@ impl AgentFormView {
                     alias: grant.alias,
                     path: grant.path,
                     access: grant.access,
+                    path_locked: false,
                     can_remove: grant_count > 1,
                 })
                 .collect(),

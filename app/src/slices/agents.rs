@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::{
     agents::{AgentError, AgentId, AgentRecord},
     error::{AppError, AppResult},
-    projects::ProjectId,
+    projects::{ProjectId, ProjectRecord, desk_path, unique_desk_path},
     responses,
     sessions::RequiredSession,
     state::AppState,
@@ -54,8 +54,7 @@ async fn root(
     let agents = state.agents.list();
     let projects = state.projects.list();
     let destination = match agents.as_slice() {
-        [agent] => crate::projects::unique_desk_path(agent, &projects)
-            .unwrap_or_else(|| "/agents".to_owned()),
+        [agent] => unique_desk_path(agent, &projects).unwrap_or_else(|| "/agents".to_owned()),
         _ => "/agents".to_owned(),
     };
     Ok(responses::graft_redirect(graft, &destination))
@@ -75,16 +74,16 @@ async fn new_agent(
     graft: GraftRequest,
     Query(query): Query<AgentQuery>,
 ) -> AppResult<Response> {
+    let starter = load_starter_project(&state, &query.project);
+    if starter_project_is_missing(&query.project, starter.as_ref()) {
+        return Ok(responses::graft_redirect(graft, "/projects"));
+    }
     render_form_page(
         &state,
         graft,
         PatchStatus::Ok,
         page::NEW_TITLE,
-        AgentFormView::create(
-            AgentFormState::blank(),
-            "",
-            &preserved_project(&query.project),
-        ),
+        create_form_view(starter.as_ref(), starter_form(starter.as_ref()), ""),
     )
 }
 
@@ -95,7 +94,10 @@ async fn create(
     Query(query): Query<AgentQuery>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
-    let project = preserved_project(&query.project);
+    let starter = load_starter_project(&state, &query.project);
+    if starter_project_is_missing(&query.project, starter.as_ref()) {
+        return Ok(responses::graft_redirect(graft, "/projects"));
+    }
     let (mut form, intent) = match AgentFormState::parse(pairs) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -104,7 +106,11 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                AgentFormView::create(AgentFormState::blank(), error.message(), &project),
+                create_form_view(
+                    starter.as_ref(),
+                    starter_form(starter.as_ref()),
+                    error.message(),
+                ),
             );
         }
     };
@@ -115,7 +121,7 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                AgentFormView::create(form, error.message(), &project),
+                create_form_view(starter.as_ref(), form, error.message()),
             );
         }
         return render_form_command(
@@ -123,8 +129,12 @@ async fn create(
             graft,
             PatchStatus::Ok,
             page::NEW_TITLE,
-            AgentFormView::create(form, "", &project),
+            create_form_view(starter.as_ref(), form, ""),
         );
+    }
+    if let Some(project) = &starter {
+        // The project record owns this path. Submitted path_0 values cannot replace it.
+        form.assign_project_path(&project.host_path);
     }
     let draft = match form.draft() {
         Ok(draft) => draft,
@@ -134,14 +144,17 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                AgentFormView::create(form, error.message(), &project),
+                create_form_view(starter.as_ref(), form, error.message()),
             );
         }
     };
     match state.agents.create(draft) {
         Ok(record) => {
-            let destination = crate::projects::unique_desk_path(&record, &state.projects.list())
-                .unwrap_or_else(|| format!("/agents/{}/configuration", record.id.as_hex()));
+            let destination = match &starter {
+                Some(project) => desk_path(&project.id, &record.id),
+                None => unique_desk_path(&record, &state.projects.list())
+                    .unwrap_or_else(|| format!("/agents/{}/configuration", record.id.as_hex())),
+            };
             Ok(responses::graft_redirect(graft, &destination))
         }
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
@@ -152,7 +165,7 @@ async fn create(
             graft,
             PatchStatus::UnprocessableEntity,
             page::NEW_TITLE,
-            AgentFormView::create(form, error.message(), &project),
+            create_form_view(starter.as_ref(), form, error.message()),
         ),
     }
 }
@@ -334,10 +347,30 @@ fn load_agent(state: &AppState, raw: &str) -> Option<AgentRecord> {
     AgentId::parse(raw).and_then(|id| state.agents.get(&id))
 }
 
-fn preserved_project(raw: &str) -> String {
-    ProjectId::parse(raw)
-        .map(|id| id.as_hex())
-        .unwrap_or_default()
+fn load_starter_project(state: &AppState, raw: &str) -> Option<ProjectRecord> {
+    ProjectId::parse(raw).and_then(|id| state.projects.get(&id))
+}
+
+fn starter_project_is_missing(raw: &str, loaded: Option<&ProjectRecord>) -> bool {
+    !raw.is_empty() && loaded.is_none()
+}
+
+fn starter_form(project: Option<&ProjectRecord>) -> AgentFormState {
+    match project {
+        Some(record) => AgentFormState::for_project(&record.name),
+        None => AgentFormState::blank(),
+    }
+}
+
+fn create_form_view(
+    project: Option<&ProjectRecord>,
+    form: AgentFormState,
+    error: &'static str,
+) -> AgentFormView {
+    match project {
+        Some(record) => AgentFormView::create_for_project(form, error, record),
+        None => AgentFormView::create(form, error, ""),
+    }
 }
 
 fn render_configuration_error(

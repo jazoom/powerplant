@@ -579,22 +579,48 @@ async fn add_directory_returns_an_agent_form_patch() {
     assert!(state.agents.list().is_empty());
 }
 
+fn git_worktree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("dir");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .expect("git")
+            .success()
+    );
+    dir
+}
+
+fn keep_dir(state: &AppState, dir: tempfile::TempDir) {
+    state
+        .scratch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(dir);
+}
+
 #[tokio::test]
 async fn add_directory_preserves_project_query_context() {
     let state = test_state();
     let token = connected(&state);
-    let project = "0123456789abcdef0123456789abcdef";
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let project_id = project.id.as_hex();
     let response = app(&state)
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents?project={project}"))
+                .uri(format!("/agents?project={project_id}"))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(
-                    "intent=add-directory&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0=%2Ftmp%2Fapp&access_0=read-write",
+                    "intent=add-directory&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&access_0=read-write",
                 ))
                 .unwrap(),
         )
@@ -603,8 +629,153 @@ async fn add_directory_preserves_project_query_context() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains(&format!("action=\"/agents?project={project}\"")));
+    assert!(text.contains(&format!("action=\"/agents?project={project_id}\"")));
     assert!(text.contains("name=\"alias_1\""));
+    assert!(text.contains(&project.host_path.to_string_lossy().into_owned()));
+    assert!(!text.contains("name=\"path_0\""));
+    assert!(text.contains("name=\"path_1\""));
+    keep_dir(&state, dir);
+}
+
+#[tokio::test]
+async fn starter_form_omits_the_project_path_field() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/new?project={}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("starter form");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(&format!(
+        "action=\"/agents?project={}\"",
+        project.id.as_hex()
+    )));
+    assert!(text.contains("value=\"Desk\""));
+    assert!(text.contains(&project.host_path.to_string_lossy().into_owned()));
+    assert!(!text.contains("name=\"path_0\""));
+    assert!(text.contains("name=\"alias_0\""));
+    assert!(text.contains("name=\"tool_write\""));
+    keep_dir(&state, dir);
+}
+
+#[tokio::test]
+async fn invalid_and_missing_starter_projects_redirect_to_the_catalogue() {
+    let state = test_state();
+    let token = connected(&state);
+    for project in ["not-an-id", "0123456789abcdef0123456789abcdef"] {
+        let response = app(&state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/new?project={project}"))
+                    .header(header::COOKIE, cookie(&token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("invalid starter");
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/projects"
+        );
+    }
+}
+
+#[tokio::test]
+async fn starter_create_ignores_a_submitted_host_path() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let other = tempfile::tempdir().expect("other");
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let forged = encoded_path(other.path());
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents?project={}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "intent=save&name=Worker&instructions=&primary=project&tool_list=on&alias_0=project&path_0={forged}&access_0=read-write"
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("starter create");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let agents = state.agents.list();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].name, "Worker");
+    assert_eq!(agents[0].directories.len(), 1);
+    assert_eq!(agents[0].directories[0].host_path, project.host_path);
+    assert_eq!(
+        location,
+        crate::projects::desk_path(&project.id, &agents[0].id).as_str()
+    );
+    keep_dir(&state, dir);
+    keep_dir(&state, other);
+}
+
+#[tokio::test]
+async fn starter_create_keeps_an_extra_context_grant() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let extra = tempfile::tempdir().expect("extra");
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let extra_path = encoded_path(extra.path());
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents?project={}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "intent=save&name=Worker&instructions=&primary=project&tool_list=on&alias_0=project&access_0=read-write&alias_1=docs&path_1={extra_path}&access_1=read-only"
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("starter extra");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    let agents = state.agents.list();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].directories.len(), 2);
+    assert_eq!(agents[0].directories[0].host_path, project.host_path);
+    assert_eq!(
+        agents[0].directories[1].host_path,
+        extra.path().canonicalize().expect("canonical")
+    );
+    assert_eq!(agents[0].directories[1].alias, "docs");
+    keep_dir(&state, dir);
+    keep_dir(&state, extra);
 }
 
 #[tokio::test]

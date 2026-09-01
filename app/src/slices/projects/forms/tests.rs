@@ -1,4 +1,4 @@
-use super::ProjectForm;
+use super::{GrantForm, ProjectForm};
 use crate::projects::ProjectError;
 
 fn form(name: &str, path: &str, revision: &str) -> ProjectForm {
@@ -77,4 +77,60 @@ fn revision_parser_rejects_malformed_and_excessive_values() {
             "{value}"
         );
     }
+}
+
+fn grant(agent_id: &str, revision: &str, alias: &str, access: &str) -> GrantForm {
+    GrantForm {
+        agent_id: agent_id.to_owned(),
+        revision: revision.to_owned(),
+        alias: alias.to_owned(),
+        access: access.to_owned(),
+    }
+}
+
+#[test]
+fn grant_form_rejects_invalid_agent_identifiers() {
+    assert_eq!(
+        grant("", "1", "project", "read-write").agent_id(),
+        Err(super::AGENT_MESSAGE)
+    );
+    assert_eq!(
+        grant(
+            "ABCDEF0123456789ABCDEF0123456789",
+            "1",
+            "project",
+            "read-write"
+        )
+        .agent_id(),
+        Err(super::AGENT_MESSAGE)
+    );
+}
+
+#[test]
+fn grant_form_rejects_malformed_revisions() {
+    for value in ["", "0", "01", "1a", "4294967296"] {
+        assert_eq!(
+            grant(
+                "0123456789abcdef0123456789abcdef",
+                value,
+                "project",
+                "read-write"
+            )
+            .revision(),
+            Err(super::AGENT_REVISION_MESSAGE),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn grant_form_rejects_unknown_access_modes() {
+    assert_eq!(
+        grant("0123456789abcdef0123456789abcdef", "1", "project", "write").access(),
+        Err(super::ACCESS_MESSAGE)
+    );
+    assert_eq!(
+        grant("0123456789abcdef0123456789abcdef", "1", "project", "").access(),
+        Err(super::ACCESS_MESSAGE)
+    );
 }

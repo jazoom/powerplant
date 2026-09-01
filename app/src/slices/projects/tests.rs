@@ -8,7 +8,7 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
-    agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
+    agents::{AccessMode, AgentDraft, AgentError, DirectoryGrant, ToolId},
     config::RuntimeConfig,
     projects::ProjectError,
     providers::{ProviderConnection, ProviderKind},
@@ -806,4 +806,268 @@ async fn a_remembered_eligible_agent_is_preferred() {
         response.headers().get(header::LOCATION).unwrap(),
         crate::projects::desk_path(&project.id, &first.id).as_str()
     );
+}
+
+#[tokio::test]
+async fn no_agent_detail_shows_starter_and_grant_actions() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/projects/{}", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("detail");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("No agent"));
+    assert!(text.contains(&format!(
+        "href=\"/agents/new?project={}\"",
+        project.id.as_hex()
+    )));
+    assert!(text.contains(&format!(
+        "action=\"/projects/{}/agents/grant\"",
+        project.id.as_hex()
+    )));
+    assert!(text.contains(&agent.name));
+    assert!(text.contains(&format!(
+        "name=\"agent_id\" value=\"{}\"",
+        agent.id.as_hex()
+    )));
+    assert!(!text.contains("name=\"path\""));
+}
+
+#[tokio::test]
+async fn grant_redirects_to_the_canonical_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "agent_id={}&revision={}&alias=code&access=read-write",
+                    agent.id.as_hex(),
+                    agent.revision
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("grant");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        crate::projects::desk_path(&project.id, &agent.id).as_str()
+    );
+    let updated = state.agents.get(&agent.id).expect("updated");
+    assert_eq!(updated.directories.len(), 2);
+    assert_eq!(updated.directories[1].alias, "code");
+    assert_eq!(updated.directories[1].host_path, project.host_path);
+    assert_eq!(updated.primary_directory, "project");
+}
+
+#[tokio::test]
+async fn grant_ignores_a_submitted_host_path() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let forged = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    let encoded = encoded_path(&forged);
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    keep_dir(&state, forged);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "agent_id={}&revision={}&alias=code&access=read-only&path={encoded}",
+                    agent.id.as_hex(),
+                    agent.revision
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("grant");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    let updated = state.agents.get(&agent.id).expect("updated");
+    assert_eq!(updated.directories.len(), 2);
+    assert_eq!(updated.directories[1].host_path, project.host_path);
+    assert_eq!(updated.directories[1].access, AccessMode::ReadOnly);
+}
+
+#[tokio::test]
+async fn stale_grant_returns_conflict() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    state
+        .agents
+        .update(
+            &agent.id,
+            agent.revision,
+            AgentDraft {
+                name: "Later".to_owned(),
+                instructions: agent.instructions.clone(),
+                tools: agent.tools.clone(),
+                directories: agent.directories.clone(),
+                primary_directory: agent.primary_directory.clone(),
+            },
+        )
+        .expect("update");
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "agent_id={}&revision={}&alias=project&access=read-write",
+                    agent.id.as_hex(),
+                    agent.revision
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("stale grant");
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains(AgentError::Conflict.message()));
+    let current = state.agents.get(&agent.id).expect("current");
+    assert_eq!(current.name, "Later");
+    assert_eq!(current.directories.len(), 1);
+}
+
+#[tokio::test]
+async fn grant_duplicate_alias_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "agent_id={}&revision={}&alias=project&access=read-write",
+                    agent.id.as_hex(),
+                    agent.revision
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("duplicate alias");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains(AgentError::DuplicateAlias.message()));
+    assert_eq!(
+        state
+            .agents
+            .get(&agent.id)
+            .expect("current")
+            .directories
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn enhanced_grant_navigates_to_the_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = git_worktree();
+    let agent_dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    let agent = create_agent(&state, "Other", agent_dir.path());
+    keep_dir(&state, project_dir);
+    keep_dir(&state, agent_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "agent_id={}&revision={}&alias=code&access=read-write",
+                    agent.id.as_hex(),
+                    agent.revision
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("enhanced grant");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!(
+        "navigate=\"{}\"",
+        crate::projects::desk_path(&project.id, &agent.id)
+    )));
 }

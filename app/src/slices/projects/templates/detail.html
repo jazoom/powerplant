@@ -15,6 +15,12 @@
     >
   </div>
 
+  {% if error != "" %}
+    <div class="alert alert-error" role="alert" tabindex="-1">
+      <p>{{ error }}</p>
+    </div>
+  {% endif %}
+
   {% if available %}
     <p>
       <span class="badge badge-success">Available</span>
@@ -34,6 +40,73 @@
       <p class="text-quiet max-w-[60ch]">
         No current agent has an exact directory grant for this project path.
       </p>
+      <a href="{{ starter_href }}" data-graft class="btn btn-primary btn-sm"
+        >Create a starter agent</a
+      >
+      {% if !grant_candidates.is_empty() %}
+        <div class="space-y-3">
+          <h3 class="text-base font-semibold">Grant access</h3>
+          <p class="text-quiet max-w-[60ch]">
+            Add this project path to a current agent. The host path comes from
+            the project record.
+          </p>
+          <ul class="record-list">
+            {% for agent in grant_candidates %}
+              <li class="record-row">
+                <form
+                  data-graft
+                  method="post"
+                  action="{{ grant_action }}"
+                  class="flex w-full flex-col gap-3 sm:flex-row sm:items-end"
+                >
+                  <input type="hidden" name="agent_id" value="{{ agent.id }}" />
+                  <input
+                    type="hidden"
+                    name="revision"
+                    value="{{ agent.revision }}"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <p class="font-medium">{{ agent.name }}</p>
+                  </div>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-quiet text-xs">Alias</span>
+                    <input
+                      class="input input-bordered input-sm font-mono"
+                      name="alias"
+                      required
+                      maxlength="32"
+                      value="{{ grant_alias }}"
+                    />
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-quiet text-xs">Access</span>
+                    <select
+                      class="select select-bordered select-sm"
+                      name="access"
+                    >
+                      <option
+                        value="read-write"
+                        {% if grant_access == "read-write" %}selected{% endif %}
+                      >
+                        Read-write
+                      </option>
+                      <option
+                        value="read-only"
+                        {% if grant_access == "read-only" %}selected{% endif %}
+                      >
+                        Read-only
+                      </option>
+                    </select>
+                  </label>
+                  <button class="btn btn-primary btn-sm" type="submit">
+                    Grant access
+                  </button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
     </section>
   {% else %}
     <section class="file-section space-y-3">

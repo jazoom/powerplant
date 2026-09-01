@@ -89,15 +89,24 @@
                     value="{{ grant.alias }}"
                   />
                 </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-quiet text-xs">Host path</span>
-                  <input
-                    class="input input-bordered input-sm font-mono"
-                    name="path_{{ grant.index }}"
-                    maxlength="4096"
-                    value="{{ grant.path }}"
-                  />
-                </label>
+                {% if grant.path_locked %}
+                  <div class="flex flex-col gap-1">
+                    <span class="text-quiet text-xs">Host path</span>
+                    <p class="text-quiet font-mono text-xs break-all">
+                      {{ grant.path }}
+                    </p>
+                  </div>
+                {% else %}
+                  <label class="flex flex-col gap-1">
+                    <span class="text-quiet text-xs">Host path</span>
+                    <input
+                      class="input input-bordered input-sm font-mono"
+                      name="path_{{ grant.index }}"
+                      maxlength="4096"
+                      value="{{ grant.path }}"
+                    />
+                  </label>
+                {% endif %}
                 <label class="flex flex-col gap-1">
                   <span class="text-quiet text-xs">Access</span>
                   <select

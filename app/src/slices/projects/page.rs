@@ -41,6 +41,12 @@ pub(super) struct EligibleAgentLink {
     pub(super) href: String,
 }
 
+pub(super) struct GrantCandidate {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) revision: String,
+}
+
 #[derive(Template)]
 #[template(path = "projects/templates/detail.html")]
 pub(super) struct DetailView {
@@ -50,23 +56,57 @@ pub(super) struct DetailView {
     pub(super) path: String,
     pub(super) available: bool,
     pub(super) agents: Vec<EligibleAgentLink>,
+    pub(super) starter_href: String,
+    pub(super) grant_action: String,
+    pub(super) grant_candidates: Vec<GrantCandidate>,
+    pub(super) grant_alias: String,
+    pub(super) grant_access: String,
+    pub(super) error: &'static str,
 }
 
 impl DetailView {
-    pub(super) fn from_record(record: &ProjectRecord, agents: &[AgentRecord]) -> Self {
+    pub(super) fn from_record(
+        record: &ProjectRecord,
+        eligible: &[AgentRecord],
+        catalogue: &[AgentRecord],
+    ) -> Self {
+        Self::with_grant(record, eligible, catalogue, "project", "read-write", "")
+    }
+
+    pub(super) fn with_grant(
+        record: &ProjectRecord,
+        eligible: &[AgentRecord],
+        catalogue: &[AgentRecord],
+        grant_alias: &str,
+        grant_access: &str,
+        error: &'static str,
+    ) -> Self {
         Self {
             document_title: format!("{} | Power Plant", record.name),
             id: record.id.as_hex(),
             name: record.name.clone(),
             path: record.host_path.to_string_lossy().into_owned(),
             available: record.host_path_is_available(),
-            agents: agents
+            agents: eligible
                 .iter()
                 .map(|agent| EligibleAgentLink {
                     name: agent.name.clone(),
                     href: desk_path(&record.id, &agent.id),
                 })
                 .collect(),
+            starter_href: format!("/agents/new?project={}", record.id.as_hex()),
+            grant_action: format!("/projects/{}/agents/grant", record.id.as_hex()),
+            grant_candidates: catalogue
+                .iter()
+                .map(|agent| GrantCandidate {
+                    id: agent.id.as_hex(),
+                    name: agent.name.clone(),
+                    revision: agent.revision.to_string(),
+                })
+                .collect(),
+            grant_alias: grant_alias.to_owned(),
+            grant_access: grant_access.to_owned(),
+            error,
         }
     }
 }

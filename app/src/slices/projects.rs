@@ -14,6 +14,7 @@ use axum::{
 use hypergraft::{CommandGraft, GraftRequest, PageGraft, PatchStatus};
 
 use crate::{
+    agents::{AgentDraft, AgentError, DirectoryGrant},
     error::{AppError, AppResult},
     projects::{ProjectError, ProjectId, ProjectRecord, desk_path, eligible_agents},
     responses,
@@ -22,7 +23,7 @@ use crate::{
 };
 
 use self::{
-    forms::{ProjectForm, REVISION_MESSAGE},
+    forms::{GrantForm, ProjectForm, REVISION_MESSAGE},
     page::{CatalogueView, DetailView, ProjectFormView},
 };
 
@@ -35,6 +36,7 @@ pub(super) fn router() -> Router<AppState> {
             "/projects/{project_id}/configuration",
             get(show_configuration).post(update_configuration),
         )
+        .route("/projects/{project_id}/agents/grant", post(grant_agent))
         .route(
             "/projects/{project_id}/agents/{agent_id}",
             get(desk::show).post(desk::send),
@@ -138,19 +140,125 @@ async fn detail(
     if let Some(destination) = destination {
         return Ok(responses::graft_redirect(graft, &destination));
     }
-    let view = DetailView::from_record(&record, &eligible);
-    match graft {
-        PageGraft::Document => {
-            let mut response =
-                responses::chat_page_response(&view.document_title, &state.assets, &view)?;
-            responses::apply_patch_status(&mut response, PatchStatus::Ok);
-            Ok(response)
+    let view = DetailView::from_record(&record, &eligible, &state.agents.list());
+    render_detail_page(&state, graft, PatchStatus::Ok, &view)
+}
+
+async fn grant_agent(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: CommandGraft,
+    Path(project_id): Path<String>,
+    Form(form): Form<GrantForm>,
+) -> AppResult<Response> {
+    let Some(project) = load_project(&state, &project_id) else {
+        return Ok(responses::graft_redirect(graft, "/projects"));
+    };
+    let agent_id = match form.agent_id() {
+        Ok(agent_id) => agent_id,
+        Err(error) => {
+            return render_grant_error(
+                &state,
+                graft,
+                &project,
+                &form,
+                error,
+                PatchStatus::UnprocessableEntity,
+            );
         }
-        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
-            &view.document_title,
-            "chat-main",
-            &view,
-        )?),
+    };
+    let revision = match form.revision() {
+        Ok(revision) => revision,
+        Err(error) => {
+            return render_grant_error(
+                &state,
+                graft,
+                &project,
+                &form,
+                error,
+                PatchStatus::UnprocessableEntity,
+            );
+        }
+    };
+    let access = match form.access() {
+        Ok(access) => access,
+        Err(error) => {
+            return render_grant_error(
+                &state,
+                graft,
+                &project,
+                &form,
+                error,
+                PatchStatus::UnprocessableEntity,
+            );
+        }
+    };
+    let Ok(_lease) = state.agent_leases.acquire(agent_id) else {
+        return render_grant_error(
+            &state,
+            graft,
+            &project,
+            &form,
+            "Wait until this reply finishes.",
+            PatchStatus::UnprocessableEntity,
+        );
+    };
+    let Some(project) = state.projects.get(&project.id) else {
+        return Ok(responses::graft_redirect(graft, "/projects"));
+    };
+    let Some(agent) = state.agents.get(&agent_id) else {
+        return render_grant_error(
+            &state,
+            graft,
+            &project,
+            &form,
+            AgentError::Missing.message(),
+            PatchStatus::UnprocessableEntity,
+        );
+    };
+    if agent.revision != revision {
+        return render_grant_error(
+            &state,
+            graft,
+            &project,
+            &form,
+            AgentError::Conflict.message(),
+            PatchStatus::Conflict,
+        );
+    }
+    let mut directories = agent.directories.clone();
+    directories.push(DirectoryGrant {
+        alias: form.alias(),
+        host_path: project.host_path.clone(),
+        access,
+    });
+    let draft = AgentDraft {
+        name: agent.name.clone(),
+        instructions: agent.instructions.clone(),
+        tools: agent.tools.clone(),
+        directories,
+        primary_directory: agent.primary_directory.clone(),
+    };
+    match state.agents.update(&agent.id, revision, draft) {
+        Ok(updated) => Ok(responses::graft_redirect(
+            graft,
+            &desk_path(&project.id, &updated.id),
+        )),
+        Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
+            Err(AppError::new("store agent", error))
+        }
+        Err(AgentError::Missing) => Ok(responses::graft_redirect(
+            graft,
+            &format!("/projects/{}", project.id.as_hex()),
+        )),
+        Err(error) => {
+            let status = if error == AgentError::Conflict {
+                PatchStatus::Conflict
+            } else {
+                PatchStatus::UnprocessableEntity
+            };
+            render_grant_error(&state, graft, &project, &form, error.message(), status)
+        }
     }
 }
 
@@ -220,6 +328,64 @@ async fn update_configuration(
 
 fn load_project(state: &AppState, raw: &str) -> Option<ProjectRecord> {
     ProjectId::parse(raw).and_then(|id| state.projects.get(&id))
+}
+
+fn render_detail_page(
+    state: &AppState,
+    graft: PageGraft,
+    status: PatchStatus,
+    view: &DetailView,
+) -> AppResult<Response> {
+    match graft {
+        PageGraft::Document => {
+            let mut response =
+                responses::chat_page_response(&view.document_title, &state.assets, view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
+            &view.document_title,
+            "chat-main",
+            view,
+        )?),
+    }
+}
+
+fn render_grant_error(
+    state: &AppState,
+    graft: CommandGraft,
+    project: &ProjectRecord,
+    form: &GrantForm,
+    error: &'static str,
+    status: PatchStatus,
+) -> AppResult<Response> {
+    let latest = state
+        .projects
+        .get(&project.id)
+        .unwrap_or_else(|| project.clone());
+    let agents = state.agents.list();
+    let eligible = eligible_agents(&agents, &latest);
+    let view = DetailView::with_grant(
+        &latest,
+        &eligible,
+        &agents,
+        &form.alias(),
+        &form.access,
+        error,
+    );
+    match graft {
+        CommandGraft::Document => {
+            let mut response =
+                responses::chat_page_response(&view.document_title, &state.assets, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
+            status,
+            "chat-main",
+            &view,
+        )?),
+    }
 }
 
 fn status_for(error: ProjectError) -> PatchStatus {
