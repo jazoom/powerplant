@@ -12,7 +12,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use hypergraft::{CommandGraft, PageGraft, PatchStatus};
+use hypergraft::{PageGraft, PatchGraft, PatchStatus};
 
 use crate::{
     error::AppResult,
@@ -57,13 +57,13 @@ async fn detail(
     Query(raw): Query<RawQuery>,
 ) -> AppResult<Response> {
     let Some((run_id, gate_id)) = ids(&run_id, &gate_id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let Some(run) = state.workflow_runs.get(&run_id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let Some(gate) = run.gates.iter().find(|gate| gate.id == gate_id) else {
-        return Ok(responses::graft_redirect(
+        return Ok(responses::request_navigation(
             graft,
             &format!("/runs/{}", run.id.as_hex()),
         ));
@@ -148,7 +148,7 @@ fn static_error(
 async fn approve(
     State(state): State<AppState>,
     RequiredSession(session): RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
@@ -167,7 +167,7 @@ async fn approve(
 async fn request_revision(
     State(state): State<AppState>,
     RequiredSession(session): RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
@@ -186,7 +186,7 @@ async fn request_revision(
 async fn cancel(
     State(state): State<AppState>,
     RequiredSession(session): RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path((run_id, gate_id)): Path<(String, String)>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
@@ -212,14 +212,14 @@ enum DecisionAction {
 async fn decide(
     state: AppState,
     session: SessionId,
-    graft: CommandGraft,
+    graft: PatchGraft,
     run_raw: String,
     gate_raw: String,
     pairs: Vec<(String, String)>,
     action: DecisionAction,
 ) -> AppResult<Response> {
     let Some((run_id, gate_id)) = ids(&run_raw, &gate_raw) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let form = match forms::DecisionForm::parse(pairs, matches!(action, DecisionAction::Revision)) {
         Ok(form) => form,
@@ -346,7 +346,7 @@ async fn decide(
             );
             continuation.job.finish(JobStatus::Cancelled, None);
         }
-        return Ok(hypergraft::outcome::redirect(graft, destination)?);
+        return Ok(responses::command_navigation(&destination));
     }
 
     let kind = if matches!(action, DecisionAction::Approve) {
@@ -431,7 +431,7 @@ async fn decide(
             .job
             .finish(JobStatus::Failed, Some("Revision requested"));
     }
-    Ok(hypergraft::outcome::redirect(graft, destination)?)
+    Ok(responses::command_navigation(&destination))
 }
 
 fn decision_record(
@@ -506,7 +506,7 @@ fn decision_record(
 }
 
 fn command_error(
-    graft: CommandGraft,
+    _graft: PatchGraft,
     status: PatchStatus,
     message: &'static str,
 ) -> AppResult<Response> {
@@ -519,14 +519,11 @@ fn command_error(
         message: &'static str,
     }
     let view = ErrorView { message };
-    match graft {
-        CommandGraft::Document => Ok((status.status_code(), message).into_response()),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "gate-detail",
-            &view,
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "gate-detail",
+        &view,
+    )?)
 }
 
 fn decision_destination(run: &crate::workflows::WorkflowRun) -> String {
@@ -591,7 +588,7 @@ fn interrupt_and_redirect(
     state: AppState,
     continuation: crate::workflows::WorkflowJob,
     run_id: RunId,
-    graft: CommandGraft,
+    graft: PatchGraft,
     destination: &str,
 ) -> AppResult<Response> {
     if state
@@ -613,7 +610,7 @@ fn interrupt_and_redirect(
         String::new(),
     );
     continuation.job.finish(JobStatus::Cancelled, None);
-    Ok(hypergraft::outcome::redirect(graft, destination)?)
+    Ok(responses::command_navigation(destination))
 }
 
 async fn object(

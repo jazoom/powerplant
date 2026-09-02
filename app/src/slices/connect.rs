@@ -13,7 +13,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use hypergraft::{CommandGraft, GraftRequest, PatchStatus};
+use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 
 use crate::{
     error::AppResult,
@@ -72,7 +72,7 @@ async fn show(State(state): State<AppState>, graft: GraftRequest) -> AppResult<R
 async fn submit(
     State(state): State<AppState>,
     OptionalSession(session): OptionalSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(form): Form<ConnectForm>,
 ) -> AppResult<Response> {
     let kind = match form.validate() {
@@ -120,7 +120,7 @@ async fn submit(
 
 async fn start_plan(
     State(state): State<AppState>,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(form): Form<PlanForm>,
 ) -> AppResult<Response> {
     let kind = match form.validate() {
@@ -280,7 +280,7 @@ async fn complete_plan_login(
 async fn forget(
     State(state): State<AppState>,
     OptionalSession(session): OptionalSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(form): Form<ForgetForm>,
 ) -> AppResult<Response> {
     if let Some(kind) = form.provider_kind() {
@@ -299,7 +299,7 @@ async fn forget(
                 .map_err(|error| crate::error::AppError::new("interrupt human gates", error))?;
             state.sessions.remove(&session);
         }
-        let mut response = responses::graft_redirect(graft, "/connect");
+        let mut response = responses::request_navigation(graft, "/connect");
         sessions::clear_session_cookie(&mut response, &state);
         return Ok(response);
     }
@@ -322,10 +322,10 @@ async fn sandbox_missing(state: &AppState) -> &'static str {
 
 fn connected_redirect(
     state: &AppState,
-    graft: CommandGraft,
+    graft: PatchGraft,
     needs_session: bool,
 ) -> AppResult<Response> {
-    let mut response = responses::graft_redirect(graft, "/");
+    let mut response = responses::request_navigation(graft, "/");
     if needs_session {
         let token = sessions::generate_session_token()
             .map_err(|error| crate::error::AppError::new("create session token", error))?;

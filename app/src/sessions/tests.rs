@@ -7,6 +7,7 @@ use axum::{
     routing::get,
 };
 use cookie::Cookie;
+use hypergraft::live::LiveGuard;
 use tower::ServiceExt;
 
 use crate::agents::{AgentId, DirectoryPolicy};
@@ -58,6 +59,39 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
     };
     assert!(state.gate_continuations.insert(continuation));
     (state, raw, session, run_id)
+}
+
+#[tokio::test]
+async fn the_live_guard_rejects_anonymous_and_removed_sessions() {
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    state
+        .vault
+        .put(ProviderConnection::with_key(
+            ProviderKind::Xai,
+            "key",
+            "model",
+        ))
+        .expect("provider");
+    let token = super::generate_session_token().expect("token");
+    let session = token.id();
+    state.sessions.insert(session);
+    let guard = super::LiveSessionGuard::new(state.sessions.clone(), state.vault.clone());
+
+    assert!(matches!(
+        guard.bind(&axum::http::Extensions::new()).await,
+        Err(hypergraft::live::GuardFailure::Terminal)
+    ));
+
+    let mut extensions = axum::http::Extensions::new();
+    extensions.insert(super::ResolvedSession::Present(session));
+    let connection = guard.bind(&extensions).await.expect("live connection");
+    assert_eq!(guard.revalidate(&connection).await, Ok(session));
+
+    state.sessions.remove(&session);
+    assert_eq!(
+        guard.revalidate(&connection).await,
+        Err(hypergraft::live::GuardFailure::Terminal)
+    );
 }
 
 #[test]

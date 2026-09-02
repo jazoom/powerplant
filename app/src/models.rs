@@ -4,9 +4,19 @@ use std::sync::{Mutex, MutexGuard};
 use crate::providers::{ProviderConnection, ProviderKind};
 use crate::state::AppState;
 
-#[derive(Default)]
 pub(crate) struct ModelCatalogue {
     inner: Mutex<HashMap<ProviderKind, CatalogueEntry>>,
+    invalidations: tokio::sync::broadcast::Sender<()>,
+}
+
+impl Default for ModelCatalogue {
+    fn default() -> Self {
+        let (invalidations, _) = tokio::sync::broadcast::channel(16);
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            invalidations,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -29,27 +39,47 @@ impl ModelCatalogue {
     }
 
     pub(crate) fn remove(&self, kind: ProviderKind) {
-        self.lock().remove(&kind);
+        let removed = self.lock().remove(&kind).is_some();
+        if removed {
+            self.invalidate();
+        }
+    }
+
+    pub(crate) fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.invalidations.subscribe()
     }
 
     fn begin_refresh(&self, kind: ProviderKind) -> u64 {
-        let mut catalogue = self.lock();
-        let entry = catalogue.entry(kind).or_default();
-        entry.revision = entry.revision.wrapping_add(1);
-        entry.pending = true;
-        entry.revision
+        let revision = {
+            let mut catalogue = self.lock();
+            let entry = catalogue.entry(kind).or_default();
+            entry.revision = entry.revision.wrapping_add(1);
+            entry.pending = true;
+            entry.revision
+        };
+        self.invalidate();
+        revision
     }
 
     fn finish(&self, kind: ProviderKind, revision: u64, models: Option<Vec<String>>) {
-        let mut catalogue = self.lock();
-        if let Some(entry) = catalogue.get_mut(&kind)
-            && entry.revision == revision
         {
+            let mut catalogue = self.lock();
+            let Some(entry) = catalogue.get_mut(&kind) else {
+                return;
+            };
+            if entry.revision != revision {
+                return;
+            }
             entry.pending = false;
             if let Some(models) = models {
                 entry.models = models;
             }
         }
+        self.invalidate();
+    }
+
+    fn invalidate(&self) {
+        let _ = self.invalidations.send(());
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<ProviderKind, CatalogueEntry>> {

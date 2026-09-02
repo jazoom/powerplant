@@ -12,7 +12,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use hypergraft::{CommandGraft, GraftRequest, PageGraft, PatchStatus};
+use hypergraft::{GraftRequest, PageGraft, PatchGraft, PatchStatus};
 use serde::Deserialize;
 
 use crate::{
@@ -84,7 +84,7 @@ async fn new_environment(
 async fn create(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let form = match EnvironmentFormState::parse(pairs) {
@@ -105,7 +105,7 @@ async fn create(
     match state.environments.create(form.to_draft()) {
         Ok((record, _)) => {
             state.environment_preparations.wake();
-            Ok(responses::graft_redirect(
+            Ok(responses::request_navigation(
                 graft,
                 &format!("/environments/{}/configuration", record.id.as_hex()),
             ))
@@ -128,7 +128,7 @@ async fn show_configuration(
     Query(query): Query<RefreshQuery>,
 ) -> AppResult<Response> {
     let Some(record) = load_environment(&state, &environment_id) else {
-        return Ok(responses::graft_redirect(graft, "/environments"));
+        return Ok(responses::request_navigation(graft, "/environments"));
     };
     match graft {
         GraftRequest::Document => render_form_page(
@@ -152,12 +152,12 @@ async fn show_configuration(
 async fn update_configuration(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(environment_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_environment(&state, &environment_id) else {
-        return Ok(responses::graft_redirect(graft, "/environments"));
+        return Ok(responses::request_navigation(graft, "/environments"));
     };
     let form = match EnvironmentFormState::parse(pairs) {
         Ok(parsed) => parsed,
@@ -195,7 +195,7 @@ async fn update_configuration(
             if updated.preparation.is_some() {
                 state.environment_preparations.wake();
             }
-            Ok(responses::graft_redirect(
+            Ok(responses::request_navigation(
                 graft,
                 &format!(
                     "/environments/{}/configuration",
@@ -216,12 +216,12 @@ async fn update_configuration(
 async fn retry_preparation(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(environment_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_environment(&state, &environment_id) else {
-        return Ok(responses::graft_redirect(graft, "/environments"));
+        return Ok(responses::request_navigation(graft, "/environments"));
     };
     let (revision, recipe) = match parse_retry(&pairs) {
         Ok(parsed) => parsed,
@@ -252,12 +252,12 @@ async fn retry_preparation(
 async fn delete_environment(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(environment_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_environment(&state, &environment_id) else {
-        return Ok(responses::graft_redirect(graft, "/environments"));
+        return Ok(responses::request_navigation(graft, "/environments"));
     };
     let (revision, confirmed) = match parse_delete(&pairs) {
         Ok(parsed) => parsed,
@@ -289,7 +289,7 @@ async fn delete_environment(
     match state.environments.delete(&record.id, revision) {
         Ok(_) => {
             state.environment_preparations.wake();
-            Ok(responses::graft_redirect(graft, "/environments"))
+            Ok(responses::request_navigation(graft, "/environments"))
         }
         Err(error) => render_form_command(
             &state,
@@ -444,67 +444,44 @@ fn render_form_page(
 }
 
 fn render_form_command(
-    state: &AppState,
-    graft: CommandGraft,
+    _state: &AppState,
+    _graft: PatchGraft,
     status: PatchStatus,
-    title: &str,
+    _title: &str,
     view: EnvironmentFormView,
 ) -> AppResult<Response> {
-    match graft {
-        CommandGraft::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "environment-form",
-            &view.contents(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "environment-form",
+        &view.contents(),
+    )?)
 }
 
 async fn render_status(
     state: &AppState,
-    graft: CommandGraft,
+    _graft: PatchGraft,
     status: PatchStatus,
     record: &EnvironmentRecord,
     refresh_form: bool,
 ) -> AppResult<Response> {
     let view = status_view(state, record).await;
-    match graft {
-        CommandGraft::Document => {
-            let form = EnvironmentFormView::edit(
-                record,
-                EnvironmentFormState::from_record(record),
-                FormErrors::default(),
-                "",
-                &view,
-            )
-            .map_err(|error| crate::error::AppError::new("render environment form", error))?;
-            let mut response =
-                responses::chat_page_response(page::CONFIG_TITLE, &state.assets, &form)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        CommandGraft::Patch if refresh_form => {
-            let form = EnvironmentFormView::edit(
-                record,
-                EnvironmentFormState::from_record(record),
-                FormErrors::default(),
-                "",
-                &view,
-            )
-            .map_err(|error| crate::error::AppError::new("render environment form", error))?;
-            let mut patches = hypergraft::PatchSet::new();
-            patches.children("environment-form", &form.contents())?;
-            patches.children("environment-preparation", &view)?;
-            Ok(patches.respond(status)?)
-        }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "environment-preparation",
+    if refresh_form {
+        let form = EnvironmentFormView::edit(
+            record,
+            EnvironmentFormState::from_record(record),
+            FormErrors::default(),
+            "",
             &view,
-        )?),
+        )
+        .map_err(|error| crate::error::AppError::new("render environment form", error))?;
+        let mut patches = hypergraft::PatchSet::new();
+        patches.children("environment-form", &form.contents())?;
+        patches.children("environment-preparation", &view)?;
+        return Ok(patches.respond(status)?);
     }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "environment-preparation",
+        &view,
+    )?)
 }

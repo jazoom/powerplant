@@ -86,7 +86,9 @@ async fn assert_connect_redirect(
         .oneshot(builder.body(Body::empty()).unwrap())
         .await
         .expect("anonymous");
-    if enhanced {
+    if method == "POST" && graft.is_none() {
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    } else if enhanced {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -417,18 +419,15 @@ async fn post_decision(
     fixture: &GateFixture,
     action: &str,
     body: String,
-    graft: Option<&str>,
+    _graft: Option<&str>,
 ) -> axum::http::Response<Body> {
-    let mut builder = Request::builder()
+    let builder = Request::builder()
         .method("POST")
         .uri(format!("{}/{action}", fixture.gate_path()))
         .header(header::COOKIE, cookie(&fixture.token))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(graft) = graft {
-        builder = builder
-            .header(hypergraft::GRAFT_REQUEST, graft)
-            .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
-    }
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
     app(&fixture.state)
         .oneshot(builder.body(Body::from(body)).unwrap())
         .await
@@ -498,11 +497,9 @@ async fn a_quick_task_approval_redirects_to_the_project_desk() {
         None,
     )
     .await;
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        fixture.desk_path().as_str()
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
     let run = fixture
         .state
         .workflow_runs
@@ -551,11 +548,9 @@ async fn a_configured_decision_redirects_to_run_detail() {
         None,
     )
     .await;
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        format!("/runs/{}", fixture.run_id.as_hex()).as_str()
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("navigate=\"/runs/{}\"", fixture.run_id.as_hex())));
 }
 
 #[tokio::test]
@@ -568,11 +563,9 @@ async fn a_quick_task_discard_settles_the_transcript() {
         None,
     )
     .await;
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        fixture.desk_path().as_str()
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
     let run = fixture
         .state
         .workflow_runs
@@ -688,11 +681,9 @@ async fn a_stale_agent_revision_interrupts_without_host_mutation() {
         None,
     )
     .await;
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        fixture.desk_path().as_str()
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
     let run = fixture
         .state
         .workflow_runs
@@ -749,7 +740,7 @@ async fn a_changed_grant_interrupts_without_host_mutation() {
         None,
     )
     .await;
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
     let run = fixture
         .state
         .workflow_runs

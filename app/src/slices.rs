@@ -24,3 +24,9 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(workflows::router())
         .merge(environments::router())
 }
+
+pub(crate) fn live_router() -> hypergraft::live::LiveRouter<AppState> {
+    hypergraft::live::LiveRouter::new()
+        .merge(chat::live_router())
+        .expect("live projection paths are unique")
+}

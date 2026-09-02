@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     response::Response,
 };
-use hypergraft::{CommandGraft, GraftRequest, PatchStatus};
+use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 
 use crate::{
     agents::{AgentRecord, DirectoryPolicy},
@@ -80,7 +80,7 @@ pub(super) async fn show(
 pub(super) async fn send(
     State(state): State<AppState>,
     session: crate::sessions::RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path((project_id, agent_id)): Path<(String, String)>,
     Query(query): Query<SendQuery>,
     Form(form): Form<ChatForm>,
@@ -90,7 +90,7 @@ pub(super) async fn send(
         Err(response) => return Ok(response),
     };
     let Some(connection) = state.vault.selected_connection() else {
-        return Ok(responses::graft_redirect(graft, "/connect"));
+        return Ok(responses::request_navigation(graft, "/connect"));
     };
 
     if !form.is_bounded() {
@@ -168,13 +168,13 @@ pub(super) async fn send(
         .await;
     };
     let Some(latest_agent) = state.agents.get(&desk.agent.id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::request_navigation(graft, "/projects"));
     };
     let Some(latest_project) = state.projects.get(&desk.project.id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::request_navigation(graft, "/projects"));
     };
     let Some(grant) = eligibility(&latest_agent, &latest_project) else {
-        return Ok(responses::graft_redirect(
+        return Ok(responses::request_navigation(
             graft,
             &format!("/projects/{}", latest_project.id.as_hex()),
         ));
@@ -196,7 +196,7 @@ pub(super) async fn send(
         .await;
     }
     if grant.alias != desk.grant.alias || grant.access != desk.grant.access {
-        return Ok(responses::graft_redirect(
+        return Ok(responses::request_navigation(
             graft,
             &format!("/projects/{}", latest_project.id.as_hex()),
         ));
@@ -373,11 +373,11 @@ pub(super) async fn send(
     {
         Ok(started) => started,
         Err(BeginTurnError::MissingSession) => {
-            return Ok(responses::graft_redirect(graft, "/connect"));
+            return Ok(responses::request_navigation(graft, "/connect"));
         }
         Err(BeginTurnError::Conflict) => {
             let Some(latest) = state.sessions.snapshot(&desk.session, &key) else {
-                return Ok(responses::graft_redirect(graft, "/connect"));
+                return Ok(responses::request_navigation(graft, "/connect"));
             };
             return reject_parallel_command(
                 &state,
@@ -441,44 +441,20 @@ pub(super) async fn send(
         execution,
     ));
 
-    match graft {
-        CommandGraft::Document => {
-            let Some(latest) = state.sessions.snapshot(&desk.session, &key) else {
-                return Ok(responses::graft_redirect(graft, "/connect"));
-            };
-            render_document(
-                &state,
-                PatchStatus::Ok,
-                view(
-                    &state,
-                    DeskPage {
-                        project: &project,
-                        agent: &record,
-                        eligible: &eligible,
-                        snapshot: &latest,
-                    },
-                    "",
-                    "",
-                    "",
-                )
-                .await,
-            )
-        }
-        CommandGraft::Patch => accept_job_patch(
-            &started.turns,
-            &started.job.id().as_hex(),
-            &desk_path(&project.id, &record.id),
-            &started.job.run_id().as_hex(),
-            &started.job.step_label(),
-            &started.job.workflow_name(),
-        ),
-    }
+    accept_job_patch(
+        &started.turns,
+        &started.job.id().as_hex(),
+        &desk_path(&project.id, &record.id),
+        &started.job.run_id().as_hex(),
+        &started.job.step_label(),
+        &started.job.workflow_name(),
+    )
 }
 
 pub(super) async fn cancel(
     State(state): State<AppState>,
     session: crate::sessions::RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path((project_id, agent_id, job_id)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     let desk = match require_desk(&state, session.0, &project_id, &agent_id, graft).await {
@@ -491,45 +467,26 @@ pub(super) async fn cancel(
         job.request_cancel();
     }
     let Some(latest) = state.sessions.snapshot(&desk.session, &desk.key) else {
-        return Ok(responses::graft_redirect(graft, "/connect"));
+        return Ok(responses::request_navigation(graft, "/connect"));
     };
-    match graft {
-        CommandGraft::Document => render_document(
+    Ok(hypergraft::outcome::children_patch(
+        PatchStatus::Ok,
+        "job-observe",
+        &view(
             &state,
-            PatchStatus::Ok,
-            view(
-                &state,
-                DeskPage {
-                    project: &desk.project,
-                    agent: &desk.agent,
-                    eligible: &desk.eligible,
-                    snapshot: &latest,
-                },
-                "",
-                "",
-                "",
-            )
-            .await,
-        ),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            PatchStatus::Ok,
-            "job-observe",
-            &view(
-                &state,
-                DeskPage {
-                    project: &desk.project,
-                    agent: &desk.agent,
-                    eligible: &desk.eligible,
-                    snapshot: &latest,
-                },
-                "",
-                "",
-                "",
-            )
-            .await
-            .job_observe(),
-        )?),
-    }
+            DeskPage {
+                project: &desk.project,
+                agent: &desk.agent,
+                eligible: &desk.eligible,
+                snapshot: &latest,
+            },
+            "",
+            "",
+            "",
+        )
+        .await
+        .job_observe(),
+    )?)
 }
 
 async fn require_desk(
@@ -541,25 +498,25 @@ async fn require_desk(
 ) -> Result<DeskContext, Response> {
     let graft = graft.into();
     if !state.vault.has_providers() {
-        return Err(responses::graft_redirect(graft, "/connect"));
+        return Err(responses::request_navigation(graft, "/connect"));
     }
     let Some(project_id) = ProjectId::parse(project_id) else {
-        return Err(responses::graft_redirect(graft, "/projects"));
+        return Err(responses::request_navigation(graft, "/projects"));
     };
     let Some(agent_id) = crate::agents::AgentId::parse(agent_id) else {
-        return Err(responses::graft_redirect(graft, "/projects"));
+        return Err(responses::request_navigation(graft, "/projects"));
     };
     let Some(project) = state.projects.get(&project_id) else {
-        return Err(responses::graft_redirect(graft, "/projects"));
+        return Err(responses::request_navigation(graft, "/projects"));
     };
     let Some(agent) = state.agents.get(&agent_id) else {
-        return Err(responses::graft_redirect(
+        return Err(responses::request_navigation(
             graft,
             &format!("/projects/{}", project.id.as_hex()),
         ));
     };
     let Some(grant) = eligibility(&agent, &project) else {
-        return Err(responses::graft_redirect(
+        return Err(responses::request_navigation(
             graft,
             &format!("/projects/{}", project.id.as_hex()),
         ));
@@ -569,7 +526,7 @@ async fn require_desk(
         agent_id: agent.id,
     };
     let Some(snapshot) = state.sessions.snapshot(&session, &key) else {
-        return Err(responses::graft_redirect(graft, "/connect"));
+        return Err(responses::request_navigation(graft, "/connect"));
     };
     let eligible = eligible_agents(&state.agents.list(), &project);
     Ok(DeskContext {

@@ -10,7 +10,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use hypergraft::{CommandGraft, PageGraft, PatchStatus};
+use hypergraft::{PageGraft, PatchGraft, PatchStatus};
 
 use crate::{
     error::AppResult,
@@ -65,7 +65,7 @@ async fn new_workflow(
 async fn create(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let (mut form, intent) = match WorkflowFormState::parse(pairs) {
@@ -128,7 +128,7 @@ async fn create(
         .await;
     }
     match state.workflows.create(definition) {
-        Ok(record) => Ok(responses::graft_redirect(
+        Ok(record) => Ok(responses::request_navigation(
             graft,
             &format!("/workflows/{}/configuration", record.id.as_hex()),
         )),
@@ -152,7 +152,7 @@ async fn show_configuration(
     Path(workflow_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(record) = load_workflow(&state, &workflow_id) else {
-        return Ok(responses::graft_redirect(graft, "/workflows"));
+        return Ok(responses::request_navigation(graft, "/workflows"));
     };
     render_form_page(
         &state,
@@ -167,12 +167,12 @@ async fn show_configuration(
 async fn update_configuration(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(workflow_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_workflow(&state, &workflow_id) else {
-        return Ok(responses::graft_redirect(graft, "/workflows"));
+        return Ok(responses::request_navigation(graft, "/workflows"));
     };
     let (mut form, intent) = match WorkflowFormState::parse(pairs) {
         Ok(parsed) => parsed,
@@ -273,12 +273,12 @@ async fn update_configuration(
 async fn delete_workflow(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(workflow_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_workflow(&state, &workflow_id) else {
-        return Ok(responses::graft_redirect(graft, "/workflows"));
+        return Ok(responses::request_navigation(graft, "/workflows"));
     };
     let (revision, confirmed) = match parse_delete(&pairs) {
         Ok(parsed) => parsed,
@@ -308,7 +308,7 @@ async fn delete_workflow(
         .await;
     }
     match state.workflows.delete(&record.id, revision) {
-        Ok(()) => Ok(responses::graft_redirect(graft, "/workflows")),
+        Ok(()) => Ok(responses::request_navigation(graft, "/workflows")),
         Err(error) => {
             render_form_command(
                 &state,
@@ -449,22 +449,15 @@ async fn render_form_page(
 
 async fn render_form_command(
     state: &AppState,
-    graft: CommandGraft,
+    _graft: PatchGraft,
     status: PatchStatus,
-    title: &str,
+    _title: &str,
     view: WorkflowFormView,
 ) -> AppResult<Response> {
     let view = attach_environments(state, view).await;
-    match graft {
-        CommandGraft::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "workflow-form",
-            &view.contents(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "workflow-form",
+        &view.contents(),
+    )?)
 }

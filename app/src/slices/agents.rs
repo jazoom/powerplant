@@ -10,7 +10,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use hypergraft::{CommandGraft, GraftRequest, PatchStatus};
+use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 use serde::Deserialize;
 
 use crate::{
@@ -61,7 +61,7 @@ async fn new_agent(
 ) -> AppResult<Response> {
     let starter = load_starter_project(&state, &query.project);
     if starter_project_is_missing(&query.project, starter.as_ref()) {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::request_navigation(graft, "/projects"));
     }
     render_form_page(
         &state,
@@ -75,13 +75,13 @@ async fn new_agent(
 async fn create(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Query(query): Query<AgentQuery>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let starter = load_starter_project(&state, &query.project);
     if starter_project_is_missing(&query.project, starter.as_ref()) {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::command_navigation("/projects"));
     }
     let (mut form, intent) = match AgentFormState::parse(pairs) {
         Ok(parsed) => parsed,
@@ -140,7 +140,7 @@ async fn create(
                 None => unique_desk_path(&record, &state.projects.list())
                     .unwrap_or_else(|| format!("/agents/{}/configuration", record.id.as_hex())),
             };
-            Ok(responses::graft_redirect(graft, &destination))
+            Ok(responses::command_navigation(&destination))
         }
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
@@ -162,7 +162,7 @@ async fn show_configuration(
     Path(agent_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
-        return Ok(responses::graft_redirect(graft, "/agents"));
+        return Ok(responses::request_navigation(graft, "/agents"));
     };
     render_form_page(
         &state,
@@ -176,12 +176,12 @@ async fn show_configuration(
 async fn update_configuration(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(agent_id): Path<String>,
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
-        return Ok(responses::graft_redirect(graft, "/agents"));
+        return Ok(responses::command_navigation("/agents"));
     };
     let (mut form, intent) = match AgentFormState::parse(pairs) {
         Ok(parsed) => parsed,
@@ -265,12 +265,12 @@ async fn update_configuration(
 async fn delete_agent(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(agent_id): Path<String>,
     Form(form): Form<DeleteForm>,
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
-        return Ok(responses::graft_redirect(graft, "/agents"));
+        return Ok(responses::command_navigation("/agents"));
     };
     let Ok(_operation) = state.agent_leases.acquire(record.id) else {
         return render_form_command(
@@ -302,7 +302,7 @@ async fn delete_agent(
         }
     };
     match state.agents.delete(&record.id, revision) {
-        Ok(()) => Ok(responses::graft_redirect(graft, "/agents")),
+        Ok(()) => Ok(responses::command_navigation("/agents")),
         Err(error) => {
             let form = AgentFormState::from_record(&record);
             render_configuration_error(&state, graft, record, form, error)
@@ -313,7 +313,7 @@ async fn delete_agent(
 async fn remove_orphan(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(form): Form<OrphanForm>,
 ) -> AppResult<Response> {
     let error = match state.sandboxes.remove_orphan(form.name.trim()).await {
@@ -360,13 +360,13 @@ fn create_form_view(
 
 fn render_configuration_error(
     state: &AppState,
-    graft: CommandGraft,
+    graft: PatchGraft,
     record: AgentRecord,
     form: AgentFormState,
     error: AgentError,
 ) -> AppResult<Response> {
     if matches!(error, AgentError::Missing) {
-        return Ok(responses::graft_redirect(graft, "/agents"));
+        return Ok(responses::command_navigation("/agents"));
     }
     let status = match error {
         AgentError::Persist | AgentError::Random | AgentError::Corrupt => {
@@ -427,24 +427,17 @@ fn render_form_page(
 }
 
 fn render_form_command(
-    state: &AppState,
-    graft: CommandGraft,
+    _state: &AppState,
+    _graft: PatchGraft,
     status: PatchStatus,
-    title: &str,
+    _title: &str,
     view: AgentFormView,
 ) -> AppResult<Response> {
-    match graft {
-        CommandGraft::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "agent-form",
-            &view.contents(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "agent-form",
+        &view.contents(),
+    )?)
 }
 
 fn render_desk<T: askama::Template>(

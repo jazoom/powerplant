@@ -39,6 +39,28 @@ fn state_with_backend(backend: ScriptedBackend) -> AppState {
     state
 }
 
+#[derive(Clone, Copy)]
+struct TestLiveGuard(sessions::SessionId);
+
+impl hypergraft::live::LiveGuard for TestLiveGuard {
+    type Connection = ();
+    type Context = sessions::SessionId;
+
+    async fn bind(
+        &self,
+        _extensions: &axum::http::Extensions,
+    ) -> Result<Self::Connection, hypergraft::live::GuardFailure> {
+        Ok(())
+    }
+
+    async fn revalidate(
+        &self,
+        _connection: &Self::Connection,
+    ) -> Result<Self::Context, hypergraft::live::GuardFailure> {
+        Ok(self.0)
+    }
+}
+
 fn agent_hex(state: &AppState) -> String {
     state.agents.list()[0].id.as_hex()
 }
@@ -500,7 +522,7 @@ async fn an_empty_patch_send_stays_a_complete_unprocessable_response() {
 }
 
 #[tokio::test]
-async fn a_document_send_returns_the_page_before_the_job_finishes() {
+async fn a_native_send_is_rejected_before_the_job_starts() {
     let state = test_state();
     let token = connected(&state).await;
     let response = app(&state)
@@ -516,14 +538,10 @@ async fn a_document_send_returns_the_page_before_the_job_finishes() {
         .await
         .expect("chat send");
 
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert!(response.headers().get(hypergraft::GRAFT_TRANSFER).is_none());
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("<!doctype html>"));
-    assert!(text.contains("Hello"));
-    assert!(text.contains("Refresh"));
-    assert!(!text.contains("Hello from Power Plant."));
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    let stored = session_snapshot(&state, &token);
+    assert!(stored.turns.is_empty());
+    assert!(stored.job.is_none());
 }
 
 #[tokio::test]
@@ -1063,6 +1081,56 @@ async fn model_updates_require_an_eligible_project_and_agent_pair() {
         state.vault.selected_connection().map(|item| item.model),
         Some("grok-4.6".to_owned())
     );
+}
+
+#[tokio::test]
+async fn the_model_live_projection_sends_current_truth_after_an_invalidation() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let url = format!(
+        "/model?project={}&agent={}",
+        project_hex(&state),
+        agent_hex(&state)
+    );
+    let harness = hypergraft::live::LiveHarness::new(super::live_router(), state.clone());
+    let mut projection = harness
+        .subscribe(&url, TestLiveGuard(session_id(&token)))
+        .await
+        .expect("live model projection");
+
+    assert_eq!(projection.first_patch().targets.len(), 1);
+    assert_eq!(
+        projection.first_patch().targets[0].target,
+        "desk-model-catalogue"
+    );
+
+    state
+        .models
+        .set_catalogue(ProviderKind::Xai, vec!["grok-live".to_owned()], false);
+    let patch = tokio::time::timeout(std::time::Duration::from_secs(1), projection.next_patch())
+        .await
+        .expect("live patch timeout")
+        .expect("live patch");
+    assert_eq!(patch.targets[0].target, "desk-model-catalogue");
+    assert!(patch.targets[0].html.contains("grok-live"));
+}
+
+#[tokio::test]
+async fn the_model_live_projection_rejects_an_invalid_query() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let harness = hypergraft::live::LiveHarness::new(super::live_router(), state);
+    let result = harness
+        .subscribe(
+            "/model?project=invalid&agent=invalid",
+            TestLiveGuard(session_id(&token)),
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(hypergraft::live::HarnessError::Invalid)
+    ));
 }
 
 #[tokio::test]

@@ -52,10 +52,10 @@ async fn detail(
     Path(run_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(id) = RunId::parse(&run_id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let Some(run) = state.workflow_runs.get(&id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let view =
         RunDetailView::from_run(&run, &state.workflows, &state.environments, &state.projects);
@@ -86,16 +86,16 @@ async fn artefact(
     Path((run_id, artefact_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let Some(run_id) = RunId::parse(&run_id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let Some(artefact_id) = crate::workflows::ArtefactId::parse(&artefact_id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let Some(run) = state.workflow_runs.get(&run_id) else {
-        return Ok(responses::graft_redirect(graft, "/runs"));
+        return Ok(responses::request_navigation(graft, "/runs"));
     };
     let Some(record) = run.artefact(&artefact_id) else {
-        return Ok(responses::graft_redirect(
+        return Ok(responses::request_navigation(
             graft,
             &format!("/runs/{}", run.id.as_hex()),
         ));

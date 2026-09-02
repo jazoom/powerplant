@@ -64,7 +64,8 @@ fn normalise_rejects_origin_with_credentials() {
 
 #[test]
 fn csp_has_no_unsafe_directives() {
-    let policy = CONTENT_SECURITY_POLICY;
+    let policy = content_security_policy(None, "ws://localhost:4000/_hypergraft/live");
+    let policy = policy.to_str().unwrap();
     assert!(!policy.contains("unsafe-inline"), "{policy}");
     assert!(!policy.contains("unsafe-eval"), "{policy}");
     assert!(policy.contains("default-src 'self'"));
@@ -73,7 +74,16 @@ fn csp_has_no_unsafe_directives() {
     assert!(policy.contains("img-src 'self' data:"));
     assert!(policy.contains("script-src 'self'"));
     assert!(policy.contains("style-src 'self'"));
-    assert!(policy.contains("connect-src 'self'"));
+    assert!(policy.contains("connect-src 'self' ws://localhost:4000/_hypergraft/live"));
+    let connect = policy
+        .split(';')
+        .find(|directive| directive.trim_start().starts_with("connect-src"))
+        .unwrap();
+    assert!(
+        connect
+            .split_whitespace()
+            .all(|source| !matches!(source, "ws:" | "wss:"))
+    );
     assert!(policy.contains("form-action 'self'"));
     assert!(policy.contains("base-uri 'self'"));
     assert!(policy.contains("require-trusted-types-for 'script'"));
@@ -83,7 +93,7 @@ fn csp_has_no_unsafe_directives() {
 #[test]
 fn nonce_policy_adds_only_the_nonce_to_script_src() {
     let nonce = CspNonce("test-nonce".to_owned());
-    let policy = content_security_policy(Some(&nonce));
+    let policy = content_security_policy(Some(&nonce), "ws://localhost:4000/_hypergraft/live");
     let policy = policy.to_str().unwrap();
     assert!(
         policy.contains("script-src 'nonce-test-nonce' 'self'"),

@@ -158,6 +158,8 @@ async fn create_redirects_to_the_new_agent() {
                 .uri("/agents")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "intent=save&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
                 )))
@@ -165,14 +167,10 @@ async fn create_redirects_to_the_new_agent() {
         )
         .await
         .expect("create");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    let location = response
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(location.starts_with("/agents/"));
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("navigate=\"/agents/"));
     assert_eq!(state.agents.list().len(), 1);
     assert_eq!(state.agents.list()[0].name, "Reader");
     state.keep_temp_dir(dir);
@@ -204,6 +202,8 @@ async fn create_persistence_failure_returns_internal_error() {
                 .uri("/agents")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "intent=save&name=Reader&instructions=&primary=project&tool_list=on&alias_0=project&path_0={encoded}&access_0=read-write"
                 )))
@@ -301,13 +301,17 @@ async fn delete_redirects_to_the_catalogue() {
                 .uri(format!("/agents/{}/delete", record.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!("revision={}", record.revision)))
                 .unwrap(),
         )
         .await
         .expect("delete");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("navigate=\"/agents\""));
     assert!(state.agents.list().is_empty());
     state.keep_temp_dir(dir);
 }
@@ -512,7 +516,7 @@ async fn configuration_document_renders_stored_directory_rows() {
 }
 
 #[tokio::test]
-async fn add_directory_returns_a_native_document_without_saving() {
+async fn native_add_directory_is_rejected_without_saving() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
@@ -529,15 +533,7 @@ async fn add_directory_returns_a_native_document_without_saving() {
         )
         .await
         .expect("add");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("<!doctype html>"));
-    assert!(text.contains("id=\"agent-form\""));
-    assert!(text.contains("value=\"Reader\""));
-    assert!(text.contains("Be careful"));
-    assert!(text.contains("name=\"alias_1\""));
-    assert!(text.contains("value=\"remove-directory:0\""));
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     assert!(state.agents.list().is_empty());
 }
 
@@ -702,6 +698,8 @@ async fn starter_create_ignores_a_submitted_host_path() {
                 .uri(format!("/agents?project={}", project.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "intent=save&name=Worker&instructions=&primary=project&tool_list=on&alias_0=project&path_0={forged}&access_0=read-write"
                 )))
@@ -709,22 +707,18 @@ async fn starter_create_ignores_a_submitted_host_path() {
         )
         .await
         .expect("starter create");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    let location = response
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
     let agents = state.agents.list();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].name, "Worker");
     assert_eq!(agents[0].directories.len(), 1);
     assert_eq!(agents[0].directories[0].host_path, project.host_path);
-    assert_eq!(
-        location,
-        crate::projects::desk_path(&project.id, &agents[0].id).as_str()
-    );
+    assert!(text.contains(&format!(
+        "navigate=\"{}\"",
+        crate::projects::desk_path(&project.id, &agents[0].id)
+    )));
     keep_dir(&state, dir);
     keep_dir(&state, other);
 }
@@ -747,6 +741,8 @@ async fn starter_create_keeps_an_extra_context_grant() {
                 .uri(format!("/agents?project={}", project.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "intent=save&name=Worker&instructions=&primary=project&tool_list=on&alias_0=project&access_0=read-write&alias_1=docs&path_1={extra_path}&access_1=read-only"
                 )))
@@ -754,7 +750,7 @@ async fn starter_create_keeps_an_extra_context_grant() {
         )
         .await
         .expect("starter extra");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
     let agents = state.agents.list();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].directories.len(), 2);
@@ -926,7 +922,9 @@ async fn assert_connect_redirect(
         .oneshot(builder.body(Body::empty()).unwrap())
         .await
         .expect("anonymous");
-    if enhanced {
+    if method == "POST" && graft.is_none() {
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    } else if enhanced {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),

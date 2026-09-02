@@ -14,7 +14,7 @@ const bound = bindTransportFeedback(document);
 
 if (import.meta.env.DEV) {
     listenForDiagnostics((detail) => {
-        console.error("Hypergraft diagnostic", detail);
+        console.error("Hypergraft diagnostic", detail.reason);
     });
 }
 

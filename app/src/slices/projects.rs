@@ -11,7 +11,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use hypergraft::{CommandGraft, GraftRequest, PageGraft, PatchStatus};
+use hypergraft::{GraftRequest, PageGraft, PatchGraft, PatchStatus};
 
 use crate::{
     agents::{AgentDraft, AgentError, DirectoryGrant},
@@ -58,7 +58,7 @@ async fn root(
         [project] => format!("/projects/{}", project.id.as_hex()),
         _ => "/projects".to_owned(),
     };
-    Ok(responses::graft_redirect(graft, &destination))
+    Ok(responses::request_navigation(graft, &destination))
 }
 
 async fn catalogue(
@@ -86,7 +86,7 @@ async fn new_project(
 async fn create(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(form): Form<ProjectForm>,
 ) -> AppResult<Response> {
     let name = match form.submitted_name() {
@@ -114,10 +114,10 @@ async fn create(
         }
     };
     match state.projects.create(name, host_path) {
-        Ok(record) => Ok(responses::graft_redirect(
-            graft,
-            &format!("/projects/{}", record.id.as_hex()),
-        )),
+        Ok(record) => Ok(responses::command_navigation(&format!(
+            "/projects/{}",
+            record.id.as_hex()
+        ))),
         Err(error @ (ProjectError::Random | ProjectError::Persist | ProjectError::Corrupt)) => {
             Err(AppError::new("store project", error))
         }
@@ -138,7 +138,7 @@ async fn detail(
     Path(project_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(record) = load_project(&state, &project_id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::page_redirect(graft, "/projects"));
     };
     let eligible = eligible_agents(&state.agents.list(), &record);
     let remembered = state.sessions.last_agent(&session.0, &record.id);
@@ -152,7 +152,7 @@ async fn detail(
         _ => remembered_eligible.map(|agent_id| desk_path(&record.id, &agent_id)),
     };
     if let Some(destination) = destination {
-        return Ok(responses::graft_redirect(graft, &destination));
+        return Ok(responses::page_redirect(graft, &destination));
     }
     let view = DetailView::from_record(&record, &eligible, &state.agents.list());
     render_detail_page(&state, graft, PatchStatus::Ok, &view)
@@ -161,12 +161,12 @@ async fn detail(
 async fn grant_agent(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(project_id): Path<String>,
     Form(form): Form<GrantForm>,
 ) -> AppResult<Response> {
     let Some(project) = load_project(&state, &project_id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::command_navigation("/projects"));
     };
     let agent_id = match form.agent_id() {
         Ok(agent_id) => agent_id,
@@ -218,7 +218,7 @@ async fn grant_agent(
         );
     };
     let Some(project) = state.projects.get(&project.id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::command_navigation("/projects"));
     };
     let Some(agent) = state.agents.get(&agent_id) else {
         return render_grant_error(
@@ -254,17 +254,17 @@ async fn grant_agent(
         primary_directory: agent.primary_directory.clone(),
     };
     match state.agents.update(&agent.id, revision, draft) {
-        Ok(updated) => Ok(responses::graft_redirect(
-            graft,
-            &desk_path(&project.id, &updated.id),
-        )),
+        Ok(updated) => Ok(responses::command_navigation(&desk_path(
+            &project.id,
+            &updated.id,
+        ))),
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
         }
-        Err(AgentError::Missing) => Ok(responses::graft_redirect(
-            graft,
-            &format!("/projects/{}", project.id.as_hex()),
-        )),
+        Err(AgentError::Missing) => Ok(responses::command_navigation(&format!(
+            "/projects/{}",
+            project.id.as_hex()
+        ))),
         Err(error) => {
             let status = if error == AgentError::Conflict {
                 PatchStatus::Conflict
@@ -283,7 +283,7 @@ async fn show_configuration(
     Path(project_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(record) = load_project(&state, &project_id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::page_redirect(graft, "/projects"));
     };
     render_form_page(
         &state,
@@ -297,12 +297,12 @@ async fn show_configuration(
 async fn update_configuration(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Path(project_id): Path<String>,
     Form(form): Form<ProjectForm>,
 ) -> AppResult<Response> {
     let Some(record) = load_project(&state, &project_id) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::command_navigation("/projects"));
     };
     let revision = match form.revision() {
         Ok(revision) => revision,
@@ -367,7 +367,7 @@ fn render_detail_page(
 
 fn render_grant_error(
     state: &AppState,
-    graft: CommandGraft,
+    _graft: PatchGraft,
     project: &ProjectRecord,
     form: &GrantForm,
     error: &'static str,
@@ -387,19 +387,11 @@ fn render_grant_error(
         &form.access,
         error,
     );
-    match graft {
-        CommandGraft::Document => {
-            let mut response =
-                responses::chat_page_response(&view.document_title, &state.assets, &view)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "chat-main",
-            &view,
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "chat-main",
+        &view,
+    )?)
 }
 
 fn status_for(error: ProjectError) -> PatchStatus {
@@ -411,13 +403,13 @@ fn status_for(error: ProjectError) -> PatchStatus {
 
 fn render_configuration_error(
     state: &AppState,
-    graft: CommandGraft,
+    graft: PatchGraft,
     record: ProjectRecord,
     submitted_name: String,
     error: ProjectError,
 ) -> AppResult<Response> {
     if matches!(error, ProjectError::Missing) {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::command_navigation("/projects"));
     }
     if matches!(
         error,
@@ -487,24 +479,17 @@ fn render_form_page(
 }
 
 fn render_form_command(
-    state: &AppState,
-    graft: CommandGraft,
+    _state: &AppState,
+    _graft: PatchGraft,
     status: PatchStatus,
-    title: &str,
+    _title: &str,
     view: ProjectFormView,
 ) -> AppResult<Response> {
-    match graft {
-        CommandGraft::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "project-form",
-            &view.contents(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "project-form",
+        &view.contents(),
+    )?)
 }
 
 fn ordered_projects(state: &AppState, session: crate::sessions::SessionId) -> Vec<ProjectRecord> {

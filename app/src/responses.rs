@@ -19,12 +19,29 @@ pub(crate) fn apply_patch_status(response: &mut Response, status: hypergraft::Pa
     }
 }
 
-pub(crate) fn graft_redirect(
+pub(crate) fn page_redirect(graft: hypergraft::PageGraft, destination: &str) -> Response {
+    hypergraft::outcome::page_redirect(graft, destination)
+        .unwrap_or_else(|_| no_store_status_response(StatusCode::BAD_REQUEST, "Bad request"))
+}
+
+pub(crate) fn command_navigation(destination: &str) -> Response {
+    hypergraft::outcome::command_navigation(destination)
+        .unwrap_or_else(|_| no_store_status_response(StatusCode::BAD_REQUEST, "Bad request"))
+}
+
+pub(crate) fn request_navigation(
     graft: impl Into<hypergraft::GraftRequest>,
     destination: &str,
 ) -> Response {
-    hypergraft::outcome::redirect(graft.into(), destination)
-        .unwrap_or_else(|_| no_store_status_response(StatusCode::BAD_REQUEST, "Bad request"))
+    match graft.into() {
+        hypergraft::GraftRequest::Document => {
+            page_redirect(hypergraft::PageGraft::Document, destination)
+        }
+        hypergraft::GraftRequest::Navigation => {
+            page_redirect(hypergraft::PageGraft::Navigation, destination)
+        }
+        hypergraft::GraftRequest::Patch => command_navigation(destination),
+    }
 }
 
 enum FullDocument {

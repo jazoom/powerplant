@@ -82,11 +82,14 @@ pub(crate) async fn add_security_headers(
     let nonce = response.extensions_mut().remove::<CspNonce>();
     let is_production_https = state.config.environment() == RuntimeEnvironment::Production
         && state.config.public_origin().starts_with("https://");
+    let live_endpoint =
+        hypergraft::live::LiveEndpoint::with_default_path(state.config.public_origin())
+            .expect("the public origin is a canonical HTTP origin");
     let headers = response.headers_mut();
 
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        content_security_policy(nonce.as_ref()),
+        content_security_policy(nonce.as_ref(), live_endpoint.csp_connect_src()),
     );
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(
@@ -177,18 +180,19 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
      style-src 'self'; \
      trusted-types hypergraft";
 
-fn content_security_policy(nonce: Option<&CspNonce>) -> HeaderValue {
-    nonce.map_or_else(
-        || HeaderValue::from_static(CONTENT_SECURITY_POLICY),
-        |nonce| {
-            let policy = CONTENT_SECURITY_POLICY.replace(
-                "script-src 'self'",
-                &format!("script-src 'nonce-{}' 'self'", nonce.as_str()),
-            );
-            HeaderValue::from_str(&policy)
-                .expect("nonce is base64url, so the header value is valid")
-        },
-    )
+fn content_security_policy(nonce: Option<&CspNonce>, live_connect_src: &str) -> HeaderValue {
+    let mut policy = CONTENT_SECURITY_POLICY.replace(
+        "connect-src 'self'",
+        &format!("connect-src 'self' {live_connect_src}"),
+    );
+    if let Some(nonce) = nonce {
+        policy = policy.replace(
+            "script-src 'self'",
+            &format!("script-src 'nonce-{}' 'self'", nonce.as_str()),
+        );
+    }
+    HeaderValue::from_str(&policy)
+        .expect("the nonce and live endpoint produce a valid header value")
 }
 
 #[cfg(test)]

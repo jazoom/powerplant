@@ -6,13 +6,13 @@ mod page;
 mod tests;
 
 use axum::{
-    Form, Router,
+    Extension, Form, Router,
     extract::{Query, State},
     response::Response,
     routing::get,
 };
 
-use hypergraft::{CommandGraft, GraftRequest, PatchSet, PatchStatus};
+use hypergraft::{GraftRequest, PatchGraft, PatchSet, PatchStatus};
 
 use crate::{
     agents::AgentRecord,
@@ -47,6 +47,12 @@ pub(super) fn router() -> Router<AppState> {
     Router::new().route("/model", get(refresh_model_options).post(update_model))
 }
 
+pub(super) fn live_router() -> hypergraft::live::LiveRouter<AppState> {
+    hypergraft::live::LiveRouter::new()
+        .route("/model", model_live)
+        .expect("live projection paths are unique")
+}
+
 #[derive(Default, serde::Deserialize)]
 struct ModelQuery {
     #[serde(default)]
@@ -60,6 +66,51 @@ struct ResolvedDesk {
     agent: AgentRecord,
     eligible: Vec<AgentRecord>,
     snapshot: SessionSnapshot,
+}
+
+async fn model_live(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionId>,
+    Query(query): Query<ModelQuery>,
+) -> Result<hypergraft::live::LiveProjection<SessionId>, hypergraft::live::LiveReject> {
+    let invalidations = state.models.subscribe();
+    let Some(project) = ProjectId::parse(query.project.trim()) else {
+        return Err(hypergraft::live::LiveReject::Invalid);
+    };
+    let Some(agent) = crate::agents::AgentId::parse(query.agent.trim()) else {
+        return Err(hypergraft::live::LiveReject::Invalid);
+    };
+    if !state.vault.has_providers()
+        || resolved_desk(&state, session, &project.as_hex(), &agent.as_hex()).is_none()
+    {
+        return Err(hypergraft::live::LiveReject::Retire);
+    }
+    Ok(hypergraft::live::LiveProjection::new(
+        hypergraft::live::broadcast_invalidations(invalidations),
+        move |session| {
+            let state = state.clone();
+            async move { refresh_model_projection(&state, session, project, agent).await }
+        },
+    ))
+}
+
+async fn refresh_model_projection(
+    state: &AppState,
+    session: SessionId,
+    project: ProjectId,
+    agent: crate::agents::AgentId,
+) -> Result<PatchSet, hypergraft::live::ProjectionError> {
+    if !state.vault.has_providers() {
+        return Err(hypergraft::live::ProjectionError::Retire);
+    }
+    let desk = resolved_desk(state, session, &project.as_hex(), &agent.as_hex())
+        .ok_or(hypergraft::live::ProjectionError::Retire)?;
+    let view = desk_view(state, &desk).await;
+    let mut patches = PatchSet::new();
+    patches
+        .children("desk-model-catalogue", &view.desk_model_catalogue())
+        .map_err(|_| hypergraft::live::ProjectionError::Retire)?;
+    Ok(patches)
 }
 
 impl ResolvedDesk {
@@ -80,15 +131,15 @@ async fn refresh_model_options(
     Query(query): Query<ModelQuery>,
 ) -> AppResult<Response> {
     let Some(session) = session else {
-        return Ok(responses::graft_redirect(graft, "/connect"));
+        return Ok(responses::request_navigation(graft, "/connect"));
     };
     if !state.vault.has_providers() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
+        return Ok(responses::request_navigation(graft, "/connect"));
     }
     match graft {
         GraftRequest::Patch => {
             let Some(desk) = resolved_desk(&state, session, &query.project, &query.agent) else {
-                return Ok(responses::graft_redirect(graft, "/projects"));
+                return Ok(responses::request_navigation(graft, "/projects"));
             };
             let view = desk_view(&state, &desk).await;
             Ok(hypergraft::outcome::children_patch(
@@ -98,7 +149,7 @@ async fn refresh_model_options(
             )?)
         }
         GraftRequest::Document | GraftRequest::Navigation => {
-            Ok(responses::graft_redirect(graft, "/"))
+            Ok(responses::request_navigation(graft, "/"))
         }
     }
 }
@@ -106,17 +157,17 @@ async fn refresh_model_options(
 async fn update_model(
     State(state): State<AppState>,
     OptionalSession(session): OptionalSession,
-    graft: CommandGraft,
+    graft: PatchGraft,
     Form(form): Form<ModelForm>,
 ) -> AppResult<Response> {
     let Some(session) = session else {
-        return Ok(responses::graft_redirect(graft, "/connect"));
+        return Ok(responses::request_navigation(graft, "/connect"));
     };
     if !state.vault.has_providers() {
-        return Ok(responses::graft_redirect(graft, "/connect"));
+        return Ok(responses::request_navigation(graft, "/connect"));
     }
     let Some(desk) = resolved_desk(&state, session, &form.project, &form.agent) else {
-        return Ok(responses::graft_redirect(graft, "/projects"));
+        return Ok(responses::request_navigation(graft, "/projects"));
     };
     if state.sessions.busy(&session) {
         let view = desk_view(&state, &desk).await;
@@ -145,19 +196,16 @@ async fn update_model(
     }
 
     let view = desk_view(&state, &desk).await;
-    match graft {
-        CommandGraft::Document => render_document(&state, PatchStatus::Ok, view),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            PatchStatus::Ok,
-            "desk-settings",
-            &view.desk_settings(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        PatchStatus::Ok,
+        "desk-settings",
+        &view.desk_settings(),
+    )?)
 }
 
 async fn toggle_favourite(
     state: &AppState,
-    graft: CommandGraft,
+    graft: PatchGraft,
     desk: &ResolvedDesk,
     form: &ModelForm,
 ) -> AppResult<Response> {
@@ -191,14 +239,11 @@ async fn toggle_favourite(
         }
     }
     let view = desk_view(state, desk).await;
-    match graft {
-        CommandGraft::Document => render_document(state, PatchStatus::Ok, view),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            PatchStatus::Ok,
-            "desk-model-catalogue",
-            &view.desk_model_catalogue(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        PatchStatus::Ok,
+        "desk-model-catalogue",
+        &view.desk_model_catalogue(),
+    )?)
 }
 
 fn submitted_model(
@@ -302,29 +347,20 @@ pub(crate) fn accept_job_patch(
 
 pub(crate) async fn reject_parallel_command(
     state: &AppState,
-    graft: CommandGraft,
+    _graft: PatchGraft,
     page: DeskPage<'_>,
 ) -> AppResult<Response> {
     const MESSAGE: &str = "Wait until this reply finishes.";
-    match graft {
-        CommandGraft::Document => render_document(
-            state,
-            PatchStatus::Conflict,
-            view(state, page, MESSAGE, "", "").await,
-        ),
-        CommandGraft::Patch => {
-            let view = view(state, page, "", "", "").await;
-            let mut patches = PatchSet::new();
-            patches.children("transcript", &TranscriptContents { turns: &view.turns })?;
-            patches.children("job-observe", &view.job_observe_with(MESSAGE))?;
-            Ok(patches.respond(PatchStatus::Conflict)?)
-        }
-    }
+    let view = view(state, page, "", "", "").await;
+    let mut patches = PatchSet::new();
+    patches.children("transcript", &TranscriptContents { turns: &view.turns })?;
+    patches.children("job-observe", &view.job_observe_with(MESSAGE))?;
+    Ok(patches.respond(PatchStatus::Conflict)?)
 }
 
 pub(crate) async fn reject_chat_input(
     state: &AppState,
-    graft: CommandGraft,
+    graft: PatchGraft,
     page: DeskPage<'_>,
     message: &'static str,
     draft: &str,
@@ -342,7 +378,7 @@ pub(crate) async fn reject_chat_input(
 
 pub(crate) async fn reject_chat_selection(
     state: &AppState,
-    graft: CommandGraft,
+    _graft: PatchGraft,
     page: DeskPage<'_>,
     message: &'static str,
     draft: &str,
@@ -350,32 +386,26 @@ pub(crate) async fn reject_chat_selection(
 ) -> AppResult<Response> {
     let mut rendered = view(state, page, message, "", "").await;
     rendered.draft_message = draft.trim().to_owned();
-    match graft {
-        CommandGraft::Document => render_document(state, status, rendered),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "composer",
-            &rendered.composer(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "composer",
+        &rendered.composer(),
+    )?)
 }
 
 async fn reject_model_view(
-    state: &AppState,
-    graft: CommandGraft,
+    _state: &AppState,
+    _graft: PatchGraft,
     view: ChatViewModel,
     message: &'static str,
 ) -> AppResult<Response> {
     let mut view = view;
     view.desk_error = message;
-    match graft {
-        CommandGraft::Document => render_document(state, PatchStatus::UnprocessableEntity, view),
-        CommandGraft::Patch => Ok(hypergraft::outcome::children_patch(
-            PatchStatus::UnprocessableEntity,
-            "desk-settings",
-            &view.desk_settings(),
-        )?),
-    }
+    Ok(hypergraft::outcome::children_patch(
+        PatchStatus::UnprocessableEntity,
+        "desk-settings",
+        &view.desk_settings(),
+    )?)
 }
 
 pub(crate) async fn view(

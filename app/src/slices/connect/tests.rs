@@ -226,17 +226,16 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
                 .uri("/connect/forget")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from("provider=xai"))
                 .unwrap(),
         )
         .await
         .expect("forget");
 
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        "/connect"
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(header::LOCATION).is_none());
     let cookies = set_cookies(&response);
     assert!(
         cookies
@@ -247,6 +246,7 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
     assert!(cookies.iter().all(|value| !value.contains(SECRET_KEY)));
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#"navigate="/connect""#));
     assert!(!text.contains(SECRET_KEY));
     assert!(!state.sessions.contains(&id));
     assert!(!state.vault.has_providers());
@@ -315,6 +315,8 @@ async fn forget_of_one_provider_keeps_the_rest() {
                 .uri("/connect/forget")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from("provider=xai"))
                 .unwrap(),
         )
@@ -360,6 +362,8 @@ async fn a_failed_plan_forget_restores_the_provider_and_session() {
                 .uri("/connect/forget")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from("provider=xai"))
                 .unwrap(),
         )
@@ -524,7 +528,7 @@ async fn an_api_key_error_targets_the_key_control() {
 }
 
 #[tokio::test]
-async fn a_native_rejection_uses_the_same_field_relation() {
+async fn a_native_connect_is_rejected_before_validation() {
     let response = connect_submit(
         test_state(),
         "provider=openai&api_key=sk-secret-key".to_owned(),
@@ -534,10 +538,9 @@ async fn a_native_rejection_uses_the_same_field_relation() {
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(text.contains("<!doctype html>"));
-    assert!(text.contains("Choose a provider."));
-    assert_field_target(&text, "connect-provider", "sk-secret-key");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(text, "Bad request");
+    assert!(!text.contains("sk-secret-key"));
 }
 
 #[tokio::test]
@@ -546,13 +549,13 @@ async fn a_successful_connect_stores_the_provider_without_echoing_the_key() {
     let response = connect_submit(
         state.clone(),
         "provider=xai&api_key=sk-test-key".to_owned(),
-        false,
+        true,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
+    assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#"navigate="/""#));
     assert!(!text.contains("sk-test-key"));
     assert!(state.vault.contains(ProviderKind::Xai));
 }
@@ -616,10 +619,10 @@ async fn adding_a_second_provider_keeps_the_first() {
     let response = connect_submit(
         state.clone(),
         "provider=synthetic&api_key=sk-second-key".to_owned(),
-        false,
+        true,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.status(), StatusCode::OK);
     assert!(state.vault.contains(ProviderKind::Xai));
     assert!(state.vault.contains(ProviderKind::Synthetic));
 }

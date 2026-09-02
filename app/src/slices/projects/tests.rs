@@ -265,7 +265,7 @@ async fn the_catalogue_orders_recent_session_projects_first() {
 }
 
 #[tokio::test]
-async fn create_redirects_to_the_project_detail() {
+async fn a_native_create_is_rejected_before_domain_work() {
     let state = test_state();
     let token = connected(&state);
     let dir = git_worktree();
@@ -282,17 +282,8 @@ async fn create_redirects_to_the_project_detail() {
         )
         .await
         .expect("create");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    let location = response
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(location.starts_with("/projects/"));
-    assert!(!location.contains("/configuration"));
-    assert_eq!(state.projects.list().len(), 1);
-    assert_eq!(state.projects.list()[0].name, "Desk");
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert!(state.projects.list().is_empty());
 }
 
 #[tokio::test]
@@ -364,6 +355,8 @@ async fn create_rejects_an_unsupported_worktree() {
                 .uri("/projects")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!("name=Desk&path={encoded}")))
                 .unwrap(),
         )
@@ -374,7 +367,7 @@ async fn create_rejects_an_unsupported_worktree() {
         axum::http::StatusCode::UNPROCESSABLE_ENTITY
     );
     let text = body_text(response).await;
-    assert!(text.contains("<!doctype html>"));
+    assert!(text.contains("target=\"project-form\""));
     assert!(text.contains(ProjectError::Worktree.message()));
     assert!(state.projects.list().is_empty());
 }
@@ -400,6 +393,8 @@ async fn create_rejects_a_symlink_alias_of_a_stored_path() {
                 .uri("/projects")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!("name=Two&path={encoded}")))
                 .unwrap(),
         )
@@ -538,6 +533,8 @@ async fn rename_ignores_a_submitted_path_and_updates_the_name() {
                 .uri(format!("/projects/{}/configuration", record.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "name=Later&path={encoded}&revision={}",
                     record.revision
@@ -990,6 +987,8 @@ async fn grant_redirects_to_the_canonical_desk() {
                 .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "agent_id={}&revision={}&alias=code&access=read-write",
                     agent.id.as_hex(),
@@ -999,11 +998,12 @@ async fn grant_redirects_to_the_canonical_desk() {
         )
         .await
         .expect("grant");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        crate::projects::desk_path(&project.id, &agent.id).as_str()
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!(
+        "navigate=\"{}\"",
+        crate::projects::desk_path(&project.id, &agent.id)
+    )));
     let updated = state.agents.get(&agent.id).expect("updated");
     assert_eq!(updated.directories.len(), 2);
     assert_eq!(updated.directories[1].alias, "code");
@@ -1034,6 +1034,8 @@ async fn grant_ignores_a_submitted_host_path() {
                 .uri(format!("/projects/{}/agents/grant", project.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "agent_id={}&revision={}&alias=code&access=read-only&path={encoded}",
                     agent.id.as_hex(),
@@ -1043,7 +1045,7 @@ async fn grant_ignores_a_submitted_host_path() {
         )
         .await
         .expect("grant");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
     let updated = state.agents.get(&agent.id).expect("updated");
     assert_eq!(updated.directories.len(), 2);
     assert_eq!(updated.directories[1].host_path, project.host_path);

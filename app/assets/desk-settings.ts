@@ -1,4 +1,3 @@
-import { requestGraftRefresh } from "hypergraft/browser";
 import type { IslandInstance, IslandMountContext } from "hypergraft/browser";
 
 type DeskControls = {
@@ -126,13 +125,6 @@ function syncProvider(root: HTMLFormElement): void {
     setExpanded(found, false);
 }
 
-function catalogueIsPending(root: HTMLElement): boolean {
-    return (
-        root.querySelector<HTMLElement>("[data-catalogue-pending]")?.dataset
-            .cataloguePending === "true"
-    );
-}
-
 function focusRelativeOption(
     found: DeskControls,
     current: HTMLButtonElement,
@@ -153,9 +145,7 @@ export function initDeskSettings(
     if (!(root instanceof HTMLFormElement)) {
         return;
     }
-    let refreshTimer: number | undefined;
     const submitDesk = () => {
-        window.clearTimeout(refreshTimer);
         root.requestSubmit();
     };
     const selectListedModel = (
@@ -190,26 +180,6 @@ export function initDeskSettings(
             }
         });
     };
-    const scheduleCatalogueRefresh = () => {
-        if (!catalogueIsPending(root) || signal.aborted) {
-            return;
-        }
-        window.clearTimeout(refreshTimer);
-        refreshTimer = window.setTimeout(() => {
-            const found = controls(root);
-            if (found?.options.contains(document.activeElement)) {
-                scheduleCatalogueRefresh();
-                return;
-            }
-            const form = document.querySelector<HTMLFormElement>(
-                "#desk-model-refresh",
-            );
-            if (form) {
-                requestGraftRefresh(form);
-            }
-        }, 250);
-    };
-
     root.addEventListener(
         "click",
         (event) => {
@@ -348,24 +318,24 @@ export function initDeskSettings(
     };
     document.addEventListener("click", closeOutside, { signal });
     document.addEventListener("focusin", closeOutside, { signal });
-    signal.addEventListener(
-        "abort",
-        () => {
-            window.clearTimeout(refreshTimer);
-        },
-        { once: true },
-    );
-    scheduleCatalogueRefresh();
 
     return {
         reconcile(context) {
-            if (
-                context.cause !== "patch" ||
-                context.detail.outcome !== "applied-patch"
-            ) {
+            const targets = (() => {
+                if (context.cause === "live-patch") {
+                    return context.detail.targetIds;
+                }
+                if (
+                    context.cause === "patch" &&
+                    context.detail.outcome === "applied-patch"
+                ) {
+                    return context.detail.targetIds;
+                }
+                return undefined;
+            })();
+            if (!targets) {
                 return;
             }
-            const targets = context.detail.targetIds;
             if (
                 targets.includes("desk-model-catalogue") ||
                 targets.includes("desk-model-options")
@@ -376,16 +346,7 @@ export function initDeskSettings(
                     filterModels(found);
                 }
             }
-            if (
-                targets.includes("desk-model-catalogue") ||
-                targets.includes("desk-model-options") ||
-                targets.includes("desk-settings")
-            ) {
-                scheduleCatalogueRefresh();
-            }
         },
-        destroy() {
-            window.clearTimeout(refreshTimer);
-        },
+        destroy() {},
     };
 }

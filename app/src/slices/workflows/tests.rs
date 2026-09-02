@@ -226,20 +226,18 @@ async fn create_redirects_to_configuration() {
                 .uri("/workflows")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(create_body(environment)))
                 .unwrap(),
         )
         .await
         .expect("create");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    let location = response
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(location.starts_with("/workflows/"));
-    assert!(location.ends_with("/configuration"));
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("navigate=\"/workflows/"));
+    assert!(text.contains("/configuration\""));
     assert_eq!(state.workflows.list()[0].definition.name(), "One step");
 }
 
@@ -473,6 +471,8 @@ async fn delete_redirects_to_the_catalogue() {
                 .uri(format!("/workflows/{}/delete", record.id.as_hex()))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
                     "revision={}&confirm=on",
                     record.revision
@@ -481,11 +481,10 @@ async fn delete_redirects_to_the_catalogue() {
         )
         .await
         .expect("delete");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        "/workflows"
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("navigate=\"/workflows\""));
     assert!(state.workflows.list().is_empty());
 }
 
@@ -501,6 +500,8 @@ async fn oversized_forms_are_rejected_before_row_allocation() {
                 .uri("/workflows")
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(oversized))
                 .unwrap(),
         )
@@ -540,7 +541,9 @@ async fn assert_connect_redirect(
         .oneshot(builder.body(Body::empty()).unwrap())
         .await
         .expect("anonymous");
-    if enhanced {
+    if method == "POST" && graft.is_none() {
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    } else if enhanced {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),

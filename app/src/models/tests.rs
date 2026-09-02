@@ -1,10 +1,13 @@
 impl super::ModelCatalogue {
     pub(crate) fn set_catalogue(&self, kind: ProviderKind, models: Vec<String>, pending: bool) {
-        let mut catalogue = self.lock();
-        let entry = catalogue.entry(kind).or_default();
-        entry.revision = entry.revision.wrapping_add(1);
-        entry.models = models;
-        entry.pending = pending;
+        {
+            let mut catalogue = self.lock();
+            let entry = catalogue.entry(kind).or_default();
+            entry.revision = entry.revision.wrapping_add(1);
+            entry.models = models;
+            entry.pending = pending;
+        }
+        self.invalidate();
     }
 }
 
