@@ -12,8 +12,11 @@ function themeForm(theme: string): HTMLFormElement {
     form.innerHTML = `
         <div data-active-theme="${theme}"></div>
         <select data-theme-select name="theme">
-            <option value="springfield-light">Springfield light</option>
-            <option value="springfield-dark">Springfield dark</option>
+            <option value="springfield">Springfield</option>
+            <option value="evergreen-terrace">Evergreen Terrace</option>
+            <option value="leftorium">Leftorium</option>
+            <option value="stonecutters">Stonecutters</option>
+            <option value="sector-7-g">Sector 7-G</option>
         </select>
     `;
     document.body.append(form);
@@ -21,52 +24,52 @@ function themeForm(theme: string): HTMLFormElement {
 }
 
 test("the selector uses the server-rendered theme", () => {
-    const form = themeForm("springfield-dark");
+    const form = themeForm("evergreen-terrace");
 
     initThemeSelector(form);
 
-    expect(document.documentElement.dataset.theme).toBe("springfield-dark");
+    expect(document.documentElement.dataset.theme).toBe("evergreen-terrace");
     expect(form.querySelector<HTMLSelectElement>("select")!.value).toBe(
-        "springfield-dark",
+        "evergreen-terrace",
     );
 });
 
-test("an invalid server-rendered theme defaults to Springfield light", () => {
+test("an invalid server-rendered theme defaults to Springfield", () => {
     const form = themeForm("unknown");
 
     initThemeSelector(form);
 
-    expect(document.documentElement.dataset.theme).toBe("springfield-light");
+    expect(document.documentElement.dataset.theme).toBe("springfield");
     expect(form.querySelector<HTMLSelectElement>("select")!.value).toBe(
-        "springfield-light",
+        "springfield",
     );
 });
 
 test("a change applies immediately and submits the preference", () => {
-    const form = themeForm("springfield-light");
+    const form = themeForm("springfield");
     const requestSubmit = vi
         .spyOn(form, "requestSubmit")
         .mockImplementation(() => {});
     initThemeSelector(form);
     const select = form.querySelector<HTMLSelectElement>("select")!;
 
-    select.value = "springfield-dark";
+    select.value = "sector-7-g";
     select.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(document.documentElement.dataset.theme).toBe("springfield-dark");
+    expect(document.documentElement.dataset.theme).toBe("sector-7-g");
     expect(requestSubmit).toHaveBeenCalledOnce();
 });
 
 test("reconciliation restores the server-rendered selection", () => {
-    const form = themeForm("springfield-light");
+    const form = themeForm("springfield");
     const instance = initThemeSelector(form);
-    document.documentElement.dataset.theme = "springfield-dark";
-    form.innerHTML = themeForm("springfield-light").innerHTML;
+    document.documentElement.dataset.theme = "evergreen-terrace";
+    form.innerHTML = themeForm("springfield").innerHTML;
 
     instance.reconcile?.({} as never);
 
-    expect(document.documentElement.dataset.theme).toBe("springfield-light");
+    expect(document.documentElement.dataset.theme).toBe("springfield");
     expect(form.querySelector<HTMLSelectElement>("select")!.value).toBe(
-        "springfield-light",
+        "springfield",
     );
 });

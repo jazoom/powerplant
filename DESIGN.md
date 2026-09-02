@@ -37,16 +37,16 @@ colors:
     composer: "oklch(95.03% 0.0942 98.1)"
     composerControl: "oklch(97% 0.09 97)"
     composerLink: "oklch(31% 0.09 137)"
-    darkCover: "oklch(16.5% 0.023 122)"
-    darkCoverDeep: "oklch(11.5% 0.018 124)"
-    darkPaper: "oklch(22.5% 0.028 112)"
-    darkPaperGreen: "oklch(26.5% 0.035 120)"
-    darkSky: "oklch(32% 0.052 215)"
-    darkInk: "oklch(91% 0.028 100)"
-    darkQuietInk: "oklch(70% 0.035 108)"
-    darkRule: "oklch(39% 0.042 115)"
-    darkControl: "oklch(18.5% 0.021 116)"
-    darkComposer: "oklch(30% 0.065 92)"
+    darkCover: "oklch(13.5% 0.024 180)"
+    darkCoverDeep: "oklch(11% 0.02 180)"
+    darkPaper: "oklch(20.5% 0.025 195)"
+    darkPaperGreen: "oklch(24.5% 0.032 192)"
+    darkSky: "oklch(34.5% 0.045 197)"
+    darkInk: "oklch(93% 0.015 95)"
+    darkQuietInk: "oklch(75.6% 0.02 112)"
+    darkRule: "oklch(39% 0.045 192)"
+    darkControl: "oklch(20.5% 0.025 195)"
+    darkComposer: "oklch(38.8% 0.06 123)"
 typography:
     display:
         fontFamily: "IBM Plex Sans, ui-sans-serif, system-ui, sans-serif"
@@ -119,13 +119,17 @@ Power Plant presents local agent work as a stable index beside a continuous pape
 
 The interface gives each task a clear location, readiness state and next action. It feels precise, practical and lightly playful.
 
-Springfield light combines olive covers, pale yellow paper, sunshine actions and lime status marks. Muted sky blue remains an informational accent.
+Springfield combines olive covers, pale yellow paper, sunshine actions and lime status marks. Muted sky blue remains an informational accent.
 
-Springfield dark moves the paper to deep olive. It keeps yellow actions, green status marks and a dark teal file bar.
+Evergreen Terrace combines deep teal surfaces with marigold actions and mint status marks.
+
+Leftorium is a restrained warm neutral theme. Stonecutters uses deep blue surfaces and cool blue actions.
+
+Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 
 ## Surfaces
 
-- The product offers Springfield light and Springfield dark. Springfield light is the default.
+- The product offers five colour themes. Springfield is the default.
 - The theme changes immediately and persists in local filesystem storage.
 - The desktop shell uses a persistent index for projects, agents, workflows, environments, runs and settings.
 - The brand mark and the first index link go to `/projects`.

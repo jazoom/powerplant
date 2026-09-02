@@ -1,11 +1,19 @@
 import type { IslandInstance } from "hypergraft/browser";
 
-export const DEFAULT_THEME = "springfield-light";
+export const DEFAULT_THEME = "springfield";
 
-export type Theme = "springfield-light" | "springfield-dark";
+export const THEMES = [
+    "springfield",
+    "evergreen-terrace",
+    "leftorium",
+    "stonecutters",
+    "sector-7-g",
+] as const;
+
+export type Theme = (typeof THEMES)[number];
 
 function isTheme(value: string | null | undefined): value is Theme {
-    return value === "springfield-light" || value === "springfield-dark";
+    return THEMES.some((theme) => theme === value);
 }
 
 function activeTheme(root: HTMLElement): Theme {

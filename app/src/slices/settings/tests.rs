@@ -102,7 +102,7 @@ async fn the_initial_document_renders_the_saved_theme_and_selection() {
     let state = test_state();
     state
         .preferences
-        .set_theme(Theme::SpringfieldDark)
+        .set_theme(Theme::EvergreenTerrace)
         .expect("theme");
     let token = connected(&state);
 
@@ -119,8 +119,8 @@ async fn the_initial_document_renders_the_saved_theme_and_selection() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
 
-    assert!(text.contains("<html lang=\"en-AU\" data-theme=\"springfield-dark\">"));
-    assert!(text.contains("data-active-theme=\"springfield-dark\""));
+    assert!(text.contains("<html lang=\"en-AU\" data-theme=\"evergreen-terrace\">"));
+    assert!(text.contains("data-active-theme=\"evergreen-terrace\""));
     assert_eq!(text.matches("selected").count(), 1);
 }
 
@@ -130,15 +130,15 @@ async fn a_theme_patch_persists_and_returns_the_authoritative_selector() {
     let token = connected(&state);
 
     let response = app(&state)
-        .oneshot(theme_request(&token, "springfield-dark"))
+        .oneshot(theme_request(&token, "sector-7-g"))
         .await
         .expect("theme patch");
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(state.preferences.theme(), Theme::SpringfieldDark);
+    assert_eq!(state.preferences.theme(), Theme::Sector7G);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("operation=\"children\" target=\"theme-setting\""));
-    assert!(text.contains("data-active-theme=\"springfield-dark\""));
+    assert!(text.contains("data-active-theme=\"sector-7-g\""));
     assert_eq!(text.matches("selected").count(), 1);
 }
 
@@ -152,11 +152,11 @@ async fn an_unknown_theme_is_rejected_without_changing_the_preference() {
         .await
         .expect("theme patch");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(state.preferences.theme(), Theme::SpringfieldLight);
+    assert_eq!(state.preferences.theme(), Theme::Springfield);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("Choose a listed theme."));
-    assert!(text.contains("data-active-theme=\"springfield-light\""));
+    assert!(text.contains("data-active-theme=\"springfield\""));
 }
 
 fn theme_request(token: &str, theme: &str) -> Request<Body> {

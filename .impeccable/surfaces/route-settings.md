@@ -17,7 +17,9 @@ A local developer chooses the colour theme for Power Plant. The selected theme a
 
 ## Content and constraints
 
-Theme is the first setting. Springfield light and Springfield dark are the only options. Springfield light is the default.
+Theme is the first setting. The selector offers five colour themes. Springfield is the default.
+
+Springfield, Evergreen Terrace, Leftorium, Stonecutters and Sector 7-G form one Springfield-inspired collection.
 
 The page inherits the repository case-file shell. It uses a canonical GET route with document and Hypergraft navigation representations.
 

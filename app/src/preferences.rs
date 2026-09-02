@@ -11,23 +11,57 @@ mod tests;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum Theme {
     #[default]
-    SpringfieldLight,
-    SpringfieldDark,
+    Springfield,
+    EvergreenTerrace,
+    Leftorium,
+    Stonecutters,
+    Sector7G,
 }
 
 impl Theme {
+    pub(crate) const ALL: &[Self] = &[
+        Self::Springfield,
+        Self::EvergreenTerrace,
+        Self::Leftorium,
+        Self::Stonecutters,
+        Self::Sector7G,
+    ];
+
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::SpringfieldLight => "springfield-light",
-            Self::SpringfieldDark => "springfield-dark",
+            Self::Springfield => "springfield",
+            Self::EvergreenTerrace => "evergreen-terrace",
+            Self::Leftorium => "leftorium",
+            Self::Stonecutters => "stonecutters",
+            Self::Sector7G => "sector-7-g",
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Springfield => "Springfield",
+            Self::EvergreenTerrace => "Evergreen Terrace",
+            Self::Leftorium => "Leftorium",
+            Self::Stonecutters => "Stonecutters",
+            Self::Sector7G => "Sector 7-G",
         }
     }
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|theme| theme.as_str() == value)
+    }
+
+    fn parse_saved(value: &str) -> Option<Self> {
         match value {
-            "springfield-light" => Some(Self::SpringfieldLight),
-            "springfield-dark" => Some(Self::SpringfieldDark),
-            _ => None,
+            "springfield-light" => Some(Self::Springfield),
+            "springfield-dark" | "springfield-dark-3" => Some(Self::EvergreenTerrace),
+            "birch" | "springfield-elementary" => Some(Self::Leftorium),
+            "midnight" => Some(Self::Stonecutters),
+            "nuclear-dusk" => Some(Self::Sector7G),
+            value => Self::parse(value),
         }
     }
 }
@@ -105,7 +139,7 @@ fn load(path: &std::path::Path) -> Theme {
     if file.version != FILE_VERSION {
         return Theme::default();
     }
-    Theme::parse(&file.theme).unwrap_or_default()
+    Theme::parse_saved(&file.theme).unwrap_or_default()
 }
 
 fn persist(path: &std::path::Path, theme: Theme) -> Result<(), PreferenceError> {
