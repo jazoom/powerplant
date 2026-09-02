@@ -9,29 +9,63 @@ import { startApp } from "./hypergraft-bootstrap";
 startApp();
 
 const LIVE_RELOAD_EVENT_STREAM = "/_tower-livereload/event-stream";
+const LIVE_RELOAD_CHANNEL = "powerplant-live-reload";
 
+// One event stream per tab can exhaust the browser HTTP/1.1 connection pool.
+// Keep the stream in the visible tab. Use BroadcastChannel to notify hidden tabs to reload.
 function enableLiveReload() {
     window.addEventListener("pageshow", () => {
-        const source = new EventSource(LIVE_RELOAD_EVENT_STREAM);
+        let source: EventSource | null = null;
+        let reloading = false;
+        const channel = new BroadcastChannel(LIVE_RELOAD_CHANNEL);
 
-        source.addEventListener("reload", () => {
+        const closeStream = () => {
+            if (!source) return;
             source.close();
-            window.location.reload();
-        });
-
-        const reloadWhenServerReturns = () => {
-            source.removeEventListener("error", reloadWhenServerReturns);
-            source.addEventListener("init", () => {
-                source.close();
-                window.location.reload();
-            });
+            source = null;
         };
 
-        source.addEventListener("error", reloadWhenServerReturns);
+        const reload = (broadcast: boolean) => {
+            if (reloading) return;
+            reloading = true;
+            closeStream();
+            if (broadcast) channel.postMessage(null);
+            channel.close();
+            window.location.reload();
+        };
+
+        channel.addEventListener("message", () => reload(false));
+
+        const openStream = () => {
+            if (source || document.visibilityState !== "visible") return;
+            const next = new EventSource(LIVE_RELOAD_EVENT_STREAM);
+            source = next;
+
+            next.addEventListener("reload", () => reload(true));
+
+            const reloadWhenServerReturns = () => {
+                next.removeEventListener("error", reloadWhenServerReturns);
+                next.addEventListener("init", () => reload(true));
+            };
+
+            next.addEventListener("error", reloadWhenServerReturns);
+        };
+
+        const onVisibility = () => {
+            if (document.visibilityState === "visible") {
+                openStream();
+            } else {
+                closeStream();
+            }
+        };
+
+        document.addEventListener("visibilitychange", onVisibility);
         window.addEventListener("pagehide", () => {
-            source.removeEventListener("error", reloadWhenServerReturns);
-            source.close();
+            document.removeEventListener("visibilitychange", onVisibility);
+            closeStream();
+            channel.close();
         });
+        openStream();
     });
 }
 
