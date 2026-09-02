@@ -28,6 +28,10 @@ fn parses_development_defaults() {
     assert_eq!(config.runtime.public_origin(), "http://localhost:4000");
     assert_eq!(config.bind_address, "localhost:4000");
     assert_eq!(
+        config.static_dir,
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static-development")
+    );
+    assert_eq!(
         config.data_dir,
         std::path::PathBuf::from("/home/powerplant/.local/share/powerplant")
     );
@@ -61,6 +65,21 @@ fn production_requires_origin() {
     assert_eq!(
         StartupConfig::from_values(values).err().unwrap(),
         "POWERPLANT_PUBLIC_ORIGIN must be set"
+    );
+}
+
+#[test]
+fn production_uses_production_assets() {
+    let mut values = development_values();
+    values.insert("POWERPLANT_ENVIRONMENT".into(), "production".into());
+    values.insert(
+        "POWERPLANT_PUBLIC_ORIGIN".into(),
+        "https://powerplant.example".into(),
+    );
+    let config = StartupConfig::from_values(values).unwrap();
+    assert_eq!(
+        config.static_dir,
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static-production")
     );
 }
 

@@ -72,7 +72,10 @@ impl StartupConfig {
         let static_dir = match values.get("POWERPLANT_STATIC_DIR") {
             Some(path) if PathBuf::from(path).is_absolute() => PathBuf::from(path),
             Some(_) => return Err("POWERPLANT_STATIC_DIR must be absolute".to_owned()),
-            None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"),
+            None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(match environment {
+                RuntimeEnvironment::Development => "static-development",
+                RuntimeEnvironment::Production => "static-production",
+            }),
         };
         Ok(Self {
             bind_address,

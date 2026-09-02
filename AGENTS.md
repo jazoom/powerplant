@@ -72,7 +72,8 @@ Do not write:
 
 ## Browser testing
 
-- Never refresh a running development server with `mise run assets:build`.
+- Development assets use `app/static-development`.
+- Production asset builds use `app/static-production`.
 - Use the `agent-browser` skill when the change can affect the browser.
 
 ## Language conventions

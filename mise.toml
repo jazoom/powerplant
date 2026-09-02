@@ -36,13 +36,13 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-mkdir -p app/static
-rm -f app/static/.vite/manifest.json
+mkdir -p app/static-development
+rm -f app/static-development/.vite/manifest.json
 
 pnpm vite build app --watch --mode development --logLevel warn &
 assets_pid=$!
 
-while [ ! -f app/static/.vite/manifest.json ]; do
+while [ ! -f app/static-development/.vite/manifest.json ]; do
   if ! kill -0 "$assets_pid" 2>/dev/null; then
     wait "$assets_pid"
     exit $?
@@ -95,5 +95,5 @@ description = "Build front-end assets"
 run = "pnpm vite build app"
 
 [tasks."assets:watch"]
-description = "Watch and build front-end assets"
-run = "pnpm vite build app --watch"
+description = "Watch and build development front-end assets"
+run = "pnpm vite build app --watch --mode development"

@@ -3,6 +3,8 @@ node_modules
 /.cache
 /.playwright
 /app/static
+/app/static-development
+/app/static-production
 /target
 /.worktrees
 /.scratch.md

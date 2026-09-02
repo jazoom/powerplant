@@ -3,14 +3,15 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig(({ mode }) => {
-    const suffix = mode === "development" ? "" : "-[hash]";
+    const development = mode === "development";
+    const suffix = development ? "" : "-[hash]";
 
     return {
         base: "/static/",
         plugins: [tailwindcss()],
         publicDir: "public",
         build: {
-            outDir: "static",
+            outDir: development ? "static-development" : "static-production",
             emptyOutDir: true,
             manifest: true,
             rolldownOptions: {
