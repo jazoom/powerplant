@@ -23,9 +23,9 @@ use crate::{
     state::{self, AppState},
 };
 
-pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run(log_level: tracing::Level) -> Result<(), Box<dyn std::error::Error>> {
     let tracing_filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+        .with_default_directive(log_level.into())
         .from_env_lossy();
     let application_events = tracing_subscriber::filter::filter_fn(|metadata| {
         is_application_trace_target(metadata.target())
@@ -148,7 +148,7 @@ fn build_router(state: AppState, static_dir: std::path::PathBuf) -> Router {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<_>| {
-                    tracing::info_span!(
+                    tracing::debug_span!(
                         "http.request",
                         method = %request.method(),
                         route = request_route(request)
@@ -158,7 +158,7 @@ fn build_router(state: AppState, static_dir: std::path::PathBuf) -> Router {
                     |response: &axum::response::Response,
                      latency: std::time::Duration,
                      _span: &tracing::Span| {
-                        tracing::info!(
+                        tracing::debug!(
                             status = response.status().as_u16(),
                             latency_ms = latency.as_millis(),
                             "request completed"

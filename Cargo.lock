@@ -4239,6 +4239,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "cap-std",
+ "clap",
  "cookie",
  "futures-util",
  "hypergraft",

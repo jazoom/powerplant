@@ -27,6 +27,6 @@ mod tools;
 mod vault;
 mod workflows;
 
-pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
-    server::run().await
+pub async fn run_server(log_level: tracing::Level) -> Result<(), Box<dyn std::error::Error>> {
+    server::run(log_level).await
 }
