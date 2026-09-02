@@ -35,7 +35,24 @@ feature/
 
 Presentation belongs in `page.rs`. Derive `Template` on the page model when the template has one natural root model.
 
-Unit-test bodies live in companion files. Production modules contain only `#[cfg(test)] mod tests;`.
+Put every unit-test body in a companion `tests.rs` file. For `foo.rs`, use `foo/tests.rs`.
+
+Declare the companion module in `foo.rs`:
+
+```rust
+#[cfg(test)]
+mod tests;
+```
+
+Do not put an inline `mod tests { ... }` block in a production file.
+
+Place local test helper methods and trait implementations into the adjacent `tests.rs` file.
+
+Place shared fixtures into the nearest common `tests.rs` file.
+
+Expose a test module as `pub(crate)` only when sibling test modules require its helpers.
+
+Keep production APIs free from `*_for_test` methods.
 
 ## Tests
 

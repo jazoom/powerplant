@@ -138,11 +138,6 @@ impl PlanLogin {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_pending_for_test(&self, pending: PendingPlan) {
-        self.pending.send_replace(Some(pending));
-    }
-
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner
             .lock()

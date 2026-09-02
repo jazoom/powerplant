@@ -16,7 +16,7 @@ use crate::state::AppState;
 use crate::workflows::RunId;
 
 fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     state
         .vault
         .put(ProviderConnection::with_key(
@@ -30,9 +30,9 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
     let raw = token.raw().clone();
     state.sessions.insert(session);
 
-    let definition = crate::workflows::definition::test_named_definition(name);
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create_for_test(
+    let definition = crate::tests::test_named_definition(name);
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = crate::workflows::WorkflowRun::configured(
         RunId::generate().expect("run"),
         1,
         AgentId::generate().expect("agent"),

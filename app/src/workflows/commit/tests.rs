@@ -3,6 +3,7 @@ use super::{
     index_info_command, parse_object_id, require_commit_approval, require_unchanged_project,
     utc_timestamp, write_tree_command,
 };
+use crate::tests::test_environment_id;
 use crate::workflows::artefacts::candidate::GitObjectFormat;
 use crate::workflows::artefacts::{
     ArtefactProducer, ArtefactProvenance, ArtefactRecord, ArtefactReference, ArtefactSummary,
@@ -11,7 +12,7 @@ use crate::workflows::artefacts::{
 };
 use crate::workflows::definition::{
     ArtefactKind, ArtefactSource, InputKey, OutputKey, PinnedWorkflowDefinition, RequiredInput,
-    StepDefinition, StepKey, test_environment_id,
+    StepDefinition, StepKey,
 };
 use crate::workflows::gates::{GateRevision, HumanDecisionKind, HumanGateRecord, HumanGateState};
 use crate::workflows::id::{ArtefactId, AttemptId, GateId, RunId};
@@ -56,8 +57,8 @@ fn journal_paths_are_derived_from_identifiers() {
 fn command_contract_rejects_non_approved_and_stale_reviews() {
     let store = store();
     let definition = correctness_security_definition(test_environment_id());
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = WorkflowRun::configured(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),
@@ -233,8 +234,8 @@ fn captured_candidate(
     tempfile::TempDir,
 ) {
     let definition = correctness_security_definition(test_environment_id());
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = WorkflowRun::configured(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),

@@ -1,11 +1,10 @@
 use super::{InputContextError, format_agent_context, verify_inputs};
+use crate::tests::test_environment_id;
 use crate::workflows::artefacts::{
     ArtefactProducer, ArtefactProvenance, ArtefactRecord, ArtefactReference, ArtefactSummary,
     ProductionDisposition, WorkflowArtefactRepository, artefact_hash_for, payload,
 };
-use crate::workflows::definition::{
-    ArtefactKind, OutputKey, PinnedWorkflowDefinition, StepKey, test_environment_id,
-};
+use crate::workflows::definition::{ArtefactKind, OutputKey, PinnedWorkflowDefinition, StepKey};
 use crate::workflows::id::{ArtefactId, AttemptId, RunId};
 use crate::workflows::run::{
     AttemptArtefactInput, ObservedCandidate, RunSource, RunSourceState, WorkflowRun,
@@ -18,8 +17,8 @@ fn store() -> WorkflowArtefactRepository {
 
 fn run() -> WorkflowRun {
     let definition = sequential_team_definition(test_environment_id());
-    let environments = crate::workflows::test_environment_set(&definition);
-    WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    WorkflowRun::configured(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),
@@ -252,8 +251,8 @@ fn current_candidate_inputs_match_the_exact_accepted_reference() {
     let store = store();
     let definition =
         crate::workflows::seeds::review_until_approved_definition(test_environment_id());
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = WorkflowRun::configured(
         RunId::generate().expect("run"),
         1,
         crate::agents::AgentId::generate().expect("agent"),

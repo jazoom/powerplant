@@ -1,13 +1,48 @@
+use super::*;
+use crate::tests::test_environment_id;
+
+pub(crate) fn test_set(definition: &WorkflowDefinition) -> ResolvedEnvironmentSet {
+    let preparation_id = PreparationId::parse(&"b".repeat(32)).expect("prep");
+    let snapshot = crate::tests::sample_snapshot(preparation_id);
+    let recipe_version = EnvironmentRecipeVersion::parse(&"c".repeat(64)).expect("recipe");
+    let mut environments = Vec::new();
+    let mut steps = Vec::new();
+    for (step, environment_id) in step_environment_ids(definition) {
+        if !environments
+            .iter()
+            .any(|item: &ResolvedEnvironment| item.environment_id == environment_id)
+        {
+            environments.push(ResolvedEnvironment {
+                environment_id,
+                name: "Alpine Git".to_owned(),
+                preparation_id,
+                recipe_version,
+                snapshot: snapshot.clone(),
+            });
+        }
+        steps.push(ResolvedStepEnvironment {
+            step,
+            environment_id,
+            preparation_id,
+            snapshot_digest: snapshot.snapshot_digest.clone(),
+        });
+    }
+    ResolvedEnvironmentSet {
+        environments,
+        steps,
+    }
+}
+
 use super::{ResolveEnvironmentError, resolve_environments};
 use crate::agents::ToolId;
-use crate::environments::snapshot::tests_support::sample_snapshot;
 use crate::environments::{
     EnvironmentCatalogue, EnvironmentDraft, EnvironmentSnapshotRepository, SnapshotAvailability,
 };
+use crate::tests::sample_snapshot;
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind,
     RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    WorkflowDefinition, candidate_revision_output, initial_candidate_input, test_environment_id,
+    WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
 
 fn draft(name: &str) -> EnvironmentDraft {

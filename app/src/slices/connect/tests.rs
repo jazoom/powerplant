@@ -13,7 +13,7 @@ use crate::{
     config::RuntimeConfig,
     plan_login::PendingPlan,
     providers::{
-        ChatBackend, ProviderConnection, ProviderError, ProviderKind, scripted::ScriptedBackend,
+        ChatBackend, ProviderConnection, ProviderError, ProviderKind, tests::ScriptedBackend,
     },
     sessions::{self, SESSION_LIFETIME, SessionId, ValidatedToken},
     state::AppState,
@@ -23,7 +23,7 @@ use crate::{
 const SECRET_KEY: &str = "sk-test-secret-key-do-not-echo";
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: AppState) -> axum::Router {
@@ -165,11 +165,7 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
             record.directories[0].host_path.clone(),
         )
         .expect("project");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
     let (environment, preparation) = state
         .environments
         .create(crate::environments::EnvironmentDraft {
@@ -179,7 +175,7 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
         })
         .expect("environment");
     state.environments.claim_oldest_queued().expect("claim");
-    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+    let snapshot = crate::tests::sample_snapshot(preparation.id);
     state.environment_snapshots.mark(
         snapshot.artifact_key.clone(),
         crate::environments::SnapshotAvailability::Available,
@@ -634,7 +630,7 @@ const PLAN_CODE: &str = "ABCD-EFGH";
 
 fn pending_state() -> AppState {
     let state = test_state();
-    state.plan_login.set_pending_for_test(PendingPlan {
+    state.plan_login.force_pending(PendingPlan {
         kind: ProviderKind::Xai,
         verification_uri: PLAN_URI.to_owned(),
         user_code: PLAN_CODE.to_owned(),

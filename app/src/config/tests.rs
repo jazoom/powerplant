@@ -1,3 +1,14 @@
+use super::*;
+
+impl super::RuntimeConfig {
+    pub(crate) fn development() -> Self {
+        Self {
+            environment: RuntimeEnvironment::Development,
+            public_origin: "http://localhost:4000".to_owned(),
+        }
+    }
+}
+
 use super::StartupConfig;
 use std::collections::HashMap;
 

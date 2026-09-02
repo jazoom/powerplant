@@ -167,20 +167,6 @@ pub(crate) struct EnvironmentCatalogue {
 }
 
 impl EnvironmentCatalogue {
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        let scratch = tempfile::tempdir().expect("logs");
-        let log_dir = scratch.path().join("logs");
-        storage::ensure_private_dir(&log_dir).expect("log dir");
-        Self {
-            path: None,
-            log_dir: Some(log_dir),
-            inner: Mutex::new(empty_state()),
-            refresh: RefreshState::new(),
-            _scratch: Some(scratch),
-        }
-    }
-
     pub(crate) fn open(path: PathBuf, log_dir: PathBuf) -> Result<Self, EnvironmentError> {
         Self::open_with_seeds(path, log_dir, &super::seeds::production_seeds())
     }
@@ -216,21 +202,6 @@ impl EnvironmentCatalogue {
                 .then(left.id.cmp(&right.id))
         });
         records
-    }
-
-    #[cfg(test)]
-    pub(crate) fn apply_production_seeds(&self) {
-        let mut state = self.lock();
-        let mut next = state.clone_state();
-        let changed =
-            apply_absent_seeds(&mut next, &super::seeds::production_seeds()).expect("seeds");
-        if !changed {
-            return;
-        }
-        persist(self.path.as_deref(), &next).expect("persist");
-        *state = next;
-        drop(state);
-        self.bump_refresh();
     }
 
     pub(crate) fn seed_id(&self, key: &str) -> Option<EnvironmentId> {
@@ -773,21 +744,6 @@ impl EnvironmentCatalogue {
         *sequence = sequence.saturating_add(1);
         drop(sequence);
         self.refresh.notify.notify_waiters();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn retired_ids(&self) -> Vec<EnvironmentId> {
-        self.lock().retired_environment_ids.clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn applied_seed_count(&self) -> usize {
-        self.lock().applied_seeds.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn preparation_count(&self) -> usize {
-        self.lock().preparations.len()
     }
 
     fn mutate_preparation(

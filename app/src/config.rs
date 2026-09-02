@@ -25,14 +25,6 @@ pub(crate) struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    #[cfg(test)]
-    pub(crate) fn development_for_test() -> Self {
-        Self {
-            environment: RuntimeEnvironment::Development,
-            public_origin: "http://localhost:4000".to_owned(),
-        }
-    }
-
     pub(crate) fn environment(&self) -> RuntimeEnvironment {
         self.environment
     }

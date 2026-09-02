@@ -142,22 +142,6 @@ impl WorkflowSelection {
 }
 
 impl WorkflowCatalogue {
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            path: None,
-            inner: Mutex::new(empty_state()),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn open(
-        path: PathBuf,
-        default_environment: crate::environments::EnvironmentId,
-    ) -> Result<Self, CatalogueError> {
-        Self::open_with_seeds(path, &super::seeds::production_seeds(default_environment))
-    }
-
     pub(crate) fn open_with_seeds(
         path: PathBuf,
         seeds: &[WorkflowSeed],
@@ -334,16 +318,6 @@ impl WorkflowCatalogue {
                 definition,
             },
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn retired_ids(&self) -> Vec<WorkflowId> {
-        self.lock().retired_workflow_ids.clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn applied_seed_count(&self) -> usize {
-        self.lock().applied_seeds.len()
     }
 
     fn lock(&self) -> MutexGuard<'_, CatalogueState> {

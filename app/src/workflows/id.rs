@@ -3,9 +3,6 @@ use rand::rngs::SysRng;
 
 use crate::hex;
 
-#[cfg(test)]
-pub(crate) const WORKFLOW_ID_LENGTH: usize = 32;
-
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct HexId([u8; 16]);
 

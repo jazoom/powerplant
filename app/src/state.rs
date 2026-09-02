@@ -45,7 +45,7 @@ pub(crate) struct AppState {
     pub(crate) environment_snapshots: Arc<EnvironmentSnapshotRepository>,
     pub(crate) environment_preparations: Arc<EnvironmentPreparationScheduler>,
     #[cfg(test)]
-    pub(crate) scratch: Arc<std::sync::Mutex<Vec<tempfile::TempDir>>>,
+    scratch: Arc<std::sync::Mutex<Vec<tempfile::TempDir>>>,
 }
 
 pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<AppState, String> {
@@ -210,41 +210,4 @@ fn recovered_cleanup_record(
 }
 
 #[cfg(test)]
-pub(crate) fn for_test(config: RuntimeConfig) -> AppState {
-    let environments = Arc::new(EnvironmentCatalogue::in_memory());
-    let environment_snapshots = Arc::new(EnvironmentSnapshotRepository::in_memory());
-    let environment_preparations =
-        EnvironmentPreparationScheduler::idle(environments.clone(), environment_snapshots.clone());
-    AppState {
-        config: Arc::new(config),
-        assets: Arc::new(AssetPaths {
-            css_path: "/static/test.css".to_owned(),
-            js_path: "/static/test.js".to_owned(),
-        }),
-        sessions: Arc::new(SessionStore::new()),
-        vault: Arc::new(ProviderVault::in_memory()),
-        chat: Arc::new(ChatBackend::Scripted(
-            crate::providers::scripted::ScriptedBackend::accept(),
-        )),
-        models: Arc::new(ModelCatalogue::default()),
-        plan_login: Arc::new(PlanLogin::new()),
-        agents: Arc::new(AgentStore::in_memory()),
-        projects: Arc::new(ProjectStore::in_memory()),
-        sandboxes: Arc::new(SandboxFleet::for_test()),
-        agent_leases: Arc::new(AgentLeaseCoordinator::new()),
-        workflows: Arc::new(WorkflowCatalogue::in_memory()),
-        workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
-        workflow_artefacts: Arc::new(WorkflowArtefactRepository::in_memory()),
-        workflow_execution: Arc::new(WorkflowExecution::new()),
-        gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),
-        workflow_workspaces: Arc::new(WorkflowWorkspaces::in_memory()),
-        commit_journals: Arc::new(CommitJournals::in_memory()),
-        environments,
-        environment_snapshots,
-        environment_preparations,
-        scratch: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }
-}
-
-#[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -1,9 +1,59 @@
+use super::*;
+
+impl super::WorkflowDefinition {
+    pub(crate) fn from_file_bytes(bytes: &[u8]) -> Result<Self, DefinitionError> {
+        let file: DefinitionFile =
+            serde_json::from_slice(bytes).map_err(|_| DefinitionError::Format)?;
+        Self::from_file(file)
+    }
+}
+
+pub(crate) fn test_environment_id() -> EnvironmentId {
+    EnvironmentId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").expect("test env")
+}
+pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
+    let role = RoleDefinition::new(
+        RoleKey::parse("agent").expect("role"),
+        "Coding agent".to_owned(),
+        String::new(),
+        String::new(),
+    )
+    .expect("role");
+    let authority =
+        AgentAuthority::new(vec![crate::agents::ToolId::List], Vec::new()).expect("authority");
+    WorkflowDefinition::from_parts(
+        name.to_owned(),
+        test_environment_id(),
+        vec![role],
+        vec![StepDefinition {
+            key: StepKey::parse("work").expect("step"),
+            name: "Work on task".to_owned(),
+            inputs: vec![initial_candidate_input()],
+            action: StepAction::Agent(AgentStep {
+                environment: StepEnvironment::WorkflowDefault,
+                role: RoleKey::parse("agent").expect("role"),
+                candidate_authority: CandidateAuthority::Edit,
+                authority,
+                required_outputs: vec![
+                    RequiredOutput {
+                        key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
+                        kind: OutputKind::AssistantReply,
+                    },
+                    candidate_revision_output(),
+                ],
+            }),
+            review: None,
+        }],
+    )
+    .expect("definition")
+}
+
 use super::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
     DefinitionError, GuestDirectoryAccess, InputKey, OutputKey, OutputKind, RequiredInput,
     RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction, StepDefinition,
     StepEnvironment, StepKey, SystemCommandId, SystemCommandStep, WorkflowDefinition,
-    candidate_revision_output, initial_candidate_input, test_environment_id,
+    candidate_revision_output, initial_candidate_input,
 };
 use crate::agents::{AccessMode, ToolId};
 use crate::environments::EnvironmentId;

@@ -7,7 +7,7 @@ use axum::{
 use tower::ServiceExt;
 
 fn test_state(config: RuntimeConfig) -> AppState {
-    crate::state::for_test(config)
+    crate::tests::test_state(config)
 }
 
 #[test]
@@ -111,10 +111,10 @@ async fn unsafe_method_without_origin_is_forbidden() {
     let app = axum::Router::new()
         .route("/", axum::routing::post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(
-            test_state(RuntimeConfig::development_for_test()),
+            test_state(RuntimeConfig::development()),
             enforce_origin,
         ))
-        .with_state(test_state(RuntimeConfig::development_for_test()));
+        .with_state(test_state(RuntimeConfig::development()));
 
     let response = app
         .oneshot(
@@ -134,10 +134,10 @@ async fn unsafe_method_with_foreign_origin_is_forbidden() {
     let app = axum::Router::new()
         .route("/", axum::routing::post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(
-            test_state(RuntimeConfig::development_for_test()),
+            test_state(RuntimeConfig::development()),
             enforce_origin,
         ))
-        .with_state(test_state(RuntimeConfig::development_for_test()));
+        .with_state(test_state(RuntimeConfig::development()));
 
     let response = app
         .oneshot(
@@ -158,10 +158,10 @@ async fn unsafe_method_with_public_origin_passes() {
     let app = axum::Router::new()
         .route("/", axum::routing::post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(
-            test_state(RuntimeConfig::development_for_test()),
+            test_state(RuntimeConfig::development()),
             enforce_origin,
         ))
-        .with_state(test_state(RuntimeConfig::development_for_test()));
+        .with_state(test_state(RuntimeConfig::development()));
 
     let response = app
         .oneshot(
@@ -182,10 +182,10 @@ async fn get_skips_origin_check() {
     let app = axum::Router::new()
         .route("/", axum::routing::get(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(
-            test_state(RuntimeConfig::development_for_test()),
+            test_state(RuntimeConfig::development()),
             enforce_origin,
         ))
-        .with_state(test_state(RuntimeConfig::development_for_test()));
+        .with_state(test_state(RuntimeConfig::development()));
 
     let response = app
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())

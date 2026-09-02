@@ -1,4 +1,6 @@
-use super::{AGENT_ID_LENGTH, AgentId};
+const AGENT_ID_LENGTH: usize = 32;
+
+use super::AgentId;
 
 #[test]
 fn generated_ids_are_opaque_hex() {

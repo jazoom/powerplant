@@ -1,3 +1,9 @@
+impl super::PlanLogin {
+    pub(crate) fn force_pending(&self, pending: PendingPlan) {
+        self.pending.send_replace(Some(pending));
+    }
+}
+
 use super::{PendingPlan, PlanLogin};
 use crate::providers::ProviderKind;
 

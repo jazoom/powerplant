@@ -4,11 +4,11 @@ use super::{
     sequential_team_definition,
 };
 use crate::agents::ToolId;
+use crate::tests::test_environment_id;
 use crate::workflows::catalogue::WorkflowCatalogue;
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 use crate::workflows::definition::{
     ArtefactKind, ArtefactSource, OutputKind, StepAction, StepEnvironment, WorkflowDefinition,
-    test_environment_id,
 };
 
 fn named(name: &str) -> WorkflowDefinition {

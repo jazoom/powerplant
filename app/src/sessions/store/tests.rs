@@ -1,3 +1,27 @@
+use super::*;
+
+impl super::SessionStore {
+    pub(crate) fn purge_expired(&self) {
+        let now = self.clock.now();
+        self.lock().retain(|_, session| session.expires_at > now);
+    }
+
+    pub(crate) fn advance_clock(&self, duration: Duration) {
+        self.clock.advance(duration);
+    }
+
+    pub(crate) fn contains(&self, id: &super::SessionId) -> bool {
+        self.lock().contains_key(id)
+    }
+}
+
+impl super::Clock {
+    fn advance(&self, duration: Duration) {
+        let millis = u64::try_from(duration.as_millis()).expect("duration fits u64");
+        self.offset_ms.fetch_add(millis, Ordering::SeqCst);
+    }
+}
+
 use std::time::Duration;
 
 use crate::agents::AgentId;

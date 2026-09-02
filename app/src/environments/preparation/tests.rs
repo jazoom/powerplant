@@ -41,8 +41,7 @@ fn failed_states_require_a_failure_and_reject_snapshots() {
     record.finished_at_ms = Some(12);
     record.failure = Some(super::PreparationFailure::new(FailureCategory::SetupExit));
     assert!(record.validate_combination());
-    record.snapshot =
-        Some(crate::environments::snapshot::tests_support::sample_snapshot(record.id));
+    record.snapshot = Some(crate::tests::sample_snapshot(record.id));
     assert!(!record.validate_combination());
 }
 

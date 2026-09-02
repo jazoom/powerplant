@@ -1,16 +1,40 @@
+pub(super) fn next_ordinal_for(attempts: &[AttemptRecord], step: &StepKey) -> u32 {
+    super::next_ordinal(attempts, step)
+}
+
+use crate::tests::test_environment_id;
+impl WorkflowRun {
+    pub(crate) fn configured(
+        id: RunId,
+        created_at_ms: u64,
+        agent_id: super::AgentId,
+        pinned: PinnedWorkflowDefinition,
+        environments: super::ResolvedEnvironmentSet,
+    ) -> Self {
+        Self::create(
+            id,
+            created_at_ms,
+            super::ProjectId::generate().expect("project"),
+            agent_id,
+            super::RunKind::Configured,
+            pinned,
+            environments,
+        )
+    }
+}
+
 use super::{
     ActionKind, AttemptCleanupRecord, AttemptId, AttemptRecord, AttemptResult, AttemptSandboxKind,
     AttemptSandboxRecord, AttemptState, EscalationReason, FailureCategory, ReviewRoute, RunState,
-    TransitionError, WorkflowRun, next_ordinal_for,
+    TransitionError, WorkflowRun,
 };
 use crate::agents::{AccessMode, ToolId};
-use crate::workflows::capabilities::{test_agent_capabilities, test_command_capabilities};
+use crate::tests::{test_agent_capabilities, test_command_capabilities};
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
     InputKey, OutputKey, OutputKind, PinnedWorkflowDefinition, RequiredInput, RequiredOutput,
     RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandId,
     SystemCommandStep, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
-    test_environment_id,
 };
 use crate::workflows::id::RunId;
 
@@ -78,8 +102,8 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
 
 fn new_run() -> WorkflowRun {
     let definition = definition();
-    let environments = crate::workflows::test_environment_set(&definition);
-    WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    WorkflowRun::configured(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -225,8 +249,8 @@ fn completed_fixing_review_run() -> WorkflowRun {
         vec![step],
     )
     .expect("definition");
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = WorkflowRun::configured(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -438,8 +462,8 @@ fn mutations_after_a_terminal_state_are_rejected() {
 #[test]
 fn completed_attempts_advance_by_vector_position() {
     let definition = two_step(true);
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = WorkflowRun::configured(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -566,8 +590,8 @@ fn review_loop_run() -> WorkflowRun {
 }
 
 fn review_run(definition: WorkflowDefinition) -> WorkflowRun {
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = WorkflowRun::configured(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -1106,7 +1130,7 @@ fn project_identity_and_run_kind_round_trip() {
     for kind in [super::RunKind::Configured, super::RunKind::QuickTask] {
         let project_id = crate::projects::ProjectId::generate().expect("project");
         let definition = definition();
-        let environments = crate::workflows::test_environment_set(&definition);
+        let environments = crate::tests::test_environment_set(&definition);
         let run = WorkflowRun::create(
             RunId::generate().expect("run"),
             10,
@@ -1209,8 +1233,8 @@ fn snapshot_contradictions_fail_load() {
     );
 
     let definition = two_step(true);
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut missing_predecessor = WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut missing_predecessor = WorkflowRun::configured(
         RunId::generate().expect("run"),
         10,
         crate::agents::AgentId::generate().expect("agent"),
@@ -1246,7 +1270,7 @@ fn quick_task_run(kind: super::RunKind) -> WorkflowRun {
         test_environment_id(),
     )
     .expect("quick task");
-    let environments = crate::workflows::test_environment_set(&pinned.definition);
+    let environments = crate::tests::test_environment_set(&pinned.definition);
     WorkflowRun::create(
         RunId::generate().expect("run"),
         10,

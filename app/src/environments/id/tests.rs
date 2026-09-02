@@ -1,4 +1,6 @@
-use super::{ENVIRONMENT_ID_LENGTH, EnvironmentId, PreparationId};
+const ENVIRONMENT_ID_LENGTH: usize = 32;
+
+use super::{EnvironmentId, PreparationId};
 
 #[test]
 fn generated_ids_are_opaque_hex() {

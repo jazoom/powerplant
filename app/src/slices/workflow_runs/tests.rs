@@ -17,7 +17,7 @@ use crate::{
 };
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -66,13 +66,9 @@ fn stored_run(state: &AppState) -> RunId {
         .projects
         .create("Harbour".to_owned(), dir.path().to_path_buf())
         .expect("project");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
-    let definition = one_agent_definition(crate::workflows::definition::test_environment_id());
-    let environments = crate::workflows::test_environment_set(&definition);
+    state.keep_temp_dir(dir);
+    let definition = one_agent_definition(crate::tests::test_environment_id());
+    let environments = crate::tests::test_environment_set(&definition);
     let run = WorkflowRun::create(
         RunId::generate().expect("run"),
         1,

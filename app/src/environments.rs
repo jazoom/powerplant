@@ -12,7 +12,7 @@ pub(crate) use catalogue::{
 };
 pub(crate) use id::{EnvironmentId, PreparationId};
 #[cfg(test)]
-pub(crate) use preparation::FailureCategory;
+pub(super) mod tests;
 pub(crate) use preparation::{PreparationRecord, PreparationState};
 pub(crate) use recipe::{EnvironmentDraft, EnvironmentRecipeVersion};
 pub(crate) use scheduler::EnvironmentPreparationScheduler;

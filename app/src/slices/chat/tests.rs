@@ -11,8 +11,7 @@ use crate::{
     agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
     config::RuntimeConfig,
     providers::{
-        ChatBackend, ProviderConnection, ProviderError, ProviderKind, Role,
-        scripted::ScriptedBackend,
+        ChatBackend, ProviderConnection, ProviderError, ProviderKind, Role, tests::ScriptedBackend,
     },
     sessions::{self, JobStatus},
     state::AppState,
@@ -21,7 +20,7 @@ use crate::{
 use super::job::MAXIMUM_REPLY_BYTES;
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -110,11 +109,7 @@ async fn connected(state: &AppState) -> String {
         .projects
         .create("Test project".to_owned(), host)
         .expect("project");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
     if state.workflows.list().is_empty() {
         seed_ready_workflow(state).await;
     }
@@ -134,8 +129,7 @@ async fn seed_ready_workflow(state: &AppState) {
             .claim_oldest_queued()
             .expect("claim")
             .expect("queued");
-        let snapshot =
-            crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+        let snapshot = crate::tests::sample_snapshot(preparation.id);
         state.environment_snapshots.mark(
             snapshot.artifact_key.clone(),
             crate::environments::SnapshotAvailability::Available,
@@ -357,7 +351,7 @@ async fn wait_until_job_events(state: &AppState, token: &str, minimum: u64) {
 fn workflow_policy_follows_the_commit_edges() {
     use crate::workflows::definition::{ArtefactKind, ArtefactSource, WorkflowDefinition};
 
-    let environment = crate::workflows::definition::test_environment_id();
+    let environment = crate::tests::test_environment_id();
     let read_only = crate::workflows::seeds::read_only_review_definition(environment);
     assert_eq!(
         super::workflow_policy(&read_only),
@@ -1085,7 +1079,7 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
         .unwrap();
     state
         .models
-        .set_for_test(ProviderKind::Synthetic, Vec::new(), true);
+        .set_catalogue(ProviderKind::Synthetic, Vec::new(), true);
 
     let pending = app(&state)
         .oneshot(model_refresh_patch(&state, &token))
@@ -1098,7 +1092,7 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
     assert!(pending_text.contains("data-catalogue-pending=\"true\""));
     assert!(!pending_text.contains("data-model-value=\"syn:large:text\""));
 
-    state.models.set_for_test(
+    state.models.set_catalogue(
         ProviderKind::Synthetic,
         vec![
             "hf:moonshotai/Kimi-K3".to_owned(),
@@ -1131,7 +1125,7 @@ async fn multiple_synthetic_models_are_rendered_and_selectable() {
             "hf:moonshotai/Kimi-K3",
         ))
         .unwrap();
-    state.models.set_for_test(
+    state.models.set_catalogue(
         ProviderKind::Synthetic,
         vec![
             "hf:moonshotai/Kimi-K3".to_owned(),
@@ -1269,15 +1263,13 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
 async fn a_missing_environment_rejects_a_task_before_a_run_starts() {
     let state = test_state();
     let token = connected(&state).await;
-    let base = crate::workflows::seeds::one_agent_definition(
-        crate::workflows::definition::test_environment_id(),
-    );
+    let base = crate::workflows::seeds::one_agent_definition(crate::tests::test_environment_id());
     let workflow = state
         .workflows
         .create(
             crate::workflows::definition::WorkflowDefinition::from_parts(
                 "Missing environment".to_owned(),
-                crate::workflows::definition::test_environment_id(),
+                crate::tests::test_environment_id(),
                 base.roles().to_vec(),
                 base.steps().to_vec(),
             )
@@ -1500,11 +1492,7 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
             second.directories[0].host_path.clone(),
         )
         .expect("second project");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
     let environment_id = state.environments.list()[0].id;
     let reader = {
         let base = crate::workflows::seeds::one_agent_definition(environment_id);
@@ -1690,7 +1678,7 @@ async fn a_stale_workflow_selection_is_a_conflict() {
             current.revision,
             crate::workflows::definition::WorkflowDefinition::from_parts(
                 "Edited agent".to_owned(),
-                crate::workflows::definition::test_environment_id(),
+                crate::tests::test_environment_id(),
                 current.definition.roles().to_vec(),
                 current.definition.steps().to_vec(),
             )
@@ -1741,7 +1729,7 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
             record.revision,
             crate::workflows::definition::WorkflowDefinition::from_parts(
                 "Later name".to_owned(),
-                crate::workflows::definition::test_environment_id(),
+                crate::tests::test_environment_id(),
                 record.definition.roles().to_vec(),
                 record.definition.steps().to_vec(),
             )
@@ -1890,11 +1878,7 @@ async fn a_read_only_quick_task_omits_the_gate_and_commit() {
             agent.directories[0].host_path.clone(),
         )
         .expect("project");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
     let response = app(&state)
         .oneshot(
             Request::builder()

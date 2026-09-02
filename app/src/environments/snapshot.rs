@@ -135,15 +135,6 @@ impl EnvironmentSnapshotRepository {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            root: None,
-            overrides: Mutex::new(Vec::new()),
-            remove_error: AtomicBool::new(false),
-        }
-    }
-
     pub(crate) fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
@@ -264,19 +255,6 @@ impl EnvironmentSnapshotRepository {
                 }
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_removal(&self) {
-        self.remove_error.store(true, Ordering::SeqCst);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mark(&self, key: SnapshotArtifactKey, availability: SnapshotAvailability) {
-        self.overrides
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push((key, availability));
     }
 
     async fn open_recorded(&self, snapshot: &PreparedSnapshot) -> Result<(), SnapshotError> {
@@ -419,25 +397,4 @@ fn parse_sha256_digest(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests_support {
-    use super::*;
-
-    pub(crate) fn sample_snapshot(id: PreparationId) -> PreparedSnapshot {
-        PreparedSnapshot {
-            artifact_key: SnapshotArtifactKey::from_preparation(&id),
-            snapshot_digest: SnapshotDigest::parse(&format!("sha256:{}", "a".repeat(64)))
-                .expect("digest"),
-            image_reference: "alpine/git".to_owned(),
-            image_manifest_digest: OciManifestDigest::parse(&format!("sha256:{}", "b".repeat(64)))
-                .expect("image"),
-            upper_integrity: RecordedIntegrity {
-                algorithm: "msb-file-merkle-blake3-v1".to_owned(),
-                value: format!("sha256:{}", "c".repeat(64)),
-            },
-            upper_size_bytes: 4096,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests;
+pub(in crate::environments) mod tests;

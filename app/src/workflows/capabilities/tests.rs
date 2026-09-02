@@ -1,3 +1,42 @@
+use super::*;
+
+use crate::agents::GUEST_PROJECT;
+
+pub(crate) fn test_agent_capabilities() -> AttemptCapabilities {
+    AttemptCapabilities {
+        schema: CAPABILITY_SCHEMA,
+        agent_revision: 1,
+        tools: vec![ToolId::List],
+        directories: vec![CapabilityDirectory {
+            alias: PRIMARY_SOURCE_ALIAS.to_owned(),
+            guest_path: GUEST_PROJECT.to_owned(),
+            access: AccessMode::ReadWrite,
+            role: DirectoryRole::PrimarySource,
+        }],
+        source_location: PrimarySourceLocation::AttemptWorkspace,
+        git_admin: AccessMode::ReadOnly,
+        network: NetworkCapability::ProviderHost,
+        secret: SecretPresence::ProviderPlaceholder,
+    }
+}
+pub(crate) fn test_command_capabilities() -> AttemptCapabilities {
+    AttemptCapabilities {
+        schema: CAPABILITY_SCHEMA,
+        agent_revision: 1,
+        tools: Vec::new(),
+        directories: vec![CapabilityDirectory {
+            alias: PRIMARY_SOURCE_ALIAS.to_owned(),
+            guest_path: GUEST_PROJECT.to_owned(),
+            access: AccessMode::ReadOnly,
+            role: DirectoryRole::PrimarySource,
+        }],
+        source_location: PrimarySourceLocation::AttemptWorkspace,
+        git_admin: AccessMode::ReadOnly,
+        network: NetworkCapability::None,
+        secret: SecretPresence::None,
+    }
+}
+
 use super::{
     AttemptCapabilities, CapabilityError, DirectoryRole, NetworkCapability, PrimarySourceLocation,
     SecretPresence,

@@ -211,16 +211,6 @@ impl GuestExec {
         self.env = env;
         self
     }
-
-    #[cfg(test)]
-    fn display(&self) -> String {
-        let mut line = self.program.clone();
-        for arg in &self.args {
-            line.push(' ');
-            line.push_str(arg);
-        }
-        line
-    }
 }
 
 pub(crate) struct SandboxFleet {
@@ -340,19 +330,6 @@ impl SandboxFleet {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
-        Self {
-            runtime: Arc::new(RuntimePrep {
-                missing: Mutex::new(None),
-            }),
-            attempt_handles: Mutex::new(HashMap::new()),
-            orphans: Mutex::new(Vec::new()),
-            scripted: true,
-            hang_command: Mutex::new(false),
-        }
-    }
-
     pub(crate) fn missing(&self) -> Option<MissingRuntime> {
         *lock_mutex(&self.runtime.missing)
     }
@@ -361,14 +338,6 @@ impl SandboxFleet {
         self.missing()
             .map(MissingRuntime::message)
             .unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hang_next_command(&self) {
-        *lock_mutex(&self.hang_command) = true;
-        for handle in lock_mutex(&self.attempt_handles).values() {
-            handle.hang_next_command();
-        }
     }
 
     pub(crate) fn attempt_handle(&self, run: RunId, attempt: AttemptId) -> Arc<GuestSandbox> {
@@ -388,11 +357,6 @@ impl SandboxFleet {
         if !orphans.iter().any(|orphan| orphan.name == name) {
             orphans.push(OrphanSandbox { name });
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn guest_named(&self, attempt: AttemptId) -> bool {
-        lock_mutex(&self.attempt_handles).contains_key(&attempt)
     }
 
     pub(crate) fn orphans(&self) -> Vec<OrphanSandbox> {
@@ -505,54 +469,6 @@ impl SandboxFleet {
 }
 
 impl GuestSandbox {
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
-        SandboxFleet::for_test().new_handle(
-            RunId::generate().expect("run"),
-            AttemptId::generate().expect("attempt"),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hang_next_command(&self) {
-        match &self.inner {
-            Inner::Microsandbox(_) => {}
-            Inner::Scripted(guest) => *lock_mutex(&guest.hang_command) = true,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_next_command(&self) {
-        match &self.inner {
-            Inner::Microsandbox(_) => {}
-            Inner::Scripted(guest) => *lock_mutex(&guest.fail_command) = true,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn start_count(&self) -> usize {
-        match &self.inner {
-            Inner::Microsandbox(_) => 0,
-            Inner::Scripted(guest) => *lock_mutex(&guest.start_count),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn last_exec(&self) -> Option<String> {
-        match &self.inner {
-            Inner::Microsandbox(_) => None,
-            Inner::Scripted(guest) => lock_mutex(&guest.last_exec).clone(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn exec_log(&self) -> Vec<GuestExec> {
-        match &self.inner {
-            Inner::Microsandbox(_) => Vec::new(),
-            Inner::Scripted(guest) => lock_mutex(&guest.exec_log).clone(),
-        }
-    }
-
     pub(crate) fn missing(&self) -> Option<MissingRuntime> {
         *lock_mutex(&self.runtime.missing)
     }
@@ -640,22 +556,6 @@ impl GuestSandbox {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn fail_next_stop(&self) {
-        match &self.inner {
-            Inner::Microsandbox(_) => {}
-            Inner::Scripted(guest) => *lock_mutex(&guest.fail_stop) = true,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_next_remove(&self) {
-        match &self.inner {
-            Inner::Microsandbox(_) => {}
-            Inner::Scripted(guest) => *lock_mutex(&guest.fail_remove) = true,
-        }
-    }
-
     pub(crate) async fn remove(&self) -> Result<(), SandboxError> {
         match &self.inner {
             Inner::Microsandbox(guest) => {
@@ -723,86 +623,6 @@ impl MicrosandboxGuest {
         }
         let _guard = self.lock.try_lock().map_err(|_| SandboxError::Active)?;
         remove_owned(name, kind).await
-    }
-}
-
-#[cfg(test)]
-impl ScriptedGuest {
-    fn start(
-        &self,
-        spec: SandboxSpec,
-        missing: Option<MissingRuntime>,
-    ) -> Result<(), SandboxError> {
-        if spec.mounts.is_empty() {
-            return Err(SandboxError::NeedProject);
-        }
-        if *lock_mutex(&self.status) == GuestStatus::Running && self.live.overlay() == Overlay::Idle
-        {
-            return Ok(());
-        }
-        if self.live.overlay() == Overlay::Starting {
-            return Ok(());
-        }
-        let _guard = self.lock.try_lock().map_err(|_| SandboxError::Active)?;
-        *lock_mutex(&self.live.spec) = Some(spec);
-        *lock_mutex(&self.start_count) += 1;
-        self.live.begin_start(missing).map(|_| ())
-    }
-
-    fn exec(
-        &self,
-        request: GuestExec,
-        missing: Option<MissingRuntime>,
-    ) -> Result<CommandSession, SandboxError> {
-        if let Some(missing) = missing {
-            return Err(SandboxError::Missing(missing));
-        }
-        if self.live.overlay() == Overlay::Starting {
-            return Err(SandboxError::Busy);
-        }
-        if lock_mutex(&self.live.spec).is_none() {
-            return Err(SandboxError::NeedProject);
-        }
-        if *lock_mutex(&self.status) != GuestStatus::Running {
-            return Err(SandboxError::NotRunning);
-        }
-        let lifecycle = self
-            .lock
-            .clone()
-            .try_lock_owned()
-            .map_err(|_| SandboxError::Active)?;
-        *lock_mutex(&self.last_exec) = Some(request.display());
-        lock_mutex(&self.exec_log).push(request.clone());
-        let session = if *lock_mutex(&self.hang_command) {
-            *lock_mutex(&self.hang_command) = false;
-            command::ScriptedCommand::hang()
-        } else if *lock_mutex(&self.fail_command) {
-            *lock_mutex(&self.fail_command) = false;
-            command::ScriptedCommand::output(request.display(), 1)
-        } else {
-            command::ScriptedCommand::output(request.display(), 0)
-        };
-        Ok(CommandSession::scripted(session).with_lifecycle(lifecycle))
-    }
-
-    fn stop(&self, missing: Option<MissingRuntime>) -> Result<(), SandboxError> {
-        if let Some(missing) = missing {
-            return Err(SandboxError::Missing(missing));
-        }
-        if self.live.overlay() == Overlay::Starting {
-            return Err(SandboxError::Busy);
-        }
-        let _guard = self.lock.try_lock().map_err(|_| SandboxError::Active)?;
-        *lock_mutex(&self.status) = GuestStatus::Stopped;
-        Ok(())
-    }
-
-    fn remove(&self, missing: Option<MissingRuntime>) -> Result<(), SandboxError> {
-        if *lock_mutex(&self.fail_remove) {
-            *lock_mutex(&self.fail_remove) = false;
-            return Err(SandboxError::Remove);
-        }
-        self.stop(missing)
     }
 }
 

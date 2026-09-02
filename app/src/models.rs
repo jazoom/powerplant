@@ -52,15 +52,6 @@ impl ModelCatalogue {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_for_test(&self, kind: ProviderKind, models: Vec<String>, pending: bool) {
-        let mut catalogue = self.lock();
-        let entry = catalogue.entry(kind).or_default();
-        entry.revision = entry.revision.wrapping_add(1);
-        entry.models = models;
-        entry.pending = pending;
-    }
-
     fn lock(&self) -> MutexGuard<'_, HashMap<ProviderKind, CatalogueEntry>> {
         self.inner
             .lock()

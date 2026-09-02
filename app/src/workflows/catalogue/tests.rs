@@ -1,13 +1,40 @@
+use super::*;
+
+impl super::WorkflowCatalogue {
+    pub(crate) fn in_memory() -> Self {
+        Self {
+            path: None,
+            inner: Mutex::new(empty_state()),
+        }
+    }
+    pub(crate) fn open(
+        path: PathBuf,
+        default_environment: crate::environments::EnvironmentId,
+    ) -> Result<Self, CatalogueError> {
+        Self::open_with_seeds(
+            path,
+            &crate::workflows::seeds::production_seeds(default_environment),
+        )
+    }
+    pub(crate) fn retired_ids(&self) -> Vec<WorkflowId> {
+        self.lock().retired_workflow_ids.clone()
+    }
+    pub(crate) fn applied_seed_count(&self) -> usize {
+        self.lock().applied_seeds.len()
+    }
+}
+
 use super::{
     CatalogueError, ResolveWorkflowError, SELECTION_TOKEN_BYTES, WorkflowCatalogue,
     WorkflowSelection, definition_fits_agent,
 };
 use crate::agents::{AccessMode, ToolId};
+use crate::tests::{test_environment_id, test_named_definition};
 use crate::workflows::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, CandidateAuthority, OutputKey, OutputKind,
     RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
     SystemCommandId, SystemCommandStep, WorkflowDefinition, candidate_revision_output,
-    initial_candidate_input, test_environment_id, test_named_definition,
+    initial_candidate_input,
 };
 use crate::workflows::id::WorkflowId;
 

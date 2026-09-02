@@ -14,7 +14,7 @@ use crate::{
 };
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -55,7 +55,7 @@ async fn seed_ready_environment(state: &AppState) -> crate::environments::Enviro
         })
         .expect("environment");
     state.environments.claim_oldest_queued().expect("claim");
-    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation.id);
+    let snapshot = crate::tests::sample_snapshot(preparation.id);
     state.environment_snapshots.mark(
         snapshot.artifact_key.clone(),
         crate::environments::SnapshotAvailability::Available,
@@ -288,9 +288,7 @@ async fn create_rejects_an_unready_environment() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(create_body(
-                    crate::workflows::definition::test_environment_id(),
-                )))
+                .body(Body::from(create_body(crate::tests::test_environment_id())))
                 .unwrap(),
         )
         .await
@@ -466,9 +464,7 @@ async fn delete_redirects_to_the_catalogue() {
     let token = connected(&state);
     let record = state
         .workflows
-        .create(one_agent_definition(
-            crate::workflows::definition::test_environment_id(),
-        ))
+        .create(one_agent_definition(crate::tests::test_environment_id()))
         .expect("create");
     let response = app(&state)
         .oneshot(

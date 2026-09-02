@@ -3,9 +3,6 @@ use rand::rngs::SysRng;
 
 use crate::hex;
 
-#[cfg(test)]
-pub(crate) const AGENT_ID_LENGTH: usize = 32;
-
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct AgentId([u8; 16]);
 

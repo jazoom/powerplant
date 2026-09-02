@@ -14,9 +14,6 @@ use tokio::sync::Notify;
 use crate::hex;
 use crate::workflows::RunId;
 
-#[cfg(test)]
-pub(crate) const JOB_ID_LENGTH: usize = 32;
-
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct JobId([u8; 16]);
 

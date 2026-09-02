@@ -27,14 +27,6 @@ struct CatalogueFile {
 }
 
 impl ProjectStore {
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            path: None,
-            inner: Mutex::new(BTreeMap::new()),
-        }
-    }
-
     pub(crate) fn open(path: PathBuf) -> Result<Self, ProjectError> {
         let dir = path.parent().ok_or(ProjectError::Persist)?;
         crate::storage::ensure_private_dir(dir).map_err(|_| ProjectError::Persist)?;

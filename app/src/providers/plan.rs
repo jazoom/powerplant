@@ -55,18 +55,6 @@ impl PlanAttempt {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    fn from_parts(staged: PathBuf, task: JoinHandle<Result<(), ProviderError>>) -> Self {
-        Self {
-            prompt: DevicePrompt {
-                verification_uri: "https://auth.openai.com/codex/device".to_owned(),
-                user_code: "TEST-CODE".to_owned(),
-            },
-            staged: Some(staged),
-            task: Some(task),
-        }
-    }
 }
 
 impl Drop for PlanAttempt {

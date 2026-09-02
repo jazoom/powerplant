@@ -1,3 +1,31 @@
+use super::*;
+
+impl super::ProviderVault {
+    pub(crate) fn in_memory() -> Self {
+        Self {
+            path: None,
+            inner: Mutex::new(VaultState::default()),
+            fail_after_next_persist: Mutex::new(false),
+            fail_next_marker_remove: Mutex::new(false),
+        }
+    }
+    pub(crate) fn put(&self, connection: ProviderConnection) -> Result<(), VaultError> {
+        self.insert_api_key(connection)
+    }
+    pub(crate) fn fail_after_next_persist(&self) {
+        *self
+            .fail_after_next_persist
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+    pub(crate) fn fail_next_marker_remove(&self) {
+        *self
+            .fail_next_marker_remove
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+}
+
 use super::{ProviderVault, VaultError};
 use crate::providers::{AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind};
 use std::path::{Path, PathBuf};

@@ -3,10 +3,10 @@ use super::{
     QUICK_TASK_NAME, ROLE_KEY, pin_quick_task,
 };
 use crate::agents::{AccessMode, ToolId};
+use crate::tests::test_environment_id;
 use crate::workflows::commands::SystemCommandId;
 use crate::workflows::definition::{
     ASSISTANT_REPLY, ArtefactKind, ArtefactSource, CandidateAuthority, OutputKind, StepAction,
-    test_environment_id,
 };
 
 fn pin(

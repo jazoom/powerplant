@@ -37,12 +37,6 @@ impl Clock {
     fn now(&self) -> Instant {
         Instant::now() + Duration::from_millis(self.offset_ms.load(Ordering::SeqCst))
     }
-
-    #[cfg(test)]
-    fn advance(&self, duration: Duration) {
-        let millis = u64::try_from(duration.as_millis()).expect("duration fits u64");
-        self.offset_ms.fetch_add(millis, Ordering::SeqCst);
-    }
 }
 
 struct Conversation {
@@ -302,29 +296,6 @@ impl SessionStore {
             .filter(|(_, session)| session.expires_at <= now)
             .map(|(id, _)| *id)
             .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn purge_expired(&self) {
-        let now = self.clock.now();
-        self.lock().retain(|_, session| {
-            if session.expires_at <= now {
-                cancel_jobs(session);
-                false
-            } else {
-                true
-            }
-        });
-    }
-
-    #[cfg(test)]
-    pub(crate) fn advance_clock(&self, duration: Duration) {
-        self.clock.advance(duration);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn contains(&self, id: &SessionId) -> bool {
-        self.lock().contains_key(id)
     }
 
     // Only the active job may complete the turn. A stale writer cannot overwrite a later command.

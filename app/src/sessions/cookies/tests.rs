@@ -44,7 +44,7 @@ fn duplicate_session_cookies_are_invalid() {
 #[test]
 fn session_cookie_uses_the_server_lifetime() {
     let token = sessions::generate_session_token().expect("token");
-    let header = session_set_header(&RuntimeConfig::development_for_test(), token.raw()).unwrap();
+    let header = session_set_header(&RuntimeConfig::development(), token.raw()).unwrap();
     let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
     assert_eq!(
         cookie.max_age(),
@@ -56,7 +56,7 @@ fn session_cookie_uses_the_server_lifetime() {
 
 #[test]
 fn deletion_header_has_no_token() {
-    let header = session_deletion_header(&RuntimeConfig::development_for_test()).unwrap();
+    let header = session_deletion_header(&RuntimeConfig::development()).unwrap();
     let cookie = Cookie::parse(header.to_str().unwrap()).unwrap();
     assert_eq!(cookie.name(), "powerplant_session");
     assert!(cookie.value().is_empty());

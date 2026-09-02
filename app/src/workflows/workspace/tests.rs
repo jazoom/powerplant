@@ -1,3 +1,17 @@
+use super::*;
+
+impl super::WorkflowWorkspaces {
+    pub(crate) fn in_memory() -> Self {
+        let hold = tempfile::tempdir().expect("workspaces");
+        let root = hold.path().to_path_buf();
+        storage::ensure_private_dir(&root).expect("dir");
+        Self {
+            root,
+            _hold: Some(hold),
+        }
+    }
+}
+
 use super::WorkflowWorkspaces;
 use crate::workflows::id::{AttemptId, RunId};
 

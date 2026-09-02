@@ -20,6 +20,8 @@ mod slices;
 mod state;
 mod storage;
 mod template_filters;
+#[cfg(test)]
+mod tests;
 mod tools;
 mod vault;
 mod workflows;

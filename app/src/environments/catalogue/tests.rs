@@ -1,8 +1,48 @@
+use super::*;
+
+impl super::EnvironmentCatalogue {
+    pub(crate) fn in_memory() -> Self {
+        let scratch = tempfile::tempdir().expect("logs");
+        let log_dir = scratch.path().join("logs");
+        storage::ensure_private_dir(&log_dir).expect("log dir");
+        Self {
+            path: None,
+            log_dir: Some(log_dir),
+            inner: Mutex::new(empty_state()),
+            refresh: RefreshState::new(),
+            _scratch: Some(scratch),
+        }
+    }
+    pub(crate) fn apply_production_seeds(&self) {
+        let mut state = self.lock();
+        let mut next = state.clone_state();
+        let changed =
+            apply_absent_seeds(&mut next, &crate::environments::seeds::production_seeds())
+                .expect("seeds");
+        if !changed {
+            return;
+        }
+        persist(self.path.as_deref(), &next).expect("persist");
+        *state = next;
+        drop(state);
+        self.bump_refresh();
+    }
+    pub(crate) fn retired_ids(&self) -> Vec<EnvironmentId> {
+        self.lock().retired_environment_ids.clone()
+    }
+    pub(crate) fn applied_seed_count(&self) -> usize {
+        self.lock().applied_seeds.len()
+    }
+    pub(crate) fn preparation_count(&self) -> usize {
+        self.lock().preparations.len()
+    }
+}
+
 use super::{EnvironmentCatalogue, EnvironmentError, MAXIMUM_ENVIRONMENTS};
 use crate::environments::id::{EnvironmentId, PreparationId};
 use crate::environments::preparation::{FailureCategory, PreparationPhase, PreparationState};
 use crate::environments::recipe::EnvironmentDraft;
-use crate::environments::snapshot::tests_support::sample_snapshot;
+use crate::tests::sample_snapshot;
 
 fn draft(name: &str, image: &str, script: &str) -> EnvironmentDraft {
     EnvironmentDraft {

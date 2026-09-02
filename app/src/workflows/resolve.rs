@@ -211,37 +211,4 @@ fn copy_ready(
 }
 
 #[cfg(test)]
-pub(crate) fn test_set(definition: &WorkflowDefinition) -> ResolvedEnvironmentSet {
-    let preparation_id = PreparationId::parse(&"b".repeat(32)).expect("prep");
-    let snapshot = crate::environments::snapshot::tests_support::sample_snapshot(preparation_id);
-    let recipe_version = EnvironmentRecipeVersion::parse(&"c".repeat(64)).expect("recipe");
-    let mut environments = Vec::new();
-    let mut steps = Vec::new();
-    for (step, environment_id) in step_environment_ids(definition) {
-        if !environments
-            .iter()
-            .any(|item: &ResolvedEnvironment| item.environment_id == environment_id)
-        {
-            environments.push(ResolvedEnvironment {
-                environment_id,
-                name: "Alpine Git".to_owned(),
-                preparation_id,
-                recipe_version,
-                snapshot: snapshot.clone(),
-            });
-        }
-        steps.push(ResolvedStepEnvironment {
-            step,
-            environment_id,
-            preparation_id,
-            snapshot_digest: snapshot.snapshot_digest.clone(),
-        });
-    }
-    ResolvedEnvironmentSet {
-        environments,
-        steps,
-    }
-}
-
-#[cfg(test)]
-mod tests;
+pub(in crate::workflows) mod tests;

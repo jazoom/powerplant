@@ -413,13 +413,6 @@ struct ReviewPolicyFile {
 }
 
 impl WorkflowDefinition {
-    #[cfg(test)]
-    pub(crate) fn from_file_bytes(bytes: &[u8]) -> Result<Self, DefinitionError> {
-        let file: DefinitionFile =
-            serde_json::from_slice(bytes).map_err(|_| DefinitionError::Format)?;
-        Self::from_file(file)
-    }
-
     pub(crate) fn from_file(file: DefinitionFile) -> Result<Self, DefinitionError> {
         if file.format_version != DEFINITION_FORMAT_VERSION {
             return Err(DefinitionError::Format);
@@ -1602,47 +1595,4 @@ pub(crate) fn candidate_revision_output() -> RequiredOutput {
 }
 
 #[cfg(test)]
-pub(crate) fn test_environment_id() -> EnvironmentId {
-    EnvironmentId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").expect("test env")
-}
-
-#[cfg(test)]
-pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
-    let role = RoleDefinition::new(
-        RoleKey::parse("agent").expect("role"),
-        "Coding agent".to_owned(),
-        String::new(),
-        String::new(),
-    )
-    .expect("role");
-    let authority =
-        AgentAuthority::new(vec![crate::agents::ToolId::List], Vec::new()).expect("authority");
-    WorkflowDefinition::from_parts(
-        name.to_owned(),
-        test_environment_id(),
-        vec![role],
-        vec![StepDefinition {
-            key: StepKey::parse("work").expect("step"),
-            name: "Work on task".to_owned(),
-            inputs: vec![initial_candidate_input()],
-            action: StepAction::Agent(AgentStep {
-                environment: StepEnvironment::WorkflowDefault,
-                role: RoleKey::parse("agent").expect("role"),
-                candidate_authority: CandidateAuthority::Edit,
-                authority,
-                required_outputs: vec![
-                    RequiredOutput {
-                        key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
-                        kind: OutputKind::AssistantReply,
-                    },
-                    candidate_revision_output(),
-                ],
-            }),
-            review: None,
-        }],
-    )
-    .expect("definition")
-}
-
-#[cfg(test)]
-mod tests;
+pub(in crate::workflows) mod tests;

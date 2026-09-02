@@ -1,9 +1,26 @@
+use super::*;
+
+impl super::WorkflowRunStore {
+    pub(crate) fn in_memory() -> Self {
+        Self {
+            dir: None,
+            inner: Mutex::new(BTreeMap::new()),
+            fail_next_mutation: Mutex::new(false),
+        }
+    }
+    pub(crate) fn fail_next_mutation(&self) {
+        *self
+            .fail_next_mutation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+}
+
+use crate::tests::test_named_definition;
 use std::fs;
 
 use super::{BROWSER_SUMMARY_LIMIT, StoreError, WorkflowRunStore};
-use crate::workflows::definition::{
-    PinnedWorkflowDefinition, WorkflowDefinition, test_named_definition,
-};
+use crate::workflows::definition::{PinnedWorkflowDefinition, WorkflowDefinition};
 use crate::workflows::id::{AttemptId, RunId};
 use crate::workflows::run::{RunState, WorkflowRun};
 
@@ -16,7 +33,7 @@ fn start_test_attempt(
     attempt: crate::workflows::id::AttemptId,
     at_ms: u64,
 ) -> Result<(), crate::workflows::run::TransitionError> {
-    let caps = crate::workflows::capabilities::test_agent_capabilities();
+    let caps = crate::tests::test_agent_capabilities();
     let sandbox = crate::workflows::run::AttemptSandboxRecord {
         kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
         snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
@@ -30,8 +47,8 @@ fn run_named(name: &str, created_at_ms: u64) -> WorkflowRun {
 
 fn run_with_id(name: &str, id: RunId, created_at_ms: u64) -> WorkflowRun {
     let definition = definition(name);
-    let environments = crate::workflows::test_environment_set(&definition);
-    WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    WorkflowRun::configured(
         id,
         created_at_ms,
         crate::agents::AgentId::generate().expect("agent"),
@@ -46,9 +63,9 @@ fn a_pinned_version_one_definition_survives_a_source_edit() {
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
     let first = definition("Original");
     let version = first.version();
-    let environments = crate::workflows::test_environment_set(&first);
+    let environments = crate::tests::test_environment_set(&first);
     let run = store
-        .create(WorkflowRun::create_for_test(
+        .create(WorkflowRun::configured(
             RunId::generate().expect("run"),
             1,
             crate::agents::AgentId::generate().expect("agent"),
@@ -76,11 +93,11 @@ fn a_pinned_version_one_definition_survives_a_source_edit() {
 fn summaries_keep_the_newest_fifty_runs() {
     let store = WorkflowRunStore::in_memory();
     let definition = definition("Limit");
-    let environments = crate::workflows::test_environment_set(&definition);
+    let environments = crate::tests::test_environment_set(&definition);
     let mut created = Vec::new();
     for created_at_ms in 1..=BROWSER_SUMMARY_LIMIT as u64 + 1 {
         let run = store
-            .create(WorkflowRun::create_for_test(
+            .create(WorkflowRun::configured(
                 RunId::generate().expect("run"),
                 created_at_ms,
                 crate::agents::AgentId::generate().expect("agent"),
@@ -405,7 +422,7 @@ fn summaries_include_project_identity() {
     let store = WorkflowRunStore::in_memory();
     let project_id = crate::projects::ProjectId::generate().expect("project");
     let definition = definition("Named");
-    let environments = crate::workflows::test_environment_set(&definition);
+    let environments = crate::tests::test_environment_set(&definition);
     let run = store
         .create(WorkflowRun::create(
             RunId::generate().expect("run"),

@@ -16,7 +16,7 @@ use crate::{
 };
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -175,11 +175,7 @@ async fn create_redirects_to_the_new_agent() {
     assert!(location.starts_with("/agents/"));
     assert_eq!(state.agents.list().len(), 1);
     assert_eq!(state.agents.list()[0].name, "Reader");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 #[tokio::test]
@@ -276,11 +272,7 @@ async fn configuration_patch_returns_a_hypergraft_patch() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("target=\"agent-form\""));
     assert_eq!(state.agents.get(&record.id).expect("updated").name, "After");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 #[tokio::test]
@@ -317,11 +309,7 @@ async fn delete_redirects_to_the_catalogue() {
     assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
     assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
     assert!(state.agents.list().is_empty());
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 fn seed_agent(state: &AppState, name: &str) -> (tempfile::TempDir, AgentRecord) {
@@ -409,11 +397,7 @@ async fn stale_update_returns_conflict() {
     let current = state.agents.get(&record.id).expect("current");
     assert_eq!(current.name, "After");
     assert_eq!(current.revision, updated.revision);
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 #[tokio::test]
@@ -466,11 +450,7 @@ async fn stale_delete_returns_conflict() {
     let current = state.agents.get(&record.id).expect("current");
     assert_eq!(current.revision, updated.revision);
     assert_eq!(current.instructions, "Newer");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 fn encoded_path(path: &std::path::Path) -> String {
@@ -528,11 +508,7 @@ async fn configuration_document_renders_stored_directory_rows() {
     assert!(text.contains("name=\"alias_0\""));
     assert!(!text.contains("name=\"alias_1\""));
     assert!(text.contains("value=\"add-directory\""));
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 #[tokio::test]
@@ -611,11 +587,7 @@ fn git_worktree() -> tempfile::TempDir {
 }
 
 fn keep_dir(state: &AppState, dir: tempfile::TempDir) {
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 #[tokio::test]
@@ -853,16 +825,8 @@ async fn remove_directory_on_configuration_keeps_revision_and_does_not_save() {
     let current = state.agents.get(&record.id).expect("current");
     assert_eq!(current.directories.len(), 2);
     assert_eq!(current.revision, record.revision);
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(first);
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(second);
+    state.keep_temp_dir(first);
+    state.keep_temp_dir(second);
 }
 
 #[tokio::test]

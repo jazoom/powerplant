@@ -17,7 +17,7 @@ use crate::{
 };
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -622,11 +622,7 @@ async fn a_detail_navigation_patches_chat_main() {
 }
 
 fn keep_dir(state: &AppState, dir: tempfile::TempDir) {
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
+    state.keep_temp_dir(dir);
 }
 
 fn create_agent(state: &AppState, name: &str, path: &Path) -> crate::agents::AgentRecord {

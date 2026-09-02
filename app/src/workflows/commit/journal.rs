@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use std::path::PathBuf;
 
 use crate::storage::{self, PersistError};
@@ -21,17 +24,6 @@ impl CommitJournals {
             #[cfg(test)]
             _hold: None,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        let hold = tempfile::tempdir().expect("journals");
-        let root = hold.path().to_path_buf();
-        storage::ensure_private_dir(&root).expect("dir");
-        Self {
-            root,
-            _hold: Some(hold),
-        }
     }
 
     pub(crate) fn create(

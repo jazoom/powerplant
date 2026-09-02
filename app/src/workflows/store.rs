@@ -59,15 +59,6 @@ impl std::fmt::Display for StoreError {
 impl std::error::Error for StoreError {}
 
 impl WorkflowRunStore {
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            dir: None,
-            inner: Mutex::new(BTreeMap::new()),
-            fail_next_mutation: Mutex::new(false),
-        }
-    }
-
     pub(crate) fn open(dir: PathBuf) -> Result<Self, StoreError> {
         crate::storage::ensure_private_dir(&dir).map_err(|_| StoreError::Persist)?;
         let runs = load_dir(&dir)?;
@@ -157,14 +148,6 @@ impl WorkflowRunStore {
         persist(self.dir.as_deref(), &next)?;
         runs.insert(*id, next.clone());
         Ok(next)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_next_mutation(&self) {
-        *self
-            .fail_next_mutation
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<RunId, WorkflowRun>> {

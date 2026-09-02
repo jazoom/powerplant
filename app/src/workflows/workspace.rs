@@ -36,17 +36,6 @@ impl WorkflowWorkspaces {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        let hold = tempfile::tempdir().expect("workspaces");
-        let root = hold.path().to_path_buf();
-        storage::ensure_private_dir(&root).expect("dir");
-        Self {
-            root,
-            _hold: Some(hold),
-        }
-    }
-
     pub(crate) fn create_attempt(
         &self,
         run: RunId,

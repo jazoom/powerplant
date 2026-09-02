@@ -2,9 +2,6 @@ pub(crate) mod plan;
 mod rig;
 mod xai_plan;
 
-#[cfg(test)]
-pub(crate) mod scripted;
-
 use std::fmt;
 use std::pin::Pin;
 
@@ -416,7 +413,7 @@ pub(crate) type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent, Provi
 pub(crate) enum ChatBackend {
     Rig,
     #[cfg(test)]
-    Scripted(scripted::ScriptedBackend),
+    Scripted(crate::tests::ScriptedBackend),
 }
 
 impl ChatBackend {
@@ -461,4 +458,4 @@ impl ChatBackend {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -3,9 +3,6 @@ use rand::rngs::SysRng;
 
 use crate::hex;
 
-#[cfg(test)]
-pub(crate) const PROJECT_ID_LENGTH: usize = 32;
-
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ProjectId([u8; 16]);
 

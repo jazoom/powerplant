@@ -1,4 +1,6 @@
-use super::{AttemptId, RunId, WORKFLOW_ID_LENGTH, WorkflowId};
+const WORKFLOW_ID_LENGTH: usize = 32;
+
+use super::{AttemptId, RunId, WorkflowId};
 
 #[test]
 fn generated_ids_are_opaque_hex() {

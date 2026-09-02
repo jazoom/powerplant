@@ -16,7 +16,7 @@ use crate::{
 };
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -247,10 +247,10 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         AccessMode::ReadWrite,
         &[ToolId::List],
         "Do the work.",
-        crate::workflows::definition::test_environment_id(),
+        crate::tests::test_environment_id(),
     )
     .expect("quick task");
-    let environments = workflows::test_environment_set(&pinned.definition);
+    let environments = crate::tests::test_environment_set(&pinned.definition);
     let mut run = workflows::WorkflowRun::create(
         workflows::RunId::generate().expect("run"),
         1,
@@ -281,7 +281,7 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
             key: InputKey::parse("candidate").expect("input"),
             artefact: initial_ref.clone(),
         }],
-        crate::workflows::capabilities::test_agent_capabilities(),
+        crate::tests::test_agent_capabilities(),
         crate::workflows::run::AttemptSandboxRecord {
             kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
             snapshot_digest: run
@@ -344,11 +344,7 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
     let run_id = run.id;
     let host = project.host_path.clone();
     state.workflow_runs.create(run).expect("store run");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(project_dir);
+    state.keep_temp_dir(project_dir);
     let token = sessions::generate_session_token().expect("session token");
     let session = token.id();
     state.sessions.insert(session);
@@ -745,12 +741,7 @@ async fn a_changed_grant_interrupts_without_host_mutation() {
             },
         )
         .expect("change grant");
-    fixture
-        .state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(other);
+    fixture.state.keep_temp_dir(other);
     let response = post_decision(
         &fixture,
         "approve",

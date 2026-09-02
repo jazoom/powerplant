@@ -28,14 +28,6 @@ pub(crate) struct AgentStore {
 }
 
 impl AgentStore {
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            dir: None,
-            inner: Mutex::new(BTreeMap::new()),
-        }
-    }
-
     pub(crate) fn open(dir: PathBuf, legacy_project: &Path) -> Result<Self, AgentError> {
         fs::create_dir_all(&dir).map_err(|_| AgentError::Persist)?;
         let mut agents = load_dir(&dir)?;
@@ -60,11 +52,6 @@ impl AgentStore {
 
     pub(crate) fn get(&self, id: &AgentId) -> Option<AgentRecord> {
         self.lock().get(id).cloned()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn count(&self) -> usize {
-        self.lock().len()
     }
 
     pub(crate) fn create(&self, draft: AgentDraft) -> Result<AgentRecord, AgentError> {

@@ -1,4 +1,6 @@
-use super::{JOB_ID_LENGTH, Job, JobId, JobStatus};
+const JOB_ID_LENGTH: usize = 32;
+
+use super::{Job, JobId, JobStatus};
 use crate::workflows::RunId;
 
 fn job() -> std::sync::Arc<Job> {

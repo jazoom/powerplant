@@ -108,16 +108,6 @@ pub(crate) struct ProviderVault {
 }
 
 impl ProviderVault {
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            path: None,
-            inner: Mutex::new(VaultState::default()),
-            fail_after_next_persist: Mutex::new(false),
-            fail_next_marker_remove: Mutex::new(false),
-        }
-    }
-
     pub(crate) fn open(path: PathBuf) -> Result<Self, VaultError> {
         let state = load(&path)?;
         reconcile(&path, &state)?;
@@ -211,11 +201,6 @@ impl ProviderVault {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn put(&self, connection: ProviderConnection) -> Result<(), VaultError> {
-        self.insert_api_key(connection)
-    }
-
     pub(crate) fn install_plan(&self, kind: ProviderKind, staged: &Path) -> Result<(), VaultError> {
         if !kind.supports_plan() {
             return Err(VaultError::Persist);
@@ -280,22 +265,6 @@ impl ProviderVault {
 
     pub(crate) fn plan_file(&self, kind: ProviderKind) -> Option<PathBuf> {
         plan_file_path(self.path.as_deref(), kind)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_after_next_persist(&self) {
-        *self
-            .fail_after_next_persist
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_next_marker_remove(&self) {
-        *self
-            .fail_next_marker_remove
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
 
     pub(crate) fn forget(&self, kind: ProviderKind) -> Result<(), VaultError> {

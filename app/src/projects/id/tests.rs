@@ -1,4 +1,6 @@
-use super::{PROJECT_ID_LENGTH, ProjectId};
+const PROJECT_ID_LENGTH: usize = 32;
+
+use super::ProjectId;
 
 #[test]
 fn generated_ids_are_opaque_lowercase_hex() {

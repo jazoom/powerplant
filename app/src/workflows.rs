@@ -1,3 +1,6 @@
+#[cfg(test)]
+pub(super) mod tests;
+
 pub(crate) mod artefacts;
 pub(crate) mod capabilities;
 mod catalogue;
@@ -31,8 +34,6 @@ pub(crate) use executor::{
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
 pub(crate) use quick::{alpine_git_id, alpine_git_is_ready, pin_quick_task};
-#[cfg(test)]
-pub(crate) use resolve::test_set as test_environment_set;
 pub(crate) use resolve::{preview_environments, resolve_environments};
 pub(crate) use run::{RunKind, RunSource, WorkflowRun, now_ms};
 pub(crate) use store::{RunSummary, WorkflowRunStore};

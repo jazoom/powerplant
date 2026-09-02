@@ -1,9 +1,19 @@
+impl super::ModelCatalogue {
+    pub(crate) fn set_catalogue(&self, kind: ProviderKind, models: Vec<String>, pending: bool) {
+        let mut catalogue = self.lock();
+        let entry = catalogue.entry(kind).or_default();
+        entry.revision = entry.revision.wrapping_add(1);
+        entry.models = models;
+        entry.pending = pending;
+    }
+}
+
 use std::sync::Arc;
 
 use super::{ModelCatalogue, refresh};
 use crate::{
     config::RuntimeConfig,
-    providers::{ChatBackend, ProviderConnection, ProviderKind, scripted::ScriptedBackend},
+    providers::{ChatBackend, ProviderConnection, ProviderKind, tests::ScriptedBackend},
 };
 
 #[test]
@@ -40,7 +50,7 @@ fn removal_invalidates_an_active_refresh() {
 
 #[tokio::test]
 async fn a_successful_backend_refresh_stores_the_model_list() {
-    let mut state = crate::state::for_test(RuntimeConfig::development_for_test());
+    let mut state = crate::tests::test_state(RuntimeConfig::development());
     state.chat = Arc::new(ChatBackend::Scripted(
         ScriptedBackend::accept().with_models(vec![
             "hf:moonshotai/Kimi-K3".to_owned(),

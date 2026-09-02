@@ -13,7 +13,7 @@ use crate::{
 };
 
 fn test_state() -> AppState {
-    crate::state::for_test(RuntimeConfig::development_for_test())
+    crate::tests::test_state(RuntimeConfig::development())
 }
 
 fn app(state: &AppState) -> axum::Router {
@@ -274,7 +274,7 @@ async fn retry_patch_updates_the_edit_form_revision() {
         .environments
         .finish_failed(
             &preparation.id,
-            crate::environments::FailureCategory::SetupExit,
+            crate::tests::FailureCategory::SetupExit,
             preparation.log,
         )
         .expect("failed");

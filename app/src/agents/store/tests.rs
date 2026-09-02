@@ -1,3 +1,17 @@
+use super::*;
+
+impl super::AgentStore {
+    pub(crate) fn in_memory() -> Self {
+        Self {
+            dir: None,
+            inner: Mutex::new(BTreeMap::new()),
+        }
+    }
+    pub(crate) fn count(&self) -> usize {
+        self.lock().len()
+    }
+}
+
 use std::fs;
 
 use super::AgentStore;

@@ -146,7 +146,7 @@ fn fixing_publication_fixture() -> (
         candidate_revision_output, initial_candidate_input,
     };
 
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let project = tempfile::tempdir().expect("project");
     assert!(
         std::process::Command::new("git")
@@ -189,7 +189,7 @@ fn fixing_publication_fixture() -> (
     };
     let definition = WorkflowDefinition::from_parts(
         "Fixing".to_owned(),
-        crate::workflows::definition::test_environment_id(),
+        crate::tests::test_environment_id(),
         vec![
             RoleDefinition::new(
                 role_key,
@@ -202,8 +202,8 @@ fn fixing_publication_fixture() -> (
         vec![step.clone()],
     )
     .expect("definition");
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create_for_test(
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = crate::workflows::WorkflowRun::configured(
         crate::workflows::RunId::generate().expect("run"),
         1,
         AgentId::generate().expect("agent"),
@@ -226,7 +226,7 @@ fn fixing_publication_fixture() -> (
     run.start_attempt(
         attempt,
         inputs.clone(),
-        crate::workflows::capabilities::test_agent_capabilities(),
+        crate::tests::test_agent_capabilities(),
         crate::workflows::run::AttemptSandboxRecord {
             kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
             snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
@@ -286,16 +286,16 @@ fn fixing_publication_fixture() -> (
 
 #[test]
 fn interruption_failure_restores_current_and_unprocessed_jobs() {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let provider = crate::providers::ProviderKind::Xai;
     let session = crate::sessions::generate_session_token()
         .expect("session")
         .id();
     let mut runs = (0..3)
         .map(|_| {
-            let definition = crate::workflows::definition::test_named_definition("Interrupt");
-            let environments = crate::workflows::test_environment_set(&definition);
-            crate::workflows::WorkflowRun::create_for_test(
+            let definition = crate::tests::test_named_definition("Interrupt");
+            let environments = crate::tests::test_environment_set(&definition);
+            crate::workflows::WorkflowRun::configured(
                 crate::workflows::RunId::generate().expect("run"),
                 1,
                 AgentId::generate().expect("agent"),
@@ -344,7 +344,7 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
 
 #[test]
 fn final_gate_completion_settles_the_session_job_successfully() {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let token = crate::sessions::generate_session_token().expect("token");
     let session_id = token.id();
     let agent_id = AgentId::generate().expect("agent");
@@ -387,7 +387,7 @@ fn final_gate_completion_settles_the_session_job_successfully() {
 
 #[test]
 fn attempt_spec_mounts_isolated_source_and_read_only_git() {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let run = crate::workflows::RunId::generate().expect("run");
     let attempt = crate::workflows::AttemptId::generate().expect("attempt");
     let workspace = state
@@ -407,7 +407,7 @@ fn attempt_spec_mounts_isolated_source_and_read_only_git() {
     );
 
     let spec = attempt_spec(
-        &crate::workflows::capabilities::test_agent_capabilities(),
+        &crate::tests::test_agent_capabilities(),
         &workspace,
         project.path(),
         &host,
@@ -433,7 +433,7 @@ async fn partial_start_cleanup_retains_resources_until_the_guest_is_gone() {
     }
 
     for failure in [Failure::None, Failure::Stop, Failure::Remove] {
-        let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+        let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
         let run = crate::workflows::RunId::generate().expect("run");
         let attempt = crate::workflows::AttemptId::generate().expect("attempt");
         let workspace = state
@@ -520,11 +520,11 @@ async fn partial_start_cleanup_retains_resources_until_the_guest_is_gone() {
 
 #[test]
 fn failed_capture_records_unknown_observed_source() {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
-    let definition = crate::workflows::definition::test_named_definition("Work");
-    let environments = crate::workflows::test_environment_set(&definition);
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    let definition = crate::tests::test_named_definition("Work");
+    let environments = crate::tests::test_environment_set(&definition);
     let run_id = crate::workflows::RunId::generate().expect("run");
-    let mut run = crate::workflows::run::WorkflowRun::create_for_test(
+    let mut run = crate::workflows::run::WorkflowRun::configured(
         run_id,
         1,
         crate::agents::AgentId::generate().expect("agent"),
@@ -560,7 +560,7 @@ fn failed_capture_records_unknown_observed_source() {
     run.start_attempt(
         attempt,
         Vec::new(),
-        crate::workflows::capabilities::test_agent_capabilities(),
+        crate::tests::test_agent_capabilities(),
         sandbox,
         2,
     )
@@ -626,7 +626,7 @@ fn completed_output_attempt(
             key: crate::workflows::definition::OutputKey::parse(output).expect("output"),
             artefact,
         }],
-        capabilities: crate::workflows::capabilities::test_agent_capabilities(),
+        capabilities: crate::tests::test_agent_capabilities(),
         sandbox: crate::workflows::run::AttemptSandboxRecord {
             kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
             snapshot_digest: crate::environments::SnapshotDigest::parse(&format!(
@@ -645,11 +645,10 @@ fn completed_output_attempt(
 fn step_output_resolution_uses_the_latest_completed_producer_attempt() {
     use crate::workflows::definition::ArtefactKind;
 
-    let definition = crate::workflows::seeds::sequential_team_definition(
-        crate::workflows::definition::test_environment_id(),
-    );
-    let environments = crate::workflows::test_environment_set(&definition);
-    let mut run = crate::workflows::WorkflowRun::create_for_test(
+    let definition =
+        crate::workflows::seeds::sequential_team_definition(crate::tests::test_environment_id());
+    let environments = crate::tests::test_environment_set(&definition);
+    let mut run = crate::workflows::WorkflowRun::configured(
         crate::workflows::RunId::generate().expect("run"),
         1,
         AgentId::generate().expect("agent"),
@@ -689,7 +688,7 @@ fn step_output_resolution_uses_the_latest_completed_producer_attempt() {
 #[test]
 fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
     for reference_updated in [false, true] {
-        let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+        let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
         let project = tempfile::tempdir().expect("project");
         assert!(
             std::process::Command::new("git")
@@ -796,9 +795,9 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
             )
             .expect("project");
         let definition = crate::workflows::seeds::correctness_security_definition(
-            crate::workflows::definition::test_environment_id(),
+            crate::tests::test_environment_id(),
         );
-        let environments = crate::workflows::test_environment_set(&definition);
+        let environments = crate::tests::test_environment_set(&definition);
         let mut run = crate::workflows::WorkflowRun::create(
             crate::workflows::RunId::generate().expect("run"),
             1,
@@ -1199,7 +1198,7 @@ fn test_job(
 
 #[test]
 fn source_capture_rejects_a_stale_agent_revision() {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let dir = git_worktree();
     let project = state
         .projects
@@ -1243,7 +1242,7 @@ fn source_capture_rejects_a_stale_agent_revision() {
 
 #[test]
 fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let dir = git_worktree();
     let project = state
         .projects
@@ -1263,8 +1262,8 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
             primary_directory: "project".to_owned(),
         })
         .expect("agent");
-    let definition = crate::workflows::definition::test_named_definition("Recover");
-    let environments = crate::workflows::test_environment_set(&definition);
+    let definition = crate::tests::test_named_definition("Recover");
+    let environments = crate::tests::test_environment_set(&definition);
     let run = crate::workflows::WorkflowRun::create(
         crate::workflows::RunId::generate().expect("run"),
         1,
@@ -1373,7 +1372,7 @@ fn gate_ready_fixture(
 ) {
     use crate::workflows::definition::{InputKey, OutputKey, StepKey};
 
-    let state = crate::state::for_test(crate::config::RuntimeConfig::development_for_test());
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let project = git_worktree();
     std::fs::write(project.path().join("file.txt"), b"candidate\n").expect("source");
     let initial_capture = crate::workflows::artefacts::CandidateCapture::capture_host(
@@ -1396,10 +1395,10 @@ fn gate_ready_fixture(
         AccessMode::ReadWrite,
         &[crate::agents::ToolId::List],
         "Do the work.",
-        crate::workflows::definition::test_environment_id(),
+        crate::tests::test_environment_id(),
     )
     .expect("quick task");
-    let environments = crate::workflows::test_environment_set(&pinned.definition);
+    let environments = crate::tests::test_environment_set(&pinned.definition);
     let mut run = crate::workflows::WorkflowRun::create(
         crate::workflows::RunId::generate().expect("run"),
         1,
@@ -1430,7 +1429,7 @@ fn gate_ready_fixture(
             key: InputKey::parse("candidate").expect("input"),
             artefact: initial_ref.clone(),
         }],
-        crate::workflows::capabilities::test_agent_capabilities(),
+        crate::tests::test_agent_capabilities(),
         crate::workflows::run::AttemptSandboxRecord {
             kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
             snapshot_digest: run
@@ -1485,11 +1484,7 @@ fn gate_ready_fixture(
     let project_id = run.project_id;
     let agent_id = run.agent_id;
     state.workflow_runs.create(run).expect("store run");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(project);
+    state.keep_temp_dir(project);
     let token = crate::sessions::generate_session_token().expect("token");
     let session_id = token.id();
     let key = crate::sessions::ConversationKey {

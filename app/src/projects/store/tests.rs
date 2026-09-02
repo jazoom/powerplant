@@ -1,3 +1,14 @@
+use super::*;
+
+impl super::ProjectStore {
+    pub(crate) fn in_memory() -> Self {
+        Self {
+            path: None,
+            inner: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
 use std::path::Path;
 
 use super::{MAXIMUM_CATALOGUE_BYTES, ProjectStore};

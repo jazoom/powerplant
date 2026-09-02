@@ -565,25 +565,6 @@ impl WorkflowRun {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn create_for_test(
-        id: RunId,
-        created_at_ms: u64,
-        agent_id: AgentId,
-        pinned: PinnedWorkflowDefinition,
-        environments: ResolvedEnvironmentSet,
-    ) -> Self {
-        Self::create(
-            id,
-            created_at_ms,
-            ProjectId::generate().expect("project"),
-            agent_id,
-            RunKind::Configured,
-            pinned,
-            environments,
-        )
-    }
-
     pub(crate) fn record_initial_candidate(
         &mut self,
         record: crate::workflows::artefacts::ArtefactRecord,
@@ -3450,11 +3431,6 @@ fn artefact_kind_matches_summary(record: &ArtefactRecord) -> bool {
             crate::workflows::artefacts::ArtefactSummary::HumanDecision { .. },
         ),
     )
-}
-
-#[cfg(test)]
-pub(super) fn next_ordinal_for(attempts: &[AttemptRecord], step: &StepKey) -> u32 {
-    next_ordinal(attempts, step)
 }
 
 #[cfg(test)]

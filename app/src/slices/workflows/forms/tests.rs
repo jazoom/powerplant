@@ -10,7 +10,7 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("name", "One step"),
         pair(
             "default-environment",
-            &crate::workflows::definition::test_environment_id().as_hex(),
+            &crate::tests::test_environment_id().as_hex(),
         ),
         pair("role_0_key", "coding-agent"),
         pair("role_0_name", "Coding agent"),

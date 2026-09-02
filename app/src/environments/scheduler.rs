@@ -71,25 +71,6 @@ impl EnvironmentPreparationScheduler {
         Self::spawn(catalogue, snapshots, PreparationRuntime::Microsandbox)
     }
 
-    #[cfg(test)]
-    pub(crate) fn idle(
-        catalogue: Arc<EnvironmentCatalogue>,
-        snapshots: Arc<EnvironmentSnapshotRepository>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            catalogue,
-            snapshots,
-            notify: Arc::new(Notify::new()),
-            stop: Arc::new(AtomicBool::new(false)),
-            runtime: PreparationRuntime::Scripted(ScriptedRuntime {
-                inner: Arc::new(std::sync::Mutex::new(ScriptedInner {
-                    fail_at: None,
-                    last_exec: None,
-                })),
-            }),
-        })
-    }
-
     fn spawn(
         catalogue: Arc<EnvironmentCatalogue>,
         snapshots: Arc<EnvironmentSnapshotRepository>,
@@ -477,28 +458,6 @@ impl EnvironmentPreparationScheduler {
             .await
             .map_err(|_| FailureCategory::SnapshotRemove)
     }
-
-    #[cfg(test)]
-    pub(crate) fn fail_at(&self, phase: PreparationPhase) {
-        if let PreparationRuntime::Scripted(runtime) = &self.runtime {
-            runtime.inner.lock().expect("lock").fail_at = Some(phase);
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_snapshot_removal(&self) {
-        self.snapshots.fail_removal();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn last_exec(&self) -> Option<GuestExec> {
-        match &self.runtime {
-            PreparationRuntime::Microsandbox => None,
-            PreparationRuntime::Scripted(runtime) => {
-                runtime.inner.lock().expect("lock").last_exec.clone()
-            }
-        }
-    }
 }
 
 impl Drop for EnvironmentPreparationScheduler {
@@ -678,54 +637,6 @@ fn map_guest_error(
     match sandbox::map_error(error, crate::sandbox::SandboxError::Start) {
         crate::sandbox::SandboxError::Missing(_) => FailureCategory::RuntimeUnavailable,
         _ => failed,
-    }
-}
-
-#[cfg(test)]
-impl ScriptedRuntime {
-    fn create_guest(&self, spec: &PreparationGuestSpec) -> Result<(), FailureCategory> {
-        let _ = spec;
-        self.phase(PreparationPhase::CreatingGuest)
-    }
-
-    fn run_setup(&self, script: &str, logger: &mut BoundedLogger) -> Result<(), FailureCategory> {
-        let mut inner = self.inner.lock().expect("lock");
-        inner.last_exec = Some(setup_exec(script));
-        drop(inner);
-        let _ = logger.append(b"setup output\n");
-        self.phase(PreparationPhase::RunningSetup)
-    }
-
-    fn create_snapshot(&self, id: PreparationId) -> Result<PreparedSnapshot, FailureCategory> {
-        self.phase(PreparationPhase::CreatingSnapshot)?;
-        Ok(super::snapshot::tests_support::sample_snapshot(id))
-    }
-
-    fn mark_available(
-        &self,
-        snapshots: &EnvironmentSnapshotRepository,
-        snapshot: &PreparedSnapshot,
-    ) {
-        snapshots.mark(
-            snapshot.artifact_key.clone(),
-            super::snapshot::SnapshotAvailability::Available,
-        );
-    }
-
-    fn phase(&self, phase: PreparationPhase) -> Result<(), FailureCategory> {
-        let inner = self.inner.lock().expect("lock");
-        if inner.fail_at == Some(phase) {
-            return Err(match phase {
-                PreparationPhase::CreatingGuest => FailureCategory::GuestCreate,
-                PreparationPhase::RunningSetup => FailureCategory::SetupExit,
-                PreparationPhase::StoppingGuest => FailureCategory::GuestStop,
-                PreparationPhase::CreatingSnapshot => FailureCategory::SnapshotCreate,
-                PreparationPhase::VerifyingSnapshot => FailureCategory::SnapshotIntegrity,
-                PreparationPhase::RemovingGuest => FailureCategory::GuestRemove,
-                _ => FailureCategory::GuestCreate,
-            });
-        }
-        Ok(())
     }
 }
 

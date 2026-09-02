@@ -1,4 +1,7 @@
 #[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
@@ -48,14 +51,6 @@ impl CommandSession {
     ) -> Self {
         Self {
             inner: CommandInner::Microsandbox(Box::new(MicrosandboxCommand { sandbox, exec })),
-            _lifecycle: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn scripted(command: ScriptedCommand) -> Self {
-        Self {
-            inner: CommandInner::Scripted(command),
             _lifecycle: None,
         }
     }
@@ -111,54 +106,6 @@ impl CommandSession {
             #[cfg(test)]
             CommandInner::Scripted(_) => {}
         }
-    }
-}
-
-#[cfg(test)]
-impl ScriptedCommand {
-    pub(super) fn output(text: String, code: i32) -> Self {
-        Self {
-            events: Mutex::new(vec![CommandEvent::Output(text), CommandEvent::Exited(code)]),
-            hang: false,
-            killed: Mutex::new(false),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    pub(super) fn hang() -> Self {
-        Self {
-            events: Mutex::new(Vec::new()),
-            hang: true,
-            killed: Mutex::new(false),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    async fn recv(&self) -> Option<CommandEvent> {
-        loop {
-            if *lock_mutex(&self.killed) {
-                return Some(CommandEvent::Exited(137));
-            }
-            {
-                let mut events = lock_mutex(&self.events);
-                if !events.is_empty() {
-                    return Some(events.remove(0));
-                }
-            }
-            if !self.hang {
-                return None;
-            }
-            let notified = self.notify.notified();
-            if *lock_mutex(&self.killed) {
-                return Some(CommandEvent::Exited(137));
-            }
-            notified.await;
-        }
-    }
-
-    fn kill(&self) {
-        *lock_mutex(&self.killed) = true;
-        self.notify.notify_waiters();
     }
 }
 
