@@ -5,31 +5,22 @@
   <div class="page-intro">
     <div>
       <h1>Settings</h1>
-      <p>Set browser preferences for your local desk.</p>
+      <p>Set preferences for your local desk.</p>
     </div>
   </div>
 
   <ol class="settings-list">
-    <li class="settings-row" data-island="theme-selector">
-      <div>
-        <h2 id="theme-heading">Theme</h2>
-        <p id="theme-description" class="text-quiet mt-1 max-w-[60ch] text-sm">
-          Choose the colour theme for Power Plant. This browser remembers your
-          choice.
-        </p>
-      </div>
-      <div class="settings-control">
-        <label class="label" for="theme-select">Current theme</label>
-        <select
-          id="theme-select"
-          class="select"
-          data-theme-select
-          aria-describedby="theme-description"
-        >
-          <option value="springfield-light">Springfield light</option>
-          <option value="springfield-dark">Springfield dark</option>
-        </select>
-      </div>
+    <li class="settings-row">
+      <form
+        id="theme-setting"
+        method="post"
+        action="/settings/theme"
+        data-graft
+        data-island="theme-selector"
+        class="contents"
+      >
+        {% include "settings/templates/theme.html" %}
+      </form>
     </li>
   </ol>
 </main>

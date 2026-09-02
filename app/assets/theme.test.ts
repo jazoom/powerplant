@@ -1,55 +1,72 @@
 // @vitest-environment happy-dom
-import { beforeEach, expect, test } from "vitest";
-import {
-    DEFAULT_THEME,
-    THEME_STORAGE_KEY,
-    applyStoredTheme,
-    initThemeSelector,
-    readStoredTheme,
-} from "./theme";
+import { beforeEach, expect, test, vi } from "vitest";
+import { DEFAULT_THEME, initThemeSelector } from "./theme";
 
 beforeEach(() => {
-    window.localStorage.clear();
     document.documentElement.dataset.theme = DEFAULT_THEME;
     document.body.replaceChildren();
 });
 
-test("an unknown stored theme falls back to Springfield light", () => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, "unknown");
-
-    expect(readStoredTheme()).toBe("springfield-light");
-    expect(applyStoredTheme()).toBe("springfield-light");
-    expect(document.documentElement.dataset.theme).toBe("springfield-light");
-});
-
-test("a stored dark theme applies to the document", () => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, "springfield-dark");
-
-    expect(applyStoredTheme()).toBe("springfield-dark");
-    expect(document.documentElement.dataset.theme).toBe("springfield-dark");
-});
-
-test("the selector applies and stores a valid theme", () => {
-    document.documentElement.dataset.theme = "springfield-dark";
-    const root = document.createElement("div");
-    root.innerHTML = `
-        <select data-theme-select>
+function themeForm(theme: string): HTMLFormElement {
+    const form = document.createElement("form");
+    form.innerHTML = `
+        <div data-active-theme="${theme}"></div>
+        <select data-theme-select name="theme">
             <option value="springfield-light">Springfield light</option>
             <option value="springfield-dark">Springfield dark</option>
         </select>
     `;
-    document.body.append(root);
+    document.body.append(form);
+    return form;
+}
 
-    const instance = initThemeSelector(root);
-    const select = root.querySelector<HTMLSelectElement>("select")!;
-    expect(select.value).toBe("springfield-dark");
+test("the selector uses the server-rendered theme", () => {
+    const form = themeForm("springfield-dark");
 
-    select.value = "springfield-light";
-    select.dispatchEvent(new Event("change"));
+    initThemeSelector(form);
+
+    expect(document.documentElement.dataset.theme).toBe("springfield-dark");
+    expect(form.querySelector<HTMLSelectElement>("select")!.value).toBe(
+        "springfield-dark",
+    );
+});
+
+test("an invalid server-rendered theme defaults to Springfield light", () => {
+    const form = themeForm("unknown");
+
+    initThemeSelector(form);
+
     expect(document.documentElement.dataset.theme).toBe("springfield-light");
-    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe(
+    expect(form.querySelector<HTMLSelectElement>("select")!.value).toBe(
         "springfield-light",
     );
+});
 
-    instance.destroy();
+test("a change applies immediately and submits the preference", () => {
+    const form = themeForm("springfield-light");
+    const requestSubmit = vi
+        .spyOn(form, "requestSubmit")
+        .mockImplementation(() => {});
+    initThemeSelector(form);
+    const select = form.querySelector<HTMLSelectElement>("select")!;
+
+    select.value = "springfield-dark";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(document.documentElement.dataset.theme).toBe("springfield-dark");
+    expect(requestSubmit).toHaveBeenCalledOnce();
+});
+
+test("reconciliation restores the server-rendered selection", () => {
+    const form = themeForm("springfield-light");
+    const instance = initThemeSelector(form);
+    document.documentElement.dataset.theme = "springfield-dark";
+    form.innerHTML = themeForm("springfield-light").innerHTML;
+
+    instance.reconcile?.({} as never);
+
+    expect(document.documentElement.dataset.theme).toBe("springfield-light");
+    expect(form.querySelector<HTMLSelectElement>("select")!.value).toBe(
+        "springfield-light",
+    );
 });

@@ -13,7 +13,7 @@ The primary target is `route:/settings`. The visitor mode is Operate.
 
 ## Job
 
-A local developer chooses the colour theme for the browser. The selected theme applies immediately and persists in browser storage.
+A local developer chooses the colour theme for Power Plant. The selected theme applies immediately and persists on the local machine.
 
 ## Content and constraints
 

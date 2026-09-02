@@ -352,8 +352,7 @@ fn render_detail_page(
 ) -> AppResult<Response> {
     match graft {
         PageGraft::Document => {
-            let mut response =
-                responses::chat_page_response(&view.document_title, &state.assets, view)?;
+            let mut response = responses::chat_page_response(&view.document_title, state, view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }
@@ -443,8 +442,7 @@ fn render_catalogue(
     let view = CatalogueView::from_records(&ordered_projects(state, session));
     match graft {
         PageGraft::Document => {
-            let mut response =
-                responses::chat_page_response(page::INDEX_TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::INDEX_TITLE, state, &view)?;
             responses::apply_patch_status(&mut response, PatchStatus::Ok);
             Ok(response)
         }
@@ -465,7 +463,7 @@ fn render_form_page(
 ) -> AppResult<Response> {
     match graft {
         GraftRequest::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(title, state, &view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }

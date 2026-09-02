@@ -126,7 +126,7 @@ Springfield dark moves the paper to deep olive. It keeps yellow actions, green s
 ## Surfaces
 
 - The product offers Springfield light and Springfield dark. Springfield light is the default.
-- The theme changes immediately and persists in browser storage.
+- The theme changes immediately and persists in local filesystem storage.
 - The desktop shell uses a persistent index for projects, agents, workflows, environments, runs and settings.
 - The brand mark and the first index link go to `/projects`.
 - The mobile shell changes the index to a compact masthead and horizontal navigation.

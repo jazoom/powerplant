@@ -413,7 +413,7 @@ fn render_form_page(
 ) -> AppResult<Response> {
     match graft {
         GraftRequest::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(title, state, &view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }
@@ -449,7 +449,7 @@ fn render_desk<T: askama::Template>(
 ) -> AppResult<Response> {
     match graft {
         GraftRequest::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, view)?;
+            let mut response = responses::chat_page_response(title, state, view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }

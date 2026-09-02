@@ -27,6 +27,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         )),
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
+        preferences: Arc::new(Preferences::in_memory()),
         agents: Arc::new(AgentStore::in_memory()),
         projects: Arc::new(ProjectStore::in_memory()),
         sandboxes: Arc::new(SandboxFleet::scripted()),

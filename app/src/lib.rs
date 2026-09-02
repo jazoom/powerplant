@@ -9,6 +9,7 @@ mod hex;
 mod markdown;
 mod models;
 mod plan_login;
+mod preferences;
 mod projects;
 mod providers;
 mod responses;

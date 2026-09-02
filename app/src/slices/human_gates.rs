@@ -104,7 +104,7 @@ async fn detail(
     };
     match graft {
         PageGraft::Document => {
-            let mut response = responses::chat_page_response(page::TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::TITLE, &state, &view)?;
             responses::apply_patch_status(&mut response, PatchStatus::Ok);
             Ok(response)
         }
@@ -133,7 +133,7 @@ fn static_error(
     let view = ErrorView { message };
     match graft {
         PageGraft::Document => {
-            let mut response = responses::chat_page_response(page::TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::TITLE, state, &view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }

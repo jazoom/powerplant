@@ -9,6 +9,7 @@ use crate::{
     },
     models::ModelCatalogue,
     plan_login::PlanLogin,
+    preferences::Preferences,
     projects::ProjectStore,
     providers::ChatBackend,
     sandbox::SandboxFleet,
@@ -30,6 +31,7 @@ pub(crate) struct AppState {
     pub(crate) chat: Arc<ChatBackend>,
     pub(crate) models: Arc<ModelCatalogue>,
     pub(crate) plan_login: Arc<PlanLogin>,
+    pub(crate) preferences: Arc<Preferences>,
     pub(crate) agents: Arc<AgentStore>,
     pub(crate) projects: Arc<ProjectStore>,
     pub(crate) sandboxes: Arc<SandboxFleet>,
@@ -101,6 +103,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         .map_err(|_| "The workflow workspace store is unreadable.".to_owned())?;
     let vault = ProviderVault::open(config.data_dir.join("providers.json"))
         .map_err(|_| "The provider vault is unreadable.".to_owned())?;
+    let preferences = Preferences::open(config.data_dir.join("preferences.json"));
     let state = AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
@@ -109,6 +112,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         chat: Arc::new(ChatBackend::Rig),
         models: Arc::new(ModelCatalogue::default()),
         plan_login: Arc::new(PlanLogin::new()),
+        preferences: Arc::new(preferences),
         agents: Arc::new(agents),
         projects: Arc::new(projects),
         sandboxes: Arc::new(sandboxes),

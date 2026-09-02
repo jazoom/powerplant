@@ -655,7 +655,7 @@ pub(crate) fn navigate_page(state: &AppState, view: &ChatViewModel) -> AppResult
         Ok(response) => Ok(response),
         Err(error) if error.kind() == hypergraft::PatchBuildErrorKind::ResponseLimit => {
             crate::error::trace_patch_build_failure("construct chat page navigation patch", &error);
-            responses::chat_page_response(&view.document_title, &state.assets, view)
+            responses::chat_page_response(&view.document_title, state, view)
         }
         Err(error) => Err(error.into()),
     }
@@ -666,7 +666,7 @@ pub(crate) fn render_document(
     status: PatchStatus,
     view: ChatViewModel,
 ) -> AppResult<Response> {
-    let mut response = responses::chat_page_response(&view.document_title, &state.assets, &view)?;
+    let mut response = responses::chat_page_response(&view.document_title, state, &view)?;
     responses::apply_patch_status(&mut response, status);
     Ok(response)
 }

@@ -1,12 +1,13 @@
 use axum::{
     body::{Body, to_bytes},
-    http::{Request, StatusCode, header},
+    http::{Method, Request, StatusCode, header},
     middleware::from_fn_with_state,
 };
 use tower::ServiceExt;
 
 use crate::{
     config::RuntimeConfig,
+    preferences::Theme,
     providers::{ProviderConnection, ProviderKind},
     sessions,
     state::AppState,
@@ -94,4 +95,78 @@ async fn settings_supports_documents_and_navigation_only() {
         .await
         .expect("patch");
     assert_eq!(patch.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn the_initial_document_renders_the_saved_theme_and_selection() {
+    let state = test_state();
+    state
+        .preferences
+        .set_theme(Theme::SpringfieldDark)
+        .expect("theme");
+    let token = connected(&state);
+
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/settings")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("settings");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(text.contains("<html lang=\"en-AU\" data-theme=\"springfield-dark\">"));
+    assert!(text.contains("data-active-theme=\"springfield-dark\""));
+    assert_eq!(text.matches("selected").count(), 1);
+}
+
+#[tokio::test]
+async fn a_theme_patch_persists_and_returns_the_authoritative_selector() {
+    let state = test_state();
+    let token = connected(&state);
+
+    let response = app(&state)
+        .oneshot(theme_request(&token, "springfield-dark"))
+        .await
+        .expect("theme patch");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.preferences.theme(), Theme::SpringfieldDark);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("operation=\"children\" target=\"theme-setting\""));
+    assert!(text.contains("data-active-theme=\"springfield-dark\""));
+    assert_eq!(text.matches("selected").count(), 1);
+}
+
+#[tokio::test]
+async fn an_unknown_theme_is_rejected_without_changing_the_preference() {
+    let state = test_state();
+    let token = connected(&state);
+
+    let response = app(&state)
+        .oneshot(theme_request(&token, "unknown"))
+        .await
+        .expect("theme patch");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(state.preferences.theme(), Theme::SpringfieldLight);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose a listed theme."));
+    assert!(text.contains("data-active-theme=\"springfield-light\""));
+}
+
+fn theme_request(token: &str, theme: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/settings/theme")
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from(format!("theme={theme}")))
+        .unwrap()
 }

@@ -32,8 +32,7 @@ async fn index(
     let view = RunIndexView::from_summaries(&state.workflow_runs.summaries(), &state.projects);
     match graft {
         PageGraft::Document => {
-            let mut response =
-                responses::chat_page_response(page::INDEX_TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::INDEX_TITLE, &state, &view)?;
             responses::apply_patch_status(&mut response, PatchStatus::Ok);
             Ok(response)
         }
@@ -61,8 +60,7 @@ async fn detail(
         RunDetailView::from_run(&run, &state.workflows, &state.environments, &state.projects);
     match graft {
         GraftRequest::Document => {
-            let mut response =
-                responses::chat_page_response(page::DETAIL_TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::DETAIL_TITLE, &state, &view)?;
             responses::apply_patch_status(&mut response, PatchStatus::Ok);
             Ok(response)
         }
@@ -103,8 +101,7 @@ async fn artefact(
     let view = ArtefactView::from_record(&run, record, &state);
     match graft {
         PageGraft::Document => {
-            let mut response =
-                responses::chat_page_response(page::ARTEFACT_TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::ARTEFACT_TITLE, &state, &view)?;
             responses::apply_patch_status(&mut response, PatchStatus::Ok);
             Ok(response)
         }

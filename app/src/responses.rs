@@ -7,9 +7,9 @@ use axum::{
 };
 
 use crate::{
-    assets::AssetPaths,
     error::{AppResult, AppResultExt},
     security::CspNonce,
+    state::AppState,
 };
 
 pub(crate) fn apply_patch_status(response: &mut Response, status: hypergraft::PatchStatus) {
@@ -61,7 +61,7 @@ impl FullDocument {
 fn render_page<T>(
     status: StatusCode,
     title: &str,
-    assets: &AssetPaths,
+    state: &AppState,
     document: FullDocument,
     content: &T,
 ) -> AppResult<Response>
@@ -75,14 +75,16 @@ where
         let html = match document {
             FullDocument::Connect => nonce.render(&ConnectPage {
                 title,
-                css_path: &assets.css_path,
-                js_path: &assets.js_path,
+                css_path: &state.assets.css_path,
+                js_path: &state.assets.js_path,
+                theme: state.preferences.theme().as_str(),
                 content: &content_html,
             })?,
             FullDocument::Chat => nonce.render(&ChatPage {
                 title,
-                css_path: &assets.css_path,
-                js_path: &assets.js_path,
+                css_path: &state.assets.css_path,
+                js_path: &state.assets.js_path,
+                theme: state.preferences.theme().as_str(),
                 content: &content_html,
             })?,
         };
@@ -93,30 +95,24 @@ where
 
 pub(crate) fn connect_page_response<T>(
     title: &str,
-    assets: &AssetPaths,
+    state: &AppState,
     content: &T,
 ) -> AppResult<Response>
 where
     T: Template,
 {
-    render_page(
-        StatusCode::OK,
-        title,
-        assets,
-        FullDocument::Connect,
-        content,
-    )
+    render_page(StatusCode::OK, title, state, FullDocument::Connect, content)
 }
 
 pub(crate) fn chat_page_response<T>(
     title: &str,
-    assets: &AssetPaths,
+    state: &AppState,
     content: &T,
 ) -> AppResult<Response>
 where
     T: Template,
 {
-    render_page(StatusCode::OK, title, assets, FullDocument::Chat, content)
+    render_page(StatusCode::OK, title, state, FullDocument::Chat, content)
 }
 
 pub(crate) fn internal_error_response() -> Response {
@@ -150,6 +146,7 @@ struct ConnectPage<'a> {
     title: &'a str,
     css_path: &'a str,
     js_path: &'a str,
+    theme: &'a str,
     content: &'a str,
 }
 
@@ -159,5 +156,6 @@ struct ChatPage<'a> {
     title: &'a str,
     css_path: &'a str,
     js_path: &'a str,
+    theme: &'a str,
     content: &'a str,
 }

@@ -344,7 +344,7 @@ fn render(
     match graft {
         GraftRequest::Document => {
             let mut response =
-                responses::connect_page_response(page::DOCUMENT_TITLE, &state.assets, &view)?;
+                responses::connect_page_response(page::DOCUMENT_TITLE, state, &view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }

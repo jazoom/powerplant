@@ -406,8 +406,7 @@ async fn render_catalogue(state: &AppState, graft: PageGraft) -> AppResult<Respo
     .await;
     match graft {
         PageGraft::Document => {
-            let mut response =
-                responses::chat_page_response(page::INDEX_TITLE, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(page::INDEX_TITLE, state, &view)?;
             responses::apply_patch_status(&mut response, PatchStatus::Ok);
             Ok(response)
         }
@@ -428,7 +427,7 @@ fn render_form_page(
 ) -> AppResult<Response> {
     match graft {
         hypergraft::GraftRequest::Document => {
-            let mut response = responses::chat_page_response(title, &state.assets, &view)?;
+            let mut response = responses::chat_page_response(title, state, &view)?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }
