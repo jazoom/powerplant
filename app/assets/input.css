@@ -245,6 +245,9 @@
         background: oklch(86.84% 0.1617 96.9 / 0.12);
     }
 
+    body:has(#chat-main [data-section="projects"])
+        .app-index-nav
+        [data-nav="projects"],
     body:has(#chat-main [data-section="agents"])
         .app-index-nav
         [data-nav="agents"],
@@ -262,6 +265,9 @@
         border-color: var(--powerplant-cover-deep);
     }
 
+    body:has(#chat-main [data-section="projects"])
+        .app-index-nav
+        [data-nav="projects"]::before,
     body:has(#chat-main [data-section="agents"])
         .app-index-nav
         [data-nav="agents"]::before,
@@ -1006,6 +1012,9 @@
         border-right: 1px solid oklch(100% 0 0 / 0.12);
     }
 
+    body:has(#chat-main [data-section="projects"])
+        .app-index-nav
+        [data-nav="projects"]::before,
     body:has(#chat-main [data-section="agents"])
         .app-index-nav
         [data-nav="agents"]::before,

@@ -34,17 +34,20 @@
       {% for agent in agents %}
         <li class="record-row">
           <div>
-            {% if agent.desk_href != "" %}
-              <a
-                href="{{ agent.desk_href }}"
-                data-graft
-                class="link link-hover font-medium"
-                >{{ agent.name }}</a
-              >
-              <p class="text-quiet text-xs">Project desk</p>
-            {% else %}
-              <span class="font-medium">{{ agent.name }}</span>
+            <span class="font-medium">{{ agent.name }}</span>
+            {% if agent.projects.is_empty() %}
               <p class="text-quiet text-xs">No matching project</p>
+            {% else %}
+              <p class="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                {% for project in agent.projects %}
+                  <a
+                    href="{{ project.href }}"
+                    data-graft
+                    class="link link-hover"
+                    >{{ project.name }}</a
+                  >
+                {% endfor %}
+              </p>
             {% endif %}
           </div>
           <a

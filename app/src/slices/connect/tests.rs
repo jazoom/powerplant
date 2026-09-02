@@ -600,7 +600,10 @@ async fn a_new_process_restores_a_session_from_the_vault_file() {
         .expect("chat");
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "/projects/new"
+    );
     let cookies = set_cookies(&response);
     assert!(
         cookies

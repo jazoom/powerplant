@@ -141,6 +141,130 @@ async fn a_catalogue_patch_is_rejected() {
 }
 
 #[tokio::test]
+async fn root_redirects_an_empty_catalogue_to_new_project() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("root");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "/projects/new"
+    );
+}
+
+#[tokio::test]
+async fn root_redirects_one_project_to_its_detail() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    create_agent(&state, "Worker", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("root");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        format!("/projects/{}", project.id.as_hex()).as_str()
+    );
+}
+
+#[tokio::test]
+async fn root_redirects_multiple_projects_to_the_catalogue() {
+    let state = test_state();
+    let token = connected(&state);
+    let first = git_worktree();
+    let second = git_worktree();
+    state
+        .projects
+        .create("Harbour".to_owned(), first.path().to_path_buf())
+        .expect("first");
+    state
+        .projects
+        .create("Quay".to_owned(), second.path().to_path_buf())
+        .expect("second");
+    keep_dir(&state, first);
+    keep_dir(&state, second);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("root");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "/projects"
+    );
+}
+
+#[tokio::test]
+async fn the_catalogue_orders_recent_session_projects_first() {
+    let state = test_state();
+    let token = connected(&state);
+    let first_dir = git_worktree();
+    let second_dir = git_worktree();
+    state
+        .projects
+        .create("Harbour".to_owned(), first_dir.path().to_path_buf())
+        .expect("first");
+    let second = state
+        .projects
+        .create("Quay".to_owned(), second_dir.path().to_path_buf())
+        .expect("second");
+    keep_dir(&state, first_dir);
+    keep_dir(&state, second_dir);
+    let session = sessions::SessionId::from_validated(
+        &sessions::ValidatedToken::parse(&token).expect("session token"),
+    );
+    state.sessions.remember_conversation(
+        &session,
+        sessions::ConversationKey {
+            project_id: second.id,
+            agent_id: crate::agents::AgentId::generate().expect("agent"),
+        },
+    );
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("catalogue");
+    let text = body_text(response).await;
+    let quay = text.find("Quay").expect("recent");
+    let harbour = text.find("Harbour").expect("other");
+    assert!(quay < harbour);
+}
+
+#[tokio::test]
 async fn create_redirects_to_the_project_detail() {
     let state = test_state();
     let token = connected(&state);

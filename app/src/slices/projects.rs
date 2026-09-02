@@ -29,6 +29,7 @@ use self::{
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(root))
         .route("/projects", get(catalogue).post(create))
         .route("/projects/new", get(new_project))
         .route("/projects/{project_id}", get(detail))
@@ -45,6 +46,19 @@ pub(super) fn router() -> Router<AppState> {
             "/projects/{project_id}/agents/{agent_id}/jobs/{job_id}/cancel",
             post(desk::cancel),
         )
+}
+
+async fn root(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: GraftRequest,
+) -> AppResult<Response> {
+    let destination = match state.projects.list().as_slice() {
+        [] => "/projects/new".to_owned(),
+        [project] => format!("/projects/{}", project.id.as_hex()),
+        _ => "/projects".to_owned(),
+    };
+    Ok(responses::graft_redirect(graft, &destination))
 }
 
 async fn catalogue(

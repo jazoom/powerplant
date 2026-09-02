@@ -36,3 +36,13 @@ pub(crate) fn eligible_agents(agents: &[AgentRecord], project: &ProjectRecord) -
         .cloned()
         .collect()
 }
+
+pub(crate) fn eligible_projects<'a>(
+    agent: &AgentRecord,
+    projects: &'a [ProjectRecord],
+) -> Vec<&'a ProjectRecord> {
+    projects
+        .iter()
+        .filter(|project| exact_grant(agent, project).is_some())
+        .collect()
+}

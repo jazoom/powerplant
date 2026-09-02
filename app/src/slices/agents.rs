@@ -29,7 +29,6 @@ use self::{
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
-        .route("/", get(root))
         .route("/agents", get(catalogue).post(create))
         .route("/agents/new", get(new_agent))
         .route("/agents/orphans/remove", post(remove_orphan))
@@ -44,20 +43,6 @@ pub(super) fn router() -> Router<AppState> {
 struct AgentQuery {
     #[serde(default)]
     project: String,
-}
-
-async fn root(
-    State(state): State<AppState>,
-    _session: RequiredSession,
-    graft: GraftRequest,
-) -> AppResult<Response> {
-    let agents = state.agents.list();
-    let projects = state.projects.list();
-    let destination = match agents.as_slice() {
-        [agent] => unique_desk_path(agent, &projects).unwrap_or_else(|| "/agents".to_owned()),
-        _ => "/agents".to_owned(),
-    };
-    Ok(responses::graft_redirect(graft, &destination))
 }
 
 async fn catalogue(

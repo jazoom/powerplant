@@ -48,62 +48,6 @@ fn connected(state: &AppState) -> String {
 }
 
 #[tokio::test]
-async fn root_redirects_to_the_catalogue_when_no_agent_exists() {
-    let state = test_state();
-    let token = connected(&state);
-    let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .uri("/")
-                .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("root");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
-}
-
-#[tokio::test]
-async fn root_redirects_to_the_catalogue_when_the_sole_agent_has_no_project() {
-    let state = test_state();
-    let token = connected(&state);
-    let dir = tempfile::tempdir().expect("dir");
-    state
-        .agents
-        .create(AgentDraft {
-            name: "Only".to_owned(),
-            instructions: String::new(),
-            tools: vec![ToolId::List],
-            directories: vec![DirectoryGrant {
-                alias: "project".to_owned(),
-                host_path: dir.path().to_path_buf(),
-                access: AccessMode::ReadWrite,
-            }],
-            primary_directory: "project".to_owned(),
-        })
-        .expect("agent");
-    state
-        .scratch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(dir);
-    let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .uri("/")
-                .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("root");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/agents");
-}
-
-#[tokio::test]
 async fn a_catalogue_document_uses_chat_main() {
     let state = test_state();
     let token = connected(&state);
@@ -124,6 +68,80 @@ async fn a_catalogue_document_uses_chat_main() {
     assert_eq!(text.matches("id=\"chat-main\"").count(), 1);
     assert!(text.contains("href=\"/agents/new\""));
     assert!(text.contains("data-graft"));
+}
+
+#[tokio::test]
+async fn the_catalogue_links_each_exact_grant_match() {
+    let state = test_state();
+    let token = connected(&state);
+    let harbour_dir = git_worktree();
+    let quay_dir = git_worktree();
+    let other_dir = git_worktree();
+    let harbour = state
+        .projects
+        .create("Harbour".to_owned(), harbour_dir.path().to_path_buf())
+        .expect("harbour");
+    let quay = state
+        .projects
+        .create("Quay".to_owned(), quay_dir.path().to_path_buf())
+        .expect("quay");
+    let both = state
+        .agents
+        .create(AgentDraft {
+            name: "Both".to_owned(),
+            instructions: String::new(),
+            tools: vec![ToolId::List],
+            directories: vec![
+                DirectoryGrant {
+                    alias: "harbour".to_owned(),
+                    host_path: harbour.host_path.clone(),
+                    access: AccessMode::ReadWrite,
+                },
+                DirectoryGrant {
+                    alias: "quay".to_owned(),
+                    host_path: quay.host_path.clone(),
+                    access: AccessMode::ReadOnly,
+                },
+            ],
+            primary_directory: "harbour".to_owned(),
+        })
+        .expect("both");
+    let none = state
+        .agents
+        .create(AgentDraft {
+            name: "None".to_owned(),
+            instructions: String::new(),
+            tools: vec![ToolId::List],
+            directories: vec![DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: other_dir.path().to_path_buf(),
+                access: AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("none");
+    keep_dir(&state, harbour_dir);
+    keep_dir(&state, quay_dir);
+    keep_dir(&state, other_dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("catalogue");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Both"));
+    assert!(text.contains("None"));
+    assert!(text.contains(&crate::projects::desk_path(&harbour.id, &both.id)));
+    assert!(text.contains(&crate::projects::desk_path(&quay.id, &both.id)));
+    assert!(!text.contains(&crate::projects::desk_path(&harbour.id, &none.id)));
+    assert!(!text.contains(&crate::projects::desk_path(&quay.id, &none.id)));
+    assert!(text.contains("No matching project"));
 }
 
 #[tokio::test]
