@@ -114,17 +114,23 @@ The palette combines olive covers, pale yellow paper, sunshine actions and lime 
 ## Surfaces
 
 - The product uses one light paper theme inside an olive shell.
-- The desktop shell uses a persistent index for agents, workflows, environments and runs.
+- The desktop shell uses a persistent index for projects, agents, workflows, environments and runs.
+- The brand mark and the first index link go to `/projects`.
 - The mobile shell changes the index to a compact masthead and horizontal navigation.
+- The mobile row stays a generic product index. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
-- Chat uses a model desk, a readiness route, a transcript sheet and an attached yellow composer.
+- The project desk uses model controls, a readiness route, a transcript sheet and an attached yellow composer.
 - Connect uses a dark setup introduction beside a pale provider file.
 - Forms use bordered field groups and dense controls without decorative cards.
 
 ## Hierarchy
 
+- Projects come first in the product index.
 - The page title and next action form the first visual level.
+- On the project desk, the project name is the title. The host path is quiet monospace metadata.
 - Readiness states appear before task input.
+- Quick task Send is the primary composer action.
+- Configured workflows sit in an advanced disclosure on the same composer.
 - Yellow identifies actions and the composer.
 - Green identifies ready or connected states.
 - Red identifies destructive actions and errors.
@@ -137,6 +143,11 @@ The palette combines olive covers, pale yellow paper, sunshine actions and lime 
 - Keep shared shell and material styles in `app/assets/input.css`.
 - Use square corners, thin rules and restrained shadows.
 - Use sky blue for slim file register strips and information.
+- Keep Projects as the first index link and the brand destination.
+- Keep mobile navigation labels generic. Use the Projects page as the project switcher.
+- Do not put project names in the permanent mobile row.
+- Keep Quick task Send as the primary composer action.
+- Keep configured workflows inside an advanced disclosure.
 - Keep native links as navigation fallbacks for Hypergraft routes.
 - Keep focus indicators visible on every interactive control.
 - Respect reduced-motion preferences.

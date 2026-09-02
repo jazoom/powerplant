@@ -6,4 +6,7 @@ node_modules
 /target
 /.worktrees
 /.scratch.md
-/.impeccable
+/.impeccable/*
+!/.impeccable/surfaces/
+/.impeccable/surfaces/*
+!/.impeccable/surfaces/*.md
