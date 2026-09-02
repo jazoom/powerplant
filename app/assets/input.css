@@ -1,12 +1,14 @@
 @import "tailwindcss";
 
 @plugin "daisyui" {
-    themes: powerplant-casefile --default;
+    themes:
+        springfield-light --default,
+        springfield-dark;
     logs: false;
 }
 
 @plugin "daisyui/theme" {
-    name: "powerplant-casefile";
+    name: "springfield-light";
     default: true;
     prefersdark: false;
     color-scheme: light;
@@ -40,6 +42,41 @@
     --noise: 0;
 }
 
+@plugin "daisyui/theme" {
+    name: "springfield-dark";
+    default: false;
+    prefersdark: false;
+    color-scheme: dark;
+    --color-base-100: oklch(22.5% 0.028 112);
+    --color-base-200: oklch(26.5% 0.035 120);
+    --color-base-300: oklch(39% 0.042 115);
+    --color-base-content: oklch(91% 0.028 100);
+    --color-primary: oklch(82.5% 0.15 96);
+    --color-primary-content: oklch(19% 0.025 120);
+    --color-secondary: oklch(63% 0.09 215);
+    --color-secondary-content: oklch(16% 0.025 120);
+    --color-accent: oklch(72% 0.14 135);
+    --color-accent-content: oklch(16% 0.025 120);
+    --color-neutral: oklch(16.5% 0.023 122);
+    --color-neutral-content: oklch(91% 0.028 100);
+    --color-warning: oklch(82.5% 0.15 96);
+    --color-warning-content: oklch(19% 0.025 120);
+    --color-info: oklch(63% 0.09 215);
+    --color-info-content: oklch(16% 0.025 120);
+    --color-success: oklch(68% 0.14 139);
+    --color-success-content: oklch(16% 0.025 120);
+    --color-error: oklch(70% 0.15 35);
+    --color-error-content: oklch(16% 0.025 35);
+    --radius-selector: 0.125rem;
+    --radius-field: 0.125rem;
+    --radius-box: 0.125rem;
+    --size-selector: 0.25rem;
+    --size-field: 0.25rem;
+    --border: 1px;
+    --depth: 0;
+    --noise: 0;
+}
+
 @source "../src/slices/**/*.html";
 @source "../src/shared_templates/**/*.html";
 @source "../src/**/*.rs";
@@ -55,11 +92,12 @@
 }
 
 @utility text-composer-quiet {
-    color: oklch(40% 0.05 115);
+    color: var(--powerplant-composer-quiet);
 }
 
 @layer base {
-    :root {
+    :root,
+    [data-theme="springfield-light"] {
         --powerplant-cover: oklch(26.7% 0.0333 118.41);
         --powerplant-cover-deep: oklch(19.34% 0.0197 121.82);
         --powerplant-paper: oklch(95.96% 0.0434 100.07);
@@ -71,11 +109,84 @@
         --powerplant-strong-rule: oklch(54.29% 0.0556 128.1);
         --powerplant-action: oklch(86.84% 0.1617 96.9);
         --powerplant-action-deep: oklch(64.79% 0.1318 94.04);
+        --powerplant-action-hover: oklch(82% 0.16 96.9);
+        --powerplant-action-ink: oklch(26.7% 0.0333 118.41);
         --powerplant-focus: oklch(52.28% 0.1304 133.62);
         --powerplant-success: oklch(52.37% 0.1292 139.2);
+        --powerplant-success-bright: oklch(78% 0.2 125);
+        --powerplant-success-ink: oklch(34% 0.1 139);
+        --powerplant-success-wash: oklch(91% 0.08 130);
+        --powerplant-error-ink: oklch(37% 0.12 34);
         --powerplant-error-wash: oklch(91% 0.055 38);
         --powerplant-warning-wash: oklch(95% 0.09 98);
+        --powerplant-info-border: oklch(60% 0.08 212);
         --powerplant-info-wash: oklch(93% 0.04 212);
+        --powerplant-control: oklch(99% 0.02 100);
+        --powerplant-composer: oklch(86.84% 0.1617 96.9);
+        --powerplant-composer-control: oklch(97% 0.09 97);
+        --powerplant-composer-link: oklch(31% 0.09 137);
+        --powerplant-composer-quiet: oklch(40% 0.05 115);
+        --powerplant-link: oklch(43% 0.11 137);
+        --powerplant-user-turn: oklch(95.03% 0.0942 98.1);
+        --powerplant-on-cover: oklch(93% 0.05 115);
+        --powerplant-on-cover-bright: oklch(98% 0.03 100);
+        --powerplant-on-cover-mid: oklch(87% 0.055 116);
+        --powerplant-on-cover-muted: oklch(84% 0.06 116);
+        --powerplant-on-cover-dim: oklch(74% 0.07 116);
+        --powerplant-cover-rule: oklch(100% 0 0 / 0.18);
+        --powerplant-cover-rule-soft: oklch(100% 0 0 / 0.17);
+        --powerplant-cover-rule-faint: oklch(100% 0 0 / 0.12);
+        --powerplant-cover-hover: oklch(86.84% 0.1617 96.9 / 0.12);
+        --powerplant-local-centre: oklch(100% 0 0);
+        --powerplant-shadow-deep: oklch(0% 0 0 / 0.34);
+        --powerplant-shadow-medium: oklch(0% 0 0 / 0.22);
+        --powerplant-shadow-soft: oklch(0% 0 0 / 0.08);
+    }
+
+    [data-theme="springfield-dark"] {
+        --powerplant-cover: oklch(16.5% 0.023 122);
+        --powerplant-cover-deep: oklch(11.5% 0.018 124);
+        --powerplant-paper: oklch(22.5% 0.028 112);
+        --powerplant-paper-green: oklch(26.5% 0.035 120);
+        --powerplant-sky: oklch(32% 0.052 215);
+        --powerplant-ink: oklch(91% 0.028 100);
+        --powerplant-quiet-ink: oklch(70% 0.035 108);
+        --powerplant-rule: oklch(39% 0.042 115);
+        --powerplant-strong-rule: oklch(52% 0.05 120);
+        --powerplant-action: oklch(82.5% 0.15 96);
+        --powerplant-action-deep: oklch(69% 0.13 94);
+        --powerplant-action-hover: oklch(87% 0.16 96);
+        --powerplant-action-ink: oklch(19% 0.025 120);
+        --powerplant-focus: oklch(80% 0.16 105);
+        --powerplant-success: oklch(68% 0.14 139);
+        --powerplant-success-bright: oklch(74% 0.18 132);
+        --powerplant-success-ink: oklch(84% 0.12 139);
+        --powerplant-success-wash: oklch(29% 0.07 139);
+        --powerplant-error-ink: oklch(87% 0.08 35);
+        --powerplant-error-wash: oklch(27% 0.08 30);
+        --powerplant-warning-wash: oklch(29% 0.07 95);
+        --powerplant-info-border: oklch(63% 0.09 215);
+        --powerplant-info-wash: oklch(27% 0.05 220);
+        --powerplant-control: oklch(18.5% 0.021 116);
+        --powerplant-composer: oklch(30% 0.065 92);
+        --powerplant-composer-control: oklch(20% 0.028 105);
+        --powerplant-composer-link: oklch(80% 0.13 135);
+        --powerplant-composer-quiet: oklch(76% 0.045 98);
+        --powerplant-link: oklch(79% 0.13 135);
+        --powerplant-user-turn: oklch(28% 0.055 95);
+        --powerplant-on-cover: oklch(91% 0.028 100);
+        --powerplant-on-cover-bright: oklch(96% 0.02 100);
+        --powerplant-on-cover-mid: oklch(87% 0.035 105);
+        --powerplant-on-cover-muted: oklch(77% 0.045 108);
+        --powerplant-on-cover-dim: oklch(66% 0.05 112);
+        --powerplant-cover-rule: oklch(100% 0 0 / 0.18);
+        --powerplant-cover-rule-soft: oklch(100% 0 0 / 0.15);
+        --powerplant-cover-rule-faint: oklch(100% 0 0 / 0.1);
+        --powerplant-cover-hover: oklch(82.5% 0.15 96 / 0.13);
+        --powerplant-local-centre: oklch(91% 0.028 100);
+        --powerplant-shadow-deep: oklch(0% 0 0 / 0.55);
+        --powerplant-shadow-medium: oklch(0% 0 0 / 0.42);
+        --powerplant-shadow-soft: oklch(0% 0 0 / 0.28);
     }
 
     html {
@@ -129,7 +240,7 @@
     }
 
     ::selection {
-        color: var(--powerplant-ink);
+        color: var(--powerplant-action-ink);
         background: var(--powerplant-action);
     }
 
@@ -147,7 +258,7 @@
         left: 0.5rem;
         z-index: 70;
         padding: 0.6rem 0.9rem;
-        color: var(--powerplant-cover);
+        color: var(--powerplant-action-ink);
         background: var(--powerplant-action);
         font-weight: 600;
         transform: translateY(-5rem);
@@ -164,9 +275,9 @@
         max-width: 96rem;
         margin: 0 auto;
         overflow: clip;
-        border: 1px solid oklch(100% 0 0 / 0.18);
+        border: 1px solid var(--powerplant-cover-rule);
         background: var(--powerplant-paper);
-        box-shadow: 0 1.1rem 3.4rem oklch(0% 0 0 / 0.34);
+        box-shadow: 0 1.1rem 3.4rem var(--powerplant-shadow-deep);
     }
 
     body:has(.chat-sheet) .app-frame {
@@ -182,7 +293,7 @@
         min-height: 0;
         align-self: start;
         flex-direction: column;
-        color: oklch(93% 0.05 115);
+        color: var(--powerplant-on-cover);
         background: var(--powerplant-cover);
         border-right: 1px solid var(--powerplant-cover-deep);
     }
@@ -193,8 +304,8 @@
         align-items: center;
         gap: 0.75rem;
         padding: 1.15rem 1.25rem;
-        color: oklch(98% 0.03 100);
-        border-bottom: 1px solid oklch(100% 0 0 / 0.17);
+        color: var(--powerplant-on-cover-bright);
+        border-bottom: 1px solid var(--powerplant-cover-rule-soft);
         text-decoration: none;
     }
 
@@ -211,13 +322,13 @@
 
     .app-brand small {
         margin-top: 0.1rem;
-        color: oklch(84% 0.06 116);
+        color: var(--powerplant-on-cover-muted);
         font-size: 0.75rem;
     }
 
     .app-index-label {
         margin: 1.5rem 1.25rem 0.5rem;
-        color: oklch(74% 0.07 116);
+        color: var(--powerplant-on-cover-dim);
         font-family: var(--font-mono);
         font-size: 0.68rem;
         letter-spacing: 0.08em;
@@ -234,15 +345,15 @@
         min-height: 3rem;
         margin-left: 0.75rem;
         padding: 0.75rem 1rem;
-        color: oklch(87% 0.055 116);
+        color: var(--powerplant-on-cover-mid);
         border: 1px solid transparent;
         border-right: 0;
         text-decoration: none;
     }
 
     .app-index-nav a:hover {
-        color: white;
-        background: oklch(86.84% 0.1617 96.9 / 0.12);
+        color: var(--powerplant-on-cover-bright);
+        background: var(--powerplant-cover-hover);
     }
 
     body:has(#chat-main [data-section="projects"])
@@ -257,9 +368,10 @@
     body:has(#chat-main [data-section="environments"])
         .app-index-nav
         [data-nav="environments"],
-    body:has(#chat-main [data-section="runs"])
+    body:has(#chat-main [data-section="runs"]) .app-index-nav [data-nav="runs"],
+    body:has(#chat-main [data-section="settings"])
         .app-index-nav
-        [data-nav="runs"] {
+        [data-nav="settings"] {
         color: var(--powerplant-ink);
         background: var(--powerplant-paper);
         border-color: var(--powerplant-cover-deep);
@@ -279,7 +391,10 @@
         [data-nav="environments"]::before,
     body:has(#chat-main [data-section="runs"])
         .app-index-nav
-        [data-nav="runs"]::before {
+        [data-nav="runs"]::before,
+    body:has(#chat-main [data-section="settings"])
+        .app-index-nav
+        [data-nav="settings"]::before {
         position: absolute;
         inset: -1px auto -1px -1px;
         width: 0.3rem;
@@ -290,7 +405,7 @@
     .app-connection {
         margin: auto 1rem 1.1rem;
         padding: 0.9rem 0.25rem 0;
-        border-top: 1px solid oklch(100% 0 0 / 0.17);
+        border-top: 1px solid var(--powerplant-cover-rule-soft);
     }
 
     .app-connection strong,
@@ -299,13 +414,13 @@
     }
 
     .app-connection strong {
-        color: white;
+        color: var(--powerplant-on-cover-bright);
         font-size: 0.8rem;
     }
 
     .app-connection a {
         margin-top: 0.3rem;
-        color: oklch(84% 0.06 116);
+        color: var(--powerplant-on-cover-muted);
         font-size: 0.75rem;
         text-underline-offset: 0.2em;
     }
@@ -317,7 +432,7 @@
         height: 0.45rem;
         margin-right: 0.45rem;
         border-radius: 50%;
-        background: oklch(78% 0.2 125);
+        background: var(--powerplant-success-bright);
     }
 
     .app-file {
@@ -360,7 +475,7 @@
         content: "";
         border: 2px solid var(--powerplant-success);
         border-radius: 50%;
-        background: oklch(100% 0 0);
+        background: var(--powerplant-local-centre);
     }
 
     .app-page {
@@ -431,13 +546,43 @@
         margin-bottom: 0.5rem;
     }
 
+    .settings-list {
+        margin: 0;
+        padding: 0;
+        border-top: 1px solid var(--powerplant-strong-rule);
+        list-style: none;
+    }
+
+    .settings-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(13rem, 18rem);
+        align-items: start;
+        gap: 2rem;
+        padding: 1.35rem 0 1.5rem;
+        border-bottom: 1px solid var(--powerplant-rule);
+    }
+
+    .settings-row h2 {
+        font-size: 1.125rem;
+        font-weight: 600;
+    }
+
+    .settings-control {
+        display: grid;
+        gap: 0.45rem;
+    }
+
+    .settings-control .select {
+        width: 100%;
+    }
+
     .btn {
         min-height: 2.5rem;
         border-radius: 0.125rem;
         font-family: var(--font-heading);
         font-weight: 600;
         text-transform: none;
-        box-shadow: 0 0.16rem 0.45rem oklch(0% 0 0 / 0.08);
+        box-shadow: 0 0.16rem 0.45rem var(--powerplant-shadow-soft);
     }
 
     .btn-sm {
@@ -446,13 +591,13 @@
 
     .btn-primary {
         border-color: var(--powerplant-cover);
-        color: var(--powerplant-ink);
+        color: var(--powerplant-action-ink);
         background: var(--powerplant-action);
     }
 
     .btn-primary:hover {
         border-color: var(--powerplant-cover-deep);
-        background: oklch(82% 0.16 96.9);
+        background: var(--powerplant-action-hover);
     }
 
     .btn-outline {
@@ -472,7 +617,7 @@
         border-color: var(--powerplant-strong-rule);
         border-radius: 0.125rem;
         color: var(--powerplant-ink);
-        background: oklch(99% 0.02 100);
+        background: var(--powerplant-control);
     }
 
     .textarea {
@@ -494,7 +639,7 @@
     .checkbox,
     .radio {
         border-color: var(--powerplant-strong-rule);
-        background: oklch(99% 0.02 100);
+        background: var(--powerplant-control);
     }
 
     .label,
@@ -507,7 +652,7 @@
     }
 
     .link {
-        color: oklch(43% 0.11 137);
+        color: var(--powerplant-link);
         font-weight: 600;
         text-decoration-thickness: 1px;
         text-underline-offset: 0.2em;
@@ -521,7 +666,7 @@
 
     .alert-error {
         border-color: var(--color-error);
-        color: oklch(37% 0.12 34);
+        color: var(--powerplant-error-ink);
         background: var(--powerplant-error-wash);
     }
 
@@ -532,7 +677,7 @@
     }
 
     .alert-info {
-        border-color: oklch(60% 0.08 212);
+        border-color: var(--powerplant-info-border);
         color: var(--powerplant-ink);
         background: var(--powerplant-info-wash);
     }
@@ -546,8 +691,8 @@
 
     .badge-success {
         border-color: var(--powerplant-success);
-        color: oklch(34% 0.1 139);
-        background: oklch(91% 0.08 130);
+        color: var(--powerplant-success-ink);
+        background: var(--powerplant-success-wash);
     }
 
     .badge-warning {
@@ -557,7 +702,7 @@
     }
 
     .badge-info {
-        border-color: oklch(60% 0.08 212);
+        border-color: var(--powerplant-info-border);
         color: var(--powerplant-ink);
         background: var(--powerplant-info-wash);
     }
@@ -573,7 +718,7 @@
     .dropdown-content {
         border-color: var(--powerplant-strong-rule);
         background: var(--powerplant-paper);
-        box-shadow: 0 0.8rem 2rem oklch(0% 0 0 / 0.22);
+        box-shadow: 0 0.8rem 2rem var(--powerplant-shadow-medium);
     }
 
     .powerplant-mark {
@@ -729,7 +874,7 @@
     }
 
     .chat-turn-user {
-        background: oklch(95.03% 0.0942 98.1);
+        background: var(--powerplant-user-turn);
     }
 
     .chat-turn-meta {
@@ -788,7 +933,7 @@
         overflow-x: auto;
         border: 1px solid var(--powerplant-strong-rule);
         border-radius: 0.125rem;
-        background: oklch(99% 0.02 100);
+        background: var(--powerplant-control);
         padding: 0.75rem 1rem;
         font-family: var(--font-mono);
         font-size: 0.875rem;
@@ -808,7 +953,7 @@
 
     .chat-prose a,
     .prose a {
-        color: oklch(43% 0.11 137);
+        color: var(--powerplant-link);
         text-underline-offset: 0.2em;
         text-decoration: underline;
     }
@@ -832,21 +977,21 @@
         padding: 1rem 1.9rem 1.15rem;
         color: var(--powerplant-ink);
         border-top: 1px solid var(--powerplant-action-deep);
-        background: var(--powerplant-action);
+        background: var(--powerplant-composer);
     }
 
     .composer-dock .input,
     .composer-dock .select,
     .composer-dock .textarea {
-        background: oklch(99% 0.02 100);
+        background: var(--powerplant-control);
     }
 
     .composer-dock .btn-outline {
-        background: oklch(97% 0.09 97);
+        background: var(--powerplant-composer-control);
     }
 
     .composer-dock .link {
-        color: oklch(31% 0.09 137);
+        color: var(--powerplant-composer-link);
     }
 
     .composer-dock :disabled {
@@ -854,7 +999,7 @@
     }
 
     .composer-dock .textarea:disabled::placeholder {
-        color: oklch(40% 0.05 115);
+        color: var(--powerplant-composer-quiet);
         opacity: 1;
     }
 
@@ -865,16 +1010,16 @@
         max-width: 82rem;
         margin: 0 auto;
         overflow: hidden;
-        border: 1px solid oklch(100% 0 0 / 0.18);
+        border: 1px solid var(--powerplant-cover-rule);
         background: var(--powerplant-paper);
-        box-shadow: 0 1.1rem 3.4rem oklch(0% 0 0 / 0.34);
+        box-shadow: 0 1.1rem 3.4rem var(--powerplant-shadow-deep);
     }
 
     .connect-index {
         display: flex;
         min-height: 0;
         flex-direction: column;
-        color: oklch(93% 0.05 115);
+        color: var(--powerplant-on-cover);
         background: var(--powerplant-cover);
         border-right: 1px solid var(--powerplant-cover-deep);
     }
@@ -896,12 +1041,12 @@
     .connect-intro p {
         max-width: 48ch;
         margin-top: 1.5rem;
-        color: oklch(88% 0.04 115);
+        color: var(--powerplant-on-cover-mid);
     }
 
     .connect-intro ol {
         margin-top: 2.5rem;
-        border-top: 1px solid oklch(100% 0 0 / 0.18);
+        border-top: 1px solid var(--powerplant-cover-rule);
         list-style: none;
     }
 
@@ -910,7 +1055,7 @@
         grid-template-columns: 2rem 1fr;
         gap: 0.7rem;
         padding: 0.9rem 0;
-        border-bottom: 1px solid oklch(100% 0 0 / 0.18);
+        border-bottom: 1px solid var(--powerplant-cover-rule);
     }
 
     .connect-intro li span {
@@ -920,7 +1065,7 @@
 
     .connect-local {
         margin: auto clamp(1.5rem, 4vw, 3.5rem) 1.5rem;
-        color: oklch(84% 0.06 116);
+        color: var(--powerplant-on-cover-muted);
         font-size: 0.8rem;
     }
 
@@ -1000,7 +1145,7 @@
     .app-index-nav {
         display: flex;
         overflow-x: auto;
-        border-top: 1px solid oklch(100% 0 0 / 0.17);
+        border-top: 1px solid var(--powerplant-cover-rule-soft);
     }
 
     .app-index-nav a {
@@ -1009,7 +1154,7 @@
         margin: 0;
         padding: 0.65rem 0.9rem;
         border: 0;
-        border-right: 1px solid oklch(100% 0 0 / 0.12);
+        border-right: 1px solid var(--powerplant-cover-rule-faint);
     }
 
     body:has(#chat-main [data-section="projects"])
@@ -1026,7 +1171,10 @@
         [data-nav="environments"]::before,
     body:has(#chat-main [data-section="runs"])
         .app-index-nav
-        [data-nav="runs"]::before {
+        [data-nav="runs"]::before,
+    body:has(#chat-main [data-section="settings"])
+        .app-index-nav
+        [data-nav="settings"]::before {
         inset: auto 0 0;
         width: auto;
         height: 0.25rem;
@@ -1050,6 +1198,11 @@
 
     .record-row {
         align-items: start;
+    }
+
+    .settings-row {
+        grid-template-columns: 1fr;
+        gap: 1rem;
     }
 
     .readiness-route {
@@ -1122,7 +1275,7 @@
     .connect-intro li {
         display: block;
         padding: 0.75rem 0.5rem 0;
-        border-right: 1px solid oklch(100% 0 0 / 0.18);
+        border-right: 1px solid var(--powerplant-cover-rule);
         border-bottom: 0;
         font-size: 0.75rem;
     }

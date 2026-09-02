@@ -8,6 +8,7 @@ mod connect;
 mod environments;
 mod human_gates;
 mod projects;
+mod settings;
 mod workflow_runs;
 mod workflows;
 
@@ -19,6 +20,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(projects::router())
         .merge(agents::router())
         .merge(chat::router())
+        .merge(settings::router())
         .merge(workflow_runs::router())
         .merge(human_gates::router())
         .merge(workflows::router())

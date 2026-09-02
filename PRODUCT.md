@@ -125,6 +125,7 @@ Current capabilities:
 - Inspect run records and their artefacts.
 - Show the newest fifty runs in the run list.
 - Show tool traces in the transcript.
+- Choose Springfield light or Springfield dark as a persistent browser preference.
 
 Current constraints:
 

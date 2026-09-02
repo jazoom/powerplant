@@ -37,6 +37,16 @@ colors:
     composer: "oklch(95.03% 0.0942 98.1)"
     composerControl: "oklch(97% 0.09 97)"
     composerLink: "oklch(31% 0.09 137)"
+    darkCover: "oklch(16.5% 0.023 122)"
+    darkCoverDeep: "oklch(11.5% 0.018 124)"
+    darkPaper: "oklch(22.5% 0.028 112)"
+    darkPaperGreen: "oklch(26.5% 0.035 120)"
+    darkSky: "oklch(32% 0.052 215)"
+    darkInk: "oklch(91% 0.028 100)"
+    darkQuietInk: "oklch(70% 0.035 108)"
+    darkRule: "oklch(39% 0.042 115)"
+    darkControl: "oklch(18.5% 0.021 116)"
+    darkComposer: "oklch(30% 0.065 92)"
 typography:
     display:
         fontFamily: "IBM Plex Sans, ui-sans-serif, system-ui, sans-serif"
@@ -109,12 +119,15 @@ Power Plant presents local agent work as a stable index beside a continuous pape
 
 The interface gives each task a clear location, readiness state and next action. It feels precise, practical and lightly playful.
 
-The palette combines olive covers, pale yellow paper, sunshine actions and lime status marks. Muted sky blue remains an informational accent.
+Springfield light combines olive covers, pale yellow paper, sunshine actions and lime status marks. Muted sky blue remains an informational accent.
+
+Springfield dark moves the paper to deep olive. It keeps yellow actions, green status marks and a dark teal file bar.
 
 ## Surfaces
 
-- The product uses one light paper theme inside an olive shell.
-- The desktop shell uses a persistent index for projects, agents, workflows, environments and runs.
+- The product offers Springfield light and Springfield dark. Springfield light is the default.
+- The theme changes immediately and persists in browser storage.
+- The desktop shell uses a persistent index for projects, agents, workflows, environments, runs and settings.
 - The brand mark and the first index link go to `/projects`.
 - The mobile shell changes the index to a compact masthead and horizontal navigation.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
@@ -144,6 +157,8 @@ The palette combines olive covers, pale yellow paper, sunshine actions and lime 
 - Use square corners, thin rules and restrained shadows.
 - Use sky blue for slim file register strips and information.
 - Keep Projects as the first index link and the brand destination.
+- Put Settings after the work catalogues in the product index.
+- Keep Theme as the first item on the Settings page.
 - Keep mobile navigation labels generic. Use the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
 - Keep Quick task Send as the primary composer action.
