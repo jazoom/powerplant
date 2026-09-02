@@ -1,0 +1,19 @@
+include = ["**/Cargo.toml"]
+exclude = ["**/.worktrees/**", "**/node_modules/**", "**/target/**"]
+
+[formatting]
+inline_table_expand = false
+reorder_keys = false
+
+[[rule]]
+keys = [
+  "dependencies",
+  "*-dependencies",
+  "workspace.dependencies",
+  "workspace.*-dependencies",
+  "target.*.dependencies",
+  "target.*.*-dependencies",
+]
+
+[rule.formatting]
+reorder_keys = true
