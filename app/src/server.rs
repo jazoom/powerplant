@@ -44,7 +44,9 @@ pub(crate) async fn run(log_level: tracing::Level) -> Result<(), Box<dyn std::er
     let static_dir = config.static_dir.clone();
     let assets = AssetPaths::load(&static_dir)
         .map_err(|error| format!("asset configuration error: {error}"))?;
-    let state = state::build(config, assets)
+    let (config, local_data) =
+        crate::local_data::prepare(config).map_err(|error| format!("startup error: {error}"))?;
+    let state = state::build(config, assets, local_data)
         .await
         .map_err(|error| format!("startup error: {error}"))?;
     tokio::spawn(sessions::purge_expired_sessions(state.clone()));

@@ -44,6 +44,7 @@ pub(crate) struct StartupConfig {
     pub(crate) runtime: RuntimeConfig,
     pub(crate) static_dir: PathBuf,
     pub(crate) data_dir: PathBuf,
+    pub(crate) protected_user_roots: Vec<PathBuf>,
 }
 
 impl StartupConfig {
@@ -82,6 +83,7 @@ impl StartupConfig {
             runtime,
             static_dir,
             data_dir: parse_data_dir(&values)?,
+            protected_user_roots: protected_user_roots(&values),
         })
     }
 }
@@ -115,6 +117,17 @@ fn parse_data_dir(values: &HashMap<String, String>) -> Result<PathBuf, String> {
         return Ok(PathBuf::from(home).join(".local/share/powerplant"));
     }
     Err("POWERPLANT_DATA_DIR must be set".to_owned())
+}
+
+fn protected_user_roots(values: &HashMap<String, String>) -> Vec<PathBuf> {
+    ["HOME", "XDG_DATA_HOME", "USERPROFILE", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(|key| {
+            let value = values.get(key).filter(|value| !value.is_empty())?;
+            let path = PathBuf::from(value);
+            path.is_absolute().then_some(path)
+        })
+        .collect()
 }
 
 fn parse_public_origin(value: &str) -> Result<String, String> {

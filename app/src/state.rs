@@ -7,6 +7,7 @@ use crate::{
     environments::{
         EnvironmentCatalogue, EnvironmentPreparationScheduler, EnvironmentSnapshotRepository,
     },
+    local_data::LocalDataReset,
     models::ModelCatalogue,
     plan_login::PlanLogin,
     preferences::Preferences,
@@ -35,6 +36,7 @@ pub(crate) struct AppState {
     pub(crate) agents: Arc<AgentStore>,
     pub(crate) projects: Arc<ProjectStore>,
     pub(crate) folder_picker: ProjectFolderPicker,
+    pub(crate) local_data: LocalDataReset,
     pub(crate) sandboxes: Arc<SandboxFleet>,
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,
     pub(crate) workflows: Arc<WorkflowCatalogue>,
@@ -51,33 +53,33 @@ pub(crate) struct AppState {
     scratch: Arc<std::sync::Mutex<Vec<tempfile::TempDir>>>,
 }
 
-pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<AppState, String> {
-    let agents = AgentStore::open(
-        config.data_dir.join("agents"),
-        &config.data_dir.join("project.json"),
-    )
-    .map_err(|error| error.message().to_owned())?;
-    let projects = ProjectStore::open(config.data_dir.join("projects.json"))
+pub(crate) async fn build(
+    config: StartupConfig,
+    assets: AssetPaths,
+    local_data: LocalDataReset,
+) -> Result<AppState, String> {
+    let data_dir = local_data.root();
+    let agents = AgentStore::open(data_dir.join("agents"), &data_dir.join("project.json"))
+        .map_err(|error| error.message().to_owned())?;
+    let projects = ProjectStore::open(data_dir.join("projects.json"))
         .map_err(|error| error.message().to_owned())?;
     let environments = EnvironmentCatalogue::open(
-        config.data_dir.join("environments.json"),
-        config.data_dir.join("environment-preparation-logs"),
+        data_dir.join("environments.json"),
+        data_dir.join("environment-preparation-logs"),
     )
     .map_err(|error| error.message().to_owned())?;
     let seeds = environments
         .seed_id(crate::environments::seeds::ALPINE_GIT_V1)
         .map(crate::workflows::seeds::production_seeds)
         .unwrap_or_default();
-    let workflows =
-        WorkflowCatalogue::open_with_seeds(config.data_dir.join("workflows.json"), &seeds)
-            .map_err(|error| error.message().to_owned())?;
-    let workflow_artefacts =
-        WorkflowArtefactRepository::open(config.data_dir.join("workflow-artefacts"))
-            .map_err(|error| error.message().to_owned())?;
-    let workflow_runs = WorkflowRunStore::open(config.data_dir.join("workflow-runs"))
+    let workflows = WorkflowCatalogue::open_with_seeds(data_dir.join("workflows.json"), &seeds)
+        .map_err(|error| error.message().to_owned())?;
+    let workflow_artefacts = WorkflowArtefactRepository::open(data_dir.join("workflow-artefacts"))
+        .map_err(|error| error.message().to_owned())?;
+    let workflow_runs = WorkflowRunStore::open(data_dir.join("workflow-runs"))
         .map_err(|error| error.message().to_owned())?;
     let environment_snapshots =
-        EnvironmentSnapshotRepository::open(config.data_dir.join("environment-snapshots"))
+        EnvironmentSnapshotRepository::open(data_dir.join("environment-snapshots"))
             .map_err(|_| "The environment snapshot store is unreadable.".to_owned())?;
     let sandboxes = SandboxFleet::prepare().await;
     let guest_recovery = sandboxes.recover_transient_guests().await;
@@ -98,13 +100,13 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
     let environment_preparations =
         EnvironmentPreparationScheduler::start(environments.clone(), environment_snapshots.clone());
     environment_preparations.wake();
-    let commit_journals = CommitJournals::open(config.data_dir.join("workflow-commit-journals"))
+    let commit_journals = CommitJournals::open(data_dir.join("workflow-commit-journals"))
         .map_err(|_| "The workflow commit journal store is unreadable.".to_owned())?;
-    let workflow_workspaces = WorkflowWorkspaces::open(config.data_dir.join("workflow-workspaces"))
+    let workflow_workspaces = WorkflowWorkspaces::open(data_dir.join("workflow-workspaces"))
         .map_err(|_| "The workflow workspace store is unreadable.".to_owned())?;
-    let vault = ProviderVault::open(config.data_dir.join("providers.json"))
+    let vault = ProviderVault::open(data_dir.join("providers.json"))
         .map_err(|_| "The provider vault is unreadable.".to_owned())?;
-    let preferences = Preferences::open(config.data_dir.join("preferences.json"));
+    let preferences = Preferences::open(data_dir.join("preferences.json"));
     let state = AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
@@ -117,6 +119,7 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         agents: Arc::new(agents),
         projects: Arc::new(projects),
         folder_picker: ProjectFolderPicker::native(),
+        local_data,
         sandboxes: Arc::new(sandboxes),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(workflows),
@@ -132,6 +135,9 @@ pub(crate) async fn build(config: StartupConfig, assets: AssetPaths) -> Result<A
         #[cfg(test)]
         scratch: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
+    if state.local_data.is_pending() {
+        return Err("Power Plant could not reset local data.".to_owned());
+    }
     let active_commit_attempts: Vec<_> = state
         .workflow_runs
         .active_runs()

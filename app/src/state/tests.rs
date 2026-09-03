@@ -31,6 +31,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         agents: Arc::new(AgentStore::in_memory()),
         projects: Arc::new(ProjectStore::in_memory()),
         folder_picker: crate::projects::ProjectFolderPicker::scripted(),
+        local_data: crate::local_data::LocalDataReset::detached(),
         sandboxes: Arc::new(SandboxFleet::scripted()),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(WorkflowCatalogue::in_memory()),

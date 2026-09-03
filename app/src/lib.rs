@@ -6,6 +6,7 @@ mod config;
 mod environments;
 mod error;
 mod hex;
+mod local_data;
 mod markdown;
 mod models;
 mod plan_login;

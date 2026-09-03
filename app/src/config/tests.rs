@@ -104,6 +104,36 @@ fn rejects_relative_static_dir() {
 }
 
 #[test]
+fn records_absolute_protected_user_roots() {
+    let mut values = development_values();
+    values.insert("XDG_DATA_HOME".into(), "/xdg/data".into());
+    values.insert("USERPROFILE".into(), "/users/me".into());
+    values.insert("LOCALAPPDATA".into(), "/users/me/AppData/Local".into());
+    let config = StartupConfig::from_values(values).unwrap();
+    assert_eq!(
+        config.protected_user_roots,
+        vec![
+            std::path::PathBuf::from("/home/powerplant"),
+            std::path::PathBuf::from("/xdg/data"),
+            std::path::PathBuf::from("/users/me"),
+            std::path::PathBuf::from("/users/me/AppData/Local"),
+        ]
+    );
+}
+
+#[test]
+fn ignores_relative_or_empty_protected_user_roots() {
+    let mut values = development_values();
+    values.insert("POWERPLANT_DATA_DIR".into(), "/var/lib/powerplant".into());
+    values.insert("HOME".into(), "relative-home".into());
+    values.insert("XDG_DATA_HOME".into(), String::new());
+    values.insert("USERPROFILE".into(), "users\\me".into());
+    values.insert("LOCALAPPDATA".into(), "AppData/Local".into());
+    let config = StartupConfig::from_values(values).unwrap();
+    assert!(config.protected_user_roots.is_empty());
+}
+
+#[test]
 fn rejects_non_canonical_origin() {
     let mut values = development_values();
     values.insert(
