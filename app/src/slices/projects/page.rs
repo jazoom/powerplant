@@ -111,17 +111,39 @@ impl DetailView {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ProjectFormMode {
+    Initial,
+    Selected,
+    Manual,
+    Edit,
+}
+
+impl ProjectFormMode {
+    pub(super) fn is_initial(self) -> bool {
+        matches!(self, Self::Initial)
+    }
+
+    pub(super) fn is_selected(self) -> bool {
+        matches!(self, Self::Selected)
+    }
+
+    pub(super) fn is_manual(self) -> bool {
+        matches!(self, Self::Manual)
+    }
+}
+
 #[derive(Template)]
 #[template(path = "projects/templates/form.html")]
 pub(super) struct ProjectFormView {
     pub(super) title: &'static str,
     pub(super) lead: &'static str,
+    pub(super) mode: ProjectFormMode,
     pub(super) action: String,
     pub(super) submit: &'static str,
     pub(super) name: String,
     pub(super) path: String,
     pub(super) host_path: String,
-    pub(super) show_path: bool,
     pub(super) revision: String,
     pub(super) error: &'static str,
 }
@@ -129,55 +151,87 @@ pub(super) struct ProjectFormView {
 #[derive(Template)]
 #[template(path = "projects/templates/form.html", block = "project_form")]
 pub(super) struct ProjectFormContents<'a> {
+    pub(super) mode: ProjectFormMode,
     pub(super) action: &'a str,
     pub(super) submit: &'static str,
     pub(super) name: &'a str,
     pub(super) path: &'a str,
     pub(super) host_path: &'a str,
-    pub(super) show_path: bool,
     pub(super) revision: &'a str,
     pub(super) error: &'static str,
 }
 
 impl ProjectFormView {
-    pub(super) fn create(name: &str, path: &str, error: &'static str) -> Self {
-        Self {
-            title: "New project",
-            lead: "Register a local Git worktree. The path stays fixed after creation.",
-            action: "/projects".to_owned(),
-            submit: "Create project",
-            name: name.to_owned(),
-            path: path.to_owned(),
-            host_path: String::new(),
-            show_path: true,
-            revision: String::new(),
+    pub(super) fn initial(error: &'static str) -> Self {
+        Self::create_state(
+            ProjectFormMode::Initial,
+            String::new(),
+            String::new(),
             error,
-        }
+        )
+    }
+
+    pub(super) fn selected(name: &str, path: &str, error: &'static str) -> Self {
+        Self::create_state(
+            ProjectFormMode::Selected,
+            name.to_owned(),
+            path.to_owned(),
+            error,
+        )
+    }
+
+    pub(super) fn manual(name: &str, path: &str, error: &'static str) -> Self {
+        Self::create_state(
+            ProjectFormMode::Manual,
+            name.to_owned(),
+            path.to_owned(),
+            error,
+        )
     }
 
     pub(super) fn edit(record: &ProjectRecord, name: &str, error: &'static str) -> Self {
         Self {
             title: "Rename project",
             lead: "Change the project name. The host path stays fixed.",
+            mode: ProjectFormMode::Edit,
             action: format!("/projects/{}/configuration", record.id.as_hex()),
             submit: "Save name",
             name: name.to_owned(),
             path: String::new(),
             host_path: record.host_path.to_string_lossy().into_owned(),
-            show_path: false,
             revision: record.revision.to_string(),
+            error,
+        }
+    }
+
+    fn create_state(
+        mode: ProjectFormMode,
+        name: String,
+        path: String,
+        error: &'static str,
+    ) -> Self {
+        Self {
+            title: "New project",
+            lead: "Register an existing local Git worktree. Power Plant does not create or clone the repository.",
+            mode,
+            action: "/projects".to_owned(),
+            submit: "Add project",
+            name,
+            path,
+            host_path: String::new(),
+            revision: String::new(),
             error,
         }
     }
 
     pub(super) fn contents(&self) -> ProjectFormContents<'_> {
         ProjectFormContents {
+            mode: self.mode,
             action: &self.action,
             submit: self.submit,
             name: &self.name,
             path: &self.path,
             host_path: &self.host_path,
-            show_path: self.show_path,
             revision: &self.revision,
             error: self.error,
         }

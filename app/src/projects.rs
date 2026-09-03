@@ -1,4 +1,5 @@
 mod eligibility;
+mod folder_picker;
 mod id;
 mod record;
 mod store;
@@ -6,6 +7,7 @@ mod store;
 pub(crate) use eligibility::{
     EligibleGrant, eligibility, eligible_agents, eligible_projects, exact_grant,
 };
+pub(crate) use folder_picker::{FolderPick, ProjectFolderPicker};
 pub(crate) use id::ProjectId;
 pub(crate) use record::{
     MAXIMUM_PROJECTS, ProjectError, ProjectRecord, submitted_host_path, submitted_name,

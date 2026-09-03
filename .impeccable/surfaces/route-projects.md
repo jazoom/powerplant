@@ -6,6 +6,7 @@ related_targets:
     [
         "route:/",
         "route:/projects/new",
+        "route:/projects/folder",
         "route:/projects/{project_id}",
         "route:/projects/{project_id}/configuration",
         "route:/projects/{project_id}/agents/{agent_id}",
@@ -47,6 +48,10 @@ On the catalogue, the primary action is New project.
 
 On an empty catalogue, the primary action is Create the first project.
 
+On the new project page, the primary action is Choose project folder.
+
+After a selected or manual path, the primary action is Add project.
+
 On project detail with no eligible agent, the primary action is Create a starter agent.
 
 On project detail with two or more eligible agents and no remembered agent, the primary action is the canonical desk link for each agent.
@@ -77,7 +82,7 @@ Configured workflow send stays in the advanced disclosure. It uses that workflow
 
 ## Empty states
 
-No projects: the catalogue asks the user to create the first project from an absolute Git worktree path.
+No projects: the catalogue asks the user to create the first project. The new project page chooses an existing Git folder. Manual path entry remains available.
 
 No agent: the project page states that no current agent has an exact directory grant. It offers a starter agent. It offers grant access when other agents exist.
 
@@ -115,6 +120,20 @@ Two or more projects redirect to `/projects`.
 
 The catalogue orders projects by recent session use, then by stable catalogue order.
 
+`/projects/new` presents the native folder chooser action. `POST /projects/folder` is a patch-only command.
+
+The command opens a native dialog on the Power Plant host. It only accepts an existing Git project folder.
+
+A selected folder fills the form with its canonical path. The folder command does not create or clone a project.
+
+Cancellation returns the current form without an error.
+
+A busy chooser returns a conflict patch and leaves the form intact.
+
+`/projects/new?entry=manual` shows the Git project path field as the fallback.
+
+The selected path stays visible and immutable before submission. The final `/projects` command validates and stores the project.
+
 After a successful create, the product redirects to `/projects/{project_id}`.
 
 The canonical desk URL is `/projects/{project_id}/agents/{agent_id}`.
@@ -136,6 +155,8 @@ Configured workflow gates keep Approve candidate, Request revision and Cancel ru
 Keep a real `href` on every ordinary navigation action.
 
 Do not put the project path in route parameters or query values.
+
+The folder command accepts patch representation only.
 
 Do not put project names in the permanent mobile row.
 

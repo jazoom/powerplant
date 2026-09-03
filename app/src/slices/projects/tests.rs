@@ -1193,3 +1193,323 @@ async fn enhanced_grant_navigates_to_the_desk() {
         crate::projects::desk_path(&project.id, &agent.id)
     )));
 }
+
+fn named_git_worktree(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let parent = tempfile::tempdir().expect("parent");
+    let project = parent.path().join(name);
+    std::fs::create_dir(&project).expect("project");
+    git_init(&project);
+    let canonical = project.canonicalize().expect("canonical");
+    (parent, canonical)
+}
+
+#[tokio::test]
+async fn new_project_defaults_to_the_folder_chooser() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects/new")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("new project");
+    let text = body_text(response).await;
+    assert!(text.contains("Choose project folder"));
+    assert!(text.contains("action=\"/projects/folder\""));
+    assert!(text.contains("href=\"/projects/new?entry=manual\""));
+    assert!(text.contains("Enter path manually"));
+    assert!(!text.contains("Add project"));
+    assert!(!text.contains("Git project path"));
+}
+
+#[tokio::test]
+async fn new_project_manual_entry_uses_the_canonical_query() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects/new?entry=manual")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("manual");
+    let text = body_text(response).await;
+    assert!(text.contains("Git project path"));
+    assert!(text.contains("/home/me/projects/my-app"));
+    assert!(text.contains("Add project"));
+    assert!(!text.contains("action=\"/projects/folder\""));
+}
+
+#[tokio::test]
+async fn new_project_rejects_an_unknown_entry_query() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects/new?entry=selected")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("unknown entry");
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn folder_selection_fills_the_form_without_creating_a_project() {
+    let state = test_state();
+    let token = connected(&state);
+    let (dir, path) = named_git_worktree("my-app");
+    state.folder_picker.queue(Some(path.clone()));
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects/folder")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("folder");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"project-form\""));
+    assert!(text.contains("value=\"my-app\""));
+    assert!(text.contains(&path.to_string_lossy().into_owned()));
+    assert!(text.contains("Add project"));
+    assert!(text.contains("Choose another folder"));
+    assert!(state.projects.list().is_empty());
+}
+
+#[tokio::test]
+async fn folder_selection_leaves_the_name_empty_when_the_component_is_invalid() {
+    let state = test_state();
+    let token = connected(&state);
+    let (dir, path) = named_git_worktree(&"a".repeat(81));
+    state.folder_picker.queue(Some(path));
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects/folder")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("folder");
+    let text = body_text(response).await;
+    assert!(text.contains("name=\"name\""));
+    assert!(text.contains("value=\"\""));
+    assert!(state.projects.list().is_empty());
+}
+
+#[tokio::test]
+async fn folder_cancellation_preserves_the_submitted_draft() {
+    let state = test_state();
+    let token = connected(&state);
+    state.folder_picker.queue(None);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects/folder")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("name=Harbour&path=/srv/harbour"))
+                .unwrap(),
+        )
+        .await
+        .expect("cancel");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"project-form\""));
+    assert!(text.contains("value=\"Harbour\""));
+    assert!(text.contains("value=\"/srv/harbour\""));
+    assert!(!text.contains("Another project folder chooser is open."));
+    assert!(state.projects.list().is_empty());
+}
+
+#[tokio::test]
+async fn a_busy_folder_chooser_returns_conflict_and_keeps_the_form() {
+    let state = test_state();
+    let token = connected(&state);
+    let _hold = state.folder_picker.occupy().expect("permit");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects/folder")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from("name=Harbour&path=/srv/harbour"))
+                .unwrap(),
+        )
+        .await
+        .expect("busy");
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"project-form\""));
+    assert!(text.contains("Another project folder chooser is open."));
+    assert!(text.contains("value=\"Harbour\""));
+    assert!(text.contains("value=\"/srv/harbour\""));
+    assert!(state.projects.list().is_empty());
+}
+
+#[tokio::test]
+async fn folder_validation_returns_project_error_copy_without_creating() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = tempfile::tempdir().expect("dir");
+    state.folder_picker.queue(Some(dir.path().to_path_buf()));
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects/folder")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("invalid folder");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"project-form\""));
+    assert!(text.contains(ProjectError::Worktree.message()));
+    assert!(text.contains("Choose project folder"));
+    assert!(state.projects.list().is_empty());
+}
+
+#[tokio::test]
+async fn the_folder_command_rejects_other_representations_before_selection() {
+    let state = test_state();
+    let token = connected(&state);
+    for (graft, name) in [
+        (None, "document-project"),
+        (Some("navigation"), "navigation-project"),
+    ] {
+        let (dir, path) = named_git_worktree(name);
+        state.folder_picker.queue(Some(path.clone()));
+        keep_dir(&state, dir);
+
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/projects/folder")
+            .header(header::COOKIE, cookie(&token))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(graft) = graft {
+            request = request
+                .header(hypergraft::GRAFT_REQUEST, graft)
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+        }
+        let rejected = app(&state)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .expect("rejected folder");
+        assert_eq!(rejected.status(), axum::http::StatusCode::BAD_REQUEST);
+
+        let accepted = app(&state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/projects/folder")
+                    .header(header::COOKIE, cookie(&token))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(hypergraft::GRAFT_REQUEST, "patch")
+                    .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("accepted folder");
+        assert_eq!(accepted.status(), axum::http::StatusCode::OK);
+        assert!(
+            body_text(accepted)
+                .await
+                .contains(&path.to_string_lossy().into_owned())
+        );
+        assert!(state.projects.list().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn create_rejects_a_forged_path_after_folder_selection() {
+    let state = test_state();
+    let token = connected(&state);
+    let (dir, path) = named_git_worktree("my-app");
+    state.folder_picker.queue(Some(path));
+    keep_dir(&state, dir);
+    let selected = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects/folder")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("folder");
+    assert_eq!(selected.status(), axum::http::StatusCode::OK);
+    assert!(state.projects.list().is_empty());
+    let forged = tempfile::tempdir().expect("forged");
+    let encoded = forged.path().to_string_lossy().replace(' ', "%20");
+    keep_dir(&state, forged);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/projects")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "name=Desk&path={encoded}&entry=selected"
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("forged create");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"project-form\""));
+    assert!(text.contains(ProjectError::Worktree.message()));
+    assert!(state.projects.list().is_empty());
+}

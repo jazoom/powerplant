@@ -8,50 +8,132 @@
       <p>{{ lead }}</p>
     </div>
   </div>
-  <div id="project-form">
+  <div id="project-form" class="flex flex-col gap-4">
     {% block project_form %}
-      <form
-        data-graft
-        method="post"
-        action="{{ action }}"
-        class="flex flex-col gap-4"
-      >
-        {% if error != "" %}
-          <div class="alert alert-error" role="alert" tabindex="-1">
-            <p>{{ error }}</p>
-          </div>
-        {% endif %}
-        {% if revision != "" %}
-          <input type="hidden" name="revision" value="{{ revision }}" />
-        {% endif %}
-        <label class="flex flex-col gap-1">
-          <span class="text-sm">Name</span>
-          <input
-            class="input input-bordered"
-            name="name"
-            required
-            maxlength="80"
-            value="{{ name }}"
-          />
-        </label>
-        {% if show_path %}
+      {% if error != "" %}
+        <div class="alert alert-error" role="alert" tabindex="-1">
+          <p>{{ error }}</p>
+        </div>
+      {% endif %}
+      {% if mode.is_initial() %}
+        <form
+          data-graft
+          method="post"
+          action="/projects/folder"
+          class="flex flex-col gap-4"
+        >
+          <button class="btn btn-primary self-start" type="submit">
+            Choose project folder
+          </button>
+        </form>
+        <a href="/projects/new?entry=manual" data-graft class="link link-hover"
+          >Enter path manually</a
+        >
+      {% else if mode.is_selected() %}
+        <p class="text-quiet font-mono text-xs break-all">{{ path }}</p>
+        <p class="text-quiet">
+          The path stays fixed after you add the project.
+        </p>
+        <form
+          data-graft
+          method="post"
+          action="{{ action }}"
+          class="flex flex-col gap-4"
+        >
+          <input type="hidden" name="path" value="{{ path }}" />
+          <input type="hidden" name="entry" value="selected" />
           <label class="flex flex-col gap-1">
-            <span class="text-sm">Host path</span>
+            <span class="text-sm">Name</span>
+            <input
+              class="input input-bordered"
+              name="name"
+              required
+              maxlength="80"
+              value="{{ name }}"
+            />
+          </label>
+          <button class="btn btn-primary self-start" type="submit">
+            {{ submit }}
+          </button>
+        </form>
+        <form
+          data-graft
+          method="post"
+          action="/projects/folder"
+          class="flex flex-col gap-4"
+        >
+          <input type="hidden" name="name" value="{{ name }}" />
+          <input type="hidden" name="path" value="{{ path }}" />
+          <button class="btn btn-ghost self-start" type="submit">
+            Choose another folder
+          </button>
+        </form>
+        <a href="/projects/new?entry=manual" data-graft class="link link-hover"
+          >Enter path manually</a
+        >
+      {% else if mode.is_manual() %}
+        <form
+          data-graft
+          method="post"
+          action="{{ action }}"
+          class="flex flex-col gap-4"
+        >
+          <input type="hidden" name="entry" value="manual" />
+          <label class="flex flex-col gap-1">
+            <span class="text-sm">Name</span>
+            <input
+              class="input input-bordered"
+              name="name"
+              required
+              maxlength="80"
+              value="{{ name }}"
+            />
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-sm">Git project path</span>
             <input
               class="input input-bordered font-mono"
               name="path"
               required
               maxlength="4096"
               value="{{ path }}"
+              placeholder="/home/me/projects/my-app"
             />
           </label>
-        {% else %}
+          <p class="text-quiet">
+            The path stays fixed after you add the project. Power Plant does not
+            create or clone the repository.
+          </p>
+          <button class="btn btn-primary self-start" type="submit">
+            {{ submit }}
+          </button>
+        </form>
+      {% else %}
+        <form
+          data-graft
+          method="post"
+          action="{{ action }}"
+          class="flex flex-col gap-4"
+        >
+          {% if revision != "" %}
+            <input type="hidden" name="revision" value="{{ revision }}" />
+          {% endif %}
+          <label class="flex flex-col gap-1">
+            <span class="text-sm">Name</span>
+            <input
+              class="input input-bordered"
+              name="name"
+              required
+              maxlength="80"
+              value="{{ name }}"
+            />
+          </label>
           <p class="text-quiet font-mono text-xs break-all">{{ host_path }}</p>
-        {% endif %}
-        <button class="btn btn-primary self-start" type="submit">
-          {{ submit }}
-        </button>
-      </form>
+          <button class="btn btn-primary self-start" type="submit">
+            {{ submit }}
+          </button>
+        </form>
+      {% endif %}
     {% endblock %}
   </div>
 </main>
