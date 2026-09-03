@@ -33,11 +33,13 @@ A local developer opens a project and sends work to one eligible agent.
 
 The product index lists Projects, Agents, Workflows, Environments and Runs.
 
-The desk title is the project name. The host path sits under the title as quiet monospace metadata.
+The desk title is the project name. The host path sits under the title as quiet monospace metadata. The project title and the composer are the strongest page elements.
+
+Model settings sit in a compact disclosure. Provider defaults stay active. Manage providers remains inside the disclosure. The `#desk-settings` patch target stays inside the disclosure.
 
 The selected agent is a compact control. Each eligible agent choice is a real canonical link.
 
-The transcript sheet is the work record for this project and agent pair.
+The transcript sheet is the work record for this project and agent pair. An empty transcript leads with a first task.
 
 The composer dock is last. Sandbox status sits before the composer. Quick task Send is the primary action. Configured workflow is an advanced disclosure.
 
@@ -107,7 +109,13 @@ No projects: the catalogue asks the user to create the first project. The new pr
 
 No agent: the project page states that no current agent has an exact directory grant. It explains that the agent can list, read, propose changes, and run sandbox commands. It states that host files remain unchanged until candidate approval. The primary command is Create starter agent. Configure permissions first remains the secondary route. It offers grant access when other agents exist.
 
-Empty transcript: the desk shows Ask Power Plant. The lead is Write, explain or review code.
+Empty transcript: the desk leads with Start with a task. Three example controls fill the composer and move focus to it:
+
+- Explain how this project is structured.
+- Review the current code and identify one concern.
+- Find one small improvement and make it.
+
+The examples use `button type="button"`. They read a bounded server-authored `data-task-example` value. They never submit a task and they do not change the composer disabled state. The examples leave after the first transcript turn.
 
 Unavailable project path: the desk shows a warning with a link to project configuration.
 
@@ -192,6 +200,8 @@ The starter command accepts patch representation only. It copies the stored proj
 Do not put project names in the permanent mobile row.
 
 Do not add a model-only chat path, a second executor or durable transcripts.
+
+Do not submit a task from an empty-desk example control.
 
 ## Unresolved
 

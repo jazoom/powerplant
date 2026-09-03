@@ -928,10 +928,51 @@
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-end;
         gap: 0.75rem;
-        padding: 0.75rem 1.5rem;
+        padding: 0.5rem 1.5rem;
         border-bottom: 1px solid var(--powerplant-rule);
+    }
+
+    .chat-model-settings {
+        display: flex;
+        min-width: 0;
+        width: 100%;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 0.75rem;
+    }
+
+    .chat-model-settings > summary {
+        display: inline-flex;
+        min-height: 2.5rem;
+        align-items: center;
+        color: var(--powerplant-quiet-ink);
+        font-family: var(--font-heading);
+        font-size: 0.8125rem;
+        font-weight: 600;
+    }
+
+    .chat-model-settings > summary:hover,
+    .chat-model-settings[open] > summary {
+        color: var(--powerplant-ink);
+    }
+
+    .chat-model-settings[open] #desk-settings {
+        width: 100%;
+    }
+
+    .chat-task-examples {
+        width: 100%;
+        margin-top: auto;
+        padding: 1.5rem 1.9rem 1.25rem;
+    }
+
+    .chat-task-examples h2 {
+        margin: 0 0 0.75rem;
+        font-size: 1.125rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
     }
 
     .chat-title-row {
@@ -1308,7 +1349,11 @@
 
     .chat-desk-bar {
         align-items: start;
-        padding-inline: 1rem;
+        padding: 0.45rem 1rem;
+    }
+
+    .chat-task-examples {
+        padding: 1rem 1.1rem 0.9rem;
     }
 
     .chat-title-row {
@@ -1338,6 +1383,10 @@
 
     .composer-dock {
         padding: 0.8rem 0.9rem 1rem;
+    }
+
+    .chat-sheet:has(.chat-task-examples) .composer-dock {
+        position: static;
     }
 
     .connect-index {

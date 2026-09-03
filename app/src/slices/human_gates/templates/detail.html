@@ -103,8 +103,11 @@
             {% endif %}
             <button
               type="submit"
-              class="btn {% if quick_task %}btn-outline{% else %}btn-error
-              btn-outline{% endif %} w-full"
+              class="btn {% if quick_task %}
+                btn-outline
+              {% else %}
+                btn-error btn-outline
+              {% endif %} w-full"
             >
               {% if quick_task %}Discard changes{% else %}Cancel run{% endif %}
             </button>

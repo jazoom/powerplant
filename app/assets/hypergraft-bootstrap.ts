@@ -8,6 +8,7 @@ import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initObserve } from "./observe";
+import { initTaskExamples } from "./task-examples";
 import { initThemeSelector } from "./theme";
 import { initTranscript } from "./transcript";
 
@@ -29,6 +30,7 @@ export function startApp(): void {
             "desk-settings": initDeskSettings,
             observe: initObserve,
             "shortcut-hint": initShortcutHint,
+            "task-examples": initTaskExamples,
             "theme-selector": initThemeSelector,
             transcript: initTranscript,
         },
