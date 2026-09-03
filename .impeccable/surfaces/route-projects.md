@@ -213,6 +213,12 @@ Do not add a model-only chat path, a second executor or durable transcripts.
 
 Do not submit a task from an empty-desk example control.
 
+Do not require a configured workflow or an onboarding completion record for the first Quick task.
+
+On a machine with a display, make sure that the native folder chooser opens a host dialog.
+
+Use `/projects/new?entry=manual` for automated first-task checks.
+
 ## Unresolved
 
 None. This brief records the shipped flow.
