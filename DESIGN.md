@@ -131,6 +131,9 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 
 - The product offers five colour themes. Springfield is the default.
 - The theme changes immediately and persists in local filesystem storage.
+- Settings has a separate local data reset after Theme.
+- Reset requires an explicit confirmation and records a restart-applied deletion.
+- Project source directories outside the Power Plant data directory remain unchanged.
 - The desktop shell uses a persistent index grouped into Work, Configure and System.
 - Work contains Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
 - The brand mark and the first index link go to `/projects`.
@@ -168,6 +171,9 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Put Settings in the System group of the product index.
 - Keep `/connect` as full-page native navigation.
 - Keep Theme as the first item on the Settings page.
+- Put the local data reset in a separate danger section on Settings.
+- Do not take a deletion path from the browser.
+- Do not stop the server from the reset command.
 - Keep mobile navigation labels generic. Use the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
 - Keep Quick task Send as the primary composer action.

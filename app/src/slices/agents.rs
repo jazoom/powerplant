@@ -16,6 +16,7 @@ use serde::Deserialize;
 use crate::{
     agents::{AgentError, AgentId, AgentRecord},
     error::{AppError, AppResult},
+    local_data::HOST_PATH_RESET_PENDING,
     projects::{ProjectId, ProjectRecord, desk_path, unique_desk_path},
     responses,
     sessions::RequiredSession,
@@ -117,6 +118,15 @@ async fn create(
             create_form_view(starter.as_ref(), form, ""),
         );
     }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::NEW_TITLE,
+            create_form_view(starter.as_ref(), form, HOST_PATH_RESET_PENDING),
+        );
+    };
     if let Some(project) = &starter {
         // The project record owns this path. Submitted path_0 values cannot replace it.
         form.assign_project_path(&project.host_path);
@@ -217,6 +227,15 @@ async fn update_configuration(
             AgentFormView::edit(&record, form, ""),
         );
     }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::CONFIG_TITLE,
+            AgentFormView::edit(&record, form, HOST_PATH_RESET_PENDING),
+        );
+    };
     let Ok(_operation) = state.agent_leases.acquire(record.id) else {
         return render_form_command(
             &state,
@@ -271,6 +290,19 @@ async fn delete_agent(
 ) -> AppResult<Response> {
     let Some(record) = load_agent(&state, &agent_id) else {
         return Ok(responses::command_navigation("/agents"));
+    };
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::CONFIG_TITLE,
+            AgentFormView::edit(
+                &record,
+                AgentFormState::from_record(&record),
+                HOST_PATH_RESET_PENDING,
+            ),
+        );
     };
     let Ok(_operation) = state.agent_leases.acquire(record.id) else {
         return render_form_command(

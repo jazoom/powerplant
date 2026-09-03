@@ -16,6 +16,7 @@ use hypergraft::{GraftRequest, PageGraft, PatchGraft, PatchStatus};
 use crate::{
     agents::{AgentDraft, AgentError, DirectoryGrant, StarterAgent},
     error::{AppError, AppResult},
+    local_data::HOST_PATH_RESET_PENDING,
     projects::{
         FolderPick, ProjectError, ProjectId, ProjectRecord, desk_path, eligible_agents,
         submitted_host_path, submitted_name,
@@ -141,6 +142,15 @@ async fn create(
     graft: PatchGraft,
     Form(form): Form<ProjectForm>,
 ) -> AppResult<Response> {
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::NEW_TITLE,
+            create_error_form(&form, HOST_PATH_RESET_PENDING),
+        );
+    };
     let name = match form.submitted_name() {
         Ok(name) => name,
         Err(error) => {
@@ -259,6 +269,16 @@ async fn grant_agent(
             );
         }
     };
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_grant_error(
+            &state,
+            graft,
+            &project,
+            &form,
+            HOST_PATH_RESET_PENDING,
+            PatchStatus::Conflict,
+        );
+    };
     let Ok(_lease) = state.agent_leases.acquire(agent_id) else {
         return render_grant_error(
             &state,
@@ -337,6 +357,14 @@ async fn create_starter(
     let Some(project) = load_project(&state, &project_id) else {
         return Ok(responses::command_navigation("/projects"));
     };
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_starter_error(
+            &state,
+            &project,
+            HOST_PATH_RESET_PENDING,
+            PatchStatus::Conflict,
+        );
+    };
     match state.agents.ensure_starter(&project) {
         Ok(StarterAgent::One(agent) | StarterAgent::Created(agent)) => Ok(
             responses::command_navigation(&desk_path(&project.id, &agent.id)),
@@ -348,7 +376,12 @@ async fn create_starter(
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
         }
-        Err(error) => render_starter_error(&state, &project, error.message()),
+        Err(error) => render_starter_error(
+            &state,
+            &project,
+            error.message(),
+            PatchStatus::UnprocessableEntity,
+        ),
     }
 }
 
@@ -444,6 +477,7 @@ fn render_starter_error(
     state: &AppState,
     project: &ProjectRecord,
     error: &'static str,
+    status: PatchStatus,
 ) -> AppResult<Response> {
     let latest = state
         .projects
@@ -453,7 +487,7 @@ fn render_starter_error(
     let eligible = eligible_agents(&agents, &latest);
     let view = DetailView::with_grant(&latest, &eligible, &agents, "project", "read-write", error);
     Ok(hypergraft::outcome::children_patch(
-        PatchStatus::UnprocessableEntity,
+        status,
         "chat-main",
         &view,
     )?)

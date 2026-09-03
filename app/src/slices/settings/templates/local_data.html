@@ -1,0 +1,32 @@
+<div>
+  <h2 id="local-data-heading">Local data</h2>
+  <p id="local-data-description" class="text-quiet mt-1 max-w-[60ch] text-sm">
+    Reset removes providers, projects, agents, environments, workflows, runs,
+    artefacts and preferences from this machine. Project source directories
+    outside the Power Plant data directory remain unchanged.
+  </p>
+  {% if let Some(message) = reset_error %}
+    <p class="text-error mt-2 text-sm" role="alert">{{ message }}</p>
+  {% endif %}
+</div>
+<div class="settings-control">
+  <label class="flex items-start gap-2 text-sm" for="local-data-confirmation">
+    <input
+      id="local-data-confirmation"
+      class="checkbox checkbox-sm mt-0.5"
+      type="checkbox"
+      name="confirmation"
+      value="reset"
+      required
+      aria-describedby="local-data-description"
+    />
+    <span>I understand that this deletes all local Power Plant data.</span>
+  </label>
+  <button
+    class="btn btn-error"
+    type="submit"
+    aria-describedby="local-data-description"
+  >
+    Reset local data
+  </button>
+</div>

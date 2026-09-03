@@ -8,8 +8,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::agents::{AgentRecord, AgentStore};
 use crate::config::StartupConfig;
+use crate::projects::{ProjectRecord, ProjectStore};
 use crate::storage::{self, PersistError};
+use crate::workflows::{ExecutionGuard, WorkflowExecution};
 
 const OWNERSHIP_MARKER_NAME: &str = ".powerplant-data-root";
 const OWNERSHIP_CONTENTS: &[u8] = b"powerplant-data-root-v1\n";
@@ -33,20 +36,50 @@ const LEGACY_ENTRIES: &[&str] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum ResetRequest {
     Recorded,
     Pending,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CatalogueResetConflict {
+    Project,
+    AgentGrant,
+}
+
+#[derive(Debug)]
+pub(crate) enum ResetError {
+    WorkflowBusy,
+    Catalogue(CatalogueResetConflict),
+    Persist(PersistError),
+}
+
+impl CatalogueResetConflict {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Project => "A project path is inside the Power Plant data directory.",
+            Self::AgentGrant => "An agent grant is inside the Power Plant data directory.",
+        }
+    }
+}
+
+pub(crate) const HOST_PATH_RESET_PENDING: &str =
+    "Power Plant is waiting to reset local data. Stop and restart Power Plant.";
+
 #[derive(Clone)]
 pub(crate) struct LocalDataReset {
     root: PathBuf,
     inner: Arc<Mutex<Inner>>,
+    mutation: Arc<tokio::sync::Mutex<()>>,
 }
 
 struct Inner {
     pending: bool,
+    execution: Option<ExecutionGuard>,
+}
+
+pub(crate) struct HostPathPermit {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
 #[derive(Clone, Copy)]
@@ -84,7 +117,11 @@ impl LocalDataReset {
     fn new(root: PathBuf) -> Self {
         Self {
             root,
-            inner: Arc::new(Mutex::new(Inner { pending: false })),
+            inner: Arc::new(Mutex::new(Inner {
+                pending: false,
+                execution: None,
+            })),
+            mutation: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -96,28 +133,98 @@ impl LocalDataReset {
         lock(&self.inner).pending
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn request_reset(&self) -> Result<ResetRequest, PersistError> {
-        let mut inner = lock(&self.inner);
-        if inner.pending {
-            return Ok(ResetRequest::Pending);
+    async fn lock_host_paths(&self) -> HostPathPermit {
+        HostPathPermit {
+            _guard: self.mutation.clone().lock_owned().await,
         }
-        let owned = marker_is_exact(&self.root, OWNERSHIP_MARKER_NAME, OWNERSHIP_CONTENTS)
-            .map_err(|_| PersistError)?;
-        if !owned {
-            return Err(PersistError);
-        }
-        if marker_is_exact(&self.root, RESET_MARKER_NAME, RESET_CONTENTS)
-            .map_err(|_| PersistError)?
-        {
-            inner.pending = true;
-            return Ok(ResetRequest::Pending);
-        }
-        let path = storage::confined_child(&self.root, RESET_MARKER_NAME)?;
-        storage::write_private(&path, RESET_CONTENTS)?;
-        inner.pending = true;
-        Ok(ResetRequest::Recorded)
     }
+
+    pub(crate) async fn begin_host_path_mutation(&self) -> Result<HostPathPermit, ()> {
+        let permit = self.lock_host_paths().await;
+        if self.is_pending() {
+            Err(())
+        } else {
+            Ok(permit)
+        }
+    }
+
+    pub(crate) async fn request_reset(
+        &self,
+        workflow_execution: &Arc<WorkflowExecution>,
+        projects: &ProjectStore,
+        agents: &AgentStore,
+    ) -> Result<ResetRequest, ResetError> {
+        if self.is_pending() {
+            return Ok(ResetRequest::Pending);
+        }
+        let execution = match workflow_execution.acquire() {
+            Ok(execution) => execution,
+            Err(()) if self.is_pending() => return Ok(ResetRequest::Pending),
+            Err(()) => return Err(ResetError::WorkflowBusy),
+        };
+        let _permit = self.lock_host_paths().await;
+        if self.is_pending() {
+            return Ok(ResetRequest::Pending);
+        }
+        if let Some(conflict) = self.catalogue_conflict(&projects.list(), &agents.list()) {
+            return Err(ResetError::Catalogue(conflict));
+        }
+        let mut inner = lock(&self.inner);
+        let result = write_reset_marker(&self.root, &mut inner).map_err(ResetError::Persist)?;
+        inner.execution = Some(execution);
+        Ok(result)
+    }
+
+    fn catalogue_conflict(
+        &self,
+        projects: &[ProjectRecord],
+        agents: &[AgentRecord],
+    ) -> Option<CatalogueResetConflict> {
+        if projects
+            .iter()
+            .any(|project| path_under_root(&self.root, &project.host_path))
+        {
+            return Some(CatalogueResetConflict::Project);
+        }
+        if agents.iter().any(|agent| {
+            agent
+                .directories
+                .iter()
+                .any(|grant| path_under_root(&self.root, &grant.host_path))
+        }) {
+            return Some(CatalogueResetConflict::AgentGrant);
+        }
+        None
+    }
+
+    #[cfg(test)]
+    fn record_reset_for_test(&self) -> Result<ResetRequest, PersistError> {
+        let mut inner = lock(&self.inner);
+        write_reset_marker(&self.root, &mut inner)
+    }
+}
+
+fn write_reset_marker(root: &Path, inner: &mut Inner) -> Result<ResetRequest, PersistError> {
+    if inner.pending {
+        return Ok(ResetRequest::Pending);
+    }
+    let owned = marker_is_exact(root, OWNERSHIP_MARKER_NAME, OWNERSHIP_CONTENTS)
+        .map_err(|_| PersistError)?;
+    if !owned {
+        return Err(PersistError);
+    }
+    if marker_is_exact(root, RESET_MARKER_NAME, RESET_CONTENTS).map_err(|_| PersistError)? {
+        inner.pending = true;
+        return Ok(ResetRequest::Pending);
+    }
+    let path = storage::confined_child(root, RESET_MARKER_NAME)?;
+    storage::write_private(&path, RESET_CONTENTS)?;
+    inner.pending = true;
+    Ok(ResetRequest::Recorded)
+}
+
+fn path_under_root(root: &Path, path: &Path) -> bool {
+    path.starts_with(root)
 }
 
 fn establish(config: &StartupConfig) -> Result<PathBuf, PrepareError> {

@@ -774,6 +774,15 @@
         font-weight: 600;
     }
 
+    .settings-row-danger {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1rem;
+    }
+
+    .settings-row-danger .settings-control {
+        max-width: 28rem;
+    }
+
     .settings-control {
         display: grid;
         gap: 0.45rem;

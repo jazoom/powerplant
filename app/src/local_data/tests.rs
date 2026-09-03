@@ -3,22 +3,26 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    Inner, LEGACY_ENTRIES, OWNERSHIP_CONTENTS, OWNERSHIP_MARKER_NAME, RESET_CONTENTS,
-    RESET_MARKER_NAME, ResetRequest,
+    CatalogueResetConflict, Inner, LEGACY_ENTRIES, OWNERSHIP_CONTENTS, OWNERSHIP_MARKER_NAME,
+    RESET_CONTENTS, RESET_MARKER_NAME, ResetRequest,
 };
-use crate::agents::AgentStore;
+use crate::agents::{AccessMode, AgentId, AgentRecord, AgentStore, DirectoryGrant};
 use crate::config::{RuntimeConfig, StartupConfig};
 use crate::preferences::{Preferences, Theme};
-use crate::projects::ProjectStore;
+use crate::projects::{ProjectId, ProjectRecord, ProjectStore};
 use crate::providers::{ProviderConnection, ProviderKind};
 use crate::vault::ProviderVault;
-use crate::workflows::WorkflowRunStore;
+use crate::workflows::{WorkflowExecution, WorkflowRunStore};
 
 impl super::LocalDataReset {
     pub(crate) fn detached() -> Self {
         Self {
             root: PathBuf::from("/powerplant-test-local-data"),
-            inner: Arc::new(Mutex::new(Inner { pending: false })),
+            inner: Arc::new(Mutex::new(Inner {
+                pending: false,
+                execution: None,
+            })),
+            mutation: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
@@ -371,7 +375,7 @@ fn ownership_and_reset_markers_use_private_permissions() {
     assert_eq!(ownership_mode, 0o600);
 
     assert_eq!(
-        local_data.request_reset().expect("record"),
+        local_data.record_reset_for_test().expect("record"),
         ResetRequest::Recorded
     );
     let reset_mode = fs::metadata(marker_path(root, RESET_MARKER_NAME))
@@ -387,7 +391,7 @@ fn repeated_reset_requests_return_pending_without_another_write() {
     let dir = tempfile::tempdir().expect("dir");
     let (_, local_data) = prepare(dir.path().join("data"));
     assert_eq!(
-        local_data.request_reset().expect("first"),
+        local_data.record_reset_for_test().expect("first"),
         ResetRequest::Recorded
     );
     assert!(local_data.is_pending());
@@ -397,7 +401,7 @@ fn repeated_reset_requests_return_pending_without_another_write() {
     )
     .expect("tamper");
     assert_eq!(
-        local_data.request_reset().expect("second"),
+        local_data.record_reset_for_test().expect("second"),
         ResetRequest::Pending
     );
     assert_eq!(
@@ -413,34 +417,11 @@ fn reset_request_rejects_an_invalid_existing_marker() {
     let marker = marker_path(local_data.root(), RESET_MARKER_NAME);
     fs::write(&marker, [RESET_CONTENTS, b"extra"].concat()).expect("invalid marker");
 
-    assert!(local_data.request_reset().is_err());
+    assert!(local_data.record_reset_for_test().is_err());
     assert!(!local_data.is_pending());
     assert_eq!(
         fs::read(marker).expect("unchanged marker"),
         [RESET_CONTENTS, b"extra"].concat()
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn a_failed_reset_write_does_not_mark_the_request_pending() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().expect("dir");
-    let (_, local_data) = prepare(dir.path().join("data"));
-    let root = local_data.root().to_path_buf();
-    let mut permissions = fs::metadata(&root).expect("meta").permissions();
-    permissions.set_mode(0o555);
-    fs::set_permissions(&root, permissions).expect("lock");
-    let failed = local_data.request_reset();
-    let mut restore = fs::metadata(&root).expect("meta").permissions();
-    restore.set_mode(0o700);
-    fs::set_permissions(&root, restore).expect("unlock");
-    assert!(failed.is_err());
-    assert!(!local_data.is_pending());
-    assert_eq!(
-        local_data.request_reset().expect("retry"),
-        ResetRequest::Recorded
     );
 }
 
@@ -456,7 +437,7 @@ fn reset_deletes_only_the_owned_tree() {
     fs::write(root.join("providers.json"), b"secret").expect("owned file");
     std::os::unix::fs::symlink(outside.path(), root.join("link")).expect("link");
     assert_eq!(
-        local_data.request_reset().expect("record"),
+        local_data.record_reset_for_test().expect("record"),
         ResetRequest::Recorded
     );
 
@@ -498,7 +479,7 @@ fn startup_reset_leaves_no_provider_project_agent_run_or_saved_theme() {
         .expect("theme");
 
     assert_eq!(
-        local_data.request_reset().expect("record"),
+        local_data.record_reset_for_test().expect("record"),
         ResetRequest::Recorded
     );
     let (_, local_data) = super::prepare(test_config(root.clone(), Vec::new())).expect("reset");
@@ -532,4 +513,111 @@ fn startup_reset_leaves_no_provider_project_agent_run_or_saved_theme() {
         Preferences::open(root.join("preferences.json")).theme(),
         Theme::Springfield
     );
+}
+
+#[test]
+fn catalogue_conflict_uses_path_components_at_the_owned_root_boundary() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (_, local_data) = prepare(dir.path().join("data"));
+    let root = local_data.root().to_path_buf();
+    let prefix_sibling = root.with_file_name("data-copy");
+
+    assert_eq!(
+        local_data.catalogue_conflict(&[project_record(root.clone())], &[]),
+        Some(CatalogueResetConflict::Project)
+    );
+    assert_eq!(
+        local_data.catalogue_conflict(&[], &[agent_record(root.join("grant"))]),
+        Some(CatalogueResetConflict::AgentGrant)
+    );
+    assert_eq!(
+        local_data.catalogue_conflict(
+            &[project_record(prefix_sibling.clone())],
+            &[agent_record(prefix_sibling.join("grant")),]
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn reset_request_retains_execution_until_process_exit() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (_, local_data) = prepare(dir.path().join("data"));
+    let execution = Arc::new(WorkflowExecution::new());
+    let projects = ProjectStore::in_memory();
+    let agents = AgentStore::in_memory();
+
+    assert_eq!(
+        local_data
+            .request_reset(&execution, &projects, &agents)
+            .await
+            .expect("record"),
+        ResetRequest::Recorded
+    );
+    assert!(execution.acquire().is_err());
+    assert_eq!(
+        local_data
+            .request_reset(&execution, &projects, &agents)
+            .await
+            .expect("repeat"),
+        ResetRequest::Pending
+    );
+    assert!(execution.acquire().is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_marker_write_releases_both_process_permits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("dir");
+    let (_, local_data) = prepare(dir.path().join("data"));
+    let root = local_data.root();
+    let mut permissions = fs::metadata(root).expect("meta").permissions();
+    permissions.set_mode(0o555);
+    fs::set_permissions(root, permissions).expect("lock");
+    let execution = Arc::new(WorkflowExecution::new());
+    let projects = ProjectStore::in_memory();
+    let agents = AgentStore::in_memory();
+
+    let failed = local_data
+        .request_reset(&execution, &projects, &agents)
+        .await;
+    let mut restore = fs::metadata(root).expect("meta").permissions();
+    restore.set_mode(0o700);
+    fs::set_permissions(root, restore).expect("unlock");
+
+    assert!(failed.is_err());
+    assert!(!local_data.is_pending());
+    let _execution = execution.acquire().expect("execution released");
+    let _host_paths = local_data
+        .begin_host_path_mutation()
+        .await
+        .expect("host paths released");
+}
+
+fn project_record(host_path: PathBuf) -> ProjectRecord {
+    ProjectRecord {
+        id: ProjectId::generate().expect("project"),
+        revision: 1,
+        name: "Desk".to_owned(),
+        host_path,
+        created_at_ms: 0,
+    }
+}
+
+fn agent_record(host_path: PathBuf) -> AgentRecord {
+    AgentRecord {
+        id: AgentId::generate().expect("agent"),
+        revision: 1,
+        name: "Worker".to_owned(),
+        instructions: String::new(),
+        tools: Vec::new(),
+        directories: vec![DirectoryGrant {
+            alias: "project".to_owned(),
+            host_path,
+            access: AccessMode::ReadWrite,
+        }],
+        primary_directory: "project".to_owned(),
+    }
 }

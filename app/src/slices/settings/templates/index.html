@@ -22,5 +22,16 @@
         {% include "settings/templates/theme.html" %}
       </form>
     </li>
+    <li class="settings-row settings-row-danger">
+      <form
+        id="local-data-reset"
+        method="post"
+        action="/settings/local-data/reset"
+        data-graft
+        class="contents"
+      >
+        {% include "settings/templates/local_data.html" %}
+      </form>
+    </li>
   </ol>
 </main>
