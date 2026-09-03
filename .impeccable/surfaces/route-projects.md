@@ -9,6 +9,7 @@ related_targets:
         "route:/projects/folder",
         "route:/projects/{project_id}",
         "route:/projects/{project_id}/configuration",
+        "route:/projects/{project_id}/agents/starter",
         "route:/projects/{project_id}/agents/{agent_id}",
         "route:/runs/{run_id}/gates/{gate_id}",
     ]
@@ -52,7 +53,7 @@ On the new project page, the primary action is Choose project folder.
 
 After a selected or manual path, the primary action is Add project.
 
-On project detail with no eligible agent, the primary action is Create a starter agent.
+On project detail with no eligible agent, the primary action is Create starter agent.
 
 On project detail with two or more eligible agents and no remembered agent, the primary action is the canonical desk link for each agent.
 
@@ -84,7 +85,7 @@ Configured workflow send stays in the advanced disclosure. It uses that workflow
 
 No projects: the catalogue asks the user to create the first project. The new project page chooses an existing Git folder. Manual path entry remains available.
 
-No agent: the project page states that no current agent has an exact directory grant. It offers a starter agent. It offers grant access when other agents exist.
+No agent: the project page states that no current agent has an exact directory grant. It explains that the agent can list, read, propose changes, and run sandbox commands. It states that host files remain unchanged until candidate approval. The primary command is Create starter agent. Configure permissions first remains the secondary route. It offers grant access when other agents exist.
 
 Empty transcript: the desk shows Ask Power Plant. The lead is Write, explain or review code.
 
@@ -136,6 +137,14 @@ The selected path stays visible and immutable before submission. The final `/pro
 
 After a successful create, the product redirects to `/projects/{project_id}`.
 
+The project page offers an explicit starter command when no eligible agent exists. `POST /projects/{project_id}/agents/starter` is a patch-only command. The command loads the current project record, then checks eligibility and creates at most one default agent in one catalogue operation.
+
+The default agent uses the project name and empty instructions. It uses every built-in tool. The alias is `project`. Access is read-write. The sole directory grant is the stored project path. `primary_directory` is `project`.
+
+If one eligible agent exists, the command opens that desk and does not create another record. If several eligible agents exist, the command returns to project detail and does not create another record. After a successful create, the command opens the new desk.
+
+Configure permissions first remains a real link to `/agents/new?project={project_id}`.
+
 The canonical desk URL is `/projects/{project_id}/agents/{agent_id}`.
 
 Quick task needs no configured workflow. It uses the pinned Alpine Git environment.
@@ -157,6 +166,8 @@ Keep a real `href` on every ordinary navigation action.
 Do not put the project path in route parameters or query values.
 
 The folder command accepts patch representation only.
+
+The starter command accepts patch representation only. It copies the stored project path. It does not take a host path from the request.
 
 Do not put project names in the permanent mobile row.
 

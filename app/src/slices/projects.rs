@@ -14,7 +14,7 @@ use axum::{
 use hypergraft::{GraftRequest, PageGraft, PatchGraft, PatchStatus};
 
 use crate::{
-    agents::{AgentDraft, AgentError, DirectoryGrant},
+    agents::{AgentDraft, AgentError, DirectoryGrant, StarterAgent},
     error::{AppError, AppResult},
     projects::{
         FolderPick, ProjectError, ProjectId, ProjectRecord, desk_path, eligible_agents,
@@ -42,6 +42,10 @@ pub(super) fn router() -> Router<AppState> {
             get(show_configuration).post(update_configuration),
         )
         .route("/projects/{project_id}/agents/grant", post(grant_agent))
+        .route(
+            "/projects/{project_id}/agents/starter",
+            post(create_starter),
+        )
         .route(
             "/projects/{project_id}/agents/{agent_id}",
             get(desk::show).post(desk::send),
@@ -324,6 +328,30 @@ async fn grant_agent(
     }
 }
 
+async fn create_starter(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    _graft: PatchGraft,
+    Path(project_id): Path<String>,
+) -> AppResult<Response> {
+    let Some(project) = load_project(&state, &project_id) else {
+        return Ok(responses::command_navigation("/projects"));
+    };
+    match state.agents.ensure_starter(&project) {
+        Ok(StarterAgent::One(agent) | StarterAgent::Created(agent)) => Ok(
+            responses::command_navigation(&desk_path(&project.id, &agent.id)),
+        ),
+        Ok(StarterAgent::Several) => Ok(responses::command_navigation(&format!(
+            "/projects/{}",
+            project.id.as_hex()
+        ))),
+        Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
+            Err(AppError::new("store agent", error))
+        }
+        Err(error) => render_starter_error(&state, &project, error.message()),
+    }
+}
+
 async fn show_configuration(
     State(state): State<AppState>,
     _session: RequiredSession,
@@ -410,6 +438,25 @@ fn render_detail_page(
             view,
         )?),
     }
+}
+
+fn render_starter_error(
+    state: &AppState,
+    project: &ProjectRecord,
+    error: &'static str,
+) -> AppResult<Response> {
+    let latest = state
+        .projects
+        .get(&project.id)
+        .unwrap_or_else(|| project.clone());
+    let agents = state.agents.list();
+    let eligible = eligible_agents(&agents, &latest);
+    let view = DetailView::with_grant(&latest, &eligible, &agents, "project", "read-write", error);
+    Ok(hypergraft::outcome::children_patch(
+        PatchStatus::UnprocessableEntity,
+        "chat-main",
+        &view,
+    )?)
 }
 
 fn render_grant_error(

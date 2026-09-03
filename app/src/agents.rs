@@ -14,5 +14,5 @@ pub(crate) use record::{
     MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, MAXIMUM_PATH_BYTES, guest_path_for,
 };
 pub(crate) use run::{AgentLeaseCoordinator, LeaseGuard};
-pub(crate) use store::AgentStore;
+pub(crate) use store::{AgentStore, StarterAgent};
 pub(crate) use tool_id::ToolId;

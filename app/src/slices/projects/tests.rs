@@ -952,6 +952,13 @@ async fn no_agent_detail_shows_starter_and_grant_actions() {
     let text = body_text(response).await;
     assert!(text.contains("No agent"));
     assert!(text.contains(&format!(
+        "action=\"/projects/{}/agents/starter\"",
+        project.id.as_hex()
+    )));
+    assert!(text.contains("Create starter agent"));
+    assert!(text.contains("Host files remain unchanged until candidate approval."));
+    assert!(text.contains("Configure permissions first"));
+    assert!(text.contains(&format!(
         "href=\"/agents/new?project={}\"",
         project.id.as_hex()
     )));
@@ -1192,6 +1199,288 @@ async fn enhanced_grant_navigates_to_the_desk() {
         "navigate=\"{}\"",
         crate::projects::desk_path(&project.id, &agent.id)
     )));
+}
+
+#[tokio::test]
+async fn starter_creates_exact_path_authority_and_opens_the_desk() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let forged = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let encoded = encoded_path(&forged);
+    keep_dir(&state, dir);
+    keep_dir(&state, forged);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/starter", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!("path={encoded}")))
+                .unwrap(),
+        )
+        .await
+        .expect("starter");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let agents = state.agents.list();
+    assert_eq!(agents.len(), 1);
+    let agent = &agents[0];
+    assert_eq!(agent.name, project.name);
+    assert!(agent.instructions.is_empty());
+    assert_eq!(agent.tools, ToolId::ALL.to_vec());
+    assert_eq!(agent.directories.len(), 1);
+    assert_eq!(agent.directories[0].alias, "project");
+    assert_eq!(agent.directories[0].host_path, project.host_path);
+    assert_eq!(agent.directories[0].access, AccessMode::ReadWrite);
+    assert_eq!(agent.primary_directory, "project");
+    let text = body_text(response).await;
+    assert!(text.contains(&format!(
+        "navigate=\"{}\"",
+        crate::projects::desk_path(&project.id, &agent.id)
+    )));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn starter_rejects_a_project_path_that_now_resolves_elsewhere() {
+    let state = test_state();
+    let token = connected(&state);
+    let parent = tempfile::tempdir().expect("parent");
+    let original = parent.path().join("project");
+    std::fs::create_dir(&original).expect("project");
+    git_init(&original);
+    let project = state
+        .projects
+        .create("Desk".to_owned(), original.clone())
+        .expect("project");
+    let moved = parent.path().join("moved");
+    std::fs::rename(&original, &moved).expect("move project");
+    std::os::unix::fs::symlink(&moved, &original).expect("replace project path");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/starter", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("starter");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = body_text(response).await;
+    assert!(text.contains("target=\"chat-main\""));
+    assert!(text.contains(AgentError::PathAccess.message()));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn a_repeated_starter_command_does_not_create_a_duplicate() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    keep_dir(&state, dir);
+    let first = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/starter", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("first starter");
+    assert_eq!(first.status(), axum::http::StatusCode::OK);
+    let created = state.agents.list();
+    assert_eq!(created.len(), 1);
+    let desk = crate::projects::desk_path(&project.id, &created[0].id);
+    assert!(
+        body_text(first)
+            .await
+            .contains(&format!("navigate=\"{desk}\""))
+    );
+    let second = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/starter", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("second starter");
+    assert_eq!(second.status(), axum::http::StatusCode::OK);
+    assert_eq!(state.agents.list().len(), 1);
+    assert_eq!(state.agents.list()[0].id, created[0].id);
+    assert!(
+        body_text(second)
+            .await
+            .contains(&format!("navigate=\"{desk}\""))
+    );
+}
+
+#[tokio::test]
+async fn concurrent_starter_commands_create_one_eligible_agent() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    keep_dir(&state, dir);
+    let router = app(&state);
+    let uri = format!("/projects/{}/agents/starter", project.id.as_hex());
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri(&uri)
+            .header(header::COOKIE, cookie(&token))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(hypergraft::GRAFT_REQUEST, "patch")
+            .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (first, second) =
+        tokio::join!(router.clone().oneshot(request()), router.oneshot(request()),);
+    let first = first.expect("first starter");
+    let second = second.expect("second starter");
+    assert_eq!(first.status(), axum::http::StatusCode::OK);
+    assert_eq!(second.status(), axum::http::StatusCode::OK);
+    let agents = state.agents.list();
+    assert_eq!(agents.len(), 1);
+    let desk = crate::projects::desk_path(&project.id, &agents[0].id);
+    let marker = format!("navigate=\"{desk}\"");
+    assert!(body_text(first).await.contains(&marker));
+    assert!(body_text(second).await.contains(&marker));
+}
+
+#[tokio::test]
+async fn several_eligible_agents_leave_the_catalogue_unchanged() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let first = create_agent(&state, "First", &project.host_path);
+    let second = create_agent(&state, "Second", &project.host_path);
+    keep_dir(&state, dir);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/projects/{}/agents/starter", project.id.as_hex()))
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("several");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("navigate=\"/projects/{}\"", project.id.as_hex())));
+    let agents = state.agents.list();
+    assert_eq!(agents.len(), 2);
+    assert!(agents.iter().any(|agent| agent.id == first.id));
+    assert!(agents.iter().any(|agent| agent.id == second.id));
+}
+
+#[tokio::test]
+async fn the_starter_command_rejects_native_post_document_and_navigation_use() {
+    let state = test_state();
+    let token = connected(&state);
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Desk".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    keep_dir(&state, dir);
+    let uri = format!("/projects/{}/agents/starter", project.id.as_hex());
+    let rejected = [
+        (
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::empty())
+                .unwrap(),
+            axum::http::StatusCode::BAD_REQUEST,
+        ),
+        (
+            Request::builder()
+                .uri(&uri)
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        (
+            Request::builder()
+                .uri(&uri)
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "navigation")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        ),
+    ];
+    for (request, status) in rejected {
+        let response = app(&state)
+            .oneshot(request)
+            .await
+            .expect("rejected starter");
+        assert_eq!(response.status(), status);
+        assert!(state.agents.list().is_empty());
+    }
+    let created = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("accepted starter");
+    assert_eq!(created.status(), axum::http::StatusCode::OK);
+    assert_eq!(state.agents.list().len(), 1);
 }
 
 fn named_git_worktree(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {

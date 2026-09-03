@@ -12,6 +12,14 @@ use super::record::{
     DEFAULT_PRIMARY_ALIAS, DirectoryGrant, MAXIMUM_AGENTS,
 };
 use super::tool_id::ToolId;
+use crate::projects::{ProjectRecord, exact_grant};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum StarterAgent {
+    One(AgentRecord),
+    Several,
+    Created(AgentRecord),
+}
 
 #[cfg(test)]
 mod tests;
@@ -57,22 +65,45 @@ impl AgentStore {
     pub(crate) fn create(&self, draft: AgentDraft) -> Result<AgentRecord, AgentError> {
         let draft = draft.validate()?;
         let mut agents = self.lock();
-        if agents.len() >= MAXIMUM_AGENTS {
-            return Err(AgentError::Full);
+        insert_created(self.dir.as_deref(), &mut agents, draft)
+    }
+
+    // Exact host-path equality matches crate::projects::exact_grant. The catalogue
+    // lock covers that check and the optional create so two starter commands cannot
+    // add a second eligible agent.
+    pub(crate) fn ensure_starter(
+        &self,
+        project: &ProjectRecord,
+    ) -> Result<StarterAgent, AgentError> {
+        let mut agents = self.lock();
+        let eligible: Vec<AgentRecord> = agents
+            .values()
+            .filter(|agent| exact_grant(agent, project).is_some())
+            .cloned()
+            .collect();
+        match eligible.as_slice() {
+            [] => {
+                let draft = AgentDraft {
+                    name: project.name.clone(),
+                    instructions: String::new(),
+                    tools: ToolId::ALL.to_vec(),
+                    directories: vec![DirectoryGrant {
+                        alias: DEFAULT_PRIMARY_ALIAS.to_owned(),
+                        host_path: project.host_path.clone(),
+                        access: AccessMode::ReadWrite,
+                    }],
+                    primary_directory: DEFAULT_PRIMARY_ALIAS.to_owned(),
+                }
+                .validate()?;
+                // Validation canonicalises host paths. Reject a changed resolution so the grant stays equal to stored project authority.
+                if draft.directories[0].host_path != project.host_path {
+                    return Err(AgentError::PathAccess);
+                }
+                insert_created(self.dir.as_deref(), &mut agents, draft).map(StarterAgent::Created)
+            }
+            [agent] => Ok(StarterAgent::One(agent.clone())),
+            _ => Ok(StarterAgent::Several),
         }
-        let id = AgentId::generate().map_err(|_| AgentError::Random)?;
-        let record = AgentRecord {
-            id,
-            revision: 1,
-            name: draft.name,
-            instructions: draft.instructions,
-            tools: draft.tools,
-            directories: draft.directories,
-            primary_directory: draft.primary_directory,
-        };
-        persist(self.dir.as_deref(), &record)?;
-        agents.insert(record.id, record.clone());
-        Ok(record)
     }
 
     pub(crate) fn update(
@@ -157,6 +188,29 @@ fn load_dir(dir: &Path) -> Result<BTreeMap<AgentId, AgentRecord>, AgentError> {
         }
     }
     Ok(agents)
+}
+
+fn insert_created(
+    dir: Option<&Path>,
+    agents: &mut BTreeMap<AgentId, AgentRecord>,
+    draft: AgentDraft,
+) -> Result<AgentRecord, AgentError> {
+    if agents.len() >= MAXIMUM_AGENTS {
+        return Err(AgentError::Full);
+    }
+    let id = AgentId::generate().map_err(|_| AgentError::Random)?;
+    let record = AgentRecord {
+        id,
+        revision: 1,
+        name: draft.name,
+        instructions: draft.instructions,
+        tools: draft.tools,
+        directories: draft.directories,
+        primary_directory: draft.primary_directory,
+    };
+    persist(dir, &record)?;
+    agents.insert(record.id, record.clone());
+    Ok(record)
 }
 
 fn persist(dir: Option<&Path>, record: &AgentRecord) -> Result<(), AgentError> {

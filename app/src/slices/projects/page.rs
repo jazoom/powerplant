@@ -56,6 +56,7 @@ pub(super) struct DetailView {
     pub(super) path: String,
     pub(super) available: bool,
     pub(super) agents: Vec<EligibleAgentLink>,
+    pub(super) starter_action: String,
     pub(super) starter_href: String,
     pub(super) grant_action: String,
     pub(super) grant_candidates: Vec<GrantCandidate>,
@@ -94,6 +95,7 @@ impl DetailView {
                     href: desk_path(&record.id, &agent.id),
                 })
                 .collect(),
+            starter_action: format!("/projects/{}/agents/starter", record.id.as_hex()),
             starter_href: format!("/agents/new?project={}", record.id.as_hex()),
             grant_action: format!("/projects/{}/agents/grant", record.id.as_hex()),
             grant_candidates: catalogue

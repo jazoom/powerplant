@@ -40,9 +40,22 @@
       <p class="text-quiet max-w-[60ch]">
         No current agent has an exact directory grant for this project path.
       </p>
-      <a href="{{ starter_href }}" data-graft class="btn btn-primary btn-sm"
-        >Create a starter agent</a
-      >
+      <p class="text-quiet max-w-[60ch]">
+        The agent can list, read, propose changes, and run sandbox commands.
+      </p>
+      <p class="text-quiet max-w-[60ch]">
+        Host files remain unchanged until candidate approval.
+      </p>
+      <form data-graft method="post" action="{{ starter_action }}">
+        <button class="btn btn-primary btn-sm" type="submit">
+          Create starter agent
+        </button>
+      </form>
+      <p>
+        <a href="{{ starter_href }}" data-graft class="link link-hover"
+          >Configure permissions first</a
+        >
+      </p>
       {% if !grant_candidates.is_empty() %}
         <div class="space-y-3">
           <h3 class="text-base font-semibold">Grant access</h3>
