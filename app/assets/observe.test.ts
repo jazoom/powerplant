@@ -15,6 +15,12 @@ const configurations = [
         unrelated: "environment-form",
         action: "/environments/x/configuration",
     },
+    {
+        name: "sandbox status",
+        target: "sandbox-status",
+        unrelated: "composer",
+        action: "/projects/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/agents/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    },
 ] as const;
 
 function observeRoot(target: string, active = true, action = "/"): HTMLElement {

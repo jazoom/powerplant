@@ -73,6 +73,7 @@ pub(crate) struct ChatViewModel {
     pub(crate) environment_preview_error: &'static str,
     pub(crate) preview_ready: bool,
     pub(crate) sandbox_status: SandboxStatus,
+    pub(crate) sandbox_cursor: String,
     pub(crate) quick_ready: bool,
     pub(crate) review_href: String,
 }
@@ -165,6 +166,10 @@ impl SandboxStatus {
 
     pub(crate) fn is_ready(&self) -> bool {
         self.kind == SandboxStatusKind::Ready
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.kind == SandboxStatusKind::Active
     }
 }
 
@@ -288,6 +293,7 @@ impl ChatViewModel {
             environment_preview_error: "",
             preview_ready: false,
             sandbox_status: SandboxStatus::from_parts(None, None, None),
+            sandbox_cursor: String::new(),
             quick_ready: false,
             review_href: String::new(),
         }
@@ -335,6 +341,15 @@ impl ChatViewModel {
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
             catalogue_pending: self.catalogue_pending,
+        }
+    }
+
+    pub(crate) fn sandbox_observe(&self) -> SandboxStatusContents<'_> {
+        SandboxStatusContents {
+            sandbox_status: &self.sandbox_status,
+            desk_href: &self.desk_href,
+            sandbox_cursor: &self.sandbox_cursor,
+            workflow_options: &self.workflow_options,
         }
     }
 
@@ -438,6 +453,15 @@ pub(crate) struct ComposerContents<'a> {
     pub(crate) environment_preview_error: &'static str,
     pub(crate) preview_ready: bool,
     pub(crate) quick_ready: bool,
+}
+
+#[derive(Template)]
+#[template(path = "projects/templates/desk.html", block = "sandbox_status")]
+pub(crate) struct SandboxStatusContents<'a> {
+    pub(crate) sandbox_status: &'a SandboxStatus,
+    pub(crate) desk_href: &'a str,
+    pub(crate) sandbox_cursor: &'a str,
+    pub(crate) workflow_options: &'a [WorkflowOption],
 }
 
 #[derive(Template)]

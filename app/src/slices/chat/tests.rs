@@ -335,6 +335,60 @@ fn observe_patch(state: &AppState, token: &str, job: &str, cursor: u64) -> Reque
         .unwrap()
 }
 
+fn sandbox_observe_patch(
+    state: &AppState,
+    token: &str,
+    sandbox: &str,
+    workflow: &str,
+) -> Request<Body> {
+    let mut uri = format!("{}?sandbox={sandbox}", chat_path(state));
+    if !workflow.is_empty() {
+        uri.push_str("&workflow=");
+        uri.push_str(workflow);
+    }
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header(header::COOKIE, cookie(token))
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn sandbox_cursor_token(state: &AppState) -> String {
+    crate::environments::EnvironmentCatalogue::cursor_token(state.environments.refresh_cursor())
+}
+
+fn sandbox_cursor_from(html: &str) -> String {
+    let name = html.find("name=\"sandbox\"").expect("sandbox field");
+    let marker = "value=\"";
+    let start = html[name..].find(marker).expect("sandbox value") + name + marker.len();
+    let end = html[start..].find('"').expect("sandbox value end") + start;
+    html[start..end].to_owned()
+}
+
+async fn sandbox_observe_text(
+    state: &AppState,
+    token: &str,
+    sandbox: &str,
+    workflow: &str,
+) -> (axum::http::StatusCode, String) {
+    let response = app(state)
+        .oneshot(sandbox_observe_patch(state, token, sandbox, workflow))
+        .await
+        .expect("sandbox observe");
+    let status = response.status();
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    (status, text)
+}
+
 fn model_refresh_patch(state: &AppState, token: &str) -> Request<Body> {
     Request::builder()
         .uri(format!(
@@ -2055,6 +2109,7 @@ async fn a_desk_document_uses_quick_task_as_the_default_send() {
     assert!(text.contains("value=\"configured\""));
     assert!(text.contains("Configured workflow"));
     assert!(text.contains("Sandbox is ready"));
+    assert!(!text.contains("data-observe-target=\"sandbox-status\""));
 }
 
 #[tokio::test]
@@ -2113,6 +2168,10 @@ async fn an_active_sandbox_disables_quick_task() {
     assert!(!text.contains(&configuration_href(&environment_id)));
     assert!(quick_send_disabled(&text));
     assert!(!composer_message_disabled(&text));
+    assert!(text.contains("data-island=\"observe\""));
+    assert!(text.contains("data-observe-target=\"sandbox-status\""));
+    assert!(text.contains("name=\"sandbox\""));
+    assert!(text.contains(&format!("method=\"get\" action=\"{}\"", chat_path(&state))));
 }
 
 #[tokio::test]
@@ -2202,4 +2261,254 @@ async fn a_missing_alpine_git_record_falls_back_to_environments() {
     assert!(!text.contains(&configuration_href(&environment_id)));
     assert!(text.contains("href=\"/environments\" data-graft"));
     assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn malformed_and_oversized_sandbox_cursors_are_rejected_first() {
+    let state = test_state();
+    let token = connected(&state).await;
+    for sandbox in ["not-valid", "0000000000000000-111111111111111111111"] {
+        let response = app(&state)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "{}?sandbox={sandbox}&cursor=nope",
+                        chat_path(&state)
+                    ))
+                    .header(header::COOKIE, cookie(&token))
+                    .header(hypergraft::GRAFT_REQUEST, "patch")
+                    .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("sandbox observe");
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let text = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("target=\"sandbox-status\""));
+        assert!(!text.contains("target=\"composer\""));
+        assert!(!text.contains("target=\"job-observe\""));
+    }
+}
+
+#[tokio::test]
+async fn a_sandbox_observation_reports_an_active_status() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let (status, text) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(text.contains("target=\"sandbox-status\""));
+    assert!(text.contains("target=\"composer\""));
+    assert!(text.contains("Sandbox preparation is in progress"));
+    assert!(text.contains("data-observe-target=\"sandbox-status\""));
+    assert!(text.contains(&format!("method=\"get\" action=\"{}\"", chat_path(&state))));
+    assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_sandbox_observation_reports_a_ready_status() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let (status, text) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(text.contains("target=\"sandbox-status\""));
+    assert!(text.contains("target=\"composer\""));
+    assert!(text.contains("Sandbox is ready"));
+    assert!(!text.contains("data-observe-target=\"sandbox-status\""));
+    assert!(!quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_sandbox_observation_reports_a_failed_status() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let environment_id = alpine_environment_id(&state);
+    let preparation = state
+        .environments
+        .claim_oldest_queued()
+        .expect("claim")
+        .expect("queued");
+    state
+        .environments
+        .finish_failed(
+            &preparation.id,
+            crate::tests::FailureCategory::SetupExit,
+            preparation.log,
+        )
+        .expect("failed");
+    let (status, text) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(text.contains("Sandbox preparation failed"));
+    assert!(text.contains(&configuration_href(&environment_id)));
+    assert!(!text.contains("data-observe-target=\"sandbox-status\""));
+    assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_sandbox_observation_reports_an_invalid_status() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let environment_id = alpine_environment_id(&state);
+    let pointer = state
+        .environments
+        .copy_ready_pointer(&environment_id)
+        .expect("ready pointer");
+    state.environment_snapshots.mark(
+        pointer.snapshot.artifact_key.clone(),
+        crate::environments::SnapshotAvailability::Corrupt,
+    );
+    let (status, text) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(text.contains("Sandbox snapshot is invalid"));
+    assert!(!text.contains("data-observe-target=\"sandbox-status\""));
+    assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_sandbox_observation_reports_an_unavailable_status() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    let (status, text) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(text.contains("Sandbox is unavailable"));
+    assert!(!text.contains("data-observe-target=\"sandbox-status\""));
+    assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn an_active_sandbox_observation_enables_quick_task_after_refresh() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let (status, active) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(active.contains("Sandbox preparation is in progress"));
+    assert!(quick_send_disabled(&active));
+    let cursor = sandbox_cursor_from(&active);
+
+    let environment_id = alpine_environment_id(&state);
+    let environment = state
+        .environments
+        .get(&environment_id)
+        .expect("environment");
+    if environment.ready_preparation.is_none() {
+        let preparation = state
+            .environments
+            .claim_oldest_queued()
+            .expect("claim")
+            .expect("queued");
+        let snapshot = crate::tests::sample_snapshot(preparation.id);
+        state.environment_snapshots.mark(
+            snapshot.artifact_key.clone(),
+            crate::environments::SnapshotAvailability::Available,
+        );
+        state
+            .environments
+            .finish_ready(&preparation.id, snapshot, preparation.log)
+            .expect("ready");
+    }
+
+    let (status, ready) = sandbox_observe_text(&state, &token, &cursor, "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(ready.contains("Sandbox is ready"));
+    assert!(!ready.contains("data-observe-target=\"sandbox-status\""));
+    assert!(!quick_send_disabled(&ready));
+}
+
+#[tokio::test]
+async fn a_sandbox_observation_preserves_the_selected_workflow() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let environment_id = alpine_environment_id(&state);
+    let first = state
+        .workflows
+        .create(crate::workflows::seeds::one_agent_definition(
+            environment_id,
+        ))
+        .expect("first workflow");
+    state
+        .workflows
+        .create(crate::workflows::seeds::read_only_review_definition(
+            environment_id,
+        ))
+        .expect("second workflow");
+    let selection = crate::workflows::WorkflowSelection {
+        workflow_id: first.id,
+        definition_version: first.definition_version,
+    }
+    .as_token();
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("{}?workflow={selection}", chat_path(&state)))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("select workflow");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+    let (status, text) =
+        sandbox_observe_text(&state, &token, &sandbox_cursor_token(&state), "").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let sandbox_name = text.find("name=\"sandbox\"").expect("sandbox field");
+    let sandbox_form_end =
+        text[sandbox_name..].find("</form>").expect("sandbox form") + sandbox_name;
+    let sandbox_form = &text[sandbox_name..sandbox_form_end];
+    assert!(sandbox_form.contains("name=\"workflow\""));
+    assert!(sandbox_form.contains(&format!("value=\"{selection}\"")));
+    let composer = text
+        .split("operation=\"children\" target=\"composer\"")
+        .nth(1)
+        .expect("composer patch");
+    assert!(opening_tag_for(composer, &format!("value=\"{selection}\"")).contains("selected"));
+    assert!(text.contains("Sandbox preparation is in progress"));
+}
+
+#[tokio::test]
+async fn a_quick_task_does_not_start_before_the_sandbox_is_ready() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let response = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.contains("That environment is not ready."));
+    assert!(session_snapshot(&state, &token).job.is_none());
+    assert!(state.workflow_runs.summaries().is_empty());
 }

@@ -143,6 +143,8 @@ pub(crate) struct ObserveQuery {
     pub(crate) cursor: String,
     #[serde(default)]
     pub(crate) workflow: String,
+    #[serde(default)]
+    pub(crate) sandbox: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]

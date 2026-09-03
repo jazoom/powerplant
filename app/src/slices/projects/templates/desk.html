@@ -388,7 +388,34 @@
       </div>
       <div id="sandbox-status">
         {% block sandbox_status %}
-          {% if sandbox_status.href != "" %}
+          {% if sandbox_status.is_active() %}
+            <div
+              data-island="observe"
+              data-observe-active="true"
+              data-observe-target="sandbox-status"
+            >
+              <p class="text-composer-quiet mb-3 text-sm" role="status">
+                {{ sandbox_status.message }}
+              </p>
+              <form data-graft method="get" action="{{ desk_href }}" hidden>
+                <input
+                  type="hidden"
+                  name="sandbox"
+                  value="{{ sandbox_cursor }}"
+                />
+                {% for option in workflow_options %}
+                  {% if option.selected %}
+                    <input
+                      type="hidden"
+                      name="workflow"
+                      value="{{ option.token }}"
+                    />
+                  {% endif %}
+                {% endfor %}
+                <button type="submit">Refresh</button>
+              </form>
+            </div>
+          {% else if sandbox_status.href != "" %}
             <div class="alert alert-warning mb-3" role="status">
               <p>
                 {{ sandbox_status.message }}

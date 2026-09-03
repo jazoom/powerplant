@@ -5,6 +5,8 @@ mod page;
 #[cfg(test)]
 mod tests;
 
+use std::time::Duration;
+
 use axum::{
     Extension, Form, Router,
     extract::{Query, State},
@@ -16,6 +18,7 @@ use hypergraft::{GraftRequest, PatchGraft, PatchSet, PatchStatus};
 
 use crate::{
     agents::AgentRecord,
+    environments::EnvironmentCatalogue,
     error::AppResult,
     projects::{ProjectId, ProjectRecord, eligibility, eligible_agents},
     responses,
@@ -34,6 +37,12 @@ use self::{
 
 pub(crate) use forms::{ChatForm, DeskMode, ObserveQuery};
 pub(crate) use job::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action};
+
+const SANDBOX_HOLD: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_secs(1)
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct DeskPage<'a> {
@@ -275,6 +284,9 @@ pub(crate) async fn observe(
     page: DeskPage<'_>,
     query: ObserveQuery,
 ) -> AppResult<Response> {
+    if !query.sandbox.trim().is_empty() {
+        return observe_sandbox(state, session, page, &query).await;
+    }
     let key = ConversationKey {
         project_id: page.project.id,
         agent_id: page.agent.id,
@@ -293,6 +305,13 @@ pub(crate) async fn observe(
     };
     let Some(job_id) = query.job_id() else {
         if !query.workflow.trim().is_empty() {
+            if let Some(selection) = WorkflowSelection::parse(query.workflow.trim())
+                && state.workflows.resolve(&selection).is_ok()
+            {
+                state
+                    .sessions
+                    .set_preferred_workflow(session, key, selection.workflow_id);
+            }
             let rendered = view(state, page, "", "", &query.workflow).await;
             return Ok(hypergraft::outcome::children_patch(
                 PatchStatus::Ok,
@@ -311,6 +330,53 @@ pub(crate) async fn observe(
         cursor,
         crate::projects::desk_path(&page.project.id, &page.agent.id),
     ))
+}
+
+async fn observe_sandbox(
+    state: &AppState,
+    session: &SessionId,
+    page: DeskPage<'_>,
+    query: &ObserveQuery,
+) -> AppResult<Response> {
+    let Some(cursor) = EnvironmentCatalogue::parse_refresh_cursor(query.sandbox.trim()) else {
+        let rendered = view(state, page, "", "", &query.workflow).await;
+        return Ok(hypergraft::outcome::children_patch(
+            PatchStatus::UnprocessableEntity,
+            "sandbox-status",
+            &rendered.sandbox_observe(),
+        )?);
+    };
+    if !state.environments.cursor_is_stale(Some(cursor)) {
+        state
+            .environments
+            .wait_while_current(cursor, SANDBOX_HOLD)
+            .await;
+    }
+    let key = ConversationKey {
+        project_id: page.project.id,
+        agent_id: page.agent.id,
+    };
+    let snapshot = state
+        .sessions
+        .snapshot(session, &key)
+        .unwrap_or_else(|| page.snapshot.clone());
+    let rendered = view(
+        state,
+        DeskPage {
+            project: page.project,
+            agent: page.agent,
+            eligible: page.eligible,
+            snapshot: &snapshot,
+        },
+        "",
+        "",
+        &query.workflow,
+    )
+    .await;
+    let mut patches = PatchSet::new();
+    patches.children("sandbox-status", &rendered.sandbox_observe())?;
+    patches.children("composer", &rendered.composer())?;
+    Ok(patches.respond(PatchStatus::Ok)?)
 }
 
 async fn refresh_composer(state: &AppState, page: DeskPage<'_>) -> AppResult<Response> {
@@ -456,6 +522,8 @@ pub(super) fn review_href_for(state: &AppState, job: &JobSnapshot) -> String {
 }
 
 async fn attach_sandbox_status(state: &AppState, page: &mut ChatViewModel) {
+    // This cursor precedes the status reads so concurrent catalogue changes remain observable.
+    let cursor = state.environments.refresh_cursor();
     let seed_id = state
         .environments
         .seed_id(crate::environments::seeds::ALPINE_GIT_V1);
@@ -473,6 +541,7 @@ async fn attach_sandbox_status(state: &AppState, page: &mut ChatViewModel) {
     page.sandbox_status =
         page::SandboxStatus::from_parts(record.as_ref(), latest.as_ref(), ready_availability);
     page.quick_ready = page.sandbox_status.is_ready();
+    page.sandbox_cursor = EnvironmentCatalogue::cursor_token(cursor);
 }
 
 async fn attach_environment_preview(state: &AppState, page: &mut ChatViewModel) {

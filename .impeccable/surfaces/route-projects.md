@@ -77,6 +77,20 @@ Ready, failed, unavailable and invalid are terminal presentation states.
 
 Failed, unavailable and invalid states link to the environment configuration route when the Alpine Git environment record exists. They fall back to `/environments` when the seed identifier or its current environment record is absent.
 
+The canonical project desk GET is the sandbox status projection.
+
+While the status is active, the desk renders an observe island. The island submits a hidden safe GET form to the canonical desk route. The form carries the sandbox refresh cursor. It also carries the selected workflow token.
+
+Sandbox observations run before job observations on that route.
+
+Each observation waits for a catalogue change or one second. Then it patches `sandbox-status` and `composer`.
+
+Quick task Send becomes enabled as soon as the ready snapshot is available.
+
+Observation stops after every terminal sandbox state.
+
+A malformed sandbox cursor returns 422 and patches `sandbox-status`.
+
 The composer stays disabled while the session owns an active command.
 
 The composer stays disabled when the project path is unavailable.
