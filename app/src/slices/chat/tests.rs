@@ -2512,3 +2512,174 @@ async fn a_quick_task_does_not_start_before_the_sandbox_is_ready() {
     assert!(session_snapshot(&state, &token).job.is_none());
     assert!(state.workflow_runs.summaries().is_empty());
 }
+
+#[tokio::test]
+async fn a_completed_quick_task_shows_task_finished_on_the_document_and_patch() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    wait_until_job_idle(&state, &token).await;
+    assert_eq!(
+        session_snapshot(&state, &token)
+            .job
+            .as_ref()
+            .map(|job| job.status),
+        Some(JobStatus::Completed)
+    );
+    let document = desk_html(&state, &token).await;
+    assert!(opening_tag_for(&document, "Task finished.").contains("role=\"status\""));
+
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(chat_path(&state))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("patch");
+    let patch = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(patch.contains("target=\"job-observe\""));
+    assert!(patch.contains("role=\"status\""));
+    assert!(patch.contains("Task finished."));
+}
+
+#[tokio::test]
+async fn a_completed_quick_task_shows_task_finished_on_the_final_stream() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let started = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let job = job_id_from_body(&started_body);
+    wait_until_job_idle(&state, &token).await;
+
+    let response = app(&state)
+        .oneshot(observe_patch(&state, &token, &job, 0))
+        .await
+        .expect("observe");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let frames = stream_frames(&body);
+    let final_frame = frames.last().expect("final frame");
+    assert!(final_frame.contains("phase=\"final\""));
+    assert!(final_frame.contains("Task finished."));
+    assert!(final_frame.contains("role=\"status\""));
+    assert!(!job_active(final_frame));
+}
+
+#[tokio::test]
+async fn a_failed_quick_task_omits_task_finished() {
+    let state = state_with_backend(ScriptedBackend::chunks([Err(ProviderError::Unreachable)]));
+    let token = connected(&state).await;
+    let started = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let job = job_id_from_body(&started_body);
+    wait_until_job_idle(&state, &token).await;
+    assert_eq!(
+        session_snapshot(&state, &token)
+            .job
+            .as_ref()
+            .map(|job| job.status),
+        Some(JobStatus::Failed)
+    );
+    let text = desk_html(&state, &token).await;
+    assert!(!text.contains("Task finished."));
+    let response = app(&state)
+        .oneshot(observe_patch(&state, &token, &job, 0))
+        .await
+        .expect("observe");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let frames = stream_frames(&body);
+    let final_frame = frames.last().expect("final frame");
+    assert!(!final_frame.contains("Task finished."));
+}
+
+#[tokio::test]
+async fn a_cancelled_quick_task_omits_task_finished() {
+    let state = state_with_backend(ScriptedBackend::hang());
+    let token = connected(&state).await;
+    let started = app(&state)
+        .oneshot(patch_send_quick(&state, &token))
+        .await
+        .expect("send");
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    assert!(!String::from_utf8_lossy(&started_body).contains("Task finished."));
+    let job = job_id_from_body(&started_body);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{}/jobs/{job}/cancel", chat_path(&state)))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("cancel");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    wait_until_job_idle(&state, &token).await;
+    assert_eq!(
+        session_snapshot(&state, &token)
+            .job
+            .as_ref()
+            .map(|job| job.status),
+        Some(JobStatus::Cancelled)
+    );
+    let text = desk_html(&state, &token).await;
+    assert!(!text.contains("Task finished."));
+}
+
+#[tokio::test]
+async fn a_completed_configured_run_omits_task_finished() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let started = app(&state)
+        .oneshot(patch_send(&state, &token))
+        .await
+        .expect("send");
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let job = job_id_from_body(&started_body);
+    wait_until_job_idle(&state, &token).await;
+    assert_eq!(
+        session_snapshot(&state, &token)
+            .job
+            .as_ref()
+            .map(|job| job.status),
+        Some(JobStatus::Completed)
+    );
+    let stored = state
+        .workflow_runs
+        .get(&state.workflow_runs.summaries()[0].id)
+        .expect("run");
+    assert_eq!(stored.kind, crate::workflows::RunKind::Configured);
+    let text = desk_html(&state, &token).await;
+    assert!(!text.contains("Task finished."));
+    let response = app(&state)
+        .oneshot(observe_patch(&state, &token, &job, 0))
+        .await
+        .expect("observe");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let frames = stream_frames(&body);
+    let final_frame = frames.last().expect("final frame");
+    assert!(!final_frame.contains("Task finished."));
+}

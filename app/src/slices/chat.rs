@@ -496,8 +496,17 @@ pub(crate) async fn view(
     attach_sandbox_status(state, &mut rendered).await;
     if let Some(job) = page.snapshot.job.as_ref() {
         rendered.review_href = review_href_for(state, job);
+        rendered.quick_task_finished = quick_task_finished(state, job);
     }
     rendered
+}
+
+pub(super) fn quick_task_finished(state: &AppState, job: &JobSnapshot) -> bool {
+    job.status == JobStatus::Completed
+        && state
+            .workflow_runs
+            .get(&job.run_id)
+            .is_some_and(|run| run.kind == RunKind::QuickTask)
 }
 
 pub(super) fn review_href_for(state: &AppState, job: &JobSnapshot) -> String {

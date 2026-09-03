@@ -46,6 +46,9 @@
       </p>
 
       {% if awaiting %}
+        {% if quick_task %}
+          <p class="text-sm">{{ host_unchanged }}</p>
+        {% endif %}
         <div
           class="{% if quick_task %}lg:grid-cols-2{% else %}lg:grid-cols-3{% endif %} grid gap-4 pt-2"
         >

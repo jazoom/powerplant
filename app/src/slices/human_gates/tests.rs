@@ -15,6 +15,9 @@ use crate::{
     workflows::{self, RunKind},
 };
 
+const HOST_UNCHANGED_SAFETY: &str =
+    "The host project is unchanged. Review the candidate before you apply it.";
+
 fn test_state() -> AppState {
     crate::tests::test_state(RuntimeConfig::development())
 }
@@ -444,6 +447,9 @@ async fn a_quick_task_gate_uses_apply_and_discard_labels() {
     assert!(text.contains("Discard changes"));
     assert!(!text.contains("Request revision"));
     assert!(!text.contains("/request-revision"));
+    let safety_at = text.find(HOST_UNCHANGED_SAFETY).expect("safety");
+    let apply_at = text.find("Apply changes").expect("apply");
+    assert!(safety_at < apply_at);
     assert!(text.contains("data-run-kind=\"quick-task\""));
     assert!(text.contains(&format!("data-project=\"{}\"", fixture.project_id.as_hex())));
     assert!(text.contains(&fixture.desk_path()));
@@ -466,6 +472,7 @@ async fn a_configured_gate_keeps_revision_controls() {
     assert!(text.contains("Cancel run"));
     assert!(!text.contains("Apply changes"));
     assert!(!text.contains("Discard changes"));
+    assert!(!text.contains(HOST_UNCHANGED_SAFETY));
 }
 
 #[tokio::test]
@@ -485,6 +492,10 @@ async fn the_project_desk_links_review_changes_for_a_quick_task_gate() {
     let text = body_text(response).await;
     assert!(text.contains("Review changes"));
     assert!(text.contains(&fixture.gate_path()));
+    let safety_at = text.find(HOST_UNCHANGED_SAFETY).expect("safety");
+    let review_at = text.find("Review changes").expect("review");
+    assert!(safety_at < review_at);
+    assert!(!text.contains("Task finished."));
 }
 
 #[tokio::test]
@@ -586,6 +597,18 @@ async fn a_quick_task_discard_settles_the_transcript() {
         Some("Here is the change.")
     );
     assert!(!git_has_head(&fixture.host));
+    let desk = app(&fixture.state)
+        .oneshot(
+            Request::builder()
+                .uri(fixture.desk_path())
+                .header(header::COOKIE, cookie(&fixture.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("desk");
+    let desk_text = body_text(desk).await;
+    assert!(!desk_text.contains("Task finished."));
     let begun = fixture.state.sessions.begin_turn(
         &fixture.session,
         fixture.key,

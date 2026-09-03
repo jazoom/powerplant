@@ -76,6 +76,8 @@ pub(crate) struct ChatViewModel {
     pub(crate) sandbox_cursor: String,
     pub(crate) quick_ready: bool,
     pub(crate) review_href: String,
+    pub(crate) quick_task_finished: bool,
+    pub(crate) host_unchanged: &'static str,
 }
 
 pub(crate) struct PreviewLine {
@@ -296,6 +298,8 @@ impl ChatViewModel {
             sandbox_cursor: String::new(),
             quick_ready: false,
             review_href: String::new(),
+            quick_task_finished: false,
+            host_unchanged: crate::workflows::HOST_UNCHANGED,
         }
     }
 
@@ -386,6 +390,8 @@ impl ChatViewModel {
             run_step: &self.run_step,
             workflow_name: &self.workflow_name,
             review_href: &self.review_href,
+            quick_task_finished: self.quick_task_finished,
+            host_unchanged: self.host_unchanged,
         }
     }
 }
@@ -477,6 +483,8 @@ pub(crate) struct JobObserveContents<'a> {
     pub(crate) run_step: &'a str,
     pub(crate) workflow_name: &'a str,
     pub(crate) review_href: &'a str,
+    pub(crate) quick_task_finished: bool,
+    pub(crate) host_unchanged: &'static str,
 }
 
 impl<'a> JobObserveContents<'a> {
@@ -487,6 +495,7 @@ impl<'a> JobObserveContents<'a> {
         run_step: &'a str,
         workflow_name: &'a str,
         review_href: &'a str,
+        quick_task_finished: bool,
     ) -> Self {
         Self {
             job_error: error,
@@ -499,6 +508,8 @@ impl<'a> JobObserveContents<'a> {
             run_step,
             workflow_name,
             review_href,
+            quick_task_finished,
+            host_unchanged: crate::workflows::HOST_UNCHANGED,
         }
     }
 
@@ -524,6 +535,8 @@ impl<'a> JobObserveContents<'a> {
             run_step,
             workflow_name,
             review_href: "",
+            quick_task_finished: false,
+            host_unchanged: crate::workflows::HOST_UNCHANGED,
         }
     }
 }

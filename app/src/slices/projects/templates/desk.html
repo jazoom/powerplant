@@ -375,9 +375,15 @@
               </div>
             </div>
           {% else %}
-            {% if job_error != "" || run_id != "" || review_href != "" %}
+            {% if job_error != "" || run_id != "" || review_href != "" || quick_task_finished %}
               <div class="mb-3">
+                {% if quick_task_finished %}
+                  <p class="text-composer-quiet text-sm" role="status">
+                    Task finished.
+                  </p>
+                {% endif %}
                 {% if review_href != "" %}
+                  <p class="text-sm">{{ host_unchanged }}</p>
                   <p class="text-sm">
                     <a
                       href="{{ review_href }}"

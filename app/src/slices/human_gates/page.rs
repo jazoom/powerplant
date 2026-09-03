@@ -50,6 +50,7 @@ pub(super) struct GatePage {
     pub(super) project_id: String,
     pub(super) desk_href: String,
     pub(super) quick_task: bool,
+    pub(super) host_unchanged: &'static str,
 }
 
 impl GatePage {
@@ -132,6 +133,7 @@ impl GatePage {
         } else {
             String::new()
         };
+        let quick_task = run.kind == RunKind::QuickTask;
         Some(Self {
             run_id: run.id.as_hex(),
             gate_id: gate.id.as_hex(),
@@ -167,7 +169,8 @@ impl GatePage {
             run_kind: run.kind.as_str(),
             project_id: run.project_id.as_hex(),
             desk_href: crate::projects::desk_path(&run.project_id, &run.agent_id),
-            quick_task: run.kind == RunKind::QuickTask,
+            quick_task,
+            host_unchanged: crate::workflows::HOST_UNCHANGED,
         })
     }
 }

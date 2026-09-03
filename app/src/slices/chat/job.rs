@@ -669,6 +669,7 @@ fn encode_observe_final(
     } else {
         let error = snapshot.error.as_deref().unwrap_or("");
         let review_href = super::review_href_for(state, &snapshot);
+        let quick_task_finished = super::quick_task_finished(state, &snapshot);
         patches.children(
             "job-observe",
             &JobObserveContents::idle(
@@ -678,6 +679,7 @@ fn encode_observe_final(
                 run_step,
                 workflow_name,
                 &review_href,
+                quick_task_finished,
             ),
         )?;
     }

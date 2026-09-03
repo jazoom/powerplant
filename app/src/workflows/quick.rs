@@ -13,6 +13,8 @@ use super::definition::{
 use super::resolve::ResolveEnvironmentError;
 
 pub(crate) const QUICK_TASK_NAME: &str = "Quick task";
+pub(crate) const HOST_UNCHANGED: &str =
+    "The host project is unchanged. Review the candidate before you apply it.";
 const ROLE_KEY: &str = "agent";
 const AGENT_STEP_KEY: &str = "work";
 const GATE_STEP_KEY: &str = "gate";
