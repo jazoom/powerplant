@@ -905,84 +905,6 @@
         flex: none;
     }
 
-    .readiness-route {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        margin: 0;
-        padding: 0;
-        border-bottom: 1px solid var(--powerplant-strong-rule);
-        background: var(--powerplant-paper-green);
-        list-style: none;
-    }
-
-    .readiness-route li {
-        position: relative;
-        min-width: 0;
-        min-height: 4.15rem;
-        padding: 0.7rem 1rem 0.65rem 2.8rem;
-        border-right: 1px solid var(--powerplant-rule);
-    }
-
-    .readiness-route li:last-child {
-        border-right: 0;
-    }
-
-    .readiness-route li::before {
-        position: absolute;
-        top: 1.26rem;
-        left: 1.3rem;
-        width: 0.55rem;
-        height: 0.55rem;
-        content: "";
-        border-radius: 50%;
-        background: var(--powerplant-success);
-    }
-
-    .readiness-route li[data-ready="false"]::before {
-        background: var(--powerplant-action-deep);
-    }
-
-    .readiness-route li::after {
-        position: absolute;
-        top: 1.52rem;
-        right: -1px;
-        left: 1.8rem;
-        z-index: 0;
-        height: 1px;
-        content: "";
-        background: color-mix(
-            in oklch,
-            var(--powerplant-success) 65%,
-            var(--powerplant-rule)
-        );
-    }
-
-    .readiness-route span,
-    .readiness-route strong {
-        position: relative;
-        z-index: 1;
-        display: block;
-        width: fit-content;
-        max-width: 100%;
-        padding-right: 0.4rem;
-        overflow: hidden;
-        background: var(--powerplant-paper-green);
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .readiness-route span {
-        color: var(--powerplant-quiet-ink);
-        font-size: 0.66rem;
-        letter-spacing: 0.07em;
-        text-transform: uppercase;
-    }
-
-    .readiness-route strong {
-        margin-top: 0.2rem;
-        font-size: 0.78rem;
-    }
-
     .status-stamp {
         display: inline-block;
         padding: 0.35rem 0.65rem;
@@ -1382,15 +1304,6 @@
     .settings-row {
         grid-template-columns: 1fr;
         gap: 1rem;
-    }
-
-    .readiness-route {
-        display: flex;
-        overflow-x: auto;
-    }
-
-    .readiness-route li {
-        min-width: 11.5rem;
     }
 
     .chat-desk-bar {

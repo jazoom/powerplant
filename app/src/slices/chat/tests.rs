@@ -100,6 +100,14 @@ fn git_init(path: &std::path::Path) {
 }
 
 async fn connected(state: &AppState) -> String {
+    let token = connect_session(state).await;
+    if state.workflows.list().is_empty() {
+        seed_ready_workflow(state).await;
+    }
+    token
+}
+
+async fn connect_session(state: &AppState) -> String {
     let token = sessions::generate_session_token().expect("session token");
     state
         .vault
@@ -132,9 +140,6 @@ async fn connected(state: &AppState) -> String {
         .create("Test project".to_owned(), host)
         .expect("project");
     state.keep_temp_dir(dir);
-    if state.workflows.list().is_empty() {
-        seed_ready_workflow(state).await;
-    }
     token.raw().as_str().to_owned()
 }
 
@@ -269,6 +274,43 @@ fn document_show(state: &AppState, token: &str) -> Request<Body> {
         .header(header::COOKIE, cookie(token))
         .body(Body::empty())
         .unwrap()
+}
+
+async fn desk_html(state: &AppState, token: &str) -> String {
+    let response = app(state)
+        .oneshot(document_show(state, token))
+        .await
+        .expect("document");
+    String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+fn alpine_environment_id(state: &AppState) -> crate::environments::EnvironmentId {
+    crate::workflows::alpine_git_id(&state.environments).expect("alpine-git")
+}
+
+fn configuration_href(id: &crate::environments::EnvironmentId) -> String {
+    format!("/environments/{}/configuration", id.as_hex())
+}
+
+fn opening_tag_for<'a>(html: &'a str, marker: &str) -> &'a str {
+    let marker_start = html.find(marker).expect("element marker");
+    let tag_start = html[..marker_start].rfind('<').expect("opening tag");
+    let tag_end = html[marker_start..].find('>').expect("opening tag end") + marker_start;
+    &html[tag_start..=tag_end]
+}
+
+fn quick_send_disabled(html: &str) -> bool {
+    opening_tag_for(html, "value=\"quick\"").contains(" disabled")
+}
+
+fn composer_message_disabled(html: &str) -> bool {
+    opening_tag_for(html, "id=\"composer-message\"").contains(" disabled")
 }
 
 fn navigation_show(state: &AppState, token: &str) -> Request<Body> {
@@ -1376,7 +1418,7 @@ async fn a_missing_environment_rejects_a_task_before_a_run_starts() {
 }
 
 #[tokio::test]
-async fn a_workflow_preview_patch_updates_readiness_and_composer() {
+async fn a_workflow_preview_patch_updates_composer() {
     let state = test_state();
     let token = connected(&state).await;
     let response = app(&state)
@@ -1399,8 +1441,9 @@ async fn a_workflow_preview_patch_updates_readiness_and_composer() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("target=\"readiness-route\""));
     assert!(text.contains("target=\"composer\""));
+    assert!(!text.contains("target=\"readiness-route\""));
+    assert!(!text.contains("target=\"sandbox-status\""));
 }
 
 #[tokio::test]
@@ -2011,5 +2054,152 @@ async fn a_desk_document_uses_quick_task_as_the_default_send() {
     assert!(text.contains("value=\"quick\""));
     assert!(text.contains("value=\"configured\""));
     assert!(text.contains("Configured workflow"));
-    assert!(text.contains("Alpine Git"));
+    assert!(text.contains("Sandbox is ready"));
+}
+
+#[tokio::test]
+async fn a_ready_sandbox_keeps_quick_task_enabled_during_replacement() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let environment_id = alpine_environment_id(&state);
+    let environment = state
+        .environments
+        .get(&environment_id)
+        .expect("environment");
+    state
+        .environments
+        .retry_preparation(
+            &environment.id,
+            environment.revision,
+            &environment.recipe_version,
+        )
+        .expect("replacement");
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("id=\"sandbox-status\""));
+    assert!(text.contains("Sandbox is ready"));
+    assert!(!text.contains("Sandbox preparation is in progress"));
+    assert!(!text.contains("Sandbox preparation failed"));
+    assert!(!text.contains(&configuration_href(&environment_id)));
+    assert!(!text.contains("id=\"readiness-route\""));
+    assert!(!quick_send_disabled(&text));
+
+    let replacement = state
+        .environments
+        .claim_oldest_queued()
+        .expect("claim replacement")
+        .expect("replacement");
+    state
+        .environments
+        .finish_failed(
+            &replacement.id,
+            crate::tests::FailureCategory::SetupExit,
+            replacement.log,
+        )
+        .expect("failed replacement");
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("Sandbox is ready"));
+    assert!(!text.contains("Sandbox preparation failed"));
+    assert!(!quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn an_active_sandbox_disables_quick_task() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let environment_id = alpine_environment_id(&state);
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("Sandbox preparation is in progress"));
+    assert!(!text.contains(&configuration_href(&environment_id)));
+    assert!(quick_send_disabled(&text));
+    assert!(!composer_message_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_failed_sandbox_links_to_environment_configuration() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    state.environments.apply_production_seeds();
+    let environment_id = alpine_environment_id(&state);
+    let preparation = state
+        .environments
+        .claim_oldest_queued()
+        .expect("claim")
+        .expect("queued");
+    state
+        .environments
+        .finish_failed(
+            &preparation.id,
+            crate::tests::FailureCategory::SetupExit,
+            preparation.log,
+        )
+        .expect("failed");
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("Sandbox preparation failed"));
+    assert!(text.contains(&configuration_href(&environment_id)));
+    assert!(text.contains("Environment configuration"));
+    assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn an_invalid_sandbox_snapshot_links_to_environment_configuration() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let environment_id = alpine_environment_id(&state);
+    let pointer = state
+        .environments
+        .copy_ready_pointer(&environment_id)
+        .expect("ready pointer");
+    state.environment_snapshots.mark(
+        pointer.snapshot.artifact_key.clone(),
+        crate::environments::SnapshotAvailability::Corrupt,
+    );
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("Sandbox snapshot is invalid"));
+    assert!(text.contains(&configuration_href(&environment_id)));
+    assert!(quick_send_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_missing_alpine_git_seed_falls_back_to_environments() {
+    let state = test_state();
+    let token = connect_session(&state).await;
+    assert!(
+        state
+            .environments
+            .seed_id(crate::environments::seeds::ALPINE_GIT_V1)
+            .is_none()
+    );
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("Sandbox is unavailable"));
+    assert!(text.contains("href=\"/environments\" data-graft"));
+    assert!(quick_send_disabled(&text));
+    assert!(!composer_message_disabled(&text));
+}
+
+#[tokio::test]
+async fn a_missing_alpine_git_record_falls_back_to_environments() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let environment_id = alpine_environment_id(&state);
+    let environment = state
+        .environments
+        .get(&environment_id)
+        .expect("environment");
+    state
+        .environments
+        .delete(&environment_id, environment.revision)
+        .expect("delete alpine-git");
+    assert!(
+        state
+            .environments
+            .seed_id(crate::environments::seeds::ALPINE_GIT_V1)
+            .is_some()
+    );
+    assert!(state.environments.get(&environment_id).is_none());
+    let text = desk_html(&state, &token).await;
+    assert!(text.contains("Sandbox is unavailable"));
+    assert!(!text.contains(&configuration_href(&environment_id)));
+    assert!(text.contains("href=\"/environments\" data-graft"));
+    assert!(quick_send_disabled(&text));
 }

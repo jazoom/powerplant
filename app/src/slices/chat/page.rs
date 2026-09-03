@@ -2,6 +2,7 @@ use askama::Template;
 
 use crate::{
     agents::AgentRecord,
+    environments::{EnvironmentRecord, PreparationRecord, PreparationState, SnapshotAvailability},
     markdown,
     models::ModelCatalogue,
     projects::ProjectRecord,
@@ -71,6 +72,7 @@ pub(crate) struct ChatViewModel {
     pub(crate) environment_preview: Vec<PreviewLine>,
     pub(crate) environment_preview_error: &'static str,
     pub(crate) preview_ready: bool,
+    pub(crate) sandbox_status: SandboxStatus,
     pub(crate) quick_ready: bool,
     pub(crate) review_href: String,
 }
@@ -84,6 +86,86 @@ pub(crate) struct WorkflowOption {
     pub(crate) label: String,
     pub(crate) policy: String,
     pub(crate) selected: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SandboxStatusKind {
+    Ready,
+    Active,
+    Failed,
+    Unavailable,
+    Invalid,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SandboxStatus {
+    pub(crate) kind: SandboxStatusKind,
+    pub(crate) message: &'static str,
+    pub(crate) href: String,
+    pub(crate) route_label: &'static str,
+}
+
+impl SandboxStatus {
+    pub(crate) fn from_parts(
+        record: Option<&EnvironmentRecord>,
+        latest: Option<&PreparationRecord>,
+        ready_availability: Option<SnapshotAvailability>,
+    ) -> Self {
+        if ready_availability == Some(SnapshotAvailability::Available) {
+            return Self {
+                kind: SandboxStatusKind::Ready,
+                message: "Sandbox is ready",
+                href: String::new(),
+                route_label: "",
+            };
+        }
+        if latest.is_some_and(|item| item.state.is_active()) {
+            return Self {
+                kind: SandboxStatusKind::Active,
+                message: "Sandbox preparation is in progress",
+                href: String::new(),
+                route_label: "",
+            };
+        }
+        let (href, route_label) = match record {
+            Some(record) => (
+                format!("/environments/{}/configuration", record.id.as_hex()),
+                "Environment configuration",
+            ),
+            None => ("/environments".to_owned(), "Environments"),
+        };
+        if latest.is_some_and(|item| {
+            matches!(
+                item.state,
+                PreparationState::Failed | PreparationState::Interrupted
+            )
+        }) {
+            return Self {
+                kind: SandboxStatusKind::Failed,
+                message: "Sandbox preparation failed",
+                href,
+                route_label,
+            };
+        }
+        if ready_availability == Some(SnapshotAvailability::Corrupt) {
+            return Self {
+                kind: SandboxStatusKind::Invalid,
+                message: "Sandbox snapshot is invalid",
+                href,
+                route_label,
+            };
+        }
+        Self {
+            kind: SandboxStatusKind::Unavailable,
+            message: "Sandbox is unavailable",
+            href,
+            route_label,
+        }
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.kind == SandboxStatusKind::Ready
+    }
 }
 
 impl ChatViewModel {
@@ -205,6 +287,7 @@ impl ChatViewModel {
             environment_preview: Vec::new(),
             environment_preview_error: "",
             preview_ready: false,
+            sandbox_status: SandboxStatus::from_parts(None, None, None),
             quick_ready: false,
             review_href: String::new(),
         }
@@ -268,16 +351,6 @@ impl ChatViewModel {
             environment_preview: &self.environment_preview,
             environment_preview_error: self.environment_preview_error,
             preview_ready: self.preview_ready,
-            quick_ready: self.quick_ready,
-        }
-    }
-
-    pub(crate) fn readiness_route(&self) -> ReadinessRouteContents<'_> {
-        ReadinessRouteContents {
-            providers: &self.providers,
-            project_name: &self.project_name,
-            project_available: self.project_available,
-            agent_name: &self.agent_name,
             quick_ready: self.quick_ready,
         }
     }
@@ -348,16 +421,6 @@ pub(crate) struct DeskModelCatalogueContents<'a> {
 #[template(path = "projects/templates/desk.html", block = "transcript")]
 pub(crate) struct TranscriptContents<'a> {
     pub(crate) turns: &'a [TurnView],
-}
-
-#[derive(Template)]
-#[template(path = "projects/templates/desk.html", block = "readiness_route")]
-pub(crate) struct ReadinessRouteContents<'a> {
-    pub(crate) providers: &'a [DeskProviderOption],
-    pub(crate) project_name: &'a str,
-    pub(crate) project_available: bool,
-    pub(crate) agent_name: &'a str,
-    pub(crate) quick_ready: bool,
 }
 
 #[derive(Template)]

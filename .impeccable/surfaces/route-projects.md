@@ -37,11 +37,9 @@ The desk title is the project name. The host path sits under the title as quiet 
 
 The selected agent is a compact control. Each eligible agent choice is a real canonical link.
 
-The readiness route sits above the transcript.
-
 The transcript sheet is the work record for this project and agent pair.
 
-The composer dock is last. Quick task Send is the primary action. Configured workflow is an advanced disclosure.
+The composer dock is last. Sandbox status sits before the composer. Quick task Send is the primary action. Configured workflow is an advanced disclosure.
 
 ## Primary action
 
@@ -63,21 +61,29 @@ On a Quick task gate, the primary action is Apply changes.
 
 ## Readiness states
 
-The desk shows Provider, Project, Agent and Alpine Git before the composer.
+The desk shows one sandbox status for the Alpine Git seed. The status sits before the composer.
 
-Provider shows the selected provider label.
+An available ready snapshot has first priority, even when a replacement preparation is active or failed.
 
-Project shows the project name when the stored path is available. Otherwise it shows Unavailable.
+Status precedence:
 
-Agent shows the selected eligible agent.
+1. Sandbox is ready: the ready snapshot is available. Quick task Send is enabled.
+2. Sandbox preparation is in progress: no available ready snapshot, and the latest preparation is queued or active.
+3. Sandbox preparation failed: no available ready snapshot, and the latest preparation failed or was interrupted.
+4. Sandbox snapshot is invalid: no available ready snapshot, after active and failed states are excluded, and the ready snapshot is corrupt.
+5. Sandbox is unavailable: no prior state applies.
 
-Alpine Git shows Ready when the `alpine-git-v1` seed is prepared and available. Otherwise it shows a real link to `/environments`.
+Ready, failed, unavailable and invalid are terminal presentation states.
+
+Failed, unavailable and invalid states link to the environment configuration route when the Alpine Git environment record exists. They fall back to `/environments` when the seed identifier or its current environment record is absent.
 
 The composer stays disabled while the session owns an active command.
 
 The composer stays disabled when the project path is unavailable.
 
-Quick task Send stays disabled when Alpine Git is not ready.
+The message field stays available while only the sandbox is not ready.
+
+Quick task Send stays disabled while the sandbox is not ready.
 
 Configured workflow send stays in the advanced disclosure. It uses that workflow environment preview.
 
@@ -91,7 +97,7 @@ Empty transcript: the desk shows Ask Power Plant. The lead is Write, explain or 
 
 Unavailable project path: the desk shows a warning with a link to project configuration.
 
-Alpine Git not ready: the desk shows a warning with a link to Environments.
+Sandbox not ready: the desk shows the sandbox status before the composer. Failed, unavailable and invalid states include the relevant environment route.
 
 No configured workflows: the advanced disclosure links to create a workflow.
 
@@ -107,7 +113,7 @@ The brand mark still goes to `/projects`.
 
 The Working file label and the connection block are hidden.
 
-The desk title row stacks. The readiness route scrolls sideways. The composer dock stays at the end of the sheet.
+The desk title row stacks. The composer dock stays at the end of the sheet.
 
 ## Flow
 

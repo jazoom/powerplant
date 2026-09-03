@@ -294,10 +294,11 @@ pub(crate) async fn observe(
     let Some(job_id) = query.job_id() else {
         if !query.workflow.trim().is_empty() {
             let rendered = view(state, page, "", "", &query.workflow).await;
-            let mut patches = PatchSet::new();
-            patches.children("readiness-route", &rendered.readiness_route())?;
-            patches.children("composer", &rendered.composer())?;
-            return Ok(patches.respond(PatchStatus::Ok)?);
+            return Ok(hypergraft::outcome::children_patch(
+                PatchStatus::Ok,
+                "composer",
+                &rendered.composer(),
+            )?);
         }
         return refresh_composer(state, page).await;
     };
@@ -426,8 +427,7 @@ pub(crate) async fn view(
     .with_project(page.project, page.agent, page.eligible);
     attach_workflow_ui(state, page.snapshot, &mut rendered, workflow_query);
     attach_environment_preview(state, &mut rendered).await;
-    rendered.quick_ready =
-        workflows::alpine_git_is_ready(&state.environments, &state.environment_snapshots).await;
+    attach_sandbox_status(state, &mut rendered).await;
     if let Some(job) = page.snapshot.job.as_ref() {
         rendered.review_href = review_href_for(state, job);
     }
@@ -453,6 +453,26 @@ pub(super) fn review_href_for(state: &AppState, job: &JobSnapshot) -> String {
         return String::new();
     };
     format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex())
+}
+
+async fn attach_sandbox_status(state: &AppState, page: &mut ChatViewModel) {
+    let seed_id = state
+        .environments
+        .seed_id(crate::environments::seeds::ALPINE_GIT_V1);
+    let record = seed_id.and_then(|id| state.environments.get(&id));
+    let latest = record
+        .as_ref()
+        .and_then(|record| state.environments.preparation(&record.latest_preparation));
+    let ready_availability = match record.as_ref() {
+        Some(record) => match state.environments.copy_ready_pointer(&record.id) {
+            Ok(pointer) => Some(state.environment_snapshots.inspect(&pointer.snapshot).await),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    page.sandbox_status =
+        page::SandboxStatus::from_parts(record.as_ref(), latest.as_ref(), ready_availability);
+    page.quick_ready = page.sandbox_status.is_ready();
 }
 
 async fn attach_environment_preview(state: &AppState, page: &mut ChatViewModel) {

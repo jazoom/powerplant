@@ -33,7 +33,7 @@ pub(crate) use executor::{
     settle_completed_job,
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
-pub(crate) use quick::{alpine_git_id, alpine_git_is_ready, pin_quick_task};
+pub(crate) use quick::{alpine_git_id, pin_quick_task};
 pub(crate) use resolve::{preview_environments, resolve_environments};
 pub(crate) use run::{RunKind, RunSource, WorkflowRun, now_ms};
 pub(crate) use store::{RunSummary, WorkflowRunStore};

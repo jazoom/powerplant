@@ -1,8 +1,6 @@
 use crate::agents::{AccessMode, ToolId};
 use crate::environments::seeds::ALPINE_GIT_V1;
-use crate::environments::{
-    EnvironmentCatalogue, EnvironmentId, EnvironmentSnapshotRepository, SnapshotAvailability,
-};
+use crate::environments::{EnvironmentCatalogue, EnvironmentId};
 
 use super::commands::SystemCommandId;
 use super::definition::{
@@ -51,19 +49,6 @@ pub(crate) fn alpine_git_id(
     catalogue
         .seed_id(ALPINE_GIT_V1)
         .ok_or(ResolveEnvironmentError::Missing)
-}
-
-pub(crate) async fn alpine_git_is_ready(
-    catalogue: &EnvironmentCatalogue,
-    snapshots: &EnvironmentSnapshotRepository,
-) -> bool {
-    let Ok(id) = alpine_git_id(catalogue) else {
-        return false;
-    };
-    let Ok(pointer) = catalogue.copy_ready_pointer(&id) else {
-        return false;
-    };
-    snapshots.inspect(&pointer.snapshot).await == SnapshotAvailability::Available
 }
 
 fn agent_step(access: AccessMode, tools: &[ToolId]) -> Result<StepDefinition, DefinitionError> {

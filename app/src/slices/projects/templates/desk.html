@@ -273,46 +273,6 @@
     </div>
   </div>
 
-  <ol
-    id="readiness-route"
-    class="readiness-route"
-    aria-label="Task readiness"
-    tabindex="0"
-  >
-    {% block readiness_route %}
-      <li>
-        <span>Provider</span>
-        <strong>
-          {% for provider in providers %}
-            {% if provider.selected %}{{ provider.label }}{% endif %}
-          {% endfor %}
-        </strong>
-      </li>
-      <li data-ready="{% if project_available %}true{% else %}false{% endif %}">
-        <span>Project</span>
-        <strong>
-          {% if project_available %}{{ project_name }}{% else %}Unavailable{% endif %}
-        </strong>
-      </li>
-      <li data-ready="true">
-        <span>Agent</span>
-        <strong>{{ agent_name }}</strong>
-      </li>
-      <li data-ready="{% if quick_ready %}true{% else %}false{% endif %}">
-        <span>Alpine Git</span>
-        <strong>
-          {% if quick_ready %}
-            Ready
-          {% else %}
-            <a href="/environments" data-graft class="link"
-              >Needs preparation</a
-            >
-          {% endif %}
-        </strong>
-      </li>
-    {% endblock %}
-  </ol>
-
   <section
     id="transcript"
     data-island="transcript"
@@ -426,6 +386,24 @@
           {% endif %}
         {% endblock %}
       </div>
+      <div id="sandbox-status">
+        {% block sandbox_status %}
+          {% if sandbox_status.href != "" %}
+            <div class="alert alert-warning mb-3" role="status">
+              <p>
+                {{ sandbox_status.message }}
+                <a href="{{ sandbox_status.href }}" data-graft class="link"
+                  >{{ sandbox_status.route_label }}</a
+                >
+              </p>
+            </div>
+          {% else %}
+            <p class="text-composer-quiet mb-3 text-sm" role="status">
+              {{ sandbox_status.message }}
+            </p>
+          {% endif %}
+        {% endblock %}
+      </div>
       <div id="composer" class="flex flex-col gap-3">
         {% block composer %}
           {% if error != "" %}
@@ -443,14 +421,6 @@
                   class="link"
                   >Project configuration</a
                 >
-              </p>
-            </div>
-          {% endif %}
-          {% if !quick_ready %}
-            <div class="alert alert-warning" role="status">
-              <p>
-                Quick task needs the Alpine Git environment.
-                <a href="/environments" data-graft class="link">Environments</a>
               </p>
             </div>
           {% endif %}
