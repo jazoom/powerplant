@@ -101,6 +101,37 @@ async fn a_catalogue_document_uses_chat_main() {
 }
 
 #[tokio::test]
+async fn a_chat_document_keeps_connect_as_native_navigation() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("catalogue");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    let connect_tags: Vec<&str> = text
+        .split("<a ")
+        .filter(|chunk| chunk.contains("href=\"/connect\""))
+        .map(|chunk| chunk.split('>').next().expect("tag"))
+        .collect();
+    assert_eq!(connect_tags.len(), 2);
+    for tag in connect_tags {
+        assert!(
+            !tag.contains("data-graft"),
+            "connect must stay full-page: {tag}"
+        );
+        assert!(tag.contains("data-nav=\"providers\""));
+    }
+}
+
+#[tokio::test]
 async fn a_catalogue_navigation_patches_chat_main() {
     let state = test_state();
     let token = connected(&state);

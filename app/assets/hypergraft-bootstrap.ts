@@ -7,6 +7,7 @@ import { initComposer, initShortcutHint } from "./composer";
 import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
+import { initNavigationMore } from "./navigation-more";
 import { initObserve } from "./observe";
 import { initTaskExamples } from "./task-examples";
 import { initThemeSelector } from "./theme";
@@ -28,6 +29,7 @@ export function startApp(): void {
             "connect-errors": initConnectErrors,
             "connect-plan": initConnectPlan,
             "desk-settings": initDeskSettings,
+            "navigation-more": initNavigationMore,
             observe: initObserve,
             "shortcut-hint": initShortcutHint,
             "task-examples": initTaskExamples,

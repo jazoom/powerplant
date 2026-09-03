@@ -31,7 +31,11 @@ A local developer opens a project and sends work to one eligible agent.
 
 ## Operate-mode hierarchy
 
-The product index lists Projects, Agents, Workflows, Environments and Runs.
+The desktop product index groups routes into Work, Configure and System.
+
+Work contains Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
+
+Projects remains the first route and the brand destination. Providers uses `/connect` with full-page native navigation.
 
 The desk title is the project name. The host path sits under the title as quiet monospace metadata. The project title and the composer are the strongest page elements.
 
@@ -125,15 +129,21 @@ No configured workflows: the advanced disclosure links to create a workflow.
 
 ## Mobile topology
 
-The mobile shell uses a compact masthead and a horizontal product row.
+The mobile shell uses a compact masthead and a primary row of Projects, Runs and More.
 
-The mobile row labels are Projects, Agents, Workflows, Environments and Runs.
+More contains Agents, Workflows, Environments, Providers and Settings.
+
+The More control is a native details disclosure with a DaisyUI menu. Every destination is a real link.
+
+The More summary uses the active treatment when a contained route is current.
 
 The Projects page is the project switcher.
 
 The brand mark still goes to `/projects`.
 
 The Working file label and the connection block are hidden.
+
+Do not put project names in the permanent mobile row.
 
 The desk title row stacks. The composer dock stays at the end of the sheet.
 

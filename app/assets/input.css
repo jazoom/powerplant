@@ -405,7 +405,10 @@
         outline-offset: 3px;
     }
 
-    .app-index :where(a):focus-visible,
+    .app-brand:focus-visible,
+    .app-index-nav-desktop a:focus-visible,
+    .app-index-nav-mobile > a:focus-visible,
+    .app-index-more > summary:focus-visible,
     .connect-index :where(a):focus-visible {
         outline-color: var(--powerplant-action);
     }
@@ -508,7 +511,7 @@
     }
 
     .app-index-label {
-        margin: 1.5rem 1.25rem 0.5rem;
+        margin: 1.1rem 1.25rem 0.35rem;
         color: var(--powerplant-on-cover-dim);
         font-family: var(--font-mono);
         font-size: 0.68rem;
@@ -516,42 +519,76 @@
         text-transform: uppercase;
     }
 
-    .app-index-nav {
+    .app-index-nav-desktop {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        flex-direction: column;
+        overflow-y: auto;
+        padding-bottom: 0.75rem;
+    }
+
+    .app-index-nav-mobile {
+        display: none;
+    }
+
+    .app-index-group {
         display: grid;
         gap: 0.2rem;
     }
 
-    .app-index-nav a {
+    .app-index-group + .app-index-group {
+        margin-top: 0.2rem;
+        padding-top: 0.2rem;
+        border-top: 1px solid var(--powerplant-cover-rule-faint);
+    }
+
+    .app-index-group-label {
+        margin: 0.35rem 1.25rem 0.1rem;
+        color: var(--powerplant-on-cover-dim);
+        font-family: var(--font-mono);
+        font-size: 0.66rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .app-index-group:first-child .app-index-group-label {
+        margin-top: 0.15rem;
+    }
+
+    .app-index-nav-desktop a {
         position: relative;
-        min-height: 3rem;
+        min-height: 2.5rem;
         margin-left: 0.75rem;
-        padding: 0.75rem 1rem;
+        padding: 0.5rem 1rem;
         color: var(--powerplant-on-cover-mid);
         border: 1px solid transparent;
         border-right: 0;
         text-decoration: none;
     }
 
-    .app-index-nav a:hover {
+    .app-index-nav-desktop a:hover {
         color: var(--powerplant-on-cover-bright);
         background: var(--powerplant-cover-hover);
     }
 
     body:has(#chat-main [data-section="projects"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="projects"],
     body:has(#chat-main [data-section="agents"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="agents"],
     body:has(#chat-main [data-section="workflows"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="workflows"],
     body:has(#chat-main [data-section="environments"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="environments"],
-    body:has(#chat-main [data-section="runs"]) .app-index-nav [data-nav="runs"],
+    body:has(#chat-main [data-section="runs"])
+        .app-index-nav-desktop
+        [data-nav="runs"],
     body:has(#chat-main [data-section="settings"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="settings"] {
         color: var(--powerplant-ink);
         background: var(--powerplant-paper);
@@ -559,22 +596,22 @@
     }
 
     body:has(#chat-main [data-section="projects"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="projects"]::before,
     body:has(#chat-main [data-section="agents"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="agents"]::before,
     body:has(#chat-main [data-section="workflows"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="workflows"]::before,
     body:has(#chat-main [data-section="environments"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="environments"]::before,
     body:has(#chat-main [data-section="runs"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="runs"]::before,
     body:has(#chat-main [data-section="settings"])
-        .app-index-nav
+        .app-index-nav-desktop
         [data-nav="settings"]::before {
         position: absolute;
         inset: -1px auto -1px -1px;
@@ -584,26 +621,15 @@
     }
 
     .app-connection {
-        margin: auto 1rem 1.1rem;
-        padding: 0.9rem 0.25rem 0;
+        margin: auto 1rem 0.8rem;
+        padding: 0.7rem 0.25rem 0;
         border-top: 1px solid var(--powerplant-cover-rule-soft);
     }
 
-    .app-connection strong,
-    .app-connection a {
-        display: block;
-    }
-
     .app-connection strong {
+        display: block;
         color: var(--powerplant-on-cover-bright);
         font-size: 0.8rem;
-    }
-
-    .app-connection a {
-        margin-top: 0.3rem;
-        color: var(--powerplant-on-cover-muted);
-        font-size: 0.75rem;
-        text-underline-offset: 0.2em;
     }
 
     .app-connection i,
@@ -1284,42 +1310,130 @@
         display: none;
     }
 
-    .app-index-nav {
+    .app-index-nav-desktop {
+        display: none;
+    }
+
+    .app-index-nav-mobile {
         display: flex;
-        overflow-x: auto;
         border-top: 1px solid var(--powerplant-cover-rule-soft);
     }
 
-    .app-index-nav a {
-        min-width: max-content;
+    .app-index-nav-mobile > a,
+    .app-index-more {
+        position: relative;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .app-index-nav-mobile > a {
+        display: flex;
         min-height: 2.7rem;
-        margin: 0;
-        padding: 0.65rem 0.9rem;
-        border: 0;
+        align-items: center;
+        justify-content: center;
+        padding: 0.65rem 0.5rem;
+        color: var(--powerplant-on-cover-mid);
         border-right: 1px solid var(--powerplant-cover-rule-faint);
+        text-align: center;
+        text-decoration: none;
+    }
+
+    .app-index-nav-mobile > a:hover,
+    .app-index-more > summary:hover,
+    .app-index-more[open] > summary {
+        color: var(--powerplant-on-cover-bright);
+        background: var(--powerplant-cover-hover);
+    }
+
+    .app-index-nav-mobile .app-index-more {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .app-index-more > summary {
+        display: flex;
+        position: relative;
+        flex: 1;
+        min-height: 2.7rem;
+        align-items: center;
+        justify-content: center;
+        padding: 0.65rem 0.5rem;
+        color: var(--powerplant-on-cover-mid);
+        font-weight: 400;
+        text-align: center;
+        list-style: none;
+    }
+
+    .app-index-more > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .app-index-more .menu {
+        color: var(--powerplant-ink);
+    }
+
+    .app-index-more .menu a {
+        min-height: 2.5rem;
+        color: var(--powerplant-ink);
+        text-decoration: none;
     }
 
     body:has(#chat-main [data-section="projects"])
-        .app-index-nav
-        [data-nav="projects"]::before,
-    body:has(#chat-main [data-section="agents"])
-        .app-index-nav
-        [data-nav="agents"]::before,
-    body:has(#chat-main [data-section="workflows"])
-        .app-index-nav
-        [data-nav="workflows"]::before,
-    body:has(#chat-main [data-section="environments"])
-        .app-index-nav
-        [data-nav="environments"]::before,
+        .app-index-nav-mobile
+        > [data-nav="projects"],
     body:has(#chat-main [data-section="runs"])
-        .app-index-nav
-        [data-nav="runs"]::before,
+        .app-index-nav-mobile
+        > [data-nav="runs"],
+    body:has(#chat-main [data-section="agents"]) .app-index-more > summary,
+    body:has(#chat-main [data-section="workflows"]) .app-index-more > summary,
+    body:has(#chat-main [data-section="environments"])
+        .app-index-more
+        > summary,
+    body:has(#chat-main [data-section="settings"]) .app-index-more > summary {
+        color: var(--powerplant-ink);
+        background: var(--powerplant-paper);
+    }
+
+    body:has(#chat-main [data-section="projects"])
+        .app-index-nav-mobile
+        > [data-nav="projects"]::before,
+    body:has(#chat-main [data-section="runs"])
+        .app-index-nav-mobile
+        > [data-nav="runs"]::before,
+    body:has(#chat-main [data-section="agents"])
+        .app-index-more
+        > summary::before,
+    body:has(#chat-main [data-section="workflows"])
+        .app-index-more
+        > summary::before,
+    body:has(#chat-main [data-section="environments"])
+        .app-index-more
+        > summary::before,
     body:has(#chat-main [data-section="settings"])
-        .app-index-nav
-        [data-nav="settings"]::before {
+        .app-index-more
+        > summary::before {
+        position: absolute;
         inset: auto 0 0;
         width: auto;
         height: 0.25rem;
+        content: "";
+        background: var(--powerplant-action);
+    }
+
+    body:has(#chat-main [data-section="agents"])
+        .app-index-more
+        [data-nav="agents"],
+    body:has(#chat-main [data-section="workflows"])
+        .app-index-more
+        [data-nav="workflows"],
+    body:has(#chat-main [data-section="environments"])
+        .app-index-more
+        [data-nav="environments"],
+    body:has(#chat-main [data-section="settings"])
+        .app-index-more
+        [data-nav="settings"] {
+        background: var(--powerplant-paper-green);
+        font-weight: 600;
     }
 
     .app-file-bar {

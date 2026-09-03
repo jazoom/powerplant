@@ -131,13 +131,17 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 
 - The product offers five colour themes. Springfield is the default.
 - The theme changes immediately and persists in local filesystem storage.
-- The desktop shell uses a persistent index for projects, agents, workflows, environments, runs and settings.
+- The desktop shell uses a persistent index grouped into Work, Configure and System.
+- Work contains Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
 - The brand mark and the first index link go to `/projects`.
-- The mobile shell changes the index to a compact masthead and horizontal navigation.
+- Providers uses `/connect` with full-page native navigation.
+- The mobile shell changes the index to a compact masthead and a primary row of Projects, Runs and More.
+- More contains Agents, Workflows, Environments, Providers and Settings.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
 - The project desk uses model controls, a readiness route, a transcript sheet and an attached yellow composer.
 - Connect uses a dark setup introduction beside a pale provider file.
+- Connect setup labels are Connect a model, Add a project and Send a task.
 - Forms use bordered field groups and dense controls without decorative cards.
 
 ## Hierarchy
@@ -161,7 +165,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Use square corners, thin rules and restrained shadows.
 - Use sky blue for slim file register strips and information.
 - Keep Projects as the first index link and the brand destination.
-- Put Settings after the work catalogues in the product index.
+- Put Settings in the System group of the product index.
+- Keep `/connect` as full-page native navigation.
 - Keep Theme as the first item on the Settings page.
 - Keep mobile navigation labels generic. Use the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
