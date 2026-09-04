@@ -19,23 +19,6 @@ const OWNERSHIP_CONTENTS: &[u8] = b"powerplant-data-root-v1\n";
 const RESET_MARKER_NAME: &str = ".powerplant-reset";
 const RESET_CONTENTS: &[u8] = b"powerplant-reset-v1\n";
 
-const LEGACY_ENTRIES: &[&str] = &[
-    "agents",
-    "project.json",
-    "projects.json",
-    "environments.json",
-    "environment-preparation-logs",
-    "environment-snapshots",
-    "workflows.json",
-    "workflow-artefacts",
-    "workflow-runs",
-    "workflow-workspaces",
-    "workflow-commit-journals",
-    "providers.json",
-    "preferences.json",
-    "models-dev-catalogue.json",
-];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResetRequest {
     Recorded,
@@ -341,25 +324,12 @@ fn marker_is_exact(root: &Path, name: &str, expected: &[u8]) -> Result<bool, Pre
 }
 
 fn ensure_claimable(root: &Path) -> Result<(), PrepareError> {
-    let entries = fs::read_dir(root).map_err(|_| PrepareError::Prepare)?;
-    for entry in entries {
-        let entry = entry.map_err(|_| PrepareError::Prepare)?;
-        let Some(expects_directory) = legacy_entry_kind(&entry.file_name()) else {
-            return Err(PrepareError::UnownedRoot);
-        };
-        let metadata = fs::symlink_metadata(entry.path()).map_err(|_| PrepareError::Prepare)?;
-        if metadata.file_type().is_symlink() || expects_directory != metadata.file_type().is_dir() {
-            return Err(PrepareError::UnownedRoot);
-        }
+    let mut entries = fs::read_dir(root).map_err(|_| PrepareError::Prepare)?;
+    match entries.next() {
+        None => Ok(()),
+        Some(Ok(_)) => Err(PrepareError::UnownedRoot),
+        Some(Err(_)) => Err(PrepareError::Prepare),
     }
-    Ok(())
-}
-
-fn legacy_entry_kind(name: &std::ffi::OsStr) -> Option<bool> {
-    LEGACY_ENTRIES
-        .iter()
-        .find(|entry| **entry == name)
-        .map(|entry| !entry.ends_with(".json"))
 }
 
 fn write_ownership_marker(root: &Path) -> Result<(), PersistError> {

@@ -55,14 +55,8 @@ fn catalogue_json(projects: Vec<serde_json::Value>) -> String {
 }
 
 #[test]
-fn missing_file_opens_empty_without_import_or_write() {
+fn missing_file_opens_empty_without_write() {
     let dir = tempfile::tempdir().expect("dir");
-    write_catalogue(
-        &dir.path().join("project.json"),
-        r#"{"version":1,"path":"/srv/legacy"}"#,
-    );
-    std::fs::create_dir(dir.path().join("agents")).expect("agents");
-    write_catalogue(&dir.path().join("agents").join("agent.json"), "{}");
     let path = dir.path().join("projects.json");
     let store = ProjectStore::open(path.clone()).expect("open");
     assert!(store.list().is_empty());

@@ -1110,7 +1110,7 @@ fn run_json_omits_the_transition_array() {
     assert_eq!(value["kind"], "configured");
     assert!(value.get("project-id").is_some());
     assert!(value.get("transitions").is_none());
-    assert!(value["attempts"][0].get("review-route").is_none());
+    assert!(value["attempts"][0]["review-route"].is_null());
 }
 
 #[test]
@@ -1188,6 +1188,29 @@ fn restricted_network_capabilities_round_trip_and_reject_invalid_domains() {
         super::capabilities_from_file(file).err(),
         Some(super::RunRecordError::Corrupt)
     );
+}
+
+#[test]
+fn incomplete_or_obsolete_attempt_fields_are_rejected() {
+    let mut run = new_run();
+    let _attempt = start(&mut run);
+    let mut missing_route = serde_json::to_value(run.to_file()).expect("json");
+    missing_route["attempts"][0]
+        .as_object_mut()
+        .expect("attempt")
+        .remove("review-route");
+    assert!(serde_json::from_value::<super::RunFile>(missing_route).is_err());
+
+    let mut missing = serde_json::to_value(run.to_file()).expect("json");
+    missing["attempts"][0]["capabilities"]
+        .as_object_mut()
+        .expect("capabilities")
+        .remove("network-domains");
+    assert!(serde_json::from_value::<super::RunFile>(missing).is_err());
+
+    let mut obsolete = serde_json::to_value(run.to_file()).expect("json");
+    obsolete["attempts"][0]["capabilities"]["secret"] = serde_json::json!("placeholder");
+    assert!(serde_json::from_value::<super::RunFile>(obsolete).is_err());
 }
 
 #[test]

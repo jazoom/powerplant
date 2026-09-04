@@ -7,12 +7,7 @@ impl super::AgentStore {
             inner: Mutex::new(BTreeMap::new()),
         }
     }
-    pub(crate) fn count(&self) -> usize {
-        self.lock().len()
-    }
 }
-
-use std::fs;
 
 use super::AgentStore;
 use crate::agents::record::{
@@ -36,52 +31,13 @@ fn draft(dir: &std::path::Path, name: &str) -> AgentDraft {
 }
 
 #[test]
-fn import_from_legacy_project_is_idempotent() {
-    let data = tempfile::tempdir().expect("data");
-    let project_dir = tempfile::tempdir().expect("project");
-    let project_file = data.path().join("project.json");
-    let agents_dir = data.path().join("agents");
-    fs::write(
-        &project_file,
-        format!(
-            "{{\n  \"version\": 1,\n  \"path\": \"{}\"\n}}\n",
-            project_dir.path().display()
-        ),
-    )
-    .expect("legacy");
-
-    let first = AgentStore::open(agents_dir.clone(), &project_file).expect("import");
-    assert_eq!(first.count(), 1);
-    assert!(!project_file.exists());
-    let imported = first.list();
-    assert_eq!(imported[0].name, "Default agent");
-    assert!(imported[0].instructions.is_empty());
-    assert_eq!(imported[0].tools.len(), ToolId::ALL.len());
-    assert_eq!(imported[0].network, NetworkAccess::None);
-
-    fs::write(
-        &project_file,
-        format!(
-            "{{\n  \"version\": 1,\n  \"path\": \"{}\"\n}}\n",
-            project_dir.path().display()
-        ),
-    )
-    .expect("legacy again");
-    let second = AgentStore::open(agents_dir, &project_file).expect("reopen");
-    assert_eq!(second.count(), 1);
-    assert_eq!(second.list()[0].id, imported[0].id);
-    assert!(!project_file.exists());
-}
-
-#[test]
 fn corrupt_record_fails_startup() {
     let data = tempfile::tempdir().expect("data");
     let agents_dir = data.path().join("agents");
-    fs::create_dir_all(&agents_dir).expect("dir");
-    fs::write(agents_dir.join("not-an-id.json"), b"{not json").expect("corrupt");
-    let project_file = data.path().join("project.json");
+    std::fs::create_dir_all(&agents_dir).expect("dir");
+    std::fs::write(agents_dir.join("not-an-id.json"), b"{not json").expect("corrupt");
     assert_eq!(
-        AgentStore::open(agents_dir, &project_file).err(),
+        AgentStore::open(agents_dir).err(),
         Some(AgentError::Corrupt)
     );
 }

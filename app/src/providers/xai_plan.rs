@@ -65,11 +65,12 @@ pub(super) struct DeviceCode {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct PlanFile {
     access_token: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::storage::required_option")]
     refresh_token: Option<String>,
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::storage::required_option")]
     expires_at: Option<u64>,
 }
 

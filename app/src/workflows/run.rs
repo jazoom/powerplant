@@ -303,7 +303,7 @@ struct AttemptFile {
     finished_at_ms: Option<u64>,
     state: String,
     result: Option<AttemptResultFile>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::storage::required_option")]
     review_route: Option<String>,
     inputs: Vec<AttemptInputFile>,
     outputs: Vec<AttemptOutputFile>,
@@ -335,7 +335,7 @@ struct CommitResultFile {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct AttemptCapabilitiesFile {
     schema: u32,
     agent_revision: u32,
@@ -344,12 +344,11 @@ struct AttemptCapabilitiesFile {
     git_admin: String,
     source_location: String,
     network: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     network_domains: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct CapabilityDirectoryFile {
     alias: String,
     guest_path: String,

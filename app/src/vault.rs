@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::providers::{
     AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString, ThinkingEffort,
-    api_key_is_bounded, effective_plan_model, model_is_bounded,
+    api_key_is_bounded, model_is_bounded,
 };
 
 #[cfg(test)]
@@ -32,6 +32,7 @@ struct StoredProvider {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct VaultFile {
     version: u32,
     selected: Option<String>,
@@ -39,15 +40,14 @@ struct VaultFile {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct VaultFileProvider {
     kind: String,
     auth: String,
-    #[serde(default)]
     api_key: String,
     model: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::storage::required_option")]
     thinking: Option<String>,
-    #[serde(default)]
     favourites: Vec<String>,
 }
 
@@ -154,7 +154,7 @@ impl ProviderVault {
                 state.providers.get(&kind).map(|stored| DeskProvider {
                     kind,
                     auth: stored.auth,
-                    model: stored_model(kind, stored),
+                    model: stored.model.clone(),
                     thinking: stored.thinking.clone(),
                     selected: state.selected == Some(kind),
                     favourites: stored.favourites.clone(),
@@ -458,19 +458,12 @@ fn connection_from(
         kind,
         auth: stored.auth,
         api_key: stored.api_key.clone(),
-        model: stored_model(kind, stored),
+        model: stored.model.clone(),
         thinking: stored.thinking.clone(),
         plan_file: (stored.auth == AuthMethod::Plan)
             .then(|| plan_file_path(path, kind))
             .flatten(),
     })
-}
-
-fn stored_model(kind: ProviderKind, stored: &StoredProvider) -> String {
-    match stored.auth {
-        AuthMethod::Plan => effective_plan_model(kind, &stored.model),
-        AuthMethod::ApiKey => stored.model.clone(),
-    }
 }
 
 fn load(path: &Path) -> Result<VaultState, VaultError> {

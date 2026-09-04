@@ -174,6 +174,26 @@ fn file_round_trip_keeps_the_identifier() {
 }
 
 #[test]
+fn unknown_record_fields_are_rejected() {
+    let dir = tempfile::tempdir().expect("dir");
+    let validated = draft(dir.path()).validate().expect("valid");
+    let record = AgentRecord {
+        id: AgentId::generate().expect("id"),
+        revision: 1,
+        name: validated.name,
+        instructions: validated.instructions,
+        tools: validated.tools,
+        network: validated.network,
+        directories: validated.directories,
+        primary_directory: validated.primary_directory,
+    };
+    let mut value = serde_json::to_value(record.to_file()).expect("json");
+    value["removed-field"] = serde_json::json!(true);
+
+    assert!(serde_json::from_value::<super::AgentFile>(value).is_err());
+}
+
+#[test]
 fn restricted_network_domains_are_normalised_and_bounded() {
     let dir = tempfile::tempdir().expect("dir");
     let mut item = draft(dir.path());

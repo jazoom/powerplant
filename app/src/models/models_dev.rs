@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::providers::{AuthMethod, ProviderKind, ThinkingEffort};
+use crate::providers::{ProviderKind, ThinkingEffort};
 use catalogue::{
     MAXIMUM_CACHE_BYTES, MAXIMUM_SOURCE_BYTES, SOURCE_URL, Snapshot, USER_AGENT, bounded_body,
     content_type_is, filter_source, model_count, parse_snapshot,
@@ -99,20 +99,7 @@ impl ModelsDevCatalogue {
         }
     }
 
-    pub(crate) fn efforts(
-        &self,
-        kind: ProviderKind,
-        auth: AuthMethod,
-        model: &str,
-    ) -> Vec<ThinkingEffort> {
-        let resolved;
-        let model = match auth {
-            AuthMethod::ApiKey => model,
-            AuthMethod::Plan => {
-                resolved = crate::providers::effective_plan_model(kind, model);
-                &resolved
-            }
-        };
+    pub(crate) fn efforts(&self, kind: ProviderKind, model: &str) -> Vec<ThinkingEffort> {
         let active = self.read();
         active
             .providers
@@ -132,11 +119,10 @@ impl ModelsDevCatalogue {
     pub(crate) fn effective_effort(
         &self,
         kind: ProviderKind,
-        auth: AuthMethod,
         model: &str,
         saved: Option<&ThinkingEffort>,
     ) -> Option<ThinkingEffort> {
-        let efforts = self.efforts(kind, auth, model);
+        let efforts = self.efforts(kind, model);
         if let Some(saved) = saved
             && efforts.contains(saved)
         {
@@ -153,11 +139,10 @@ impl ModelsDevCatalogue {
     pub(crate) fn supports(
         &self,
         kind: ProviderKind,
-        auth: AuthMethod,
         model: &str,
         effort: &ThinkingEffort,
     ) -> bool {
-        self.efforts(kind, auth, model).contains(effort)
+        self.efforts(kind, model).contains(effort)
     }
 
     pub(crate) async fn refresh_if_due(&self) -> bool {

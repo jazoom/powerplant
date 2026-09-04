@@ -257,19 +257,13 @@ impl ChatViewModel {
             .map(|provider| provider.model.clone())
             .unwrap_or_default();
         let effective_thinking = selected.and_then(|provider| {
-            models_dev.effective_effort(
-                provider.kind,
-                provider.auth,
-                &provider.model,
-                provider.thinking.as_ref(),
-            )
+            models_dev.effective_effort(provider.kind, &provider.model, provider.thinking.as_ref())
         });
         let thinking_options = selected
             .map(|provider| {
                 thinking_options(
                     models_dev,
                     provider.kind,
-                    provider.auth,
                     &provider.model,
                     effective_thinking.as_ref(),
                 )
@@ -281,7 +275,6 @@ impl ChatViewModel {
                     provider.kind,
                     models_dev,
                     &provider.model,
-                    provider.auth,
                     &provider.favourites,
                     &catalogue.list(provider.kind),
                 )
@@ -298,18 +291,12 @@ impl ChatViewModel {
                     thinking: models_dev
                         .effective_effort(
                             provider.kind,
-                            provider.auth,
                             &provider.model,
                             provider.thinking.as_ref(),
                         )
                         .map(|value| value.as_str().to_owned())
                         .unwrap_or_default(),
-                    efforts_json: efforts_json(
-                        models_dev,
-                        provider.kind,
-                        provider.auth,
-                        &provider.model,
-                    ),
+                    efforts_json: efforts_json(models_dev, provider.kind, &provider.model),
                     selected: provider.selected,
                 })
                 .collect(),
@@ -630,12 +617,11 @@ pub(crate) struct TurnBody<'a> {
 fn thinking_options(
     catalogue: &ModelsDevCatalogue,
     kind: ProviderKind,
-    auth: crate::providers::AuthMethod,
     model: &str,
     current: Option<&ThinkingEffort>,
 ) -> Vec<ThinkingOption> {
     catalogue
-        .efforts(kind, auth, model)
+        .efforts(kind, model)
         .into_iter()
         .map(|effort| ThinkingOption {
             value: effort.as_str().to_owned(),
@@ -645,14 +631,9 @@ fn thinking_options(
         .collect()
 }
 
-fn efforts_json(
-    catalogue: &ModelsDevCatalogue,
-    kind: ProviderKind,
-    auth: crate::providers::AuthMethod,
-    model: &str,
-) -> String {
+fn efforts_json(catalogue: &ModelsDevCatalogue, kind: ProviderKind, model: &str) -> String {
     let values: Vec<_> = catalogue
-        .efforts(kind, auth, model)
+        .efforts(kind, model)
         .into_iter()
         .map(|value| value.as_str().to_owned())
         .collect();
@@ -663,7 +644,6 @@ fn model_options(
     kind: ProviderKind,
     metadata: &ModelsDevCatalogue,
     current: &str,
-    auth: crate::providers::AuthMethod,
     favourites: &[String],
     listed: &[String],
 ) -> (Vec<ModelOption>, Vec<ModelOption>) {
@@ -672,7 +652,7 @@ fn model_options(
         .iter()
         .map(|id| ModelOption {
             id: id.clone(),
-            efforts_json: efforts_json(metadata, kind, auth, id),
+            efforts_json: efforts_json(metadata, kind, id),
             selected: id == current,
         })
         .collect();
@@ -681,7 +661,7 @@ fn model_options(
         .filter(|id| !favourites.contains(id))
         .map(|id| ModelOption {
             id: id.clone(),
-            efforts_json: efforts_json(metadata, kind, auth, id),
+            efforts_json: efforts_json(metadata, kind, id),
             selected: id == current,
         })
         .collect();
@@ -690,7 +670,7 @@ fn model_options(
             0,
             ModelOption {
                 id: current.to_owned(),
-                efforts_json: efforts_json(metadata, kind, auth, current),
+                efforts_json: efforts_json(metadata, kind, current),
                 selected: true,
             },
         );

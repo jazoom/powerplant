@@ -9,22 +9,6 @@ use super::{
 };
 
 #[test]
-fn chatgpt_plan_replaces_retired_model_ids() {
-    assert_eq!(
-        super::effective_plan_model(ProviderKind::OpenaiCodex, "gpt-5.1-codex"),
-        "gpt-5.6-sol"
-    );
-    assert_eq!(
-        super::effective_plan_model(ProviderKind::OpenaiCodex, "gpt-5.6-terra"),
-        "gpt-5.6-terra"
-    );
-    assert_eq!(
-        super::effective_plan_model(ProviderKind::Xai, "grok-4.6"),
-        "grok-4.6"
-    );
-}
-
-#[test]
 fn thinking_levels_map_to_each_provider_request_shape() {
     let mut connection = ProviderConnection::with_key(ProviderKind::OpenaiCodex, "key", "model");
     assert_eq!(thinking_parameters(&connection), None);

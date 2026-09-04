@@ -37,6 +37,28 @@ fn plan_file_debug_redacts_tokens() {
 }
 
 #[test]
+fn incomplete_or_unknown_plan_file_fields_are_rejected() {
+    for value in [
+        serde_json::json!({
+            "access_token": "token",
+            "expires_at": null
+        }),
+        serde_json::json!({
+            "access_token": "token",
+            "refresh_token": null
+        }),
+        serde_json::json!({
+            "access_token": "token",
+            "refresh_token": null,
+            "expires_at": null,
+            "removed-field": true
+        }),
+    ] {
+        assert!(serde_json::from_value::<PlanFile>(value).is_err());
+    }
+}
+
+#[test]
 fn device_code_fields_reject_unsafe_provider_values() {
     assert_eq!(
         super::sanitise_user_code("  ABCD-1234  ").as_deref(),

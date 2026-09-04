@@ -64,9 +64,7 @@ fn activation_state() -> AppState {
     ));
     state.vault = Arc::new(ProviderVault::open(root.join("providers.json")).expect("providers"));
     state.preferences = Arc::new(Preferences::open(root.join("preferences.json")));
-    state.agents = Arc::new(
-        AgentStore::open(root.join("agents"), &root.join("project.json")).expect("agents"),
-    );
+    state.agents = Arc::new(AgentStore::open(root.join("agents")).expect("agents"));
     state.projects = Arc::new(ProjectStore::open(root.join("projects.json")).expect("projects"));
     state.workflows = Arc::new(workflows);
     state.workflow_runs =

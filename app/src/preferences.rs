@@ -53,20 +53,10 @@ impl Theme {
             .copied()
             .find(|theme| theme.as_str() == value)
     }
-
-    fn parse_saved(value: &str) -> Option<Self> {
-        match value {
-            "springfield-light" => Some(Self::Springfield),
-            "springfield-dark" | "springfield-dark-3" => Some(Self::EvergreenTerrace),
-            "birch" | "springfield-elementary" => Some(Self::Leftorium),
-            "midnight" => Some(Self::Stonecutters),
-            "nuclear-dusk" => Some(Self::Sector7G),
-            value => Self::parse(value),
-        }
-    }
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct PreferencesFile {
     version: u32,
     theme: String,
@@ -139,7 +129,7 @@ fn load(path: &std::path::Path) -> Theme {
     if file.version != FILE_VERSION {
         return Theme::default();
     }
-    Theme::parse_saved(&file.theme).unwrap_or_default()
+    Theme::parse(&file.theme).unwrap_or_default()
 }
 
 fn persist(path: &std::path::Path, theme: Theme) -> Result<(), PreferenceError> {

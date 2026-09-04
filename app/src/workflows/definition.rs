@@ -329,10 +329,9 @@ struct RoleFile {
 struct StepFile {
     key: String,
     name: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     inputs: Vec<InputFile>,
     action: ActionFile,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::storage::required_option")]
     review: Option<ReviewPolicyFile>,
 }
 

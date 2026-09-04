@@ -17,7 +17,6 @@ pub(crate) const MAXIMUM_ALIAS_BYTES: usize = 32;
 pub(crate) const MAXIMUM_PATH_BYTES: usize = 4_096;
 pub(crate) const GUEST_PROJECT: &str = "/project";
 pub(crate) const GUEST_ACCESS_ROOT: &str = "/access";
-pub(crate) const DEFAULT_AGENT_NAME: &str = "Default agent";
 pub(crate) const DEFAULT_PRIMARY_ALIAS: &str = "project";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -187,6 +186,7 @@ impl std::fmt::Display for AgentError {
 impl std::error::Error for AgentError {}
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct AgentFile {
     pub(super) version: u32,
     pub(super) id: String,
@@ -201,6 +201,7 @@ pub(super) struct AgentFile {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct AgentFileGrant {
     pub(super) alias: String,
     pub(super) host_path: String,

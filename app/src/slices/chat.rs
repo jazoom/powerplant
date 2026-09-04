@@ -199,28 +199,15 @@ async fn update_model(
             let selection_changed =
                 previous.is_none_or(|provider| provider.kind != kind || provider.model != model);
             let thinking = if selection_changed {
-                state.models_dev.effective_effort(
-                    kind,
-                    target.auth,
-                    &model,
-                    target.thinking.as_ref(),
-                )
+                state
+                    .models_dev
+                    .effective_effort(kind, &model, target.thinking.as_ref())
             } else {
                 match submitted_effort {
-                    Some(effort)
-                        if state
-                            .models_dev
-                            .supports(kind, target.auth, &model, &effort) =>
-                    {
+                    Some(effort) if state.models_dev.supports(kind, &model, &effort) => {
                         Some(effort)
                     }
-                    None if state
-                        .models_dev
-                        .efforts(kind, target.auth, &model)
-                        .is_empty() =>
-                    {
-                        None
-                    }
+                    None if state.models_dev.efforts(kind, &model).is_empty() => None,
                     _ => {
                         let view = desk_view(&state, &desk).await;
                         return reject_model_view(

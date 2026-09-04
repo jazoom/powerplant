@@ -194,21 +194,6 @@ pub(crate) fn resolve_model(kind: ProviderKind, model: &str) -> String {
     }
 }
 
-// Codex retired these ChatGPT-plan ids. Keep stored vault values sendable.
-pub(crate) fn effective_plan_model(kind: ProviderKind, model: &str) -> String {
-    let model = model.trim();
-    if model.is_empty() || retired_plan_model(kind, model) {
-        kind.default_model().to_owned()
-    } else {
-        model.to_owned()
-    }
-}
-
-fn retired_plan_model(kind: ProviderKind, model: &str) -> bool {
-    kind == ProviderKind::OpenaiCodex
-        && matches!(model, "gpt-5.1-codex" | "gpt-5.2" | "gpt-5.3-codex")
-}
-
 #[derive(Clone)]
 pub(crate) struct SecretString(String);
 

@@ -1,8 +1,8 @@
 use super::*;
 
-fn effort_values(catalogue: &ModelsDevCatalogue, auth: AuthMethod, model: &str) -> Vec<String> {
+fn effort_values(catalogue: &ModelsDevCatalogue, model: &str) -> Vec<String> {
     catalogue
-        .efforts(ProviderKind::OpenaiCodex, auth, model)
+        .efforts(ProviderKind::OpenaiCodex, model)
         .into_iter()
         .map(|value| value.as_str().to_owned())
         .collect()
@@ -17,21 +17,7 @@ fn snapshot_is_rejected(snapshot: &Snapshot) -> bool {
 fn bundled_snapshot_has_required_dynamic_efforts() {
     let catalogue = ModelsDevCatalogue::bundled();
     assert_eq!(
-        effort_values(&catalogue, AuthMethod::ApiKey, "gpt-5.6-sol"),
-        ["none", "low", "medium", "high", "xhigh", "max"]
-    );
-}
-
-#[test]
-fn capability_lookup_only_remaps_retired_plan_models() {
-    let catalogue = ModelsDevCatalogue::bundled();
-
-    assert_eq!(
-        effort_values(&catalogue, AuthMethod::ApiKey, "gpt-5.2"),
-        ["none", "low", "medium", "high", "xhigh"]
-    );
-    assert_eq!(
-        effort_values(&catalogue, AuthMethod::Plan, "gpt-5.2"),
+        effort_values(&catalogue, "gpt-5.6-sol"),
         ["none", "low", "medium", "high", "xhigh", "max"]
     );
 }

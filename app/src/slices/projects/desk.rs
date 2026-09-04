@@ -94,7 +94,6 @@ pub(super) async fn send(
     };
     connection.thinking = state.models_dev.effective_effort(
         connection.kind,
-        connection.auth,
         &connection.model,
         connection.thinking.as_ref(),
     );

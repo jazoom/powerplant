@@ -18,6 +18,15 @@ impl std::fmt::Display for PersistError {
 
 impl std::error::Error for PersistError {}
 
+/// With `deserialize_with`, this rejects an absent field but accepts `null`.
+pub(crate) fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer)
+}
+
 pub(crate) fn ensure_private_dir(path: &Path) -> Result<(), PersistError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {

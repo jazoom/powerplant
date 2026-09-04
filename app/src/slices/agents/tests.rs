@@ -186,9 +186,7 @@ async fn create_persistence_failure_returns_internal_error() {
     let mut state = test_state();
     let data = tempfile::tempdir().expect("data");
     let agents_dir = data.path().join("agents");
-    state.agents = Arc::new(
-        AgentStore::open(agents_dir.clone(), &data.path().join("project.json")).expect("store"),
-    );
+    state.agents = Arc::new(AgentStore::open(agents_dir.clone()).expect("store"));
     std::fs::remove_dir(&agents_dir).expect("remove agents directory");
     std::fs::write(&agents_dir, b"not a directory").expect("block agents directory");
     let token = connected(&state);

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    CatalogueResetConflict, Inner, LEGACY_ENTRIES, OWNERSHIP_CONTENTS, OWNERSHIP_MARKER_NAME,
-    RESET_CONTENTS, RESET_MARKER_NAME, ResetRequest,
+    CatalogueResetConflict, Inner, OWNERSHIP_CONTENTS, OWNERSHIP_MARKER_NAME, RESET_CONTENTS,
+    RESET_MARKER_NAME, ResetRequest,
 };
 use crate::agents::{AccessMode, AgentId, AgentRecord, AgentStore, DirectoryGrant};
 use crate::config::{RuntimeConfig, StartupConfig};
@@ -112,26 +112,6 @@ fn claims_an_empty_existing_root() {
 }
 
 #[test]
-fn claims_a_closed_legacy_root_and_keeps_its_entries() {
-    let dir = tempfile::tempdir().expect("dir");
-    let root = dir.path().join("data");
-    fs::create_dir(&root).expect("create");
-    for name in LEGACY_ENTRIES {
-        if name.ends_with(".json") {
-            fs::write(root.join(name), b"{}").expect("legacy file");
-        } else {
-            fs::create_dir(root.join(name)).expect("legacy dir");
-        }
-    }
-    let (_, local_data) = prepare(root);
-    let names = listed_names(local_data.root());
-    assert!(names.contains(&OWNERSHIP_MARKER_NAME.to_owned()));
-    for name in LEGACY_ENTRIES {
-        assert!(names.contains(&name.to_string()), "{name}");
-    }
-}
-
-#[test]
 fn rejects_an_unowned_directory_with_a_foreign_entry() {
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path().join("data");
@@ -150,7 +130,7 @@ fn rejects_an_unowned_directory_with_a_foreign_entry() {
 
 #[cfg(unix)]
 #[test]
-fn rejects_a_symbolic_legacy_entry_before_claiming_the_root() {
+fn rejects_a_symbolic_entry_before_claiming_the_root() {
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path().join("data");
     let outside = dir.path().join("outside-agents");
@@ -498,7 +478,7 @@ fn startup_reset_leaves_no_provider_project_agent_run_or_saved_theme() {
             .is_empty()
     );
     assert!(
-        AgentStore::open(root.join("agents"), &root.join("project.json"))
+        AgentStore::open(root.join("agents"))
             .expect("agents")
             .list()
             .is_empty()

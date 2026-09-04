@@ -759,7 +759,7 @@ fn version_one_linear_workflows_round_trip_from_vector_order() {
     assert!(value.get("first-step").is_none());
     for step in value["steps"].as_array().expect("steps") {
         assert!(step.get("on-success").is_none());
-        assert!(step.get("review").is_none());
+        assert!(step["review"].is_null());
     }
 
     let bytes = serde_json::to_vec(&value).expect("bytes");
@@ -782,7 +782,7 @@ fn version_one_linear_workflows_round_trip_from_vector_order() {
 fn version_one_final_steps_round_trip_without_successors() {
     let definition = one_agent();
     let value = serde_json::to_value(definition.to_file()).expect("json");
-    assert!(value["steps"][0].get("review").is_none());
+    assert!(value["steps"][0]["review"].is_null());
     assert!(value["steps"][0].get("on-success").is_none());
 
     let bytes = serde_json::to_vec(&value).expect("bytes");
@@ -822,6 +822,23 @@ fn version_one_keyed_review_loops_round_trip() {
         Some("commit")
     );
     assert!(loaded.step_position(&policy.revision_target) < loaded.step_position(&reviewer_key));
+}
+
+#[test]
+fn current_step_fields_are_required() {
+    for field in ["inputs", "review"] {
+        let mut value = serde_json::to_value(one_agent().to_file()).expect("json");
+        value["steps"][0]
+            .as_object_mut()
+            .expect("step")
+            .remove(field);
+        let bytes = serde_json::to_vec(&value).expect("bytes");
+        assert_eq!(
+            WorkflowDefinition::from_file_bytes(&bytes).err(),
+            Some(DefinitionError::Format),
+            "{field}"
+        );
+    }
 }
 
 #[test]

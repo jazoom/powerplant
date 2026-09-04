@@ -51,7 +51,7 @@ fn marker_for(plan_path: &Path) -> PathBuf {
 fn write_plan_metadata(path: &Path) {
     std::fs::write(
         path,
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"plan","model":"grok-4.6"}]}"#,
+        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"plan","api_key":"","model":"grok-4.6","thinking":null,"favourites":[]}]}"#,
     )
     .unwrap();
 }
@@ -59,7 +59,7 @@ fn write_plan_metadata(path: &Path) {
 fn write_api_metadata(path: &Path) {
     std::fs::write(
         path,
-        br#"{"version":1,"selected":"synthetic","providers":[{"kind":"synthetic","auth":"api_key","api_key":"sk-one","model":"hf:custom"}]}"#,
+        br#"{"version":1,"selected":"synthetic","providers":[{"kind":"synthetic","auth":"api_key","api_key":"sk-one","model":"hf:custom","thinking":null,"favourites":[]}]}"#,
     )
     .unwrap();
 }
@@ -276,31 +276,6 @@ fn api_key_insertion_removes_the_prior_plan_file() {
 }
 
 #[test]
-fn a_retired_chatgpt_plan_model_is_replaced_on_read() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let path = dir.path().join("providers.json");
-    std::fs::write(
-        &path,
-        br#"{"version":1,"selected":"openai-codex","providers":[{"kind":"openai-codex","auth":"plan","model":"gpt-5.1-codex"}]}"#,
-    )
-    .unwrap();
-    std::fs::write(dir.path().join("chatgpt-auth.json"), b"{}").unwrap();
-    let vault = ProviderVault::open(path).expect("vault");
-    assert_eq!(
-        vault.selected_connection().map(|item| item.model),
-        Some("gpt-5.6-sol".to_owned())
-    );
-    assert_eq!(
-        vault
-            .desk_providers()
-            .into_iter()
-            .find(|item| item.kind == ProviderKind::OpenaiCodex)
-            .map(|item| item.model),
-        Some("gpt-5.6-sol".to_owned())
-    );
-}
-
-#[test]
 fn plan_installation_restores_metadata_and_files_after_persist_failure() {
     let (vault, _dir, path) = file_vault();
     vault
@@ -377,6 +352,31 @@ fn malformed_json_is_corrupt_and_leaves_the_file_unchanged() {
     let path = dir.path().join("providers.json");
     let bytes = b"{not-json";
     std::fs::write(&path, bytes).unwrap();
+    assert_open_leaves_bytes(&path, bytes);
+}
+
+#[test]
+fn missing_current_provider_fields_are_corrupt() {
+    for provider in [
+        r#"{"kind":"xai","auth":"api_key","model":"grok-4.6","thinking":null,"favourites":[]}"#,
+        r#"{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":[]}"#,
+        r#"{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","thinking":null}"#,
+    ] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("providers.json");
+        let bytes = format!(r#"{{"version":1,"selected":"xai","providers":[{provider}]}}"#);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_open_leaves_bytes(&path, bytes.as_bytes());
+    }
+}
+
+#[test]
+fn unknown_vault_fields_are_corrupt() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("providers.json");
+    let bytes = br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","thinking":null,"favourites":[],"removed-field":true}]}"#;
+    std::fs::write(&path, bytes).unwrap();
+
     assert_open_leaves_bytes(&path, bytes);
 }
 

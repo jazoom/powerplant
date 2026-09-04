@@ -60,8 +60,8 @@ pub(crate) async fn build(
     local_data: LocalDataReset,
 ) -> Result<AppState, String> {
     let data_dir = local_data.root();
-    let agents = AgentStore::open(data_dir.join("agents"), &data_dir.join("project.json"))
-        .map_err(|error| error.message().to_owned())?;
+    let agents =
+        AgentStore::open(data_dir.join("agents")).map_err(|error| error.message().to_owned())?;
     let projects = ProjectStore::open(data_dir.join("projects.json"))
         .map_err(|error| error.message().to_owned())?;
     let environments = EnvironmentCatalogue::open(
