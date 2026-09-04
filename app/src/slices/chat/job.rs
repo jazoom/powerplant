@@ -22,6 +22,9 @@ use super::page::{
     assistant_turn, user_turn,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) struct AgentRunSpec {
     pub(crate) agent_id: AgentId,
     pub(crate) revision: u32,
@@ -60,7 +63,10 @@ const OBSERVE_SEGMENT_MAX: Duration = if cfg!(test) {
 };
 
 // Stay below the 1 MiB envelope after Markdown HTML and the job-observe patch.
-pub(super) const MAXIMUM_REPLY_BYTES: usize = 64 * 1024;
+pub(super) const MAXIMUM_MODEL_REPLY_BYTES: usize = 64 * 1024;
+pub(super) const MAXIMUM_REPLY_BYTES: usize = 128 * 1024;
+const MAXIMUM_VISIBLE_TOOL_BYTES: usize = 64 * 1024;
+const MAXIMUM_TOOL_PREVIEW_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum ProgressOffer {
@@ -120,6 +126,8 @@ pub(crate) async fn run_agent_action(
     let secret = secret.as_deref();
     let mut extra: Vec<Message> = Vec::new();
     let mut reply = String::new();
+    let mut model_reply_bytes = 0usize;
+    let mut visible_tool_bytes = 0usize;
     let mut published = 0usize;
     let mut last_emit = Instant::now();
     let mut output_visible = false;
@@ -169,14 +177,15 @@ pub(crate) async fn run_agent_action(
             match chunk {
                 Ok(ModelEvent::Text(piece)) => {
                     text.push_str(&piece);
-                    if append_and_publish(
+                    let truncated = append_model_piece(&mut reply, &piece, &mut model_reply_bytes);
+                    publish_progress(
                         &job,
-                        &mut reply,
+                        &reply,
                         &mut published,
                         &mut last_emit,
                         &mut output_visible,
-                        &piece,
-                    ) {
+                    );
+                    if truncated {
                         persist_failure(state, &session_id, &agent_id, &job, &reply);
                         return AgentActionEnd {
                             outcome: AgentOutcome::ProviderFailure,
@@ -239,22 +248,16 @@ pub(crate) async fn run_agent_action(
                 return cancel_action(state, &session_id, &agent_id, &job, &reply);
             }
             let output = tools::redact(&trace.output, secret);
-            let visible = tools::render_trace(&trace.label, &output);
-            if append_and_publish(
+            let visible =
+                tools::render_trace_preview(&trace.label, &output, MAXIMUM_TOOL_PREVIEW_BYTES);
+            append_visible_tool_trace(&mut reply, &visible, &mut visible_tool_bytes);
+            publish_progress(
                 &job,
-                &mut reply,
+                &reply,
                 &mut published,
                 &mut last_emit,
                 &mut output_visible,
-                &format!("\n\n{visible}"),
-            ) {
-                persist_failure(state, &session_id, &agent_id, &job, &reply);
-                return AgentActionEnd {
-                    outcome: AgentOutcome::ProviderFailure,
-                    error: Some(ProviderError::ReplyTooLong.message().to_owned()),
-                    reply: reply.clone(),
-                };
-            }
+            );
             extra.push(Message::tool_result(id, name, output));
         }
     }
@@ -285,111 +288,45 @@ fn assistant_tool_message(text: &str, calls: &[(String, String, serde_json::Valu
     Message::Assistant { id: None, content }
 }
 
-fn append_and_publish(
+fn append_model_piece(reply: &mut String, piece: &str, model_reply_bytes: &mut usize) -> bool {
+    let remaining = MAXIMUM_MODEL_REPLY_BYTES.saturating_sub(*model_reply_bytes);
+    if piece.len() <= remaining {
+        reply.push_str(piece);
+        *model_reply_bytes += piece.len();
+        return false;
+    }
+    let mut end = remaining;
+    while end > 0 && !piece.is_char_boundary(end) {
+        end -= 1;
+    }
+    reply.push_str(&piece[..end]);
+    *model_reply_bytes += end;
+    true
+}
+
+fn append_visible_tool_trace(reply: &mut String, trace: &str, visible_tool_bytes: &mut usize) {
+    let trace_bytes = 2usize.saturating_add(trace.len());
+    if trace_bytes > MAXIMUM_VISIBLE_TOOL_BYTES.saturating_sub(*visible_tool_bytes) {
+        return;
+    }
+    reply.push_str("\n\n");
+    reply.push_str(trace);
+    *visible_tool_bytes += trace_bytes;
+}
+
+fn publish_progress(
     job: &Job,
-    reply: &mut String,
+    reply: &str,
     published: &mut usize,
     last_emit: &mut Instant,
     output_visible: &mut bool,
-    piece: &str,
-) -> bool {
-    let truncated = append_bounded(reply, piece);
+) {
     if progress_due(*output_visible, *last_emit) {
         publish_remaining(job, reply, *published);
         *published = reply.len();
         *output_visible = *published > 0;
         *last_emit = Instant::now();
     }
-    truncated
-}
-
-#[cfg(any())]
-pub(super) async fn run_job(
-    state: AppState,
-    session_id: SessionId,
-    connection: ProviderConnection,
-    turns: Vec<ChatTurn>,
-    job: Arc<Job>,
-) {
-    let mut tokens = tokio::select! {
-        biased;
-        _ = job.cancelled() => {
-            finish_cancelled(&state, &session_id, &job, "");
-            return;
-        }
-        result = state.chat.stream(&connection, &turns) => match result {
-            Ok(stream) => stream,
-            Err(error) => {
-                let _ = state
-                    .sessions
-                    .fail_turn(&session_id, &job.id(), String::new());
-                job.finish(JobStatus::Failed, Some(error.message()));
-                return;
-            }
-        },
-    };
-
-    let mut reply = String::new();
-    let mut published = 0usize;
-    let mut last_emit = Instant::now();
-    let mut output_visible = false;
-
-    loop {
-        let chunk = tokio::select! {
-            biased;
-            _ = job.cancelled() => {
-                finish_cancelled(&state, &session_id, &job, &reply);
-                return;
-            }
-            chunk = tokens.next() => chunk,
-        };
-        let Some(chunk) = chunk else {
-            break;
-        };
-        let piece = match chunk {
-            Ok(text) => text,
-            Err(error) => {
-                publish_remaining(&job, &reply, published);
-                persist_failure(&state, &session_id, &job, &reply);
-                job.finish(JobStatus::Failed, Some(error.message()));
-                return;
-            }
-        };
-        let truncated = append_bounded(&mut reply, &piece);
-
-        if progress_due(output_visible, last_emit) {
-            publish_remaining(&job, &reply, published);
-            published = reply.len();
-            output_visible = published > 0;
-            last_emit = Instant::now();
-        }
-
-        if truncated {
-            publish_remaining(&job, &reply, published);
-            persist_failure(&state, &session_id, &job, &reply);
-            job.finish(
-                JobStatus::Failed,
-                Some(ProviderError::ReplyTooLong.message()),
-            );
-            return;
-        }
-    }
-
-    if job.cancel_requested() {
-        finish_cancelled(&state, &session_id, &job, &reply);
-        return;
-    }
-
-    publish_remaining(&job, &reply, published);
-
-    if reply.trim().is_empty() {
-        persist_failure(&state, &session_id, &job, "");
-        job.finish(JobStatus::Failed, Some(ProviderError::EmptyReply.message()));
-        return;
-    }
-
-    persist_success(&state, &session_id, &job, &reply);
-    job.finish(JobStatus::Completed, None);
 }
 
 pub(crate) fn bound_reply(text: &str) -> &str {
@@ -401,20 +338,6 @@ pub(crate) fn bound_reply(text: &str) -> &str {
         end -= 1;
     }
     &text[..end]
-}
-
-fn append_bounded(reply: &mut String, piece: &str) -> bool {
-    let remaining = MAXIMUM_REPLY_BYTES.saturating_sub(reply.len());
-    if piece.len() <= remaining {
-        reply.push_str(piece);
-        return false;
-    }
-    let mut end = remaining;
-    while end > 0 && !piece.is_char_boundary(end) {
-        end -= 1;
-    }
-    reply.push_str(&piece[..end]);
-    true
 }
 
 fn persist_success(_state: &AppState, _id: &SessionId, _agent: &AgentId, _job: &Job, _reply: &str) {

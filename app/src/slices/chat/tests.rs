@@ -17,7 +17,7 @@ use crate::{
     state::AppState,
 };
 
-use super::job::MAXIMUM_REPLY_BYTES;
+use super::job::MAXIMUM_MODEL_REPLY_BYTES;
 
 fn test_state() -> AppState {
     crate::tests::test_state(RuntimeConfig::development())
@@ -834,8 +834,8 @@ async fn a_long_job_uses_repeated_observation_segments() {
 
 #[tokio::test]
 async fn an_oversized_reply_is_bounded_and_reported_as_truncated() {
-    let oversized = "a".repeat(MAXIMUM_REPLY_BYTES + 128);
-    let bounded = "a".repeat(MAXIMUM_REPLY_BYTES);
+    let oversized = "a".repeat(MAXIMUM_MODEL_REPLY_BYTES + 128);
+    let bounded = "a".repeat(MAXIMUM_MODEL_REPLY_BYTES);
     let state = state_with_backend(ScriptedBackend::chunks([Ok(oversized)]));
     let token = connected(&state).await;
     let started = app(&state)
