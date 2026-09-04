@@ -9,6 +9,8 @@ There are no user accounts. A local vault stores provider API keys until the use
 ## Notes to agent
 
 - You can run `mise` commands. At the end of your work you MUST run `mise run clean`. If there are errors or warnings you MUST fix them, then run `mise run clean` again.
+- During alpha, keep each persisted format version at 1.
+- Do not add compatibility migrations during alpha.
 - Do not use numeronyms, for example "a11y".
 - Code is liability. Look for chances to simplify or remove code.
 - Hypergraft lives in the sibling `../hypergraft` project. Read `../hypergraft/README.md` and treat `../hypergraft/protocol-v1.json` as the canonical protocol fixture.

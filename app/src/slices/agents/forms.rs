@@ -4,7 +4,8 @@ use serde::Deserialize;
 
 use crate::agents::{
     AccessMode, AgentDraft, AgentError, AgentRecord, DirectoryGrant, MAXIMUM_GRANTS,
-    MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, MAXIMUM_PATH_BYTES, ToolId,
+    MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, MAXIMUM_NETWORK_TEXT_BYTES, MAXIMUM_PATH_BYTES,
+    NetworkAccess, ToolId,
 };
 
 pub(super) const REVISION_MESSAGE: &str = "Reload the agent and try again.";
@@ -40,6 +41,8 @@ pub(super) struct AgentFormState {
     pub(super) primary: String,
     pub(super) revision: String,
     pub(super) tools: Vec<ToolId>,
+    pub(super) network: String,
+    pub(super) network_domains: String,
     pub(super) directories: Vec<DirectoryDraft>,
 }
 
@@ -64,6 +67,8 @@ impl AgentFormState {
             primary: "project".to_owned(),
             revision: String::new(),
             tools: ToolId::ALL.to_vec(),
+            network: NetworkAccess::None.as_str().to_owned(),
+            network_domains: String::new(),
             directories: vec![DirectoryDraft {
                 alias: "project".to_owned(),
                 path: String::new(),
@@ -98,6 +103,8 @@ impl AgentFormState {
             primary: record.primary_directory.clone(),
             revision: record.revision.to_string(),
             tools: record.tools.clone(),
+            network: record.network.as_str().to_owned(),
+            network_domains: record.network.domains().join("\n"),
             directories: record
                 .directories
                 .iter()
@@ -116,6 +123,8 @@ impl AgentFormState {
         let mut instructions = String::new();
         let mut primary = String::new();
         let mut revision = String::new();
+        let mut network = NetworkAccess::None.as_str().to_owned();
+        let mut network_domains = String::new();
         let mut intent = None;
         let mut tools = Vec::new();
         let mut directory_fields = Vec::new();
@@ -129,6 +138,8 @@ impl AgentFormState {
                 Field::Instructions => instructions = value,
                 Field::Primary => primary = value,
                 Field::Revision => revision = value,
+                Field::Network => network = value,
+                Field::NetworkDomains => network_domains = value,
                 Field::Intent => intent = Some(parse_intent(&value)?),
                 Field::Tool(tool) => {
                     if is_checked(&value) && !tools.contains(&tool) {
@@ -151,6 +162,8 @@ impl AgentFormState {
                 primary,
                 revision,
                 tools,
+                network,
+                network_domains,
                 directories,
             },
             intent,
@@ -195,6 +208,10 @@ impl AgentFormState {
         if self.instructions.len() > MAXIMUM_INSTRUCTION_BYTES {
             return Err(AgentError::Instructions);
         }
+        if self.network_domains.len() > MAXIMUM_NETWORK_TEXT_BYTES {
+            return Err(AgentError::Network);
+        }
+        let network = NetworkAccess::parse_form(&self.network, &self.network_domains)?;
         let mut directories = Vec::new();
         for row in &self.directories {
             let alias = row.alias.trim();
@@ -218,6 +235,7 @@ impl AgentFormState {
             name: self.name.clone(),
             instructions: self.instructions.clone(),
             tools: self.tools.clone(),
+            network,
             directories,
             primary_directory: self.primary.clone(),
         })
@@ -248,6 +266,8 @@ enum Field {
     Instructions,
     Primary,
     Revision,
+    Network,
+    NetworkDomains,
     Intent,
     Tool(ToolId),
     Directory { index: usize, part: DirPart },
@@ -274,6 +294,8 @@ fn parse_field(name: &str) -> Result<Field, FormError> {
         "instructions" => Ok(Field::Instructions),
         "primary" => Ok(Field::Primary),
         "revision" => Ok(Field::Revision),
+        "network" => Ok(Field::Network),
+        "network_domains" => Ok(Field::NetworkDomains),
         "intent" => Ok(Field::Intent),
         other => parse_indexed_field(other),
     }

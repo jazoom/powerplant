@@ -15,7 +15,9 @@ impl super::AgentStore {
 use std::fs;
 
 use super::AgentStore;
-use crate::agents::record::{AccessMode, AgentDraft, AgentError, DirectoryGrant, MAXIMUM_AGENTS};
+use crate::agents::record::{
+    AccessMode, AgentDraft, AgentError, DirectoryGrant, MAXIMUM_AGENTS, NetworkAccess,
+};
 use crate::agents::tool_id::ToolId;
 
 fn draft(dir: &std::path::Path, name: &str) -> AgentDraft {
@@ -23,6 +25,7 @@ fn draft(dir: &std::path::Path, name: &str) -> AgentDraft {
         name: name.to_owned(),
         instructions: String::new(),
         tools: vec![ToolId::List],
+        network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
             alias: "project".to_owned(),
             host_path: dir.to_path_buf(),
@@ -54,6 +57,7 @@ fn import_from_legacy_project_is_idempotent() {
     assert_eq!(imported[0].name, "Default agent");
     assert!(imported[0].instructions.is_empty());
     assert_eq!(imported[0].tools.len(), ToolId::ALL.len());
+    assert_eq!(imported[0].network, NetworkAccess::None);
 
     fs::write(
         &project_file,

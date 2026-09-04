@@ -72,6 +72,84 @@
             </label>
           {% endfor %}
         </fieldset>
+        <fieldset class="space-y-3" data-network-access>
+          <legend class="text-sm">Network access</legend>
+          <p id="agent-network-help" class="text-quiet text-xs">
+            Control outbound connections from commands inside the sandbox. Model
+            requests always stay outside the sandbox.
+          </p>
+          <div
+            class="border-base-300 divide-base-300 divide-y rounded-sm border"
+          >
+            <label class="flex cursor-pointer items-start gap-3 p-3">
+              <input
+                class="radio radio-sm mt-0.5"
+                type="radio"
+                name="network"
+                value="none"
+                {% if network == "none" %}checked{% endif %}
+                aria-describedby="agent-network-help"
+              />
+              <span>
+                <span class="block text-sm">No network</span>
+                <span class="text-quiet block text-xs">
+                  Block all outbound connections. This is the default.
+                </span>
+              </span>
+            </label>
+            <label class="flex cursor-pointer items-start gap-3 p-3">
+              <input
+                class="radio radio-sm mt-0.5"
+                type="radio"
+                name="network"
+                value="restricted"
+                {% if network == "restricted" %}checked{% endif %}
+                aria-describedby="agent-network-help agent-network-domains-help"
+              />
+              <span>
+                <span class="block text-sm">Restricted domains</span>
+                <span class="text-quiet block text-xs">
+                  Allow only the listed domains and their subdomains.
+                </span>
+              </span>
+            </label>
+            <label class="flex cursor-pointer items-start gap-3 p-3">
+              <input
+                class="radio radio-sm mt-0.5"
+                type="radio"
+                name="network"
+                value="public"
+                {% if network == "public" %}checked{% endif %}
+                aria-describedby="agent-network-help"
+              />
+              <span>
+                <span class="block text-sm">Public internet</span>
+                <span class="text-quiet block text-xs">
+                  Allow public destinations. Block the host and private
+                  networks.
+                </span>
+              </span>
+            </label>
+          </div>
+          <label class="flex flex-col gap-1" data-network-domains>
+            <span class="text-sm">Allowed domains</span>
+            <textarea
+              class="textarea textarea-bordered min-h-24 font-mono text-sm"
+              name="network_domains"
+              maxlength="8127"
+              autocapitalize="none"
+              autocomplete="off"
+              spellcheck="false"
+              aria-describedby="agent-network-domains-help"
+              placeholder="registry.npmjs.org&#10;github.com"
+            >
+{{ network_domains }}</textarea>
+            <span id="agent-network-domains-help" class="text-quiet text-xs">
+              For restricted access, enter one base domain per line. Each entry
+              includes all subdomains and ports.
+            </span>
+          </label>
+        </fieldset>
         <fieldset class="space-y-3">
           <legend class="text-sm">Project access</legend>
           <p class="text-quiet text-xs">

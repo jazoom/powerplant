@@ -22,6 +22,7 @@ fn agent(grants: Vec<DirectoryGrant>) -> AgentRecord {
         name: "Agent".to_owned(),
         instructions: String::new(),
         tools: vec![ToolId::List],
+        network: crate::agents::NetworkAccess::None,
         directories: grants,
         primary_directory: primary,
     }

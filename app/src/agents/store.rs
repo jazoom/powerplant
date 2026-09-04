@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::id::AgentId;
 use super::record::{
     AccessMode, AgentDraft, AgentError, AgentFile, AgentRecord, DEFAULT_AGENT_NAME,
-    DEFAULT_PRIMARY_ALIAS, DirectoryGrant, MAXIMUM_AGENTS,
+    DEFAULT_PRIMARY_ALIAS, DirectoryGrant, MAXIMUM_AGENTS, NetworkAccess,
 };
 use super::tool_id::ToolId;
 use crate::projects::{ProjectRecord, exact_grant};
@@ -87,6 +87,7 @@ impl AgentStore {
                     name: project.name.clone(),
                     instructions: String::new(),
                     tools: ToolId::ALL.to_vec(),
+                    network: NetworkAccess::None,
                     directories: vec![DirectoryGrant {
                         alias: DEFAULT_PRIMARY_ALIAS.to_owned(),
                         host_path: project.host_path.clone(),
@@ -130,6 +131,7 @@ impl AgentStore {
             name: draft.name,
             instructions: draft.instructions,
             tools: draft.tools,
+            network: draft.network,
             directories: draft.directories,
             primary_directory: draft.primary_directory,
         };
@@ -205,6 +207,7 @@ fn insert_created(
         name: draft.name,
         instructions: draft.instructions,
         tools: draft.tools,
+        network: draft.network,
         directories: draft.directories,
         primary_directory: draft.primary_directory,
     };
@@ -232,6 +235,7 @@ fn persist_new(dir: &Path, draft: AgentDraft) -> Result<AgentRecord, AgentError>
         name: draft.name,
         instructions: draft.instructions,
         tools: draft.tools,
+        network: draft.network,
         directories: draft.directories,
         primary_directory: draft.primary_directory,
     };
@@ -247,6 +251,7 @@ fn import_legacy(path: &Path) -> Result<Option<AgentDraft>, AgentError> {
         name: DEFAULT_AGENT_NAME.to_owned(),
         instructions: String::new(),
         tools: ToolId::ALL.to_vec(),
+        network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
             alias: DEFAULT_PRIMARY_ALIAS.to_owned(),
             host_path,

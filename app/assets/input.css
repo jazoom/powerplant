@@ -1680,6 +1680,11 @@
     transition: none;
 }
 
+[data-network-access]:not(:has(input[value="restricted"]:checked))
+    [data-network-domains] {
+    display: none;
+}
+
 [data-graft-submitter-pending] {
     cursor: wait;
     opacity: 0.65;

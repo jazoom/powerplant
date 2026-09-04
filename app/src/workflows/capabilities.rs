@@ -1,12 +1,10 @@
-use crate::agents::{AccessMode, AgentRecord, ToolId, guest_path_for};
-use crate::providers::ProviderConnection;
-use crate::sandbox::GuestAccess;
+use crate::agents::{AccessMode, AgentRecord, NetworkAccess, ToolId, guest_path_for};
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 #[cfg(test)]
 use crate::workflows::definition::PRIMARY_SOURCE_ALIAS;
 use crate::workflows::definition::{StepAction, StepDefinition};
 
-pub(crate) const CAPABILITY_SCHEMA: u32 = 2;
+pub(crate) const CAPABILITY_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AttemptCapabilities {
@@ -17,7 +15,6 @@ pub(crate) struct AttemptCapabilities {
     pub(crate) source_location: PrimarySourceLocation,
     pub(crate) git_admin: AccessMode,
     pub(crate) network: NetworkCapability,
-    pub(crate) secret: SecretPresence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,16 +37,11 @@ pub(crate) enum DirectoryRole {
     SecondaryContext,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum NetworkCapability {
     None,
-    ProviderHost,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SecretPresence {
-    None,
-    ProviderPlaceholder,
+    Restricted(Vec<String>),
+    Public,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,7 +54,6 @@ impl AttemptCapabilities {
         step: &StepDefinition,
         agent: &AgentRecord,
         primary_alias: &str,
-        _connection: &ProviderConnection,
     ) -> Result<Self, CapabilityError> {
         let primary = agent
             .directories
@@ -115,8 +106,7 @@ impl AttemptCapabilities {
                     directories,
                     source_location: PrimarySourceLocation::AttemptWorkspace,
                     git_admin: AccessMode::ReadOnly,
-                    network: NetworkCapability::ProviderHost,
-                    secret: SecretPresence::ProviderPlaceholder,
+                    network: NetworkCapability::from_agent(&agent.network),
                 })
             }
             StepAction::SystemCommand(action) => {
@@ -131,15 +121,12 @@ impl AttemptCapabilities {
         }
     }
 
-    pub(crate) fn guest_access(&self, connection: &ProviderConnection) -> GuestAccess {
-        if self.network != NetworkCapability::ProviderHost {
-            return GuestAccess::default();
+    pub(crate) fn sandbox_network(&self) -> NetworkAccess {
+        match &self.network {
+            NetworkCapability::None => NetworkAccess::None,
+            NetworkCapability::Restricted(domains) => NetworkAccess::Restricted(domains.clone()),
+            NetworkCapability::Public => NetworkAccess::Public,
         }
-        let mut access = GuestAccess::from_connection(connection);
-        if self.secret != SecretPresence::ProviderPlaceholder {
-            access.secret = None;
-        }
-        access
     }
 
     pub(crate) fn primary(&self) -> Option<&CapabilityDirectory> {
@@ -166,10 +153,13 @@ impl AttemptCapabilities {
         }
     }
 
-    pub(crate) fn network_label(&self) -> &'static str {
-        match self.network {
-            NetworkCapability::None => "none",
-            NetworkCapability::ProviderHost => "provider",
+    pub(crate) fn network_label(&self) -> String {
+        match &self.network {
+            NetworkCapability::None => "None".to_owned(),
+            NetworkCapability::Restricted(domains) => {
+                format!("Restricted ({} domains)", domains.len())
+            }
+            NetworkCapability::Public => "Public internet".to_owned(),
         }
     }
 }
@@ -216,34 +206,40 @@ impl DirectoryRole {
 }
 
 impl NetworkCapability {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) fn from_agent(access: &NetworkAccess) -> Self {
+        match access {
+            NetworkAccess::None => Self::None,
+            NetworkAccess::Restricted(domains) => Self::Restricted(domains.clone()),
+            NetworkAccess::Public => Self::Public,
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::ProviderHost => "provider-host",
+            Self::Restricted(_) => "restricted",
+            Self::Public => "public",
         }
     }
 
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "none" => Some(Self::None),
-            "provider-host" => Some(Self::ProviderHost),
-            _ => None,
-        }
-    }
-}
-
-impl SecretPresence {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) fn domains(&self) -> &[String] {
         match self {
-            Self::None => "none",
-            Self::ProviderPlaceholder => "provider-placeholder",
+            Self::Restricted(domains) => domains,
+            Self::None | Self::Public => &[],
         }
     }
 
-    pub(crate) fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str, domains: Vec<String>) -> Option<Self> {
         match value {
-            "none" => Some(Self::None),
-            "provider-placeholder" => Some(Self::ProviderPlaceholder),
+            "none" if domains.is_empty() => Some(Self::None),
+            "restricted" if !domains.is_empty() => {
+                let access = NetworkAccess::parse_form(value, &domains.join("\n")).ok()?;
+                let NetworkAccess::Restricted(domains) = access else {
+                    return None;
+                };
+                Some(Self::Restricted(domains))
+            }
+            "public" if domains.is_empty() => Some(Self::Public),
             _ => None,
         }
     }
@@ -268,7 +264,6 @@ fn commit_or_read_only(
             source_location: PrimarySourceLocation::UserProject,
             git_admin: AccessMode::ReadWrite,
             network: NetworkCapability::None,
-            secret: SecretPresence::None,
         }
     } else {
         AttemptCapabilities {
@@ -279,7 +274,6 @@ fn commit_or_read_only(
             source_location: PrimarySourceLocation::AttemptWorkspace,
             git_admin: AccessMode::ReadOnly,
             network: NetworkCapability::None,
-            secret: SecretPresence::None,
         }
     }
 }

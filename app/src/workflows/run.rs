@@ -10,7 +10,7 @@ use crate::projects::ProjectId;
 use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::capabilities::{
     AttemptCapabilities, CapabilityDirectory, DirectoryRole, NetworkCapability,
-    PrimarySourceLocation, SecretPresence,
+    PrimarySourceLocation,
 };
 use super::commit::{CommitResult, CommitTransaction, CommitTransactionState};
 use super::definition::{
@@ -21,7 +21,7 @@ use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
 use super::id::{AttemptId, GateId, RunId, WorkflowId};
 use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
-pub(crate) const RUN_RECORD_VERSION: u32 = 2;
+pub(crate) const RUN_RECORD_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowRun {
@@ -344,7 +344,8 @@ struct AttemptCapabilitiesFile {
     git_admin: String,
     source_location: String,
     network: String,
-    secret: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    network_domains: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2746,7 +2747,6 @@ fn validate_attempt_isolation(
     match attempt.action_kind {
         ActionKind::SystemCommand => {
             if attempt.capabilities.network != NetworkCapability::None
-                || attempt.capabilities.secret != SecretPresence::None
                 || !attempt.capabilities.tools.is_empty()
             {
                 return Err(RunRecordError::Corrupt);
@@ -2891,7 +2891,6 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                 action.command == crate::workflows::commands::SystemCommandId::CommitCandidate;
             capabilities.tools.is_empty()
                 && capabilities.network == NetworkCapability::None
-                && capabilities.secret == SecretPresence::None
                 && capabilities.directories.iter().all(|directory| {
                     valid_guest_path(&directory.guest_path)
                         && if commit {
@@ -2942,7 +2941,7 @@ fn capabilities_to_file(capabilities: &AttemptCapabilities) -> AttemptCapabiliti
         git_admin: capabilities.git_admin.as_str().to_owned(),
         source_location: capabilities.source_location.as_str().to_owned(),
         network: capabilities.network.as_str().to_owned(),
-        secret: capabilities.secret.as_str().to_owned(),
+        network_domains: capabilities.network.domains().to_vec(),
     }
 }
 
@@ -2981,6 +2980,8 @@ fn capabilities_from_file(
             role: DirectoryRole::parse(&directory.role).ok_or(RunRecordError::Corrupt)?,
         });
     }
+    let network = NetworkCapability::parse(&file.network, file.network_domains)
+        .ok_or(RunRecordError::Corrupt)?;
     Ok(AttemptCapabilities {
         schema: file.schema,
         agent_revision: file.agent_revision,
@@ -2988,8 +2989,7 @@ fn capabilities_from_file(
         directories,
         source_location,
         git_admin,
-        network: NetworkCapability::parse(&file.network).ok_or(RunRecordError::Corrupt)?,
-        secret: SecretPresence::parse(&file.secret).ok_or(RunRecordError::Corrupt)?,
+        network,
     })
 }
 

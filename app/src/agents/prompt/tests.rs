@@ -1,6 +1,6 @@
 use super::compose_role;
 use crate::agents::policy::DirectoryPolicy;
-use crate::agents::record::{AccessMode, AgentRecord, DirectoryGrant};
+use crate::agents::record::{AccessMode, AgentRecord, DirectoryGrant, NetworkAccess};
 use crate::agents::{AgentId, ToolId};
 
 #[test]
@@ -11,6 +11,7 @@ fn composed_preamble_omits_host_paths() {
         name: "Maintainer".to_owned(),
         instructions: "Keep public interfaces stable.".to_owned(),
         tools: vec![ToolId::List, ToolId::Read],
+        network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
             alias: "project".to_owned(),
             host_path: "/home/user/src/secret-repo".into(),

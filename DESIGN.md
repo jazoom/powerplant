@@ -152,6 +152,9 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Provider setup presents plan login and API key as separate connection methods.
 - Connect setup labels are Connect a model, Add a project and Send a task.
 - Forms use bordered field groups and dense controls without decorative cards.
+- Agent configuration puts network access between tools and project access.
+- Agent network access uses three direct choices: No network, Restricted domains and Public internet.
+- Restricted network access uses one base domain per line. The form states that each entry includes subdomains and ports.
 
 ## Hierarchy
 
@@ -189,5 +192,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Keep configured workflows inside an advanced disclosure.
 - Keep native links as navigation fallbacks for Hypergraft routes.
 - Keep focus indicators visible on every interactive control.
+- Keep No network as the default for new agents.
+- State that model requests stay outside the sandbox on the agent form.
 - Respect reduced-motion preferences.
 - Do not use title case for labels, buttons or headings.

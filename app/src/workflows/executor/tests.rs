@@ -411,7 +411,6 @@ fn attempt_spec_mounts_isolated_source_and_read_only_git() {
         &workspace,
         project.path(),
         &host,
-        crate::sandbox::GuestAccess::default(),
     )
     .expect("spec");
 
@@ -449,7 +448,7 @@ async fn partial_start_cleanup_retains_resources_until_the_guest_is_gone() {
                 read_only: false,
             }],
             workdir: GUEST_PROJECT.to_owned(),
-            access: crate::sandbox::GuestAccess::default(),
+            network: crate::agents::NetworkAccess::None,
         };
         sandbox
             .start_from_snapshot(std::path::Path::new("snapshot"), "sha256:deadbeef", spec)
@@ -779,6 +778,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
                 name: format!("Recovery {reference_updated}"),
                 instructions: String::new(),
                 tools: crate::agents::ToolId::ALL.to_vec(),
+                network: crate::agents::NetworkAccess::None,
                 directories: vec![crate::agents::DirectoryGrant {
                     alias: "project".to_owned(),
                     host_path: project.path().to_path_buf(),
@@ -853,11 +853,6 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
             &commit_step,
             &agent,
             &agent.primary_directory,
-            &crate::providers::ProviderConnection::with_key(
-                crate::providers::ProviderKind::Xai,
-                "key",
-                "model",
-            ),
         )
         .expect("capabilities");
         let attempt = crate::workflows::AttemptId::generate().expect("attempt");
@@ -1210,6 +1205,7 @@ fn source_capture_rejects_a_stale_agent_revision() {
             name: "Desk agent".to_owned(),
             instructions: String::new(),
             tools: crate::agents::ToolId::ALL.to_vec(),
+            network: crate::agents::NetworkAccess::None,
             directories: vec![crate::agents::DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: project.host_path.clone(),
@@ -1229,6 +1225,7 @@ fn source_capture_rejects_a_stale_agent_revision() {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
                 tools: agent.tools.clone(),
+                network: agent.network.clone(),
                 directories: agent.directories.clone(),
                 primary_directory: agent.primary_directory.clone(),
             },
@@ -1254,6 +1251,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
             name: "Recovery agent".to_owned(),
             instructions: String::new(),
             tools: crate::agents::ToolId::ALL.to_vec(),
+            network: crate::agents::NetworkAccess::None,
             directories: vec![crate::agents::DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: project.host_path.clone(),
@@ -1288,6 +1286,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
                 tools: agent.tools.clone(),
+                network: agent.network.clone(),
                 directories: vec![crate::agents::DirectoryGrant {
                     alias: "project".to_owned(),
                     host_path: other.path().to_path_buf(),
@@ -1308,6 +1307,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
                 name: agent.name,
                 instructions: agent.instructions,
                 tools: agent.tools,
+                network: agent.network,
                 directories: agent.directories,
                 primary_directory: agent.primary_directory,
             },

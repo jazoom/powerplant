@@ -440,16 +440,14 @@ fn summaries_include_project_identity() {
 }
 
 #[test]
-fn an_old_run_schema_fails_startup() {
+fn an_unsupported_run_schema_fails_startup() {
     let dir = tempfile::tempdir().expect("dir");
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
     let run = store.create(run_named("Named", 1)).expect("create");
     let path = dir.path().join(format!("{}.json", run.id.as_hex()));
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
-    value["record-version"] = serde_json::json!(1);
-    value.as_object_mut().expect("object").remove("project-id");
-    value.as_object_mut().expect("object").remove("kind");
+    value["record-version"] = serde_json::json!(2);
     fs::write(&path, serde_json::to_vec(&value).expect("bytes")).expect("write");
     assert_eq!(
         WorkflowRunStore::open(dir.path().to_path_buf()).err(),

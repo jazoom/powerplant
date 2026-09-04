@@ -8,6 +8,9 @@ use super::tool_id::ToolId;
 pub(crate) const AGENT_RECORD_VERSION: u32 = 1;
 pub(crate) const MAXIMUM_AGENTS: usize = 32;
 pub(crate) const MAXIMUM_GRANTS: usize = 8;
+pub(crate) const MAXIMUM_NETWORK_DOMAINS: usize = 32;
+pub(crate) const MAXIMUM_NETWORK_DOMAIN_BYTES: usize = 253;
+pub(crate) const MAXIMUM_NETWORK_TEXT_BYTES: usize = 8_127;
 pub(crate) const MAXIMUM_NAME_BYTES: usize = 80;
 pub(crate) const MAXIMUM_INSTRUCTION_BYTES: usize = 32_768;
 pub(crate) const MAXIMUM_ALIAS_BYTES: usize = 32;
@@ -45,6 +48,50 @@ impl AccessMode {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum NetworkAccess {
+    #[default]
+    None,
+    Restricted(Vec<String>),
+    Public,
+}
+
+impl NetworkAccess {
+    pub(crate) fn parse_form(mode: &str, domains: &str) -> Result<Self, AgentError> {
+        if domains.len() > MAXIMUM_NETWORK_TEXT_BYTES {
+            return Err(AgentError::Network);
+        }
+        let access = match mode.trim() {
+            "none" => Self::None,
+            "restricted" => Self::Restricted(
+                domains
+                    .lines()
+                    .filter(|domain| !domain.trim().is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            ),
+            "public" => Self::Public,
+            _ => return Err(AgentError::Network),
+        };
+        normalise_network(access)
+    }
+
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Restricted(_) => "restricted",
+            Self::Public => "public",
+        }
+    }
+
+    pub(crate) fn domains(&self) -> &[String] {
+        match self {
+            Self::Restricted(domains) => domains,
+            Self::None | Self::Public => &[],
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DirectoryGrant {
     pub(crate) alias: String,
@@ -59,6 +106,7 @@ pub(crate) struct AgentRecord {
     pub(crate) name: String,
     pub(crate) instructions: String,
     pub(crate) tools: Vec<ToolId>,
+    pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
     pub(crate) primary_directory: String,
 }
@@ -68,6 +116,7 @@ pub(crate) struct AgentDraft {
     pub(crate) name: String,
     pub(crate) instructions: String,
     pub(crate) tools: Vec<ToolId>,
+    pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
     pub(crate) primary_directory: String,
 }
@@ -85,6 +134,7 @@ pub(crate) enum AgentError {
     Instructions,
     Tools,
     ToolConflict,
+    Network,
     Alias,
     DuplicateAlias,
     Path,
@@ -110,6 +160,9 @@ impl AgentError {
             Self::Instructions => "Those instructions are too long.",
             Self::Tools => "Choose tools from the built-in set.",
             Self::ToolConflict => "That tool set needs a writable directory.",
+            Self::Network => {
+                "Choose valid network access. Restricted access needs 1 to 32 domains."
+            }
             Self::Alias => {
                 "Enter a directory alias that uses letters, numbers, hyphen or underscore."
             }
@@ -141,6 +194,8 @@ pub(super) struct AgentFile {
     pub(super) name: String,
     pub(super) instructions: String,
     pub(super) tools: Vec<String>,
+    pub(super) network: String,
+    pub(super) network_domains: Vec<String>,
     pub(super) directories: Vec<AgentFileGrant>,
     pub(super) primary_directory: String,
 }
@@ -161,10 +216,12 @@ impl AgentRecord {
         if file.revision == 0 {
             return Err(AgentError::Corrupt);
         }
+        let network = parse_stored_network(&file.network, file.network_domains)?;
         let draft = AgentDraft {
             name: file.name,
             instructions: file.instructions,
             tools: parse_stored_tools(&file.tools)?,
+            network,
             directories: file
                 .directories
                 .into_iter()
@@ -190,6 +247,7 @@ impl AgentRecord {
             name: normalised.name,
             instructions: normalised.instructions,
             tools: normalised.tools,
+            network: normalised.network,
             directories: normalised.directories,
             primary_directory: normalised.primary_directory,
         })
@@ -207,6 +265,8 @@ impl AgentRecord {
                 .iter()
                 .map(|tool| tool.as_str().to_owned())
                 .collect(),
+            network: self.network.as_str().to_owned(),
+            network_domains: self.network.domains().to_vec(),
             directories: self
                 .directories
                 .iter()
@@ -234,6 +294,7 @@ impl AgentDraft {
         let name = normalise_name(&self.name)?;
         let instructions = normalise_instructions(&self.instructions)?;
         let tools = normalise_tools(&self.tools)?;
+        let network = normalise_network(self.network)?;
         if self.directories.is_empty() || self.directories.len() > MAXIMUM_GRANTS {
             return Err(AgentError::GrantCount);
         }
@@ -268,9 +329,19 @@ impl AgentDraft {
             name,
             instructions,
             tools,
+            network,
             directories,
             primary_directory,
         })
+    }
+}
+
+fn parse_stored_network(mode: &str, domains: Vec<String>) -> Result<NetworkAccess, AgentError> {
+    match mode {
+        "none" if domains.is_empty() => Ok(NetworkAccess::None),
+        "restricted" => Ok(NetworkAccess::Restricted(domains)),
+        "public" if domains.is_empty() => Ok(NetworkAccess::Public),
+        _ => Err(AgentError::Corrupt),
     }
 }
 
@@ -289,6 +360,42 @@ fn parse_stored_tools(raw: &[String]) -> Result<Vec<ToolId>, AgentError> {
         .into_iter()
         .filter(|tool| tools.contains(tool))
         .collect())
+}
+
+fn normalise_network(access: NetworkAccess) -> Result<NetworkAccess, AgentError> {
+    let NetworkAccess::Restricted(raw_domains) = access else {
+        return Ok(access);
+    };
+    let mut domains = Vec::with_capacity(raw_domains.len().min(MAXIMUM_NETWORK_DOMAINS));
+    for raw in raw_domains {
+        let domain = raw
+            .trim()
+            .trim_start_matches('.')
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if domain.is_empty()
+            || domain.len() > MAXIMUM_NETWORK_DOMAIN_BYTES
+            || domain.contains('*')
+            || microsandbox::NetworkPolicy::builder()
+                .default_deny()
+                .egress(|rules| rules.allow_domain_suffixes([domain.as_str()]))
+                .build()
+                .is_err()
+        {
+            return Err(AgentError::Network);
+        }
+        if domains.contains(&domain) {
+            continue;
+        }
+        if domains.len() == MAXIMUM_NETWORK_DOMAINS {
+            return Err(AgentError::Network);
+        }
+        domains.push(domain);
+    }
+    if domains.is_empty() {
+        return Err(AgentError::Network);
+    }
+    Ok(NetworkAccess::Restricted(domains))
 }
 
 fn normalise_name(raw: &str) -> Result<String, AgentError> {

@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use super::{
     AccessMode, AgentDraft, AgentError, AgentRecord, DirectoryGrant, MAXIMUM_GRANTS,
-    MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, canonical_directory,
+    MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, MAXIMUM_NETWORK_DOMAINS, NetworkAccess,
+    canonical_directory,
 };
 use crate::agents::id::AgentId;
 use crate::agents::tool_id::ToolId;
@@ -12,6 +13,7 @@ fn draft(dir: &std::path::Path) -> AgentDraft {
         name: "Repository maintainer".to_owned(),
         instructions: String::new(),
         tools: ToolId::ALL.to_vec(),
+        network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
             alias: "project".to_owned(),
             host_path: dir.to_path_buf(),
@@ -119,6 +121,7 @@ fn grant_count_is_bounded() {
         name: "Many".to_owned(),
         instructions: String::new(),
         tools: vec![ToolId::List],
+        network: NetworkAccess::None,
         directories,
         primary_directory: "d0".to_owned(),
     };
@@ -131,6 +134,7 @@ fn relative_and_missing_paths_are_rejected() {
         name: "Agent".to_owned(),
         instructions: String::new(),
         tools: Vec::new(),
+        network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
             alias: "project".to_owned(),
             host_path: PathBuf::from("relative"),
@@ -146,13 +150,16 @@ fn relative_and_missing_paths_are_rejected() {
 #[test]
 fn file_round_trip_keeps_the_identifier() {
     let dir = tempfile::tempdir().expect("dir");
-    let validated = draft(dir.path()).validate().expect("valid");
+    let mut draft = draft(dir.path());
+    draft.network = NetworkAccess::Restricted(vec!["registry.npmjs.org".to_owned()]);
+    let validated = draft.validate().expect("valid");
     let record = AgentRecord {
         id: AgentId::generate().expect("id"),
         revision: 3,
         name: validated.name,
         instructions: validated.instructions,
         tools: validated.tools,
+        network: validated.network,
         directories: validated.directories,
         primary_directory: validated.primary_directory,
     };
@@ -160,6 +167,52 @@ fn file_round_trip_keeps_the_identifier() {
     assert_eq!(restored.id, record.id);
     assert_eq!(restored.revision, 3);
     assert_eq!(restored.name, "Repository maintainer");
+    assert_eq!(
+        restored.network,
+        NetworkAccess::Restricted(vec!["registry.npmjs.org".to_owned()])
+    );
+}
+
+#[test]
+fn restricted_network_domains_are_normalised_and_bounded() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut item = draft(dir.path());
+    item.network = NetworkAccess::Restricted(vec![
+        ".Registry.NPMJS.org.".to_owned(),
+        "github.com".to_owned(),
+        "REGISTRY.npmjs.org".to_owned(),
+    ]);
+    let validated = item.validate().expect("network");
+    assert_eq!(
+        validated.network,
+        NetworkAccess::Restricted(vec![
+            "registry.npmjs.org".to_owned(),
+            "github.com".to_owned(),
+        ])
+    );
+
+    for invalid in [
+        "com",
+        "https://example.com",
+        "example.com/path",
+        "*.example.com",
+    ] {
+        let mut item = draft(dir.path());
+        item.network = NetworkAccess::Restricted(vec![invalid.to_owned()]);
+        assert_eq!(
+            item.validate().err(),
+            Some(AgentError::Network),
+            "{invalid}"
+        );
+    }
+
+    let mut item = draft(dir.path());
+    item.network = NetworkAccess::Restricted(
+        (0..=MAXIMUM_NETWORK_DOMAINS)
+            .map(|index| format!("domain-{index}.example"))
+            .collect(),
+    );
+    assert_eq!(item.validate().err(), Some(AgentError::Network));
 }
 
 #[test]

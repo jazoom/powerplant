@@ -332,7 +332,6 @@ pub(crate) async fn execute_run(
             &step,
             &agent,
             &job.grant_alias,
-            &job.connection,
         ) {
             Ok(capabilities) => capabilities,
             Err(error) => {
@@ -1857,18 +1856,16 @@ async fn start_attempt_sandbox(
         .iter()
         .find(|grant| grant.alias == job.host_policy.primary_alias())
         .ok_or("Choose a project directory.")?;
-    let access = capabilities.guest_access(&job.connection);
     let spec = if capabilities.source_location
         == crate::workflows::capabilities::PrimarySourceLocation::UserProject
     {
-        commit_attempt_spec(capabilities, &user_project.host_path, access)?
+        commit_attempt_spec(capabilities, &user_project.host_path)?
     } else {
         let spec = attempt_spec(
             capabilities,
             workspace,
             &user_project.host_path,
             &job.host_policy,
-            access,
         )?;
         crate::sandbox::reject_user_project_write(&spec, &user_project.host_path)
             .map_err(|error| error.message())?;
@@ -1940,7 +1937,6 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
 fn commit_attempt_spec(
     capabilities: &crate::workflows::capabilities::AttemptCapabilities,
     user_project: &std::path::Path,
-    access: crate::sandbox::GuestAccess,
 ) -> Result<crate::sandbox::SandboxSpec, &'static str> {
     let Some(primary) = capabilities.primary() else {
         return Err("A sandbox-backed step needs a primary source.");
@@ -1963,7 +1959,7 @@ fn commit_attempt_spec(
             },
         ],
         workdir: primary.guest_path.clone(),
-        access,
+        network: capabilities.sandbox_network(),
     })
 }
 
@@ -1972,7 +1968,6 @@ fn attempt_spec(
     workspace: &crate::workflows::workspace::AttemptWorkspace,
     user_project: &std::path::Path,
     host: &DirectoryPolicy,
-    access: crate::sandbox::GuestAccess,
 ) -> Result<crate::sandbox::SandboxSpec, &'static str> {
     let mut mounts = Vec::new();
     let Some(primary) = capabilities.primary() else {
@@ -2012,7 +2007,7 @@ fn attempt_spec(
     Ok(crate::sandbox::SandboxSpec {
         mounts,
         workdir: primary.guest_path.clone(),
-        access,
+        network: capabilities.sandbox_network(),
     })
 }
 

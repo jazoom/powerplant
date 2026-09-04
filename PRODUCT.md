@@ -46,7 +46,9 @@ The `/` route uses the project catalogue. An empty catalogue redirects to `/proj
 
 The project catalogue is not host access authority. An agent directory grant is the only authority for an agent to access a project. An agent is eligible when one stored canonical grant path equals the project path. Prefix matches give no authority. Project registration gives no authority.
 
-They create agents in the local catalogue. Each agent has a name, instructions, tools and host directory grants. The selected project grant maps to `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`.
+They create agents in the local catalogue. Each agent has a name, instructions, tools, a network policy and host directory grants. The selected project grant maps to `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`.
+
+An agent network policy permits no network, selected domain suffixes or the public internet. No network is the default. Public access excludes the host and private networks. Restricted access includes each listed domain, its subdomains and all ports.
 
 They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. A workflow can use only a ready snapshot.
 
@@ -103,6 +105,7 @@ Current capabilities:
 - Edit and delete agents.
 - Grant host directories to each agent.
 - Configure the list, read, write and run tools for each agent.
+- Deny agent network access, allow selected domain suffixes or allow the public internet.
 - Create environment recipes from an OCI image and a setup script.
 - Edit and delete environment recipes.
 - Prepare environment snapshots for workflow use.
@@ -133,7 +136,7 @@ Current constraints:
 
 - The product does not create user accounts.
 - The project desk stays a transcript plus composer.
-- Agent tools run only in the guest. The guest does not receive a raw provider key or plan token. Microsandbox secrets inject placeholders. During agent steps, Power Plant limits outbound network access to the selected provider host. System-command steps have no network access. Model inference stays on the host through Rig.
+- Agent tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig.
 - Project records, run records and artefacts persist locally. Browser transcripts remain memory-only. The product does not persist the transcript across process restarts.
 - One desk job can be active per browser session.
 - One workflow execution can be active process-wide.

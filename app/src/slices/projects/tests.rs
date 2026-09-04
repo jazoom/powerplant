@@ -657,6 +657,7 @@ fn create_agent(state: &AppState, name: &str, path: &Path) -> crate::agents::Age
             name: name.to_owned(),
             instructions: String::new(),
             tools: vec![ToolId::List],
+            network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: path.to_path_buf(),
@@ -842,6 +843,7 @@ async fn a_stale_grant_cannot_open_the_desk() {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
                 tools: agent.tools.clone(),
+                network: agent.network.clone(),
                 directories: vec![DirectoryGrant {
                     alias: "project".to_owned(),
                     host_path: other.path().to_path_buf(),
@@ -1107,6 +1109,7 @@ async fn stale_grant_returns_conflict() {
                 name: "Later".to_owned(),
                 instructions: agent.instructions.clone(),
                 tools: agent.tools.clone(),
+                network: agent.network.clone(),
                 directories: agent.directories.clone(),
                 primary_directory: agent.primary_directory.clone(),
             },
@@ -1263,6 +1266,7 @@ async fn starter_creates_exact_path_authority_and_opens_the_desk() {
     assert_eq!(agent.name, project.name);
     assert!(agent.instructions.is_empty());
     assert_eq!(agent.tools, ToolId::ALL.to_vec());
+    assert_eq!(agent.network, crate::agents::NetworkAccess::None);
     assert_eq!(agent.directories.len(), 1);
     assert_eq!(agent.directories[0].alias, "project");
     assert_eq!(agent.directories[0].host_path, project.host_path);

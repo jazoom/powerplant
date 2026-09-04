@@ -1,5 +1,5 @@
 use super::DirectoryPolicy;
-use crate::agents::record::{AccessMode, AgentRecord, DirectoryGrant};
+use crate::agents::record::{AccessMode, AgentRecord, DirectoryGrant, NetworkAccess};
 use crate::agents::{AgentId, ToolId};
 
 fn record(primary: &str, grants: Vec<DirectoryGrant>) -> AgentRecord {
@@ -9,6 +9,7 @@ fn record(primary: &str, grants: Vec<DirectoryGrant>) -> AgentRecord {
         name: "Agent".to_owned(),
         instructions: String::new(),
         tools: vec![ToolId::List],
+        network: NetworkAccess::None,
         directories: grants,
         primary_directory: primary.to_owned(),
     }

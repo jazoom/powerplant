@@ -11,7 +11,8 @@ pub(crate) use policy::{DirectoryPolicy, PolicyGrant};
 pub(crate) use prompt::compose_role;
 pub(crate) use record::{
     AccessMode, AgentDraft, AgentError, AgentRecord, DirectoryGrant, GUEST_PROJECT, MAXIMUM_GRANTS,
-    MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, MAXIMUM_PATH_BYTES, guest_path_for,
+    MAXIMUM_INSTRUCTION_BYTES, MAXIMUM_NAME_BYTES, MAXIMUM_NETWORK_TEXT_BYTES, MAXIMUM_PATH_BYTES,
+    NetworkAccess, guest_path_for,
 };
 pub(crate) use run::{AgentLeaseCoordinator, LeaseGuard};
 pub(crate) use store::{AgentStore, StarterAgent};

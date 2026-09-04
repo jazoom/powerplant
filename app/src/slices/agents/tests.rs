@@ -8,7 +8,10 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
-    agents::{AccessMode, AgentDraft, AgentError, AgentRecord, AgentStore, DirectoryGrant, ToolId},
+    agents::{
+        AccessMode, AgentDraft, AgentError, AgentRecord, AgentStore, DirectoryGrant, NetworkAccess,
+        ToolId,
+    },
     config::RuntimeConfig,
     providers::{ProviderConnection, ProviderKind},
     sessions,
@@ -91,6 +94,7 @@ async fn the_catalogue_links_each_exact_grant_match() {
             name: "Both".to_owned(),
             instructions: String::new(),
             tools: vec![ToolId::List],
+            network: NetworkAccess::None,
             directories: vec![
                 DirectoryGrant {
                     alias: "harbour".to_owned(),
@@ -112,6 +116,7 @@ async fn the_catalogue_links_each_exact_grant_match() {
             name: "None".to_owned(),
             instructions: String::new(),
             tools: vec![ToolId::List],
+            network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: other_dir.path().to_path_buf(),
@@ -232,6 +237,7 @@ async fn configuration_patch_returns_a_hypergraft_patch() {
             name: "Before".to_owned(),
             instructions: String::new(),
             tools: vec![ToolId::List],
+            network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: dir.path().to_path_buf(),
@@ -286,6 +292,7 @@ async fn delete_redirects_to_the_catalogue() {
             name: "Gone".to_owned(),
             instructions: String::new(),
             tools: vec![ToolId::List],
+            network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: dir.path().to_path_buf(),
@@ -324,6 +331,7 @@ fn seed_agent(state: &AppState, name: &str) -> (tempfile::TempDir, AgentRecord) 
             name: name.to_owned(),
             instructions: String::new(),
             tools: vec![ToolId::List],
+            network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
                 alias: "project".to_owned(),
                 host_path: dir.path().to_path_buf(),
@@ -360,6 +368,7 @@ async fn stale_update_returns_conflict() {
                 name: "After".to_owned(),
                 instructions: String::new(),
                 tools: vec![ToolId::List],
+                network: NetworkAccess::None,
                 directories: vec![DirectoryGrant {
                     alias: "project".to_owned(),
                     host_path: dir.path().to_path_buf(),
@@ -418,6 +427,7 @@ async fn stale_delete_returns_conflict() {
                 name: "Kept".to_owned(),
                 instructions: "Newer".to_owned(),
                 tools: vec![ToolId::List],
+                network: NetworkAccess::None,
                 directories: vec![DirectoryGrant {
                     alias: "project".to_owned(),
                     host_path: dir.path().to_path_buf(),
@@ -776,6 +786,7 @@ async fn remove_directory_on_configuration_keeps_revision_and_does_not_save() {
             name: "Two".to_owned(),
             instructions: "Stay".to_owned(),
             tools: vec![ToolId::List],
+            network: NetworkAccess::None,
             directories: vec![
                 DirectoryGrant {
                     alias: "project".to_owned(),

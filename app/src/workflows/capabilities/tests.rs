@@ -15,8 +15,7 @@ pub(crate) fn test_agent_capabilities() -> AttemptCapabilities {
         }],
         source_location: PrimarySourceLocation::AttemptWorkspace,
         git_admin: AccessMode::ReadOnly,
-        network: NetworkCapability::ProviderHost,
-        secret: SecretPresence::ProviderPlaceholder,
+        network: NetworkCapability::None,
     }
 }
 pub(crate) fn test_command_capabilities() -> AttemptCapabilities {
@@ -33,16 +32,13 @@ pub(crate) fn test_command_capabilities() -> AttemptCapabilities {
         source_location: PrimarySourceLocation::AttemptWorkspace,
         git_admin: AccessMode::ReadOnly,
         network: NetworkCapability::None,
-        secret: SecretPresence::None,
     }
 }
 
 use super::{
     AttemptCapabilities, CapabilityError, DirectoryRole, NetworkCapability, PrimarySourceLocation,
-    SecretPresence,
 };
-use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, ToolId};
-use crate::providers::{ProviderConnection, ProviderKind};
+use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, NetworkAccess, ToolId};
 use crate::tools::SUBMIT_WORKFLOW_OUTPUT;
 use crate::workflows::definition::{
     AgentAuthority, AgentStep, CandidateAuthority, GuestDirectoryAccess, OutputKey, OutputKind,
@@ -61,6 +57,7 @@ fn agent_with_primary(tools: Vec<ToolId>, writable: bool, primary: &str) -> Agen
         name: "Agent".to_owned(),
         instructions: String::new(),
         tools,
+        network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
             alias: primary.to_owned(),
             host_path: "/tmp/project".into(),
@@ -74,16 +71,11 @@ fn agent_with_primary(tools: Vec<ToolId>, writable: bool, primary: &str) -> Agen
     }
 }
 
-fn connection() -> ProviderConnection {
-    ProviderConnection::with_key(ProviderKind::Xai, "sk-test", "grok-4.6")
-}
-
 fn derive(
     step: &StepDefinition,
     agent: &AgentRecord,
-    connection: &ProviderConnection,
 ) -> Result<AttemptCapabilities, CapabilityError> {
-    AttemptCapabilities::derive(step, agent, &agent.primary_directory, connection)
+    AttemptCapabilities::derive(step, agent, &agent.primary_directory)
 }
 
 fn agent_step(tools: Vec<ToolId>, writable: bool) -> StepDefinition {
@@ -140,19 +132,17 @@ fn commit_step() -> StepDefinition {
 
 #[test]
 fn capability_policy_table() {
-    let connection = connection();
     let ceiling = agent(ToolId::ALL.to_vec(), true);
 
     let over = agent_step(vec![ToolId::List, ToolId::Write], true);
     assert_eq!(
-        derive(&over, &agent(vec![ToolId::List], true), &connection),
+        derive(&over, &agent(vec![ToolId::List], true)),
         Err(CapabilityError::Authority)
     );
 
     let planner = derive(
         &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
         &ceiling,
-        &connection,
     )
     .expect("planner");
     assert_eq!(planner.schema, super::CAPABILITY_SCHEMA);
@@ -166,15 +156,11 @@ fn capability_policy_table() {
         planner.source_location,
         PrimarySourceLocation::AttemptWorkspace
     );
-    assert_eq!(planner.network, NetworkCapability::ProviderHost);
+    assert_eq!(planner.network, NetworkCapability::None);
 
     let custom_primary = agent_with_primary(ToolId::ALL.to_vec(), true, "source");
-    let implementer = derive(
-        &agent_step(ToolId::ALL.to_vec(), true),
-        &custom_primary,
-        &connection,
-    )
-    .expect("implementer");
+    let implementer =
+        derive(&agent_step(ToolId::ALL.to_vec(), true), &custom_primary).expect("implementer");
     assert_eq!(
         implementer
             .primary()
@@ -196,7 +182,6 @@ fn capability_policy_table() {
     let reviewer = derive(
         &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
         &ceiling,
-        &connection,
     )
     .expect("reviewer");
     assert_eq!(
@@ -205,10 +190,9 @@ fn capability_policy_table() {
     );
     assert_eq!(reviewer.git_admin, AccessMode::ReadOnly);
 
-    let status = derive(&status_step(), &ceiling, &connection).expect("status");
+    let status = derive(&status_step(), &ceiling).expect("status");
     assert!(status.tools.is_empty());
     assert_eq!(status.network, NetworkCapability::None);
-    assert_eq!(status.secret, SecretPresence::None);
     assert_eq!(status.git_admin, AccessMode::ReadOnly);
     assert_eq!(
         status.source_location,
@@ -219,10 +203,9 @@ fn capability_policy_table() {
         Some(AccessMode::ReadOnly)
     );
 
-    let commit = derive(&commit_step(), &ceiling, &connection).expect("commit");
+    let commit = derive(&commit_step(), &ceiling).expect("commit");
     assert!(commit.tools.is_empty());
     assert_eq!(commit.network, NetworkCapability::None);
-    assert_eq!(commit.secret, SecretPresence::None);
     assert_eq!(commit.git_admin, AccessMode::ReadWrite);
     assert_eq!(commit.source_location, PrimarySourceLocation::UserProject);
     assert_eq!(
@@ -236,6 +219,27 @@ fn capability_policy_table() {
 }
 
 #[test]
+fn agent_network_access_is_pinned() {
+    for (access, expected) in [
+        (NetworkAccess::None, NetworkCapability::None),
+        (
+            NetworkAccess::Restricted(vec!["npmjs.org".to_owned()]),
+            NetworkCapability::Restricted(vec!["npmjs.org".to_owned()]),
+        ),
+        (NetworkAccess::Public, NetworkCapability::Public),
+    ] {
+        let mut configured = agent(ToolId::ALL.to_vec(), true);
+        configured.network = access;
+        let capabilities = derive(
+            &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], true),
+            &configured,
+        )
+        .expect("capabilities");
+        assert_eq!(capabilities.network, expected);
+    }
+}
+
+#[test]
 fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
     let selected = AgentRecord {
         id: AgentId::generate().expect("id"),
@@ -243,6 +247,7 @@ fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
         name: "Agent".to_owned(),
         instructions: String::new(),
         tools: vec![ToolId::List],
+        network: NetworkAccess::None,
         directories: vec![
             DirectoryGrant {
                 alias: "docs".to_owned(),
@@ -270,8 +275,7 @@ fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
     )
     .expect("authority");
 
-    let capabilities =
-        AttemptCapabilities::derive(&step, &selected, "code", &connection()).expect("selected");
+    let capabilities = AttemptCapabilities::derive(&step, &selected, "code").expect("selected");
     assert_eq!(capabilities.agent_revision, selected.revision);
     assert_eq!(
         capabilities
@@ -302,7 +306,7 @@ fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
         ]
     );
     assert_eq!(
-        AttemptCapabilities::derive(&commit_step(), &selected, "docs", &connection()),
+        AttemptCapabilities::derive(&commit_step(), &selected, "docs"),
         Err(CapabilityError::Authority)
     );
 }

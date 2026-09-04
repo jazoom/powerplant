@@ -81,6 +81,8 @@ pub(super) struct AgentFormView {
     pub(super) name: String,
     pub(super) instructions: String,
     pub(super) primary: String,
+    pub(super) network: String,
+    pub(super) network_domains: String,
     pub(super) tools: Vec<ToolRow>,
     pub(super) grants: Vec<GrantRow>,
     pub(super) can_add: bool,
@@ -98,6 +100,8 @@ pub(super) struct AgentFormContents<'a> {
     pub(super) name: &'a str,
     pub(super) instructions: &'a str,
     pub(super) primary: &'a str,
+    pub(super) network: &'a str,
+    pub(super) network_domains: &'a str,
     pub(super) tools: &'a [ToolRow],
     pub(super) grants: &'a [GrantRow],
     pub(super) can_add: bool,
@@ -171,6 +175,8 @@ impl AgentFormView {
             name: state.name,
             instructions: state.instructions,
             primary: state.primary,
+            network: state.network,
+            network_domains: state.network_domains,
             tools: ToolId::ALL
                 .into_iter()
                 .map(|tool| ToolRow {
@@ -207,6 +213,8 @@ impl AgentFormView {
             name: &self.name,
             instructions: &self.instructions,
             primary: &self.primary,
+            network: &self.network,
+            network_domains: &self.network_domains,
             tools: &self.tools,
             grants: &self.grants,
             can_add: self.can_add,

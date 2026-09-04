@@ -1074,7 +1074,7 @@ fn durable_commit_transactions_record_an_approved_human_decision() {
 }
 
 #[test]
-fn version_two_run_records_round_trip() {
+fn run_records_round_trip() {
     let mut run = new_run();
     let attempt = start(&mut run);
     complete(&mut run, attempt, 12);
@@ -1101,12 +1101,12 @@ fn version_two_run_records_round_trip() {
 }
 
 #[test]
-fn version_two_run_json_omits_the_transition_array() {
+fn run_json_omits_the_transition_array() {
     let mut run = new_run();
     let attempt = start(&mut run);
     complete(&mut run, attempt, 12);
     let value = serde_json::to_value(run.to_file()).expect("json");
-    assert_eq!(value["record-version"], 2);
+    assert_eq!(value["record-version"], 1);
     assert_eq!(value["kind"], "configured");
     assert!(value.get("project-id").is_some());
     assert!(value.get("transitions").is_none());
@@ -1115,7 +1115,7 @@ fn version_two_run_json_omits_the_transition_array() {
 
 #[test]
 fn obsolete_run_record_versions_are_rejected() {
-    for version in [1, 3] {
+    for version in [0, 2] {
         let mut file = new_run().to_file();
         file.record_version = version;
         assert_eq!(
@@ -1163,11 +1163,39 @@ fn missing_or_unknown_project_identity_fails_load() {
 }
 
 #[test]
+fn restricted_network_capabilities_round_trip_and_reject_invalid_domains() {
+    let mut capabilities = test_agent_capabilities();
+    capabilities.network =
+        super::NetworkCapability::Restricted(vec!["npmjs.org".to_owned(), "github.com".to_owned()]);
+    let file = super::capabilities_to_file(&capabilities);
+    assert_eq!(
+        super::capabilities_from_file(file)
+            .expect("capabilities")
+            .network,
+        capabilities.network
+    );
+
+    let mut file = super::capabilities_to_file(&capabilities);
+    file.network_domains = vec!["com".to_owned()];
+    assert_eq!(
+        super::capabilities_from_file(file).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+
+    let mut file = super::capabilities_to_file(&test_agent_capabilities());
+    file.network = "provider-host".to_owned();
+    assert_eq!(
+        super::capabilities_from_file(file).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
 fn obsolete_capability_schemas_are_rejected() {
     let mut run = new_run();
     let _attempt = start(&mut run);
     let mut file = run.to_file();
-    file.attempts[0].capabilities.schema = 1;
+    file.attempts[0].capabilities.schema = 2;
     assert_eq!(
         WorkflowRun::from_file(file).err(),
         Some(super::RunRecordError::Corrupt)

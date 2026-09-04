@@ -22,7 +22,7 @@ pub(super) struct AttemptView {
     pub(super) primary_access: &'static str,
     pub(super) source_location: &'static str,
     pub(super) git_admin: &'static str,
-    pub(super) network: &'static str,
+    pub(super) network: String,
     pub(super) reports: Vec<StepArtefactView>,
     pub(super) route: String,
 }

@@ -12,7 +12,7 @@ mod command;
 mod tests;
 
 pub(crate) use crate::agents::GUEST_PROJECT;
-pub(crate) use access::{GuestAccess, public_network_policy};
+pub(crate) use access::public_network_policy;
 pub(crate) use command::{CommandEvent, CommandSession};
 
 pub(crate) const SANDBOX_OWNER_LABEL: &str = "works.powerplant.owner";
@@ -65,24 +65,12 @@ pub(crate) struct MountSpec {
     pub(crate) read_only: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SandboxSpec {
     pub(crate) mounts: Vec<MountSpec>,
     pub(crate) workdir: String,
-    pub(crate) access: GuestAccess,
+    pub(crate) network: crate::agents::NetworkAccess,
 }
-
-impl PartialEq for SandboxSpec {
-    fn eq(&self, other: &Self) -> bool {
-        self.workdir == other.workdir
-            && self.mounts == other.mounts
-            && self.access.host == other.access.host
-            && self.access.secret.as_ref().map(|secret| secret.expose())
-                == other.access.secret.as_ref().map(|secret| secret.expose())
-    }
-}
-
-impl Eq for SandboxSpec {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OrphanSandbox {
@@ -688,13 +676,12 @@ async fn create_detached(
     digest: &str,
 ) -> Result<(), SandboxError> {
     *lock_mutex(&live.spec) = Some(spec.clone());
-    let host = spec.access.host.clone();
     let mut builder = microsandbox::Sandbox::builder(name)
         .from_snapshot(snapshot.to_string_lossy().into_owned())
         .label(SANDBOX_SNAPSHOT_LABEL, digest);
     builder = apply_owner_labels(builder, run_id, attempt_id)
         .workdir(&spec.workdir)
-        .network(|network| network.policy(access::provider_policy(&host)))
+        .network(|network| network.policy(access::network_policy(&spec.network)))
         .detached(true);
     for mount in &spec.mounts {
         let guest = mount.guest.clone();
@@ -704,11 +691,6 @@ async fn create_detached(
             let bound = volume.bind(host_path);
             if read_only { bound.readonly() } else { bound }
         });
-    }
-    if let Some(secret) = &spec.access.secret {
-        let value = secret.expose().to_owned();
-        builder =
-            builder.secret(|entry| entry.env(access::SECRET_ENV).value(value).allow_host(host));
     }
     let (mut progress, task) = match builder.create_detached_with_pull_progress() {
         Ok(started) => started,

@@ -322,6 +322,7 @@ async fn grant_agent(
         name: agent.name.clone(),
         instructions: agent.instructions.clone(),
         tools: agent.tools.clone(),
+        network: agent.network.clone(),
         directories,
         primary_directory: agent.primary_directory.clone(),
     };

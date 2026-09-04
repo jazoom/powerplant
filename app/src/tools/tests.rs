@@ -9,6 +9,7 @@ fn policy() -> DirectoryPolicy {
             name: "Agent".to_owned(),
             instructions: String::new(),
             tools: ToolId::ALL.to_vec(),
+            network: crate::agents::NetworkAccess::None,
             directories: vec![
                 DirectoryGrant {
                     alias: "project".to_owned(),

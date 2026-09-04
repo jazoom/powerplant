@@ -1,5 +1,5 @@
 use super::{AgentFormState, FormError, FormIntent};
-use crate::agents::{AccessMode, AgentError, ToolId};
+use crate::agents::{AccessMode, AgentError, NetworkAccess, ToolId};
 
 fn pair(key: &str, value: &str) -> (String, String) {
     (key.to_owned(), value.to_owned())
@@ -10,6 +10,8 @@ fn valid_pairs() -> Vec<(String, String)> {
         pair("intent", "save"),
         pair("name", "Maintainer"),
         pair("instructions", "Keep going"),
+        pair("network", "none"),
+        pair("network_domains", ""),
         pair("primary", "project"),
         pair("tool_list", "on"),
         pair("tool_read", "on"),
@@ -25,8 +27,33 @@ fn agent_form_reads_tools_and_grants() {
     assert_eq!(intent, FormIntent::Save);
     let draft = form.draft().expect("draft");
     assert_eq!(draft.tools, [ToolId::List, ToolId::Read]);
+    assert_eq!(draft.network, NetworkAccess::None);
     assert_eq!(draft.directories.len(), 1);
     assert_eq!(draft.directories[0].access, AccessMode::ReadWrite);
+}
+
+#[test]
+fn restricted_network_domains_are_parsed_and_normalised() {
+    let mut pairs = valid_pairs();
+    pairs[3] = pair("network", "restricted");
+    pairs[4] = pair("network_domains", "Registry.NPMJS.org\ngithub.com");
+    let (form, _) = AgentFormState::parse(pairs).expect("parse");
+    assert_eq!(
+        form.draft().expect("draft").network,
+        NetworkAccess::Restricted(vec![
+            "registry.npmjs.org".to_owned(),
+            "github.com".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn invalid_restricted_network_domains_are_rejected() {
+    let mut pairs = valid_pairs();
+    pairs[3] = pair("network", "restricted");
+    pairs[4] = pair("network_domains", "https://example.com/path");
+    let (form, _) = AgentFormState::parse(pairs).expect("parse");
+    assert_eq!(form.draft().err(), Some(AgentError::Network));
 }
 
 #[test]
@@ -115,6 +142,8 @@ fn add_directory_appends_a_blank_row_without_path_validation() {
     assert_eq!(form.directories[1].access, "read-write");
     assert_eq!(form.name, "Maintainer");
     assert_eq!(form.instructions, "Keep going");
+    assert_eq!(form.network, "none");
+    assert!(form.network_domains.is_empty());
     assert_eq!(form.primary, "project");
     assert_eq!(form.tools, [ToolId::List, ToolId::Read]);
 }

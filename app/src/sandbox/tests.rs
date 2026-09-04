@@ -168,9 +168,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    GuestAccess, GuestSandbox, MountSpec, SANDBOX_OWNER_LABEL, SANDBOX_OWNER_VALUE, SandboxError,
-    SandboxSpec, owns_sandbox_owner,
+    GuestSandbox, MountSpec, SANDBOX_OWNER_LABEL, SANDBOX_OWNER_VALUE, SandboxError, SandboxSpec,
+    owns_sandbox_owner,
 };
+use crate::agents::NetworkAccess;
 
 fn spec(dir: &Path) -> SandboxSpec {
     SandboxSpec {
@@ -180,7 +181,7 @@ fn spec(dir: &Path) -> SandboxSpec {
             read_only: false,
         }],
         workdir: "/project".to_owned(),
-        access: GuestAccess::default(),
+        network: NetworkAccess::None,
     }
 }
 
@@ -203,7 +204,7 @@ async fn start_from_snapshot_is_rejected_without_mounts() {
     let spec = SandboxSpec {
         mounts: Vec::new(),
         workdir: "/project".to_owned(),
-        access: GuestAccess::default(),
+        network: NetworkAccess::None,
     };
     assert!(matches!(
         sandbox
@@ -287,7 +288,7 @@ fn writable_user_project_mounts_are_rejected() {
             },
         ],
         workdir: "/project".to_owned(),
-        access: GuestAccess::default(),
+        network: NetworkAccess::None,
     };
     assert!(matches!(
         super::reject_user_project_write(&commit, &spec.mounts[0].host),
@@ -304,7 +305,7 @@ fn stale_mounts_are_rejected() {
             read_only: false,
         }],
         workdir: "/project".to_owned(),
-        access: GuestAccess::default(),
+        network: NetworkAccess::None,
     };
     assert!(matches!(
         super::confirm_mounts(&sandbox_spec),
