@@ -1,197 +1,259 @@
-<section id="connect-card" data-island="connect-errors" class="connect-sheet">
-  {% block card_contents %}
-    {% if open_chat %}
-      <p class="mb-5 text-sm">
-        <a href="/" class="link link-hover">Back to the local desk</a>
-      </p>
-    {% endif %}
-
-    <h1 class="font-heading font-semibold">Connect a provider</h1>
-    <p class="text-quiet mt-3 max-w-[65ch]">
-      Power Plant stores one key or plan login for each provider on this
-      machine. Forget removes that provider connection.
-    </p>
-
-    {% if sandbox_missing != "" %}
-      <div class="alert alert-warning mt-6" role="status">
-        <p>{{ sandbox_missing }}</p>
-      </div>
-    {% endif %}
-
-    {% if let Some(pending) = pending %}
-      <section
-        id="connect-plan-status"
-        class="connect-sheet-section space-y-3"
-        data-island="connect-plan"
-        data-plan-active="{% if pending.active %}true{% else %}false{% endif %}"
-      >
-        <h2 class="text-lg font-semibold">Finish sign-in</h2>
-        <p class="text-quiet">{{ pending.provider_label }}</p>
-        {% if let Some(message) = pending.error %}
-          <div class="alert alert-error" role="alert">
-            <p>{{ message }}</p>
-          </div>
-        {% else %}
-          <p>Open the provider link and enter this code.</p>
-          <p>
-            <a
-              href="{{ pending.verification_uri }}"
-              class="link break-all"
-              rel="noreferrer"
-              target="_blank"
-              >{{ pending.verification_uri }}</a
-            >
-          </p>
-          <p class="font-mono text-xl tracking-wide">{{ pending.user_code }}</p>
-          <form data-graft method="get" action="/connect" hidden></form>
-        {% endif %}
-      </section>
-    {% endif %}
-
-    {% if !stored.is_empty() %}
-      <section class="connect-sheet-section space-y-3">
-        <h2 class="text-lg font-semibold">Connected providers</h2>
-        <ul class="record-list">
-          {% for provider in stored %}
-            <li class="record-row">
-              <span class="flex min-w-0 items-center gap-3">
-                <span
-                  class="provider-logo provider-logo-{{ provider.value }}"
-                  aria-hidden="true"
-                ></span>
-                <span>
-                  <span class="block font-medium">{{ provider.label }}</span>
-                  <span class="text-quiet text-sm">{{ provider.method }}</span>
-                </span>
-              </span>
-              <form data-graft method="post" action="/connect/forget">
-                <input
-                  type="hidden"
-                  name="provider"
-                  value="{{ provider.value }}"
-                />
-                <button class="btn btn-ghost btn-sm" type="submit">
-                  Forget
-                </button>
-              </form>
-            </li>
-          {% endfor %}
-        </ul>
-      </section>
-    {% endif %}
-
-    {% if let Some(error) = error %}
-      <div
-        id="connect-errors"
-        class="alert alert-error mt-6"
-        role="alert"
-        tabindex="-1"
-      >
-        <p><a href="#{{ error.target_id() }}">{{ error.message }}</a></p>
-      </div>
-    {% endif %}
-
-    {% if show_chatgpt || show_grok %}
-      <section id="connect-plan" class="connect-sheet-section space-y-3">
+<main
+  data-section="providers"
+  class="provider-page {% if has_stored_providers %}
+    mx-auto max-w-4xl flex-1
+  {% else %}
+    m-auto max-w-[42rem]
+  {% endif %} flex w-full flex-col px-5 py-8 sm:px-8"
+>
+  <section id="connect-card" data-island="connect-errors" class="connect-sheet">
+    {% block card_contents %}
+      <div class="page-intro">
         <div>
-          <h2 class="text-lg font-semibold">Use a plan login</h2>
-          <p class="text-quiet mt-1 text-sm">
-            Sign in through the provider in a separate browser tab.
-          </p>
-        </div>
-        {% if show_chatgpt %}
-          <form data-graft method="post" action="/connect/plan">
-            <input type="hidden" name="provider" value="openai-codex" />
-            <button
-              class="btn btn-outline w-full"
-              type="submit"
-              {% if let Some(error) = error %}
-                {% if error.is_plan() %}
-                  aria-invalid="true" aria-describedby="connect-errors"
-                {% endif %}
-              {% endif %}
-            >
-              Sign in with ChatGPT
-            </button>
-          </form>
-        {% endif %}
-        {% if show_grok %}
-          <form data-graft method="post" action="/connect/plan">
-            <input type="hidden" name="provider" value="xai" />
-            <button class="btn btn-outline w-full" type="submit">
-              Sign in with SuperGrok
-            </button>
-          </form>
-        {% endif %}
-      </section>
-    {% endif %}
-
-    {% if !providers.is_empty() %}
-      <form
-        data-graft
-        class="connect-sheet-section space-y-5"
-        method="post"
-        action="/connect"
-        autocomplete="off"
-      >
-        <div>
-          <h2 class="text-lg font-semibold">Use an API key</h2>
-          <p class="text-quiet mt-1 text-sm">
-            Choose the provider that issued the key.
-          </p>
-        </div>
-        <fieldset
-          id="connect-provider"
-          class="grid gap-2 sm:grid-cols-2"
-          tabindex="-1"
-          {% if let Some(error) = error %}
-            {% if error.is_provider() %}
-              aria-invalid="true" aria-describedby="connect-errors"
-            {% endif %}
+          {% if has_stored_providers %}
+            <h1>Providers</h1>
+            <p>
+              Connected providers are available to use from the project desk.
+            </p>
+          {% else %}
+            <h1>Connect a provider</h1>
+            <p>
+              Connect as many providers as you like with a plan login or an API
+              key.
+            </p>
           {% endif %}
-        >
-          <legend class="label mb-2">Provider</legend>
-          {% for provider in providers %}
-            <label
-              class="border-base-300 has-checked:border-accent has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 border px-3"
-            >
-              <input
-                class="radio radio-primary"
-                type="radio"
-                name="provider"
-                value="{{ provider.value }}"
-                {% if provider.selected %}checked{% endif %}
-                required
-              />
-              <span
-                class="provider-logo provider-logo-{{ provider.value }}"
-                aria-hidden="true"
-              ></span>
-              <span>{{ provider.label }}</span>
-            </label>
-          {% endfor %}
-        </fieldset>
-        <div>
-          <label for="connect-key" class="label">API key</label>
-          <input
-            id="connect-key"
-            class="input input-bordered w-full font-mono"
-            name="api_key"
-            type="password"
-            autocomplete="new-password"
-            required
-            maxlength="4096"
-            {% if let Some(error) = error %}
-              {% if error.is_api_key() %}
-                aria-invalid="true" aria-describedby="connect-errors"
-              {% endif %}
-            {% endif %}
-          />
         </div>
-        <button class="btn btn-primary w-full" type="submit">
-          Save provider
-        </button>
-      </form>
-    {% endif %}
-  {% endblock %}
-</section>
+        {% if has_stored_providers %}
+          <a href="/" data-graft class="setup-continue btn btn-primary shrink-0"
+            >Continue to projects</a
+          >
+        {% endif %}
+      </div>
+
+      {% if sandbox_missing != "" %}
+        <div class="alert alert-warning mt-6" role="status">
+          <p>{{ sandbox_missing }}</p>
+        </div>
+      {% endif %}
+
+      {% if !stored.is_empty() %}
+        <section class="mt-10 space-y-3">
+          <h2 class="text-lg font-semibold">Connected providers</h2>
+          <ul class="record-list">
+            {% for provider in stored %}
+              <li class="record-row">
+                <span class="flex min-w-0 items-center gap-3">
+                  <span
+                    class="provider-logo provider-logo-{{ provider.value }}"
+                    aria-hidden="true"
+                  ></span>
+                  <span>
+                    <span class="block font-medium">{{ provider.label }}</span>
+                    <span class="text-quiet text-sm"
+                      >{{ provider.method }}</span
+                    >
+                  </span>
+                </span>
+                <form data-graft method="post" action="/connect/forget">
+                  <input
+                    type="hidden"
+                    name="provider"
+                    value="{{ provider.value }}"
+                  />
+                  <button class="btn btn-ghost btn-sm" type="submit">
+                    Forget
+                  </button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
+
+      {% if let Some(error) = error %}
+        <div
+          id="connect-errors"
+          class="alert alert-error mt-6"
+          role="alert"
+          tabindex="-1"
+        >
+          <p><a href="#{{ error.target_id() }}">{{ error.message }}</a></p>
+        </div>
+      {% endif %}
+
+      {% if show_chatgpt || show_grok || !providers.is_empty() %}
+        <div class="border-base-300 mt-6 border-b">
+          {% if show_chatgpt || show_grok %}
+            <section id="connect-plan" class="space-y-4 py-6">
+              <div>
+                <h2 class="font-semibold">Connect with a plan</h2>
+                <p class="text-quiet mt-1 text-sm">
+                  Each button starts a separate sign-in for its provider. No API
+                  key is needed.
+                </p>
+              </div>
+              {% if let Some(pending) = pending %}
+                <div
+                  id="connect-plan-status"
+                  class="alert alert-info block space-y-3"
+                  data-island="connect-plan"
+                  data-plan-active="{% if pending.active %}true{% else %}false{% endif %}"
+                >
+                  <h3 class="font-semibold">Finish sign-in</h3>
+                  <p class="text-quiet">{{ pending.provider_label }}</p>
+                  {% if let Some(message) = pending.error %}
+                    <div class="alert alert-error" role="alert">
+                      <p>{{ message }}</p>
+                    </div>
+                  {% else %}
+                    <p>Open the provider link and enter this code.</p>
+                    <p>
+                      <a
+                        href="{{ pending.verification_uri }}"
+                        class="link break-all"
+                        rel="noreferrer"
+                        target="_blank"
+                        >{{ pending.verification_uri }}</a
+                      >
+                    </p>
+                    <p class="font-mono text-xl tracking-wide">
+                      {{ pending.user_code }}
+                    </p>
+                    <form
+                      data-graft
+                      method="get"
+                      action="/connect"
+                      hidden
+                    ></form>
+                  {% endif %}
+                </div>
+              {% endif %}
+              <div class="grid gap-2 sm:grid-cols-2">
+                {% if show_chatgpt %}
+                  <form data-graft method="post" action="/connect/plan">
+                    <input type="hidden" name="provider" value="openai-codex" />
+                    <button
+                      class="btn btn-outline w-full"
+                      type="submit"
+                      {% if let Some(error) = error %}
+                        {% if error.is_plan() %}
+                          aria-invalid="true" aria-describedby="connect-errors"
+                        {% endif %}
+                      {% endif %}
+                    >
+                      <span
+                        class="provider-logo provider-logo-openai-codex"
+                        aria-hidden="true"
+                      ></span>
+                      Sign in with ChatGPT
+                    </button>
+                  </form>
+                {% endif %}
+                {% if show_grok %}
+                  <form data-graft method="post" action="/connect/plan">
+                    <input type="hidden" name="provider" value="xai" />
+                    <button class="btn btn-outline w-full" type="submit">
+                      <span
+                        class="provider-logo provider-logo-xai"
+                        aria-hidden="true"
+                      ></span>
+                      Sign in with SuperGrok
+                    </button>
+                  </form>
+                {% endif %}
+              </div>
+            </section>
+          {% endif %}
+
+          {% if !providers.is_empty() %}
+            <form
+              data-graft
+              class="space-y-5 py-6"
+              method="post"
+              action="/connect"
+              autocomplete="off"
+            >
+              <div>
+                <h2 class="font-semibold">Connect with an API key</h2>
+                <p class="text-quiet mt-1 text-sm">
+                  Select one provider. Then enter an API key from that same
+                  provider.
+                </p>
+              </div>
+              <fieldset
+                id="connect-provider"
+                class="grid gap-2 sm:grid-cols-2"
+                tabindex="-1"
+                {% if let Some(error) = error %}
+                  {% if error.is_provider() %}
+                    aria-invalid="true" aria-describedby="connect-errors"
+                  {% endif %}
+                {% endif %}
+              >
+                <legend class="label mb-2">1. Provider for this API key</legend>
+                {% for provider in providers %}
+                  <label
+                    class="border-base-300 has-checked:border-accent has-checked:bg-base-200 flex min-h-12 cursor-pointer items-center gap-3 border px-3"
+                  >
+                    <input
+                      class="radio radio-primary"
+                      type="radio"
+                      name="provider"
+                      value="{{ provider.value }}"
+                      {% if provider.selected %}checked{% endif %}
+                      required
+                    />
+                    <span
+                      class="provider-logo provider-logo-{{ provider.value }}"
+                      aria-hidden="true"
+                    ></span>
+                    <span>{{ provider.label }}</span>
+                  </label>
+                {% endfor %}
+              </fieldset>
+              <div>
+                <label for="connect-key" class="label"
+                  >2. API key from that provider</label
+                >
+                <p id="connect-key-help" class="text-quiet mb-2 text-sm">
+                  This key applies only to the provider selected in step 1.
+                </p>
+                <input
+                  id="connect-key"
+                  class="input input-bordered w-full font-mono"
+                  name="api_key"
+                  type="password"
+                  {% if clear_api_key %}value=""{% endif %}
+                  autocomplete="new-password"
+                  required
+                  maxlength="4096"
+                  {% if let Some(error) = error %}
+                    {% if error.is_api_key() %}
+                      aria-invalid="true" aria-describedby="connect-key-help
+                      connect-errors"
+                    {% else %}
+                      aria-describedby="connect-key-help"
+                    {% endif %}
+                  {% else %}
+                    aria-describedby="connect-key-help"
+                  {% endif %}
+                />
+              </div>
+              <button class="btn btn-outline" type="submit">
+                Connect with API key
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if has_stored_providers %}
+        <div class="setup-continue mt-8 flex justify-end">
+          <a href="/" data-graft class="btn btn-primary w-full sm:w-auto"
+            >Continue to projects</a
+          >
+        </div>
+      {% endif %}
+    {% endblock %}
+  </section>
+</main>

@@ -71,7 +71,6 @@ async fn show(State(state): State<AppState>, graft: GraftRequest) -> AppResult<R
 
 async fn submit(
     State(state): State<AppState>,
-    OptionalSession(session): OptionalSession,
     graft: PatchGraft,
     Form(form): Form<ConnectForm>,
 ) -> AppResult<Response> {
@@ -115,7 +114,13 @@ async fn submit(
         .map_err(|error| crate::error::AppError::new("store provider", error))?;
     models::refresh(state.clone(), connection);
 
-    connected_redirect(&state, graft, session.is_none())
+    let view = ConnectViewModel::initial(
+        &state.vault,
+        state.plan_login.snapshot(),
+        sandbox_missing(&state).await,
+    )
+    .clear_api_key();
+    render(&state, graft.into(), PatchStatus::Ok, view)
 }
 
 async fn start_plan(
@@ -320,36 +325,31 @@ async fn sandbox_missing(state: &AppState) -> &'static str {
     state.sandboxes.missing_message()
 }
 
-fn connected_redirect(
-    state: &AppState,
-    graft: PatchGraft,
-    needs_session: bool,
-) -> AppResult<Response> {
-    let mut response = responses::request_navigation(graft, "/");
-    if needs_session {
-        let token = sessions::generate_session_token()
-            .map_err(|error| crate::error::AppError::new("create session token", error))?;
-        state.sessions.insert(token.id());
-        sessions::set_session_cookie(&mut response, state, token.raw())?;
-    }
-    Ok(response)
-}
-
 fn render(
     state: &AppState,
     graft: GraftRequest,
     status: PatchStatus,
     view: ConnectViewModel,
 ) -> AppResult<Response> {
+    let use_app_shell = view.has_stored_providers;
+    let page_target = if use_app_shell {
+        "chat-main"
+    } else {
+        "connect-main"
+    };
     match graft {
         GraftRequest::Document => {
-            let mut response =
-                responses::connect_page_response(page::DOCUMENT_TITLE, state, &view)?;
+            let mut response = responses::connect_page_response(
+                page::DOCUMENT_TITLE,
+                state,
+                &view,
+                use_app_shell,
+            )?;
             responses::apply_patch_status(&mut response, status);
             Ok(response)
         }
         GraftRequest::Navigation if status == PatchStatus::Ok => Ok(
-            hypergraft::outcome::page_patch(page::DOCUMENT_TITLE, "connect-main", &view)?,
+            hypergraft::outcome::page_patch(page::DOCUMENT_TITLE, page_target, &view)?,
         ),
         GraftRequest::Patch => Ok(hypergraft::outcome::children_patch(
             status,

@@ -36,7 +36,8 @@ pub(super) struct ConnectViewModel {
     pub(super) providers: Vec<ProviderOption>,
     pub(super) stored: Vec<StoredProviderView>,
     pub(super) pending: Option<PendingPlanView>,
-    pub(super) open_chat: bool,
+    pub(super) has_stored_providers: bool,
+    pub(super) clear_api_key: bool,
     pub(super) show_chatgpt: bool,
     pub(super) show_grok: bool,
     pub(super) sandbox_missing: &'static str,
@@ -101,12 +102,18 @@ impl ConnectViewModel {
         Self::new(vault, None, pending, sandbox_missing, Some(error))
     }
 
+    pub(super) fn clear_api_key(mut self) -> Self {
+        self.clear_api_key = true;
+        self
+    }
+
     pub(super) fn card_contents(&self) -> ConnectCardContents<'_> {
         ConnectCardContents {
             providers: &self.providers,
             stored: &self.stored,
             pending: self.pending.as_ref(),
-            open_chat: self.open_chat,
+            has_stored_providers: self.has_stored_providers,
+            clear_api_key: self.clear_api_key,
             show_chatgpt: self.show_chatgpt,
             show_grok: self.show_grok,
             sandbox_missing: self.sandbox_missing,
@@ -122,12 +129,13 @@ impl ConnectViewModel {
         error: Option<FieldError>,
     ) -> Self {
         let stored = stored_providers(vault);
-        let open_chat = !stored.is_empty();
+        let has_stored_providers = !stored.is_empty();
         Self {
             providers: options(vault, selected),
             stored,
             pending: pending.map(pending_view),
-            open_chat,
+            has_stored_providers,
+            clear_api_key: false,
             show_chatgpt: !vault.contains(ProviderKind::OpenaiCodex),
             show_grok: !vault.contains(ProviderKind::Xai),
             sandbox_missing,
@@ -142,7 +150,8 @@ pub(super) struct ConnectCardContents<'a> {
     providers: &'a [ProviderOption],
     stored: &'a [StoredProviderView],
     pending: Option<&'a PendingPlanView>,
-    open_chat: bool,
+    has_stored_providers: bool,
+    clear_api_key: bool,
     show_chatgpt: bool,
     show_grok: bool,
     sandbox_missing: &'a str,

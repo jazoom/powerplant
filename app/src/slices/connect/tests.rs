@@ -472,10 +472,7 @@ async fn connect_submit(
 fn assert_field_target(text: &str, target: &str, secret: &str) {
     assert!(text.contains(&format!("href=\"#{target}\"")));
     assert_eq!(text.matches("aria-invalid").count(), 1);
-    assert_eq!(
-        text.matches(r#"aria-describedby="connect-errors""#).count(),
-        1
-    );
+    assert_eq!(text.matches("connect-errors").count(), 2);
     assert_eq!(aria_invalid_control(text), target);
     assert!(!text.contains(secret));
 }
@@ -555,7 +552,9 @@ async fn a_successful_connect_stores_the_provider_without_echoing_the_key() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains(r#"navigate="/""#));
+    assert!(text.contains(r#"operation="children" target="connect-card""#));
+    assert!(text.contains("Continue to projects"));
+    assert!(text.contains("value=\"\""));
     assert!(!text.contains("sk-test-key"));
     assert!(state.vault.contains(ProviderKind::Xai));
 }
@@ -580,6 +579,10 @@ async fn connect_stays_available_when_providers_are_stored() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("xAI (Grok)"));
     assert!(text.contains("action=\"/connect/forget\""));
+    assert!(text.contains("id=\"chat-main\""));
+    assert!(text.contains("data-section=\"providers\""));
+    assert!(!text.contains("Back to the local desk"));
+    assert!(!text.contains("class=\"connect-frame\""));
     assert!(!text.contains(SECRET_KEY));
 }
 
@@ -613,7 +616,7 @@ async fn a_new_process_restores_a_session_from_the_vault_file() {
 }
 
 #[tokio::test]
-async fn adding_a_second_provider_keeps_the_first() {
+async fn adding_a_second_provider_in_setup_keeps_the_first() {
     let state = test_state();
     store_provider(&state, SECRET_KEY);
     let response = connect_submit(
@@ -623,6 +626,9 @@ async fn adding_a_second_provider_keeps_the_first() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Continue to projects"));
     assert!(state.vault.contains(ProviderKind::Xai));
     assert!(state.vault.contains(ProviderKind::Synthetic));
 }
@@ -675,6 +681,20 @@ async fn pending_login_navigation_patches_the_page() {
     assert!(text.contains(r#"operation="children" target="connect-main""#));
     assert!(text.contains(PLAN_URI));
     assert!(text.contains(PLAN_CODE));
+}
+
+#[tokio::test]
+async fn stored_provider_navigation_patches_the_app_shell() {
+    let state = test_state();
+    store_provider(&state, SECRET_KEY);
+    let response = connect_get(state, Some("navigation")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#"operation="children" target="chat-main""#));
+    assert!(text.contains("data-section=\"providers\""));
+    assert!(!text.contains("<!doctype html>"));
+    assert!(!text.contains(SECRET_KEY));
 }
 
 #[tokio::test]

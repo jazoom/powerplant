@@ -589,7 +589,10 @@
         [data-nav="runs"],
     body:has(#chat-main [data-section="settings"])
         .app-index-nav-desktop
-        [data-nav="settings"] {
+        [data-nav="settings"],
+    body:has(#chat-main [data-section="providers"])
+        .app-index-nav-desktop
+        [data-nav="providers"] {
         color: var(--powerplant-ink);
         background: var(--powerplant-paper);
         border-color: var(--powerplant-cover-deep);
@@ -612,7 +615,10 @@
         [data-nav="runs"]::before,
     body:has(#chat-main [data-section="settings"])
         .app-index-nav-desktop
-        [data-nav="settings"]::before {
+        [data-nav="settings"]::before,
+    body:has(#chat-main [data-section="providers"])
+        .app-index-nav-desktop
+        [data-nav="providers"]::before {
         position: absolute;
         inset: -1px auto -1px -1px;
         width: 0.3rem;
@@ -1234,14 +1240,8 @@
     }
 
     #connect-main {
-        width: min(100%, 42rem);
-        margin: auto;
-        padding: clamp(1.5rem, 5vw, 4rem);
-    }
-
-    .connect-sheet > h1 {
-        font-size: clamp(1.8rem, 3vw, 2.7rem);
-        letter-spacing: -0.035em;
+        display: flex;
+        min-width: 0;
     }
 
     .connect-sheet-section {
@@ -1290,6 +1290,10 @@
             filter: saturate(1);
         }
     }
+}
+
+.app-frame .setup-continue {
+    display: none;
 }
 
 @media (max-width: 767px) {
@@ -1389,6 +1393,9 @@
 
     .app-index-more .menu {
         color: var(--powerplant-ink);
+        border: 1px solid var(--powerplant-strong-rule);
+        background: var(--powerplant-paper);
+        box-shadow: 0 0.4rem 1.2rem var(--powerplant-shadow-medium);
     }
 
     .app-index-more .menu a {
@@ -1408,7 +1415,8 @@
     body:has(#chat-main [data-section="environments"])
         .app-index-more
         > summary,
-    body:has(#chat-main [data-section="settings"]) .app-index-more > summary {
+    body:has(#chat-main [data-section="settings"]) .app-index-more > summary,
+    body:has(#chat-main [data-section="providers"]) .app-index-more > summary {
         color: var(--powerplant-ink);
         background: var(--powerplant-paper);
     }
@@ -1430,6 +1438,9 @@
         > summary::before,
     body:has(#chat-main [data-section="settings"])
         .app-index-more
+        > summary::before,
+    body:has(#chat-main [data-section="providers"])
+        .app-index-more
         > summary::before {
         position: absolute;
         inset: auto 0 0;
@@ -1450,7 +1461,10 @@
         [data-nav="environments"],
     body:has(#chat-main [data-section="settings"])
         .app-index-more
-        [data-nav="settings"] {
+        [data-nav="settings"],
+    body:has(#chat-main [data-section="providers"])
+        .app-index-more
+        [data-nav="providers"] {
         background: var(--powerplant-paper-green);
         font-weight: 600;
     }
@@ -1565,11 +1579,6 @@
 
     .connect-local {
         display: none;
-    }
-
-    #connect-main {
-        width: 100%;
-        padding: 1.5rem 1rem 2rem;
     }
 
     .btn:not(.btn-sm) {

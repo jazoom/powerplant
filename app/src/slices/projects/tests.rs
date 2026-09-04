@@ -101,7 +101,7 @@ async fn a_catalogue_document_uses_chat_main() {
 }
 
 #[tokio::test]
-async fn a_chat_document_keeps_connect_as_native_navigation() {
+async fn a_chat_document_enhances_provider_navigation() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
@@ -123,10 +123,7 @@ async fn a_chat_document_keeps_connect_as_native_navigation() {
         .collect();
     assert_eq!(connect_tags.len(), 2);
     for tag in connect_tags {
-        assert!(
-            !tag.contains("data-graft"),
-            "connect must stay full-page: {tag}"
-        );
+        assert!(tag.contains("data-graft"));
         assert!(tag.contains("data-nav=\"providers\""));
     }
 }

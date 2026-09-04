@@ -138,7 +138,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The desktop shell uses a persistent index grouped into Work, Configure and System.
 - Work contains Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
 - The brand mark and the first index link go to `/projects`.
-- Providers uses `/connect` with full-page native navigation.
+- Providers uses `/connect` in the app shell after the first provider connects.
+- Before the first provider connects, `/connect` uses the standalone setup introduction.
 - The mobile shell changes the index to a compact masthead and a primary row of Projects, Runs and More.
 - More contains Agents, Workflows, Environments, Providers and Settings.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
@@ -146,7 +147,9 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The project desk uses visible provider, model and thinking controls, a readiness route, a transcript sheet and an attached yellow composer.
 - The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.
 - The thinking control shows Not available when no adjustable effort exists.
-- Connect uses a dark setup introduction beside a pale provider file.
+- First-time connect uses a dark setup introduction beside a pale provider file.
+- Established provider management uses the standard app shell and marks Providers as active.
+- Provider setup presents plan login and API key as separate connection methods.
 - Connect setup labels are Connect a model, Add a project and Send a task.
 - Forms use bordered field groups and dense controls without decorative cards.
 
@@ -172,7 +175,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Use sky blue for slim file register strips and information.
 - Keep Projects as the first index link and the brand destination.
 - Put Settings in the System group of the product index.
-- Keep `/connect` as full-page native navigation.
+- Keep first-time `/connect` navigation as a standalone page.
+- Use app-shell navigation for `/connect` when a provider already exists.
 - Keep Theme as the first item on the Settings page.
 - Put the local data reset in a separate danger section on Settings.
 - Do not take a deletion path from the browser.

@@ -46,14 +46,14 @@ pub(crate) fn request_navigation(
 
 enum FullDocument {
     Connect,
-    Chat,
+    App,
 }
 
 impl FullDocument {
     fn operation(&self) -> &'static str {
         match self {
             Self::Connect => "render connect page",
-            Self::Chat => "render chat page",
+            Self::App => "render app page",
         }
     }
 }
@@ -80,7 +80,7 @@ where
                 theme: state.preferences.theme().as_str(),
                 content: &content_html,
             })?,
-            FullDocument::Chat => nonce.render(&ChatPage {
+            FullDocument::App => nonce.render(&AppPage {
                 title,
                 css_path: &state.assets.css_path,
                 js_path: &state.assets.js_path,
@@ -97,11 +97,17 @@ pub(crate) fn connect_page_response<T>(
     title: &str,
     state: &AppState,
     content: &T,
+    use_app_shell: bool,
 ) -> AppResult<Response>
 where
     T: Template,
 {
-    render_page(StatusCode::OK, title, state, FullDocument::Connect, content)
+    let document = if use_app_shell {
+        FullDocument::App
+    } else {
+        FullDocument::Connect
+    };
+    render_page(StatusCode::OK, title, state, document, content)
 }
 
 pub(crate) fn chat_page_response<T>(
@@ -112,7 +118,7 @@ pub(crate) fn chat_page_response<T>(
 where
     T: Template,
 {
-    render_page(StatusCode::OK, title, state, FullDocument::Chat, content)
+    render_page(StatusCode::OK, title, state, FullDocument::App, content)
 }
 
 pub(crate) fn internal_error_response() -> Response {
@@ -152,7 +158,7 @@ struct ConnectPage<'a> {
 
 #[derive(Template)]
 #[template(path = "layout/chat.html")]
-struct ChatPage<'a> {
+struct AppPage<'a> {
     title: &'a str,
     css_path: &'a str,
     js_path: &'a str,

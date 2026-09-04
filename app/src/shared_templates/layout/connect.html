@@ -1,6 +1,7 @@
 {% extends "layout/base.html" %}
 {% let csp_nonce = "nonce"|crate::template_filters::csp_nonce -%}
 {% block body %}
+  <a class="skip-link" href="#connect-main">Skip to main content</a>
   <div class="connect-frame">
     <aside class="connect-index">
       <a href="/connect" data-graft class="app-brand">
@@ -17,7 +18,7 @@
         </span>
       </a>
       <div class="connect-intro">
-        <h1>Bring your model connection.</h1>
+        <h1>BYO provider.</h1>
         <p>
           Power Plant keeps the provider connection on this machine. The agent
           works inside an isolated sandbox.
@@ -35,7 +36,7 @@
         <span class="font-mono">FILE PP–CONNECT</span>
         <span class="app-local-badge">Stored on this machine</span>
       </header>
-      <main id="connect-main" tabindex="-1">{{ content|safe }}</main>
+      <div id="connect-main" tabindex="-1">{{ content|safe }}</div>
     </div>
   </div>
 {% endblock %}
