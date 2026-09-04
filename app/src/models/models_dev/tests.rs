@@ -1,0 +1,83 @@
+use super::*;
+
+fn effort_values(catalogue: &ModelsDevCatalogue, auth: AuthMethod, model: &str) -> Vec<String> {
+    catalogue
+        .efforts(ProviderKind::OpenaiCodex, auth, model)
+        .into_iter()
+        .map(|value| value.as_str().to_owned())
+        .collect()
+}
+
+fn snapshot_is_rejected(snapshot: &Snapshot) -> bool {
+    let bytes = serde_json::to_vec(snapshot).expect("snapshot");
+    parse_snapshot(&bytes).is_err()
+}
+
+#[test]
+fn bundled_snapshot_has_required_dynamic_efforts() {
+    let catalogue = ModelsDevCatalogue::bundled();
+    assert_eq!(
+        effort_values(&catalogue, AuthMethod::ApiKey, "gpt-5.6-sol"),
+        ["none", "low", "medium", "high", "xhigh", "max"]
+    );
+}
+
+#[test]
+fn capability_lookup_only_remaps_retired_plan_models() {
+    let catalogue = ModelsDevCatalogue::bundled();
+
+    assert_eq!(
+        effort_values(&catalogue, AuthMethod::ApiKey, "gpt-5.2"),
+        ["none", "low", "medium", "high", "xhigh"]
+    );
+    assert_eq!(
+        effort_values(&catalogue, AuthMethod::Plan, "gpt-5.2"),
+        ["none", "low", "medium", "high", "xhigh", "max"]
+    );
+}
+
+#[test]
+fn snapshot_rejects_duplicate_provider_identifiers() {
+    let mut snapshot = parse_snapshot(BUNDLED).expect("bundled snapshot");
+    snapshot.providers.push(snapshot.providers[0].clone());
+
+    assert!(snapshot_is_rejected(&snapshot));
+}
+
+#[test]
+fn snapshot_rejects_duplicate_model_identifiers() {
+    let mut snapshot = parse_snapshot(BUNDLED).expect("bundled snapshot");
+    let duplicate = snapshot.providers[0].models[0].clone();
+    snapshot.providers[0].models.push(duplicate);
+
+    assert!(snapshot_is_rejected(&snapshot));
+}
+
+#[test]
+fn snapshot_rejects_duplicate_effort_values() {
+    let mut snapshot = parse_snapshot(BUNDLED).expect("bundled snapshot");
+    let model = snapshot.providers[0]
+        .models
+        .iter_mut()
+        .find(|model| !model.efforts.is_empty())
+        .expect("model with efforts");
+    model.efforts.push(model.efforts[0].clone());
+
+    assert!(snapshot_is_rejected(&snapshot));
+}
+
+#[test]
+fn snapshot_requires_each_provider() {
+    let mut snapshot = parse_snapshot(BUNDLED).expect("bundled snapshot");
+    snapshot
+        .providers
+        .retain(|provider| provider.id != ProviderKind::Xai.as_str());
+
+    assert!(snapshot_is_rejected(&snapshot));
+}
+
+#[test]
+fn future_attempt_does_not_suppress_refresh() {
+    assert!(!timestamp_is_recent(101, 100));
+    assert!(timestamp_is_recent(100, 100));
+}

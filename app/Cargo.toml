@@ -20,8 +20,9 @@ futures-util = "0.3.34"
 hypergraft = { path = "../../hypergraft" }
 microsandbox = "0.6.15"
 pulldown-cmark = "0.13.4"
+quick-xml = "0.39.2"
 rand = { version = "0.10.2", default-features = false, features = ["sys_rng"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["gzip", "rustls"] }
 rfd = "0.17.2"
 rig-core = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }

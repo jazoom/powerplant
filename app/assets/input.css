@@ -1250,6 +1250,36 @@
         border-top: 1px solid var(--powerplant-strong-rule);
     }
 
+    .provider-logo {
+        display: block;
+        width: 1.5rem;
+        height: 1.5rem;
+        flex: none;
+        background: var(--powerplant-ink);
+        mask: var(--provider-logo) center / contain no-repeat;
+        -webkit-mask: var(--provider-logo) center / contain no-repeat;
+    }
+
+    .provider-logo-deepseek {
+        --provider-logo: url("../public/images/providers/deepseek.svg");
+    }
+
+    .provider-logo-openai-codex {
+        --provider-logo: url("../public/images/providers/openai-codex.svg");
+    }
+
+    .provider-logo-openrouter {
+        --provider-logo: url("../public/images/providers/openrouter.svg");
+    }
+
+    .provider-logo-synthetic {
+        --provider-logo: url("../public/images/providers/synthetic.svg");
+    }
+
+    .provider-logo-xai {
+        --provider-logo: url("../public/images/providers/xai.svg");
+    }
+
     @keyframes file-settle {
         from {
             clip-path: inset(0 0 1.5% 0);
@@ -1550,6 +1580,10 @@
 @media (forced-colors: active) {
     :where(a, button, input, select, textarea, summary):focus-visible {
         outline-color: Highlight;
+    }
+
+    .provider-logo {
+        background: CanvasText;
     }
 }
 

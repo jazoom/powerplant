@@ -109,58 +109,36 @@ impl ProviderKind {
             Self::Synthetic | Self::Openrouter | Self::Deepseek => None,
         }
     }
-
-    pub(crate) fn thinking_levels(self) -> &'static [ThinkingLevel] {
-        const LEVELS: &[ThinkingLevel] = &[
-            ThinkingLevel::Default,
-            ThinkingLevel::Low,
-            ThinkingLevel::Medium,
-            ThinkingLevel::High,
-        ];
-        const DEEPSEEK_LEVELS: &[ThinkingLevel] = &[ThinkingLevel::Default, ThinkingLevel::High];
-        match self {
-            Self::Deepseek => DEEPSEEK_LEVELS,
-            Self::Xai | Self::OpenaiCodex | Self::Synthetic | Self::Openrouter => LEVELS,
-        }
-    }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ThinkingLevel {
-    #[default]
-    Default,
-    Low,
-    Medium,
-    High,
-}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ThinkingEffort(String);
 
-impl ThinkingLevel {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "default" => Some(Self::Default),
-            "low" => Some(Self::Low),
-            "medium" => Some(Self::Medium),
-            "high" => Some(Self::High),
-            _ => None,
+impl ThinkingEffort {
+    pub(crate) fn new(value: String) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty()
+            || value.len() > 32
+            || value.chars().any(char::is_control)
+            || value == "default"
+        {
+            return None;
         }
+        Some(Self(value.to_owned()))
     }
 
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
     }
 
-    pub(crate) fn label(self, kind: ProviderKind) -> &'static str {
-        match (kind, self) {
-            (_, Self::Default) => "Provider default",
-            (ProviderKind::Deepseek, Self::High) => "On",
-            (_, Self::Low) => "Low",
-            (_, Self::Medium) => "Medium",
-            (_, Self::High) => "High",
+    pub(crate) fn label(&self) -> String {
+        if self.0 == "none" {
+            return "Off".to_owned();
+        }
+        let mut characters = self.0.chars();
+        match characters.next() {
+            Some(first) => first.to_uppercase().chain(characters).collect(),
+            None => String::new(),
         }
     }
 }
@@ -256,7 +234,7 @@ pub(crate) struct ProviderConnection {
     pub(crate) auth: AuthMethod,
     pub(crate) api_key: SecretString,
     pub(crate) model: String,
-    pub(crate) thinking: ThinkingLevel,
+    pub(crate) thinking: Option<ThinkingEffort>,
     pub(crate) plan_file: Option<std::path::PathBuf>,
 }
 
@@ -271,7 +249,7 @@ impl ProviderConnection {
             auth: AuthMethod::ApiKey,
             api_key: SecretString::new(key.into()),
             model: model.into(),
-            thinking: ThinkingLevel::Default,
+            thinking: None,
             plan_file: None,
         }
     }
@@ -286,7 +264,7 @@ impl ProviderConnection {
             auth: AuthMethod::Plan,
             api_key: SecretString::new(String::new()),
             model: model.into(),
-            thinking: ThinkingLevel::Default,
+            thinking: None,
             plan_file,
         }
     }

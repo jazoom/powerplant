@@ -73,6 +73,7 @@ run = [
   "taplo format --check",
   "pnpm tsgo --noEmit --incremental --tsBuildInfoFile .cache/tsgo.tsbuildinfo --project app/tsconfig.json",
   "cargo clippy --all-targets --all-features -- --deny warnings",
+  "mise run catalogue:check",
 ]
 
 [tasks.test]
@@ -89,6 +90,14 @@ run = [
   "mise run format",
   "mise run check",
 ]
+
+[tasks."catalogue:update"]
+description = "Update the models.dev catalogue and provider logos"
+run = "cargo run -p powerplant --bin catalogue -- update"
+
+[tasks."catalogue:check"]
+description = "Validate the checked-in models.dev catalogue and provider logos"
+run = "cargo run -p powerplant --bin catalogue -- check"
 
 [tasks."assets:build"]
 description = "Build front-end assets"

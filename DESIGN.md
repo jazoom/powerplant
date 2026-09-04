@@ -131,7 +131,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 
 - The product offers five colour themes. Springfield is the default.
 - The theme changes immediately and persists in local filesystem storage.
-- Settings has a separate local data reset after Theme.
+- Settings puts Theme first and the model catalogue refresh second.
+- Settings has a separate local data reset after the model catalogue refresh.
 - Reset requires an explicit confirmation and records a restart-applied deletion.
 - Project source directories outside the Power Plant data directory remain unchanged.
 - The desktop shell uses a persistent index grouped into Work, Configure and System.
@@ -143,6 +144,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
 - The project desk uses visible provider, model and thinking controls, a readiness route, a transcript sheet and an attached yellow composer.
+- The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.
+- The thinking control shows Not available when no adjustable effort exists.
 - Connect uses a dark setup introduction beside a pale provider file.
 - Connect setup labels are Connect a model, Add a project and Send a task.
 - Forms use bordered field groups and dense controls without decorative cards.

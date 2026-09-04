@@ -33,6 +33,7 @@ const LEGACY_ENTRIES: &[&str] = &[
     "workflow-commit-journals",
     "providers.json",
     "preferences.json",
+    "models-dev-catalogue.json",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

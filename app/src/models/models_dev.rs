@@ -1,0 +1,290 @@
+mod catalogue;
+
+use std::{
+    fs,
+    path::PathBuf,
+    sync::RwLock,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use crate::providers::{AuthMethod, ProviderKind, ThinkingEffort};
+use catalogue::{
+    MAXIMUM_CACHE_BYTES, MAXIMUM_SOURCE_BYTES, SOURCE_URL, Snapshot, USER_AGENT, bounded_body,
+    content_type_is, filter_source, model_count, parse_snapshot,
+};
+
+pub use catalogue::run_catalogue_utility;
+const REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const BUNDLED: &[u8] = include_bytes!("../../catalogue/models-dev-v1.json");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefreshResult {
+    Updated,
+    Unchanged,
+    Failed,
+    Skipped,
+}
+
+pub(crate) struct ModelsDevCatalogue {
+    path: Option<PathBuf>,
+    active: RwLock<Snapshot>,
+    refresh: tokio::sync::Mutex<()>,
+    client: reqwest::Client,
+}
+
+impl ModelsDevCatalogue {
+    pub(crate) fn open(path: PathBuf) -> Result<Self, String> {
+        let bundled = parse_snapshot(BUNDLED)
+            .map_err(|_| "The bundled model catalogue is invalid.".to_owned())?;
+        tracing::info!(
+            source = "bundled",
+            model_count = model_count(&bundled),
+            "model capability catalogue loaded"
+        );
+        let active = match crate::storage::read_private_bounded(&path, MAXIMUM_CACHE_BYTES) {
+            Ok(bytes) => match parse_snapshot(&bytes) {
+                Ok(snapshot) => {
+                    tracing::info!(
+                        source = "local",
+                        model_count = model_count(&snapshot),
+                        "model capability catalogue loaded"
+                    );
+                    snapshot
+                }
+                Err(()) => {
+                    tracing::warn!(
+                        source = "local",
+                        "corrupt model capability catalogue ignored"
+                    );
+                    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+                        let _ = crate::storage::remove_private(&path);
+                    }
+                    bundled
+                }
+            },
+            Err(_) => {
+                if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+                    tracing::warn!(
+                        source = "local",
+                        "unreadable model capability catalogue ignored"
+                    );
+                    let _ = crate::storage::remove_private(&path);
+                }
+                bundled
+            }
+        };
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .user_agent(USER_AGENT)
+            .build()
+            .map_err(|_| "The model catalogue client is unavailable.".to_owned())?;
+        Ok(Self {
+            path: Some(path),
+            active: RwLock::new(active),
+            refresh: tokio::sync::Mutex::new(()),
+            client,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bundled() -> Self {
+        let active = parse_snapshot(BUNDLED).expect("bundled catalogue");
+        Self {
+            path: None,
+            active: RwLock::new(active),
+            refresh: tokio::sync::Mutex::new(()),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    pub(crate) fn efforts(
+        &self,
+        kind: ProviderKind,
+        auth: AuthMethod,
+        model: &str,
+    ) -> Vec<ThinkingEffort> {
+        let resolved;
+        let model = match auth {
+            AuthMethod::ApiKey => model,
+            AuthMethod::Plan => {
+                resolved = crate::providers::effective_plan_model(kind, model);
+                &resolved
+            }
+        };
+        let active = self.read();
+        active
+            .providers
+            .iter()
+            .find(|provider| provider.id == kind.as_str())
+            .and_then(|provider| provider.models.iter().find(|entry| entry.id == model))
+            .map(|entry| {
+                entry
+                    .efforts
+                    .iter()
+                    .filter_map(|value| ThinkingEffort::new(value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn effective_effort(
+        &self,
+        kind: ProviderKind,
+        auth: AuthMethod,
+        model: &str,
+        saved: Option<&ThinkingEffort>,
+    ) -> Option<ThinkingEffort> {
+        let efforts = self.efforts(kind, auth, model);
+        if let Some(saved) = saved
+            && efforts.contains(saved)
+        {
+            return Some(saved.clone());
+        }
+        for preferred in ["medium", "high"] {
+            if let Some(value) = efforts.iter().find(|value| value.as_str() == preferred) {
+                return Some(value.clone());
+            }
+        }
+        efforts.into_iter().next()
+    }
+
+    pub(crate) fn supports(
+        &self,
+        kind: ProviderKind,
+        auth: AuthMethod,
+        model: &str,
+        effort: &ThinkingEffort,
+    ) -> bool {
+        self.efforts(kind, auth, model).contains(effort)
+    }
+
+    pub(crate) async fn refresh_if_due(&self) -> bool {
+        self.refresh(false).await == RefreshResult::Updated
+    }
+
+    pub(crate) async fn refresh_now(&self) -> RefreshResult {
+        self.refresh(true).await
+    }
+
+    async fn refresh(&self, force: bool) -> RefreshResult {
+        let _guard = self.refresh.lock().await;
+        let now = unix_seconds();
+        let previous = self.read().clone();
+        if !force && timestamp_is_recent(previous.last_attempt_at_unix_seconds, now) {
+            tracing::debug!(source = "local", "model capability refresh skipped");
+            return RefreshResult::Skipped;
+        }
+        tracing::info!(source = "network", "model capability refresh started");
+        let mut request = self
+            .client
+            .get(SOURCE_URL)
+            .header(reqwest::header::ACCEPT, "application/json");
+        if !force && !previous.source.etag.is_empty() {
+            request = request.header(reqwest::header::IF_NONE_MATCH, &previous.source.etag);
+        }
+        let mut attempted = previous.clone();
+        attempted.last_attempt_at_unix_seconds = now;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(_) => {
+                self.persist_attempt(attempted);
+                tracing::warn!(source = "network", "model capability transport failed");
+                return RefreshResult::Failed;
+            }
+        };
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            attempted.checked_at_unix_seconds = now;
+            self.replace(attempted, false);
+            tracing::info!(source = "network", "model capability catalogue unchanged");
+            return RefreshResult::Unchanged;
+        }
+        if response.status() != reqwest::StatusCode::OK
+            || !content_type_is(&response, "application/json")
+        {
+            self.persist_attempt(attempted);
+            tracing::warn!(
+                status = response.status().as_u16(),
+                "model capability HTTP response rejected"
+            );
+            return RefreshResult::Failed;
+        }
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
+        let Some(body) = bounded_body(response, MAXIMUM_SOURCE_BYTES).await else {
+            self.persist_attempt(attempted);
+            tracing::warn!("model capability response size rejected");
+            return RefreshResult::Failed;
+        };
+        let Ok(mut next) = filter_source(&body, &etag, now) else {
+            self.persist_attempt(attempted);
+            tracing::warn!("model capability schema rejected");
+            return RefreshResult::Failed;
+        };
+        next.last_attempt_at_unix_seconds = now;
+        let changed = capabilities_differ(&previous, &next);
+        self.replace(next, changed);
+        if changed {
+            RefreshResult::Updated
+        } else {
+            RefreshResult::Unchanged
+        }
+    }
+
+    fn persist_attempt(&self, snapshot: Snapshot) {
+        self.replace(snapshot, false);
+    }
+    fn replace(&self, snapshot: Snapshot, changed: bool) {
+        if let Some(path) = self.path.as_deref()
+            && let Ok(bytes) = serde_json::to_vec_pretty(&snapshot)
+            && bytes.len() <= MAXIMUM_CACHE_BYTES
+            && crate::storage::write_private(path, &bytes).is_err()
+        {
+            tracing::warn!("model capability cache persistence failed");
+        }
+        *self.write() = snapshot;
+        if changed {
+            tracing::info!("model capability catalogue changed");
+        }
+    }
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Snapshot> {
+        self.active
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Snapshot> {
+        self.active
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+pub(crate) async fn refresh_worker(state: crate::state::AppState) {
+    loop {
+        if state.models_dev.refresh_if_due().await {
+            state.models.metadata_changed();
+        }
+        tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+    }
+}
+
+fn capabilities_differ(left: &Snapshot, right: &Snapshot) -> bool {
+    serde_json::to_value(&left.providers).ok() != serde_json::to_value(&right.providers).ok()
+}
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+fn timestamp_is_recent(timestamp: u64, now: u64) -> bool {
+    timestamp <= now && now - timestamp < REFRESH_INTERVAL.as_secs()
+}
+
+#[cfg(test)]
+mod tests;

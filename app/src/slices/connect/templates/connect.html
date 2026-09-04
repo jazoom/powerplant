@@ -54,9 +54,15 @@
         <ul class="record-list">
           {% for provider in stored %}
             <li class="record-row">
-              <span class="min-w-0">
-                <span class="block font-medium">{{ provider.label }}</span>
-                <span class="text-quiet text-sm">{{ provider.method }}</span>
+              <span class="flex min-w-0 items-center gap-3">
+                <span
+                  class="provider-logo provider-logo-{{ provider.value }}"
+                  aria-hidden="true"
+                ></span>
+                <span>
+                  <span class="block font-medium">{{ provider.label }}</span>
+                  <span class="text-quiet text-sm">{{ provider.method }}</span>
+                </span>
               </span>
               <form data-graft method="post" action="/connect/forget">
                 <input
@@ -157,6 +163,10 @@
                 {% if provider.selected %}checked{% endif %}
                 required
               />
+              <span
+                class="provider-logo provider-logo-{{ provider.value }}"
+                aria-hidden="true"
+              ></span>
               <span>{{ provider.label }}</span>
             </label>
           {% endfor %}

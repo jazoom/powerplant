@@ -15,6 +15,7 @@ use serde::Deserialize;
 use crate::{
     error::AppResult,
     local_data::{ResetError, ResetRequest},
+    models::models_dev::RefreshResult,
     preferences::Theme,
     responses,
     sessions::RequiredSession,
@@ -23,13 +24,18 @@ use crate::{
 
 use self::page::{
     CONFIRMATION_ABSENT, CONFIRMATION_DUPLICATED, CONFIRMATION_MALFORMED, LocalDataSection,
-    RECORD_FAILED, ResetStatusPage, SettingsPage, ThemeSetting, WORKFLOW_BUSY,
+    ModelCatalogueSetting, RECORD_FAILED, ResetStatusPage, SettingsPage, ThemeSetting,
+    WORKFLOW_BUSY,
 };
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/settings", get(show))
         .route("/settings/theme", post(update_theme))
+        .route(
+            "/settings/model-catalogue/refresh",
+            post(refresh_model_catalogue),
+        )
         .route("/settings/local-data/reset", post(reset_local_data))
 }
 
@@ -86,6 +92,34 @@ async fn update_theme(
         );
     }
     theme_patch(PatchStatus::Ok, &state, None)
+}
+
+async fn refresh_model_catalogue(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    _graft: PatchGraft,
+) -> AppResult<Response> {
+    let (status, message, error) = match state.models_dev.refresh_now().await {
+        RefreshResult::Updated => {
+            state.models.metadata_changed();
+            (PatchStatus::Ok, Some("Model catalogue updated."), None)
+        }
+        RefreshResult::Unchanged | RefreshResult::Skipped => (
+            PatchStatus::Ok,
+            Some("Model catalogue is up to date."),
+            None,
+        ),
+        RefreshResult::Failed => (
+            PatchStatus::UnprocessableEntity,
+            None,
+            Some("Power Plant could not refresh the model catalogue. Try again."),
+        ),
+    };
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "model-catalogue-setting",
+        &ModelCatalogueSetting::result(message, error),
+    )?)
 }
 
 async fn reset_local_data(

@@ -1,3 +1,5 @@
+pub(crate) mod models_dev;
+
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
@@ -75,6 +77,10 @@ impl ModelCatalogue {
                 entry.models = models;
             }
         }
+        self.invalidate();
+    }
+
+    pub(crate) fn metadata_changed(&self) {
         self.invalidate();
     }
 

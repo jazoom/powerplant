@@ -1134,7 +1134,9 @@ async fn the_desk_updates_the_thinking_level() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     assert_eq!(
         state.vault.selected_connection().map(|item| item.thinking),
-        Some(crate::providers::ThinkingLevel::High)
+        Some(Some(
+            crate::providers::ThinkingEffort::new("high".to_owned()).unwrap()
+        ))
     );
 }
 
@@ -1215,10 +1217,14 @@ async fn the_model_live_projection_sends_current_truth_after_an_invalidation() {
         .await
         .expect("live model projection");
 
-    assert_eq!(projection.first_patch().targets.len(), 1);
+    assert_eq!(projection.first_patch().targets.len(), 2);
     assert_eq!(
         projection.first_patch().targets[0].target,
         "desk-model-catalogue"
+    );
+    assert_eq!(
+        projection.first_patch().targets[1].target,
+        "desk-thinking-control"
     );
 
     state
@@ -1229,6 +1235,7 @@ async fn the_model_live_projection_sends_current_truth_after_an_invalidation() {
         .expect("live patch timeout")
         .expect("live patch");
     assert_eq!(patch.targets[0].target, "desk-model-catalogue");
+    assert_eq!(patch.targets[1].target, "desk-thinking-control");
     assert!(patch.targets[0].html.contains("grok-live"));
 }
 
@@ -1362,11 +1369,7 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
         .unwrap();
     state
         .vault
-        .select_settings(
-            ProviderKind::Xai,
-            "grok-4.6".to_owned(),
-            crate::providers::ThinkingLevel::Default,
-        )
+        .select_settings(ProviderKind::Xai, "grok-4.6".to_owned(), None)
         .unwrap();
 
     let response = app(&state)
@@ -1382,6 +1385,70 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
     let selected = state.vault.selected_connection().unwrap();
     assert_eq!(selected.kind, ProviderKind::OpenaiCodex);
     assert_eq!(selected.model, "gpt-5.1-codex");
+}
+
+#[tokio::test]
+async fn provider_changes_preserve_each_providers_saved_thinking_effort() {
+    let state = test_state();
+    let token = connected(&state).await;
+    state
+        .vault
+        .put(ProviderConnection::with_key(
+            ProviderKind::OpenaiCodex,
+            "test-openai-key",
+            "gpt-5.2",
+        ))
+        .unwrap();
+    state
+        .vault
+        .select_settings(
+            ProviderKind::OpenaiCodex,
+            "gpt-5.2".to_owned(),
+            crate::providers::ThinkingEffort::new("low".to_owned()),
+        )
+        .unwrap();
+    state
+        .vault
+        .select_settings(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            crate::providers::ThinkingEffort::new("high".to_owned()),
+        )
+        .unwrap();
+
+    let openai = app(&state)
+        .oneshot(model_update_patch(
+            &state,
+            &token,
+            "provider=openai-codex&model=grok-4.6",
+        ))
+        .await
+        .expect("openai provider change");
+    assert_eq!(openai.status(), axum::http::StatusCode::OK);
+    let selected = state.vault.selected_connection().expect("openai selected");
+    assert_eq!(selected.kind, ProviderKind::OpenaiCodex);
+    assert_eq!(selected.model, "gpt-5.2");
+    assert_eq!(
+        selected.thinking.as_ref().map(|value| value.as_str()),
+        Some("low")
+    );
+
+    let xai = app(&state)
+        .oneshot(model_update_patch(
+            &state,
+            &token,
+            "provider=xai&model=gpt-5.2",
+        ))
+        .await
+        .expect("xai provider change");
+    assert_eq!(xai.status(), axum::http::StatusCode::OK);
+    let selected = state.vault.selected_connection().expect("xai selected");
+    assert_eq!(selected.kind, ProviderKind::Xai);
+    assert_eq!(selected.model, "grok-4.6");
+    assert_eq!(
+        selected.thinking.as_ref().map(|value| value.as_str()),
+        Some("high")
+    );
 }
 
 #[tokio::test]

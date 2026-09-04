@@ -36,7 +36,7 @@ The user starts the Power Plant process on their machine. The default origin is 
 
 They open that origin in a browser. They add a key or a plan login for a provider that is not stored. Power Plant can store one credential for each provider at the same time. The connect page offers only providers that are not stored.
 
-They choose the provider, model and thinking level on the project desk. They can keep the provider defaults.
+They choose the provider, model and model-specific thinking effort on the project desk.
 
 Projects are the first product object. Each project has a name and one immutable host path. The path must be a supported Git worktree. Users can create projects and rename them. They cannot edit paths or delete project records.
 
@@ -91,7 +91,9 @@ Current capabilities:
 - Accept an API key for xAI, OpenAI Codex, Synthetic, OpenRouter or DeepSeek.
 - Sign in with a ChatGPT plan or a SuperGrok plan from the connect page.
 - Store more than one provider on the local machine.
-- Choose the provider, model and thinking level on the project desk.
+- Choose the provider, model and model-specific thinking effort on the project desk.
+- Use bundled models.dev metadata when a model advertises adjustable thinking effort.
+- Refresh the models.dev capability catalogue manually from Settings.
 - Create projects in the local catalogue.
 - Rename projects.
 - Open a project desk with an eligible agent.

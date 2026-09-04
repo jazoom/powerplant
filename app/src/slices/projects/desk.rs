@@ -89,9 +89,15 @@ pub(super) async fn send(
         Ok(value) => value,
         Err(response) => return Ok(response),
     };
-    let Some(connection) = state.vault.selected_connection() else {
+    let Some(mut connection) = state.vault.selected_connection() else {
         return Ok(responses::request_navigation(graft, "/connect"));
     };
+    connection.thinking = state.models_dev.effective_effort(
+        connection.kind,
+        connection.auth,
+        &connection.model,
+        connection.thinking.as_ref(),
+    );
 
     if !form.is_bounded() {
         return reject_chat_input(

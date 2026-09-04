@@ -4,9 +4,9 @@ use crate::{
     agents::AgentRecord,
     environments::{EnvironmentRecord, PreparationRecord, PreparationState, SnapshotAvailability},
     markdown,
-    models::ModelCatalogue,
+    models::{ModelCatalogue, models_dev::ModelsDevCatalogue},
     projects::ProjectRecord,
-    providers::{ChatTurn, ProviderKind, Role, ThinkingLevel},
+    providers::{ChatTurn, ProviderKind, Role, ThinkingEffort},
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
@@ -23,18 +23,20 @@ pub(crate) struct DeskProviderOption {
     pub(crate) value: &'static str,
     pub(crate) label: &'static str,
     pub(crate) model: String,
-    pub(crate) thinking: &'static str,
+    pub(crate) thinking: String,
+    pub(crate) efforts_json: String,
     pub(crate) selected: bool,
 }
 
 pub(crate) struct ThinkingOption {
-    pub(crate) value: &'static str,
-    pub(crate) label: &'static str,
+    pub(crate) value: String,
+    pub(crate) label: String,
     pub(crate) selected: bool,
 }
 
 pub(crate) struct ModelOption {
     pub(crate) id: String,
+    pub(crate) efforts_json: String,
     pub(crate) selected: bool,
 }
 
@@ -189,6 +191,7 @@ impl ChatViewModel {
         session: &SessionSnapshot,
         vault: &ProviderVault,
         catalogue: &ModelCatalogue,
+        models_dev: &ModelsDevCatalogue,
         error: &'static str,
         desk_error: &'static str,
     ) -> Self {
@@ -196,6 +199,7 @@ impl ChatViewModel {
             record,
             &vault.desk_providers(),
             catalogue,
+            models_dev,
             &session.turns,
             session.job.as_ref(),
             session.session_busy,
@@ -209,6 +213,7 @@ impl ChatViewModel {
         record: &AgentRecord,
         providers: &[DeskProvider],
         catalogue: &ModelCatalogue,
+        models_dev: &ModelsDevCatalogue,
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
         session_busy: bool,
@@ -251,13 +256,32 @@ impl ChatViewModel {
         let model = selected
             .map(|provider| provider.model.clone())
             .unwrap_or_default();
+        let effective_thinking = selected.and_then(|provider| {
+            models_dev.effective_effort(
+                provider.kind,
+                provider.auth,
+                &provider.model,
+                provider.thinking.as_ref(),
+            )
+        });
         let thinking_options = selected
-            .map(|provider| thinking_options(provider.kind, provider.thinking))
+            .map(|provider| {
+                thinking_options(
+                    models_dev,
+                    provider.kind,
+                    provider.auth,
+                    &provider.model,
+                    effective_thinking.as_ref(),
+                )
+            })
             .unwrap_or_default();
         let (favourite_models, catalogue_models) = selected
             .map(|provider| {
                 model_options(
+                    provider.kind,
+                    models_dev,
                     &provider.model,
+                    provider.auth,
                     &provider.favourites,
                     &catalogue.list(provider.kind),
                 )
@@ -271,7 +295,21 @@ impl ChatViewModel {
                     value: provider.kind.as_str(),
                     label: provider.kind.label(),
                     model: provider.model.clone(),
-                    thinking: provider.thinking.as_str(),
+                    thinking: models_dev
+                        .effective_effort(
+                            provider.kind,
+                            provider.auth,
+                            &provider.model,
+                            provider.thinking.as_ref(),
+                        )
+                        .map(|value| value.as_str().to_owned())
+                        .unwrap_or_default(),
+                    efforts_json: efforts_json(
+                        models_dev,
+                        provider.kind,
+                        provider.auth,
+                        &provider.model,
+                    ),
                     selected: provider.selected,
                 })
                 .collect(),
@@ -359,6 +397,13 @@ impl ChatViewModel {
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
             catalogue_pending: self.catalogue_pending,
+        }
+    }
+
+    pub(crate) fn thinking_control(&self) -> ThinkingControlContents<'_> {
+        ThinkingControlContents {
+            thinking_options: &self.thinking_options,
+            job_active: self.session_busy,
         }
     }
 
@@ -451,6 +496,13 @@ pub(crate) struct DeskModelCatalogueContents<'a> {
     pub(crate) favourite_models: &'a [ModelOption],
     pub(crate) catalogue_models: &'a [ModelOption],
     pub(crate) catalogue_pending: bool,
+}
+
+#[derive(Template)]
+#[template(path = "projects/templates/desk.html", block = "thinking_control")]
+pub(crate) struct ThinkingControlContents<'a> {
+    pub(crate) thinking_options: &'a [ThinkingOption],
+    pub(crate) job_active: bool,
 }
 
 #[derive(Template)]
@@ -575,19 +627,43 @@ pub(crate) struct TurnBody<'a> {
     pub(crate) turn: &'a TurnView,
 }
 
-fn thinking_options(kind: ProviderKind, current: ThinkingLevel) -> Vec<ThinkingOption> {
-    kind.thinking_levels()
-        .iter()
-        .map(|level| ThinkingOption {
-            value: level.as_str(),
-            label: level.label(kind),
-            selected: *level == current,
+fn thinking_options(
+    catalogue: &ModelsDevCatalogue,
+    kind: ProviderKind,
+    auth: crate::providers::AuthMethod,
+    model: &str,
+    current: Option<&ThinkingEffort>,
+) -> Vec<ThinkingOption> {
+    catalogue
+        .efforts(kind, auth, model)
+        .into_iter()
+        .map(|effort| ThinkingOption {
+            value: effort.as_str().to_owned(),
+            label: effort.label(),
+            selected: current == Some(&effort),
         })
         .collect()
 }
 
+fn efforts_json(
+    catalogue: &ModelsDevCatalogue,
+    kind: ProviderKind,
+    auth: crate::providers::AuthMethod,
+    model: &str,
+) -> String {
+    let values: Vec<_> = catalogue
+        .efforts(kind, auth, model)
+        .into_iter()
+        .map(|value| value.as_str().to_owned())
+        .collect();
+    serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_owned())
+}
+
 fn model_options(
+    kind: ProviderKind,
+    metadata: &ModelsDevCatalogue,
     current: &str,
+    auth: crate::providers::AuthMethod,
     favourites: &[String],
     listed: &[String],
 ) -> (Vec<ModelOption>, Vec<ModelOption>) {
@@ -596,6 +672,7 @@ fn model_options(
         .iter()
         .map(|id| ModelOption {
             id: id.clone(),
+            efforts_json: efforts_json(metadata, kind, auth, id),
             selected: id == current,
         })
         .collect();
@@ -604,6 +681,7 @@ fn model_options(
         .filter(|id| !favourites.contains(id))
         .map(|id| ModelOption {
             id: id.clone(),
+            efforts_json: efforts_json(metadata, kind, auth, id),
             selected: id == current,
         })
         .collect();
@@ -612,6 +690,7 @@ fn model_options(
             0,
             ModelOption {
                 id: current.to_owned(),
+                efforts_json: efforts_json(metadata, kind, auth, current),
                 selected: true,
             },
         );

@@ -41,6 +41,7 @@
                     value="{{ provider.value }}"
                     data-model="{{ provider.model }}"
                     data-thinking="{{ provider.thinking }}"
+                    data-thinking-efforts="{{ provider.efforts_json }}"
                     {% if provider.selected %}selected{% endif %}
                   >
                     {{ provider.label }}
@@ -131,6 +132,7 @@
                                   class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 items-center py-2 pl-3 text-left font-mono"
                                   type="button"
                                   data-model-value="{{ option.id }}"
+                                  data-thinking-efforts="{{ option.efforts_json }}"
                                   aria-pressed="{% if option.selected %}true{% else %}false{% endif %}"
                                 >
                                   <span class="truncate">{{ option.id }}</span>
@@ -181,6 +183,7 @@
                                   class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 items-center py-2 pl-3 text-left font-mono"
                                   type="button"
                                   data-model-value="{{ option.id }}"
+                                  data-thinking-efforts="{{ option.efforts_json }}"
                                   aria-pressed="{% if option.selected %}true{% else %}false{% endif %}"
                                 >
                                   <span class="truncate">{{ option.id }}</span>
@@ -218,28 +221,36 @@
                 </div>
               </div>
             </div>
-            <label
-              class="col-span-2 flex min-w-0 flex-col gap-1 sm:col-span-1"
-              for="desk-thinking"
+            <div
+              id="desk-thinking-control"
+              class="col-span-2 min-w-0 sm:col-span-1"
             >
-              <span>Thinking</span>
-              <select
-                id="desk-thinking"
-                class="select select-bordered select-sm w-full"
-                name="thinking"
-                data-thinking-select
-                {% if job_active %}disabled{% endif %}
-              >
-                {% for option in thinking_options %}
-                  <option
-                    value="{{ option.value }}"
-                    {% if option.selected %}selected{% endif %}
+              {% block thinking_control %}
+                <label class="flex min-w-0 flex-col gap-1" for="desk-thinking">
+                  <span>Thinking</span>
+                  <select
+                    id="desk-thinking"
+                    class="select select-bordered select-sm w-full"
+                    name="thinking"
+                    data-thinking-select
+                    {% if job_active || thinking_options.is_empty() %}disabled{% endif %}
                   >
-                    {{ option.label }}
-                  </option>
-                {% endfor %}
-              </select>
-            </label>
+                    {% if thinking_options.is_empty() %}
+                      <option value="" selected>Not available</option>
+                    {% else %}
+                      {% for option in thinking_options %}
+                        <option
+                          value="{{ option.value }}"
+                          {% if option.selected %}selected{% endif %}
+                        >
+                          {{ option.label }}
+                        </option>
+                      {% endfor %}
+                    {% endif %}
+                  </select>
+                </label>
+              {% endblock %}
+            </div>
           </form>
           <form
             id="desk-model-refresh"

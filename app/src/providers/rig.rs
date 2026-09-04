@@ -11,8 +11,8 @@ use rig_core::{
 use super::{
     AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, ModelEvent, ModelStream,
     OPENROUTER_BASE_URL, ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
-    ThinkingLevel, classify_failure_status_for, classify_verify_status, model_is_bounded,
-    with_json_detail, with_provider_detail, xai_plan,
+    classify_failure_status_for, classify_verify_status, model_is_bounded, with_json_detail,
+    with_provider_detail, xai_plan,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -287,14 +287,12 @@ pub(super) async fn stream_turn(
 }
 
 pub(super) fn thinking_parameters(connection: &ProviderConnection) -> Option<serde_json::Value> {
-    let effort = match connection.thinking {
-        ThinkingLevel::Default => return None,
-        ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High => "high",
-    };
+    let effort = connection.thinking.as_ref()?.as_str();
     Some(match (connection.kind, connection.auth) {
-        (ProviderKind::Deepseek, _) => serde_json::json!({"thinking": {"type": "enabled"}}),
+        (ProviderKind::Deepseek, _) => serde_json::json!({
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": effort,
+        }),
         (ProviderKind::Synthetic, _) | (ProviderKind::Xai, AuthMethod::Plan) => {
             serde_json::json!({"reasoning_effort": effort})
         }

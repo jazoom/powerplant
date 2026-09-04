@@ -118,6 +118,7 @@ async fn refresh_model_projection(
     let mut patches = PatchSet::new();
     patches
         .children("desk-model-catalogue", &view.desk_model_catalogue())
+        .and_then(|_| patches.children("desk-thinking-control", &view.thinking_control()))
         .map_err(|_| hypergraft::live::ProjectionError::Retire)?;
     Ok(patches)
 }
@@ -187,8 +188,51 @@ async fn update_model(
     }
 
     match form.validate(|kind| state.vault.contains(kind)) {
-        Ok((kind, model, thinking)) => {
+        Ok((kind, model, submitted_effort)) => {
             let model = submitted_model(&state, &form, kind, model);
+            let providers = state.vault.desk_providers();
+            let previous = providers.iter().find(|provider| provider.selected);
+            let Some(target) = providers.iter().find(|provider| provider.kind == kind) else {
+                let view = desk_view(&state, &desk).await;
+                return reject_model_view(&state, graft, view, "Choose a stored provider.").await;
+            };
+            let selection_changed =
+                previous.is_none_or(|provider| provider.kind != kind || provider.model != model);
+            let thinking = if selection_changed {
+                state.models_dev.effective_effort(
+                    kind,
+                    target.auth,
+                    &model,
+                    target.thinking.as_ref(),
+                )
+            } else {
+                match submitted_effort {
+                    Some(effort)
+                        if state
+                            .models_dev
+                            .supports(kind, target.auth, &model, &effort) =>
+                    {
+                        Some(effort)
+                    }
+                    None if state
+                        .models_dev
+                        .efforts(kind, target.auth, &model)
+                        .is_empty() =>
+                    {
+                        None
+                    }
+                    _ => {
+                        let view = desk_view(&state, &desk).await;
+                        return reject_model_view(
+                            &state,
+                            graft,
+                            view,
+                            "Choose an available thinking effort.",
+                        )
+                        .await;
+                    }
+                }
+            };
             state
                 .vault
                 .select_settings(kind, model, thinking)
@@ -204,7 +248,7 @@ async fn update_model(
         }
         Err(forms::ModelError::Thinking) => {
             let view = desk_view(&state, &desk).await;
-            return reject_model_view(&state, graft, view, "Choose a thinking level.").await;
+            return reject_model_view(&state, graft, view, "Choose a thinking effort.").await;
         }
     }
 
@@ -491,6 +535,7 @@ pub(crate) async fn view(
         page.snapshot,
         &state.vault,
         &state.models,
+        &state.models_dev,
         error,
         desk_error,
     )

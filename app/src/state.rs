@@ -8,7 +8,7 @@ use crate::{
         EnvironmentCatalogue, EnvironmentPreparationScheduler, EnvironmentSnapshotRepository,
     },
     local_data::LocalDataReset,
-    models::ModelCatalogue,
+    models::{ModelCatalogue, models_dev::ModelsDevCatalogue},
     plan_login::PlanLogin,
     preferences::Preferences,
     projects::{ProjectFolderPicker, ProjectStore},
@@ -31,6 +31,7 @@ pub(crate) struct AppState {
     pub(crate) vault: Arc<ProviderVault>,
     pub(crate) chat: Arc<ChatBackend>,
     pub(crate) models: Arc<ModelCatalogue>,
+    pub(crate) models_dev: Arc<ModelsDevCatalogue>,
     pub(crate) plan_login: Arc<PlanLogin>,
     pub(crate) preferences: Arc<Preferences>,
     pub(crate) agents: Arc<AgentStore>,
@@ -107,6 +108,7 @@ pub(crate) async fn build(
     let vault = ProviderVault::open(data_dir.join("providers.json"))
         .map_err(|_| "The provider vault is unreadable.".to_owned())?;
     let preferences = Preferences::open(data_dir.join("preferences.json"));
+    let models_dev = ModelsDevCatalogue::open(data_dir.join("models-dev-catalogue.json"))?;
     let state = AppState {
         config: Arc::new(config.runtime),
         assets: Arc::new(assets),
@@ -114,6 +116,7 @@ pub(crate) async fn build(
         vault: Arc::new(vault),
         chat: Arc::new(ChatBackend::Rig),
         models: Arc::new(ModelCatalogue::default()),
+        models_dev: Arc::new(models_dev),
         plan_login: Arc::new(PlanLogin::new()),
         preferences: Arc::new(preferences),
         agents: Arc::new(agents),

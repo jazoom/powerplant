@@ -17,6 +17,8 @@ pub(super) struct SettingsPage {
     theme: &'static str,
     themes: &'static [Theme],
     error: Option<&'static str>,
+    catalogue_status: Option<&'static str>,
+    catalogue_error: Option<&'static str>,
     reset_error: Option<&'static str>,
 }
 
@@ -26,6 +28,8 @@ impl SettingsPage {
             theme: theme.as_str(),
             themes: Theme::ALL,
             error: None,
+            catalogue_status: None,
+            catalogue_error: None,
             reset_error: None,
         }
     }
@@ -45,6 +49,25 @@ impl ThemeSetting {
             theme: theme.as_str(),
             themes: Theme::ALL,
             error,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "settings/templates/model_catalogue.html")]
+pub(super) struct ModelCatalogueSetting {
+    catalogue_status: Option<&'static str>,
+    catalogue_error: Option<&'static str>,
+}
+
+impl ModelCatalogueSetting {
+    pub(super) fn result(
+        catalogue_status: Option<&'static str>,
+        catalogue_error: Option<&'static str>,
+    ) -> Self {
+        Self {
+            catalogue_status,
+            catalogue_error,
         }
     }
 }

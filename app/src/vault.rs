@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::providers::{
-    AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString, ThinkingLevel,
+    AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString, ThinkingEffort,
     api_key_is_bounded, effective_plan_model, model_is_bounded,
 };
 
@@ -15,10 +15,6 @@ use crate::providers::{
 mod tests;
 
 const VAULT_VERSION: u32 = 1;
-
-fn default_thinking_level() -> String {
-    ThinkingLevel::Default.as_str().to_owned()
-}
 
 #[derive(Clone, Default)]
 struct VaultState {
@@ -31,7 +27,7 @@ struct StoredProvider {
     auth: AuthMethod,
     api_key: SecretString,
     model: String,
-    thinking: ThinkingLevel,
+    thinking: Option<ThinkingEffort>,
     favourites: Vec<String>,
 }
 
@@ -49,8 +45,8 @@ struct VaultFileProvider {
     #[serde(default)]
     api_key: String,
     model: String,
-    #[serde(default = "default_thinking_level")]
-    thinking: String,
+    #[serde(default)]
+    thinking: Option<String>,
     #[serde(default)]
     favourites: Vec<String>,
 }
@@ -101,7 +97,7 @@ pub(crate) struct DeskProvider {
     pub(crate) kind: ProviderKind,
     pub(crate) auth: AuthMethod,
     pub(crate) model: String,
-    pub(crate) thinking: ThinkingLevel,
+    pub(crate) thinking: Option<ThinkingEffort>,
     pub(crate) selected: bool,
     pub(crate) favourites: Vec<String>,
 }
@@ -159,7 +155,7 @@ impl ProviderVault {
                     kind,
                     auth: stored.auth,
                     model: stored_model(kind, stored),
-                    thinking: stored.thinking,
+                    thinking: stored.thinking.clone(),
                     selected: state.selected == Some(kind),
                     favourites: stored.favourites.clone(),
                 })
@@ -185,7 +181,7 @@ impl ProviderVault {
             .map(|stored| {
                 (
                     stored.model.clone(),
-                    stored.thinking,
+                    stored.thinking.clone(),
                     stored.favourites.clone(),
                 )
             })
@@ -236,17 +232,11 @@ impl ProviderVault {
             .map(|stored| {
                 (
                     stored.model.clone(),
-                    stored.thinking,
+                    stored.thinking.clone(),
                     stored.favourites.clone(),
                 )
             })
-            .unwrap_or_else(|| {
-                (
-                    kind.default_model().to_owned(),
-                    ThinkingLevel::Default,
-                    Vec::new(),
-                )
-            });
+            .unwrap_or_else(|| (kind.default_model().to_owned(), None, Vec::new()));
         state.providers.insert(
             kind,
             StoredProvider {
@@ -332,7 +322,7 @@ impl ProviderVault {
         &self,
         kind: ProviderKind,
         model: String,
-        thinking: ThinkingLevel,
+        thinking: Option<ThinkingEffort>,
     ) -> Result<(), VaultError> {
         self.mutate(|state| {
             if let Some(stored) = state.providers.get_mut(&kind) {
@@ -469,7 +459,7 @@ fn connection_from(
         auth: stored.auth,
         api_key: stored.api_key.clone(),
         model: stored_model(kind, stored),
-        thinking: stored.thinking,
+        thinking: stored.thinking.clone(),
         plan_file: (stored.auth == AuthMethod::Plan)
             .then(|| plan_file_path(path, kind))
             .flatten(),
@@ -507,12 +497,10 @@ fn load(path: &Path) -> Result<VaultState, VaultError> {
         if !model_is_canonical(&entry.model) {
             return Err(VaultError::Corrupt);
         }
-        let Some(thinking) = ThinkingLevel::parse(&entry.thinking) else {
-            return Err(VaultError::Corrupt);
+        let thinking = match entry.thinking.as_deref() {
+            None | Some("default") => None,
+            Some(value) => Some(ThinkingEffort::new(value.to_owned()).ok_or(VaultError::Corrupt)?),
         };
-        if !kind.thinking_levels().contains(&thinking) {
-            return Err(VaultError::Corrupt);
-        }
         let api_key = match auth {
             AuthMethod::ApiKey => {
                 if entry.api_key.trim() != entry.api_key || !api_key_is_bounded(&entry.api_key) {
@@ -589,7 +577,10 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
                         AuthMethod::Plan => String::new(),
                     },
                     model: stored.model.clone(),
-                    thinking: stored.thinking.as_str().to_owned(),
+                    thinking: stored
+                        .thinking
+                        .as_ref()
+                        .map(|value| value.as_str().to_owned()),
                     favourites: stored.favourites.clone(),
                 })
             })

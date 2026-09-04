@@ -22,6 +22,17 @@
         {% include "settings/templates/theme.html" %}
       </form>
     </li>
+    <li class="settings-row">
+      <form
+        id="model-catalogue-setting"
+        method="post"
+        action="/settings/model-catalogue/refresh"
+        data-graft
+        class="contents"
+      >
+        {% include "settings/templates/model_catalogue.html" %}
+      </form>
+    </li>
     <li class="settings-row settings-row-danger">
       <form
         id="local-data-reset"

@@ -128,7 +128,7 @@ fn model_form_accepts_a_stored_provider_and_blank_model() {
         Ok((
             ProviderKind::Xai,
             ProviderKind::Xai.default_model().to_owned(),
-            crate::providers::ThinkingLevel::Default,
+            None,
         ))
     );
 }
@@ -215,7 +215,7 @@ fn model_form_rejects_an_oversized_or_control_model() {
 }
 
 #[test]
-fn model_form_rejects_unsupported_thinking_levels() {
+fn model_form_accepts_a_bounded_dynamic_thinking_effort() {
     let form = ModelForm {
         provider: "deepseek".to_owned(),
         model: "deepseek-v4-flash".to_owned(),
@@ -225,5 +225,12 @@ fn model_form_rejects_unsupported_thinking_levels() {
         project: String::new(),
         agent: String::new(),
     };
-    assert_eq!(form.validate(|_| true), Err(ModelError::Thinking));
+    assert_eq!(
+        form.validate(|_| true),
+        Ok((
+            ProviderKind::Deepseek,
+            "deepseek-v4-flash".to_owned(),
+            Some(crate::providers::ThinkingEffort::new("low".to_owned()).unwrap()),
+        ))
+    );
 }

@@ -96,6 +96,64 @@ function filterModels(found: DeskControls): void {
     found.noResults.hidden = query === "" || visible !== 0;
 }
 
+function effortLabel(value: string): string {
+    if (value === "none") return "Off";
+    return value.length === 0
+        ? value
+        : `${value[0]?.toLocaleUpperCase()}${value.slice(1)}`;
+}
+
+function parseEfforts(value: string | undefined): string[] {
+    if (!value || new TextEncoder().encode(value).length > 1024) {
+        return [];
+    }
+    try {
+        const parsed: unknown = JSON.parse(value);
+        if (
+            !Array.isArray(parsed) ||
+            parsed.length > 16 ||
+            parsed.some(
+                (item) =>
+                    typeof item !== "string" ||
+                    item.length === 0 ||
+                    new TextEncoder().encode(item).length > 32,
+            )
+        ) {
+            return [];
+        }
+        return Array.from(new Set(parsed));
+    } catch {
+        return [];
+    }
+}
+
+function effectiveEffort(efforts: string[], saved: string): string {
+    if (efforts.includes(saved)) return saved;
+    if (efforts.includes("medium")) return "medium";
+    if (efforts.includes("high")) return "high";
+    return efforts[0] ?? "";
+}
+
+function syncThinking(
+    found: DeskControls,
+    efforts: string[],
+    saved: string,
+): void {
+    const selected = effectiveEffort(efforts, saved);
+    found.thinking.replaceChildren();
+    if (efforts.length === 0) {
+        found.thinking.add(new Option("Not available", "", true, true));
+        found.thinking.disabled = true;
+        return;
+    }
+    for (const effort of efforts) {
+        found.thinking.add(
+            new Option(effortLabel(effort), effort, false, effort === selected),
+        );
+    }
+    found.thinking.disabled = found.provider.disabled;
+}
+
 function syncModelSelection(root: HTMLFormElement): void {
     const found = controls(root);
     if (!found) {
@@ -123,7 +181,11 @@ function syncProvider(root: HTMLFormElement): void {
     }
     const selected = found.provider.selectedOptions.item(0);
     found.model.value = selected?.dataset.model ?? "";
-    found.thinking.value = selected?.dataset.thinking ?? "default";
+    syncThinking(
+        found,
+        parseEfforts(selected?.dataset.thinkingEfforts),
+        selected?.dataset.thinking ?? "",
+    );
     found.providerModelSynced.value = "true";
     syncModelSelection(root);
     setExpanded(found, false);
@@ -157,6 +219,11 @@ export function initDeskSettings(
         option: HTMLButtonElement,
     ) => {
         found.model.value = option.dataset.modelValue ?? "";
+        syncThinking(
+            found,
+            parseEfforts(option.dataset.thinkingEfforts),
+            found.thinking.value,
+        );
         syncModelSelection(root);
         setExpanded(found, false);
         submitDesk();
@@ -345,11 +412,23 @@ export function initDeskSettings(
             }
             if (
                 targets.includes("desk-model-catalogue") ||
-                targets.includes("desk-model-options")
+                targets.includes("desk-model-options") ||
+                targets.includes("desk-thinking-control")
             ) {
                 syncModelSelection(root);
                 const found = controls(root);
                 if (found) {
+                    const selected = modelOptions(found).find(
+                        (option) =>
+                            option.dataset.modelValue === found.model.value,
+                    );
+                    if (selected) {
+                        syncThinking(
+                            found,
+                            parseEfforts(selected.dataset.thinkingEfforts),
+                            found.thinking.value,
+                        );
+                    }
                     filterModels(found);
                 }
             }
