@@ -5,14 +5,17 @@
   <div class="page-intro">
     <div>
       <h1>Runs</h1>
-      <p>Follow each workflow from its first step to review and completion.</p>
+      <p>Track task progress, review changes and inspect results.</p>
     </div>
   </div>
 
   {% if runs.is_empty() %}
-    <section class="file-section space-y-2">
-      <h2 class="text-lg font-semibold">No runs</h2>
-      <p class="text-quiet">Start work from an agent desk.</p>
+    <section class="file-section space-y-3">
+      <h2 class="text-lg font-semibold">No runs yet</h2>
+      <p class="text-quiet">Open a project desk and send your first task.</p>
+      <a href="/projects" data-graft class="btn btn-primary btn-sm"
+        >Open projects</a
+      >
     </section>
   {% else %}
     <ul class="record-list">
@@ -37,18 +40,15 @@
             {% else if run.project_name != "" %}
               <p class="text-sm">{{ run.project_name }}</p>
             {% endif %}
-            {% if run.uncatalogued %}
-              <p class="text-quiet text-xs">Uncatalogued definition</p>
-            {% endif %}
-            <p class="text-quiet font-mono text-xs break-all">
-              {{ run.version }}
-            </p>
+
             {% if run.latest_attempt != "" %}
               <p class="text-sm">{{ run.latest_attempt }}</p>
             {% endif %}
           </div>
           <div class="flex flex-col items-end gap-1 text-right">
-            <span class="badge badge-outline">{{ run.state }}</span>
+            <span class="badge state-badge" data-state="{{ run.state }}"
+              >{{ run.state }}</span
+            >
             {% if run.current_step != "" %}
               <span class="text-sm">{{ run.current_step }}</span>
             {% endif %}

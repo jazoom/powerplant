@@ -570,7 +570,7 @@ async fn a_patch_send_starts_a_job_without_streaming() {
     assert!(text.contains("name=\"cursor\" value=\"0\""));
     assert!(text.contains("data-observe-active=\"true\""));
     assert!(text.contains("turn-1"));
-    assert!(text.contains("Refresh"));
+    assert!(text.contains("Check status"));
     assert!(text.contains("Stop"));
     assert!(text.contains("target=\"job-observe\""));
     assert!(!text.contains("target=\"composer\""));
@@ -1973,10 +1973,10 @@ async fn a_new_run_pins_the_selected_catalogue_identity() {
         .expect("send");
     wait_until_job_idle(&state, &token).await;
     let run = &state.workflow_runs.summaries()[0];
-    assert_eq!(run.workflow_id, Some(record.id));
-    assert_eq!(run.version, record.definition_version);
     assert_eq!(run.project_id, state.projects.list()[0].id);
     let stored = state.workflow_runs.get(&run.id).expect("run");
+    assert_eq!(stored.pinned.workflow_id, Some(record.id));
+    assert_eq!(stored.pinned.version, record.definition_version);
     assert_eq!(stored.kind, crate::workflows::RunKind::Configured);
     assert_eq!(stored.project_id, run.project_id);
     state

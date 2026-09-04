@@ -22,9 +22,7 @@
   {% endif %}
 
   {% if available %}
-    <p>
-      <span class="badge badge-success">Available</span>
-    </p>
+    <p><span class="badge badge-success">Available</span></p>
   {% else %}
     <div class="alert alert-warning" role="status">
       <p>
@@ -36,15 +34,13 @@
 
   {% if agents.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">No agent</h2>
+      <h2 class="text-lg font-semibold">Choose how to start</h2>
       <p class="text-quiet max-w-[60ch]">
-        No current agent has an exact directory grant for this project path.
+        No agent can access this project yet. A starter agent can inspect files,
+        run sandbox commands and propose changes.
       </p>
       <p class="text-quiet max-w-[60ch]">
-        The agent can list, read, propose changes, and run sandbox commands.
-      </p>
-      <p class="text-quiet max-w-[60ch]">
-        Host files remain unchanged until candidate approval.
+        Your project stays unchanged until you apply the proposed changes.
       </p>
       <form data-graft method="post" action="{{ starter_action }}">
         <button class="btn btn-primary btn-sm" type="submit">
@@ -53,15 +49,14 @@
       </form>
       <p>
         <a href="{{ starter_href }}" data-graft class="link link-hover"
-          >Configure permissions first</a
+          >Set custom permissions instead</a
         >
       </p>
       {% if !grant_candidates.is_empty() %}
         <div class="space-y-3">
-          <h3 class="text-base font-semibold">Grant access</h3>
+          <h3 class="text-base font-semibold">Use an existing agent</h3>
           <p class="text-quiet max-w-[60ch]">
-            Add this project path to a current agent. The host path comes from
-            the project record.
+            Give an existing agent access to this project.
           </p>
           <ul class="record-list">
             {% for agent in grant_candidates %}
@@ -92,7 +87,7 @@
                     />
                   </label>
                   <label class="flex flex-col gap-1">
-                    <span class="text-quiet text-xs">Access</span>
+                    <span class="text-quiet text-xs">Project access</span>
                     <select
                       class="select select-bordered select-sm"
                       name="access"
@@ -101,13 +96,13 @@
                         value="read-write"
                         {% if grant_access == "read-write" %}selected{% endif %}
                       >
-                        Read-write
+                        Can read and write
                       </option>
                       <option
                         value="read-only"
                         {% if grant_access == "read-only" %}selected{% endif %}
                       >
-                        Read-only
+                        Read only
                       </option>
                     </select>
                   </label>
@@ -123,7 +118,7 @@
     </section>
   {% else %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">Choose an agent</h2>
+      <h2 class="text-lg font-semibold">Open with an agent</h2>
       <ul class="record-list">
         {% for agent in agents %}
           <li class="record-row">

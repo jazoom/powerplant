@@ -20,7 +20,6 @@ pub(super) struct CatalogueItem {
     pub(super) image: String,
     pub(super) readiness: &'static str,
     pub(super) readiness_tone: &'static str,
-    pub(super) snapshot: String,
     pub(super) prepared: String,
 }
 
@@ -53,11 +52,6 @@ impl CatalogueView {
                 image: record.recipe.oci_image.as_str().to_owned(),
                 readiness: readiness.label,
                 readiness_tone: readiness.tone,
-                snapshot: ready
-                    .as_ref()
-                    .and_then(|record| record.snapshot.as_ref())
-                    .map(|snapshot| snapshot.snapshot_digest.as_str().to_owned())
-                    .unwrap_or_default(),
                 prepared: latest
                     .as_ref()
                     .map(|record| format_time(record.requested_at_ms))

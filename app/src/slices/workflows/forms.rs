@@ -37,6 +37,8 @@ pub(super) enum FormIntent {
     MoveStepUp(usize),
     MoveStepDown(usize),
     UpdateReviewPolicy(usize),
+    AddDirectory { step: usize },
+    RemoveDirectory { step: usize, directory: usize },
     AddOutput(usize),
     RemoveOutput { step: usize, output: usize },
     MoveOutputUp { step: usize, output: usize },
@@ -455,6 +457,25 @@ impl WorkflowFormState {
                 }
                 Ok(())
             }
+            FormIntent::AddDirectory { step } => {
+                let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
+                if row.directories.len() >= MAXIMUM_DIRECTORIES {
+                    return Err(FormError::Excessive);
+                }
+                row.directories.push(DirectoryDraft {
+                    alias: String::new(),
+                    access: AccessMode::ReadOnly.as_str().to_owned(),
+                });
+                Ok(())
+            }
+            FormIntent::RemoveDirectory { step, directory } => {
+                let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
+                if directory >= row.directories.len() {
+                    return Err(FormError::Index);
+                }
+                row.directories.remove(directory);
+                Ok(())
+            }
             FormIntent::AddInput(step) => {
                 if step >= self.steps.len() {
                     return Err(FormError::Index);
@@ -849,6 +870,17 @@ fn parse_indexed_intent(raw: &str) -> Result<FormIntent, FormError> {
         "update-review-policy" if parts.next().is_none() => {
             Ok(FormIntent::UpdateReviewPolicy(first))
         }
+        "add-directory" if parts.next().is_none() => Ok(FormIntent::AddDirectory { step: first }),
+        "remove-directory" => {
+            let directory = parse_index(parts.next().ok_or(FormError::Intent)?)?;
+            if parts.next().is_some() {
+                return Err(FormError::Intent);
+            }
+            Ok(FormIntent::RemoveDirectory {
+                step: first,
+                directory,
+            })
+        }
         "add-input" if parts.next().is_none() => Ok(FormIntent::AddInput(first)),
         "remove-input" => {
             let input = parse_index(parts.next().ok_or(FormError::Intent)?)?;
@@ -1216,8 +1248,6 @@ fn empty_step() -> StepDraft {
 }
 
 fn blank_agent_step(key: &str, role: &str) -> StepDraft {
-    let mut directories = Vec::new();
-    pad_directories(&mut directories);
     StepDraft {
         key: key.to_owned(),
         name: String::new(),
@@ -1227,7 +1257,7 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: ToolId::ALL.to_vec(),
-        directories,
+        directories: Vec::new(),
         inputs: vec![input_from_required(&initial_candidate_input())],
         review_policy: None,
         outputs: vec![
@@ -1300,15 +1330,6 @@ fn parse_source(
     })
 }
 
-fn pad_directories(directories: &mut Vec<DirectoryDraft>) {
-    while directories.len() < MAXIMUM_DIRECTORIES {
-        directories.push(DirectoryDraft {
-            alias: String::new(),
-            access: AccessMode::ReadOnly.as_str().to_owned(),
-        });
-    }
-}
-
 fn step_from_definition(step: &StepDefinition) -> StepDraft {
     let review_policy = step.review.as_ref().map(|policy| ReviewPolicyDraft {
         report_output: policy.report_output.as_str().to_owned(),
@@ -1317,7 +1338,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
     });
     match &step.action {
         StepAction::Agent(action) => {
-            let mut directories: Vec<DirectoryDraft> = action
+            let directories: Vec<DirectoryDraft> = action
                 .authority
                 .directories
                 .iter()
@@ -1326,7 +1347,6 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                     access: directory.access.as_str().to_owned(),
                 })
                 .collect();
-            pad_directories(&mut directories);
             StepDraft {
                 key: step.key.as_str().to_owned(),
                 name: step.name.clone(),

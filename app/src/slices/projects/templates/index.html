@@ -5,21 +5,21 @@
   <div class="page-intro">
     <div>
       <h1>Projects</h1>
-      <p>
-        Register a local Git worktree and keep it as a stable project record.
-      </p>
+      <p>Add an existing Git project from this machine.</p>
     </div>
-    <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
-      >New project</a
-    >
+    {% if !projects.is_empty() %}
+      <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
+        >New project</a
+      >
+    {% endif %}
   </div>
 
   {% if projects.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">No projects</h2>
+      <h2 class="text-lg font-semibold">Create your first project</h2>
       <p class="text-quiet max-w-[60ch]">
-        Create a project from an absolute Git worktree path. The path cannot
-        change later.
+        Choose an existing Git project folder. You cannot change its folder
+        after you add it.
       </p>
       <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
         >Create the first project</a

@@ -5,11 +5,13 @@
   <div class="page-intro">
     <div>
       <h1>Agents</h1>
-      <p>Choose an agent to open its desk, or define a new local worker.</p>
+      <p>Agents define instructions, tools and access to local projects.</p>
     </div>
-    <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
-      >New agent</a
-    >
+    {% if !agents.is_empty() %}
+      <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
+        >New agent</a
+      >
+    {% endif %}
   </div>
 
   {% if error != "" %}
@@ -20,10 +22,9 @@
 
   {% if agents.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">No agents</h2>
+      <h2 class="text-lg font-semibold">Create your first agent</h2>
       <p class="text-quiet max-w-[60ch]">
-        Create an agent to choose its project directories, instructions and
-        tools.
+        Define how an agent works and which local projects it can access.
       </p>
       <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
         >Create the first agent</a
@@ -64,9 +65,10 @@
   {% if !orphans.is_empty() %}
     <section class="file-section space-y-3">
       <div>
-        <h2 class="text-lg font-semibold">Orphan sandboxes</h2>
+        <h2 class="text-lg font-semibold">Unused sandboxes</h2>
         <p class="text-quiet mt-1 text-sm">
-          These sandboxes belong to Power Plant but have no agent record.
+          These sandboxes no longer belong to an agent. Remove them to reclaim
+          local storage.
         </p>
       </div>
       <ul class="record-list">

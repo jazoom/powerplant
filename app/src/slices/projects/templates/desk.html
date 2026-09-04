@@ -276,8 +276,12 @@
       </p>
     </div>
     <div class="chat-title-actions">
-      <span class="status-stamp">
-        {% if job_active %}{{ job_status }}{% else %}Ready for work{% endif %}
+      <span
+        class="status-stamp"
+        data-state="{% if review_href != "" %}Awaiting decision{% else if job_active %}Active{% else if quick_task_finished %}Completed{% else %}Ready{% endif %}"
+      >
+        {% if review_href != "" %}Awaiting decision{% else if job_active %}{{ job_status }}{% else if quick_task_finished %}Task
+        complete{% else %}Ready for work{% endif %}
       </span>
       <details class="dropdown dropdown-end">
         <summary class="btn btn-ghost h-auto min-h-11 px-3">
@@ -307,9 +311,9 @@
         href="/agents/{{ agent_id }}/configuration"
         data-graft
         class="btn btn-ghost btn-sm"
-        >Configure</a
+        >Agent settings</a
       >
-      <a href="/runs" data-graft class="btn btn-ghost btn-sm">Runs</a>
+      <a href="/runs" data-graft class="btn btn-ghost btn-sm">View runs</a>
     </div>
   </div>
 
@@ -389,7 +393,7 @@
               {% if run_id != "" %}
                 <p class="text-sm">
                   <a href="/runs/{{ run_id }}" data-graft class="link"
-                    >Current run</a
+                    >View run</a
                   >
                 </p>
               {% endif %}
@@ -403,14 +407,18 @@
                   <div id="job-cursor">
                     {% include "chat/templates/job_cursor.html" %}
                   </div>
-                  <button class="btn btn-outline" type="submit">Refresh</button>
+                  <button class="btn btn-outline" type="submit">
+                    Check status
+                  </button>
                 </form>
                 <form
                   data-graft
                   method="post"
                   action="{{ desk_href }}/jobs/{{ job_id }}/cancel"
                 >
-                  <button class="btn btn-outline" type="submit">Stop</button>
+                  <button class="btn btn-outline" type="submit">
+                    Stop task
+                  </button>
                 </form>
               </div>
             </div>
@@ -444,7 +452,7 @@
                       <span class="text-composer-quiet">{{ run_step }}</span>
                     {% endif %}
                     <a href="/runs/{{ run_id }}" data-graft class="link"
-                      >Current run</a
+                      >View run</a
                     >
                   </p>
                 {% endif %}
@@ -518,7 +526,7 @@
                   href="/projects/{{ project_id }}/configuration"
                   data-graft
                   class="link"
-                  >Project configuration</a
+                  >Project settings</a
                 >
               </p>
             </div>
@@ -545,9 +553,9 @@
                 {% else if session_busy %}
                   Wait until this reply finishes
                 {% else if !quick_ready %}
-                  Prepare Alpine Git or use a configured workflow
+                  Write your task while the sandbox prepares
                 {% else %}
-                  Message Power Plant
+                  Describe the task for this agent
                 {% endif %}"
               >
 {{- draft_message -}}</textarea>
@@ -561,11 +569,11 @@
                 Send
               </button>
             </div>
-            <p class="text-composer-quiet text-xs" data-island="shortcut-hint">
+            <p
+              class="shortcut-hint text-composer-quiet text-xs"
+              data-island="shortcut-hint"
+            >
               Ctrl or Cmd + Enter to send.
-            </p>
-            <p class="text-composer-quiet text-xs">
-              The project directory must be a Git worktree.
             </p>
           </form>
           <details class="border-base-300 rounded-box mt-3 border">
@@ -575,9 +583,9 @@
             <div class="flex flex-col gap-3 px-3 pb-3">
               {% if workflow_empty %}
                 <p class="text-sm">
-                  Configured workflows need a workflow.
+                  No configured workflows yet.
                   <a href="/workflows/new" data-graft class="link"
-                    >Create workflow</a
+                    >Create a workflow</a
                   >
                 </p>
               {% else %}
@@ -608,7 +616,7 @@
                     </select>
                   </label>
                   <button class="btn btn-outline btn-sm" type="submit">
-                    Apply
+                    Use workflow
                   </button>
                   <a href="/workflows" data-graft class="link text-sm"
                     >Manage workflows</a
@@ -617,7 +625,7 @@
                 {% for option in workflow_options %}
                   {% if option.selected %}
                     <p class="text-composer-quiet text-sm">
-                      Review policy: {{ option.policy }}
+                      Review: {{ option.policy }}
                     </p>
                   {% endif %}
                 {% endfor %}

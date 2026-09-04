@@ -2,8 +2,8 @@
   data-section="runs"
   class="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
 >
-  <p class="text-quiet text-sm">
-    <a href="{{ run_href }}" data-graft class="link">Back to run</a>
+  <p class="text-sm">
+    <a href="{{ run_href }}" data-graft class="link">Back to run detail</a>
   </p>
   <div class="page-intro">
     <div>
@@ -11,20 +11,40 @@
       <p class="font-mono text-xs break-all">{{ hash }}</p>
     </div>
   </div>
-  <p class="text-sm">{{ producer }}</p>
-  <p class="text-quiet text-xs">{{ created }}</p>
-  {% if constraint != "" %}
-    <p class="text-sm">{{ constraint }}</p>
+  <section class="border-base-300 space-y-2 border p-4">
+    <h2 class="text-base font-semibold">Output record</h2>
+    <p class="text-sm">
+      <span class="text-quiet">Produced by</span> {{ producer }}
+    </p>
+    <p class="text-quiet text-xs">Saved {{ created }}</p>
+    {% if constraint != "" %}
+      <p class="text-sm">{{ constraint }}</p>
+    {% endif %}
+  </section>
+  {% if body != "" %}
+    <section class="space-y-2">
+      <h2 class="text-base font-semibold">Recorded output</h2>
+      <article class="prose max-w-none">{{ body|safe }}</article>
+    </section>
   {% endif %}
-  <article class="prose max-w-none">{{ body|safe }}</article>
+  {% if body == "" && preview == "" %}
+    {% if content_unavailable %}
+      <p class="text-quiet">The stored output content is unavailable.</p>
+    {% else %}
+      <p class="text-quiet">The stored output is empty.</p>
+    {% endif %}
+  {% endif %}
   {% if preview != "" %}
     <section class="space-y-2">
-      <h2 class="text-base font-semibold">Preview</h2>
+      <h2 class="text-base font-semibold">Candidate changes preview</h2>
       {% if truncated %}
-        <p class="text-quiet text-sm">This preview is truncated.</p>
+        <p class="text-quiet text-sm">
+          This preview is truncated. The stored output contains the complete
+          candidate.
+        </p>
       {% endif %}
       <pre
-        class="border-base-300 overflow-x-auto rounded-sm border p-3 text-xs"
+        class="border-base-300 bg-base-200 max-h-[70vh] overflow-auto border p-3 text-xs"
       >
 {{ preview|safe }}</pre>
     </section>

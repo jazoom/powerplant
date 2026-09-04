@@ -23,6 +23,16 @@ function activeTheme(root: HTMLElement): Theme {
         : DEFAULT_THEME;
 }
 
+function applyTheme(page: HTMLElement, theme: Theme): void {
+    if (page.dataset.theme === theme) {
+        return;
+    }
+    page.classList.add("theme-switching");
+    page.dataset.theme = theme;
+    void page.offsetWidth;
+    page.classList.remove("theme-switching");
+}
+
 export function initThemeSelector(root: HTMLElement): IslandInstance {
     if (!(root instanceof HTMLFormElement)) {
         return { destroy() {} };
@@ -31,7 +41,7 @@ export function initThemeSelector(root: HTMLElement): IslandInstance {
     const page = document.documentElement;
     const applyAuthoritativeTheme = () => {
         const theme = activeTheme(root);
-        page.dataset.theme = theme;
+        applyTheme(page, theme);
         const select = root.querySelector<HTMLSelectElement>(
             "[data-theme-select]",
         );
@@ -53,7 +63,7 @@ export function initThemeSelector(root: HTMLElement): IslandInstance {
             applyAuthoritativeTheme();
             return;
         }
-        page.dataset.theme = select.value;
+        applyTheme(page, select.value);
         root.requestSubmit();
     };
 

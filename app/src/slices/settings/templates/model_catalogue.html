@@ -1,9 +1,8 @@
 <div>
   <h2>Model catalogue</h2>
   <p class="text-quiet mt-1 text-sm">
-    Power Plant refreshes model capabilities and thinking options from
-    models.dev automatically once a day. Manual refresh is available for recent
-    catalogue changes.
+    Power Plant updates model capabilities and thinking options from models.dev
+    once a day. Refresh now to get newer changes.
   </p>
   {% if let Some(status) = catalogue_status %}
     <p class="text-success mt-2 text-sm" role="status">{{ status }}</p>
@@ -12,4 +11,4 @@
     <p class="text-error mt-2 text-sm" role="alert">{{ error }}</p>
   {% endif %}
 </div>
-<button class="btn btn-outline btn-sm" type="submit">Refresh catalogue</button>
+<button class="btn btn-outline btn-sm" type="submit">Check for updates</button>

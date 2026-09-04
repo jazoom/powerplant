@@ -253,6 +253,8 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
         catalogue_note: String::new(),
         version: "version".to_owned(),
         state: "Completed",
+        state_note: "All steps completed.",
+        review_href: String::new(),
         created: "now".to_owned(),
         current_step: "Commit".to_owned(),
         steps: vec![super::page::StepView {

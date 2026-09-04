@@ -194,7 +194,7 @@ impl ProjectFormView {
     pub(super) fn edit(record: &ProjectRecord, name: &str, error: &'static str) -> Self {
         Self {
             title: "Rename project",
-            lead: "Change the project name. The host path stays fixed.",
+            lead: "Change the project name. The project folder stays fixed.",
             mode: ProjectFormMode::Edit,
             action: format!("/projects/{}/configuration", record.id.as_hex()),
             submit: "Save name",
@@ -214,7 +214,7 @@ impl ProjectFormView {
     ) -> Self {
         Self {
             title: "New project",
-            lead: "Register an existing local Git worktree. Power Plant does not create or clone the repository.",
+            lead: "Add an existing Git project from this machine. Power Plant does not create or clone repositories.",
             mode,
             action: "/projects".to_owned(),
             submit: "Add project",

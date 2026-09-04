@@ -5,7 +5,7 @@
   <div class="page-intro">
     <div>
       <h1>{{ title }}</h1>
-      <p>Define the guest image and setup script for isolated agent work.</p>
+      <p>Configure the container image and setup script for agent sandboxes.</p>
     </div>
   </div>
   <div id="environment-form">
@@ -69,15 +69,23 @@
               <p class="text-error text-sm">{{ script_error }}</p>
             {% endif %}
           </label>
-          <aside class="text-quiet space-y-2 text-sm">
-            <p>Setup uses a new guest.</p>
-            <p>Setup can reach the public internet.</p>
-            <p>Setup cannot access the user project or provider credentials.</p>
-            <p>The image must provide /bin/sh.</p>
-            {% if revision != "" %}
-              <p>A recipe change requests preparation.</p>
-              <p>A name change keeps the active snapshot.</p>
-            {% endif %}
+          <aside
+            class="border-base-300 bg-base-200 space-y-3 border p-4 text-sm"
+            aria-label="Preparation rules"
+          >
+            <p class="font-semibold">Preparation rules</p>
+            <ul class="text-quiet list-disc space-y-2 pl-5">
+              <li>Power Plant runs setup in a new sandbox.</li>
+              <li>Setup can access the public internet.</li>
+              <li>
+                Setup cannot access project files or provider credentials.
+              </li>
+              <li>The image must provide <code>/bin/sh</code>.</li>
+              {% if revision != "" %}
+                <li>A changed image or script starts a new preparation.</li>
+                <li>A name change keeps the active snapshot.</li>
+              {% endif %}
+            </ul>
           </aside>
         </div>
         <button class="btn btn-primary self-start" type="submit">
@@ -121,6 +129,7 @@
               class="checkbox checkbox-sm"
               type="checkbox"
               name="confirm"
+              required
             />
             <span>Delete this environment</span>
           </label>

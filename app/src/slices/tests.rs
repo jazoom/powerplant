@@ -315,14 +315,15 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(navigate_target(&text), "/");
+    assert!(text.contains("href=\"/\""));
     assert!(!text.contains("sk-test-key"));
     assert!(state.vault.contains(ProviderKind::Xai));
-    let token = session_cookie(&headers);
+    assert!(headers.get(header::SET_COOKIE).is_none());
 
-    let (status, headers, _) = send(&state, document("/", Some(&token))).await;
+    let (status, headers, _) = send(&state, document("/", None)).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location(&headers), "/projects/new");
+    let token = session_cookie(&headers);
 
     let (status, _, text) = send(&state, document("/projects/new", Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
@@ -332,7 +333,7 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     let (status, _, text) =
         send(&state, document("/projects/new?entry=manual", Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("Git project path"));
+    assert!(text.contains("Git project folder"));
     assert!(text.contains("action=\"/projects\""));
 
     let worktree = git_worktree();

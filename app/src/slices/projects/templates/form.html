@@ -30,9 +30,12 @@
           >Enter path manually</a
         >
       {% else if mode.is_selected() %}
-        <p class="text-quiet font-mono text-xs break-all">{{ path }}</p>
+        <div>
+          <p class="text-sm font-semibold">Selected project folder</p>
+          <p class="text-quiet mt-1 font-mono text-xs break-all">{{ path }}</p>
+        </div>
         <p class="text-quiet">
-          The path stays fixed after you add the project.
+          You cannot change this folder after you add the project.
         </p>
         <form
           data-graft
@@ -90,7 +93,7 @@
             />
           </label>
           <label class="flex flex-col gap-1">
-            <span class="text-sm">Git project path</span>
+            <span class="text-sm">Git project folder</span>
             <input
               class="input input-bordered font-mono"
               name="path"
@@ -101,8 +104,8 @@
             />
           </label>
           <p class="text-quiet">
-            The path stays fixed after you add the project. Power Plant does not
-            create or clone the repository.
+            Enter the absolute path to an existing Git project. You cannot
+            change this folder later.
           </p>
           <button class="btn btn-primary self-start" type="submit">
             {{ submit }}
@@ -128,7 +131,12 @@
               value="{{ name }}"
             />
           </label>
-          <p class="text-quiet font-mono text-xs break-all">{{ host_path }}</p>
+          <div>
+            <p class="text-sm font-semibold">Project folder</p>
+            <p class="text-quiet mt-1 font-mono text-xs break-all">
+              {{ host_path }}
+            </p>
+          </div>
           <button class="btn btn-primary self-start" type="submit">
             {{ submit }}
           </button>

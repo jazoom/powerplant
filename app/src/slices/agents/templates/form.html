@@ -5,7 +5,7 @@
   <div class="page-intro">
     <div>
       <h1>{{ title }}</h1>
-      <p>Set the agent instructions, tools and project directories.</p>
+      <p>Define how this agent works and which local projects it can access.</p>
     </div>
   </div>
   <div id="agent-form">
@@ -48,11 +48,18 @@
             class="textarea textarea-bordered min-h-32"
             name="instructions"
             maxlength="32768"
+            aria-describedby="agent-instructions-help"
           >
 {{- instructions -}}</textarea>
+          <span id="agent-instructions-help" class="text-quiet text-xs">
+            Describe the work, context and rules for this agent.
+          </span>
         </label>
         <fieldset class="space-y-2">
           <legend class="text-sm">Tools</legend>
+          <p class="text-quiet text-xs">
+            Choose what the agent can do inside its sandbox.
+          </p>
           {% for tool in tools %}
             <label class="flex items-center gap-2">
               <input
@@ -66,9 +73,12 @@
           {% endfor %}
         </fieldset>
         <fieldset class="space-y-3">
-          <legend class="text-sm">Directories</legend>
+          <legend class="text-sm">Project access</legend>
+          <p class="text-quiet text-xs">
+            Add each local folder that this agent can use.
+          </p>
           <label class="flex flex-col gap-1">
-            <span class="text-sm">Primary alias</span>
+            <span class="text-sm">Primary folder alias</span>
             <input
               class="input input-bordered input-sm font-mono"
               name="primary"
@@ -91,14 +101,14 @@
                 </label>
                 {% if grant.path_locked %}
                   <div class="flex flex-col gap-1">
-                    <span class="text-quiet text-xs">Host path</span>
+                    <span class="text-quiet text-xs">Local folder</span>
                     <p class="text-quiet font-mono text-xs break-all">
                       {{ grant.path }}
                     </p>
                   </div>
                 {% else %}
                   <label class="flex flex-col gap-1">
-                    <span class="text-quiet text-xs">Host path</span>
+                    <span class="text-quiet text-xs">Local folder path</span>
                     <input
                       class="input input-bordered input-sm font-mono"
                       name="path_{{ grant.index }}"
@@ -108,7 +118,7 @@
                   </label>
                 {% endif %}
                 <label class="flex flex-col gap-1">
-                  <span class="text-quiet text-xs">Access</span>
+                  <span class="text-quiet text-xs">Folder access</span>
                   <select
                     class="select select-bordered select-sm"
                     name="access_{{ grant.index }}"
@@ -117,13 +127,13 @@
                       value="read-write"
                       {% if grant.access == "read-write" %}selected{% endif %}
                     >
-                      Read-write
+                      Can read and write
                     </option>
                     <option
                       value="read-only"
                       {% if grant.access == "read-only" %}selected{% endif %}
                     >
-                      Read-only
+                      Read only
                     </option>
                   </select>
                 </label>
@@ -163,12 +173,25 @@
         </button>
       </form>
       {% if show_delete %}
-        <form data-graft method="post" action="/agents/{{ agent_id }}/delete">
-          <input type="hidden" name="revision" value="{{ revision }}" />
-          <button class="btn btn-error btn-outline btn-sm" type="submit">
-            Delete agent
-          </button>
-        </form>
+        <details class="danger-zone file-disclosure">
+          <summary>Delete agent</summary>
+          <div class="max-w-xl space-y-3 pt-4">
+            <p class="text-quiet text-sm">
+              This removes the agent record and its sandbox. Project files stay
+              unchanged.
+            </p>
+            <form
+              data-graft
+              method="post"
+              action="/agents/{{ agent_id }}/delete"
+            >
+              <input type="hidden" name="revision" value="{{ revision }}" />
+              <button class="btn btn-error btn-outline btn-sm" type="submit">
+                Delete agent
+              </button>
+            </form>
+          </div>
+        </details>
       {% endif %}
     {% endblock %}
   </div>

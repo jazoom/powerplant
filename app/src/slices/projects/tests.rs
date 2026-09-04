@@ -907,7 +907,7 @@ async fn two_eligible_agents_render_canonical_desk_links() {
         .expect("choice");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains("Choose an agent"));
+    assert!(text.contains("Open with an agent"));
     assert!(text.contains(&crate::projects::desk_path(&project.id, &first.id)));
     assert!(text.contains(&crate::projects::desk_path(&project.id, &second.id)));
     assert!(text.contains("data-graft"));
@@ -984,8 +984,8 @@ async fn no_agent_detail_shows_starter_and_grant_actions() {
         project.id.as_hex()
     )));
     assert!(text.contains("Create starter agent"));
-    assert!(text.contains("Host files remain unchanged until candidate approval."));
-    assert!(text.contains("Configure permissions first"));
+    assert!(text.contains("Your project stays unchanged until you apply the proposed changes."));
+    assert!(text.contains("Set custom permissions instead"));
     assert!(text.contains(&format!(
         "href=\"/agents/new?project={}\"",
         project.id.as_hex()
@@ -1558,7 +1558,7 @@ async fn new_project_manual_entry_uses_the_canonical_query() {
         .await
         .expect("manual");
     let text = body_text(response).await;
-    assert!(text.contains("Git project path"));
+    assert!(text.contains("Git project folder"));
     assert!(text.contains("/home/me/projects/my-app"));
     assert!(text.contains("Add project"));
     assert!(!text.contains("action=\"/projects/folder\""));

@@ -13,7 +13,7 @@
   </p>
   {% if let Some(snapshot) = snapshot %}
     <div class="border-base-300 space-y-1 rounded-sm border px-3 py-3">
-      <h3 class="text-sm font-semibold">Active snapshot</h3>
+      <h3 class="text-sm font-semibold">Ready snapshot</h3>
       <p class="font-mono text-xs break-all">{{ snapshot.digest }}</p>
       <p class="text-quiet font-mono text-xs break-all">{{ snapshot.image }}</p>
       <p class="text-quiet font-mono text-xs break-all">
@@ -42,10 +42,15 @@
   {% if log_truncated %}
     <p class="text-quiet text-sm">The log reached its size bound.</p>
   {% endif %}
-  <pre
-    class="border-base-300 bg-base-200 max-h-80 overflow-auto rounded-sm border p-3 font-mono text-xs whitespace-pre-wrap"
-  >
+  {% if log_tail != "" %}
+    <div class="space-y-2">
+      <h3 class="text-sm font-semibold">Preparation log</h3>
+      <pre
+        class="border-base-300 bg-base-200 max-h-80 overflow-auto border p-3 font-mono text-xs whitespace-pre-wrap"
+      >
 {{ log_tail }}</pre>
+    </div>
+  {% endif %}
   <form
     data-graft
     method="get"
@@ -77,10 +82,10 @@
     <table class="table-sm table">
       <thead>
         <tr>
-          <th>Ordinal</th>
+          <th>Attempt</th>
           <th>Version</th>
           <th>Status</th>
-          <th>Time</th>
+          <th>Requested</th>
           <th>Digest</th>
         </tr>
       </thead>

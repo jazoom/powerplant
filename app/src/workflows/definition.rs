@@ -978,10 +978,6 @@ impl DefinitionVersion {
     pub(crate) fn as_hex(&self) -> String {
         hex::encode(&self.0)
     }
-
-    pub(crate) fn short_hex(&self) -> String {
-        self.as_hex()[..8].to_owned()
-    }
 }
 
 impl std::fmt::Debug for DefinitionVersion {

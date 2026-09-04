@@ -1,15 +1,14 @@
 <div data-active-theme="{{ theme }}">
   <h2 id="theme-heading">Theme</h2>
   <p id="theme-description" class="text-quiet mt-1 max-w-[60ch] text-sm">
-    Choose the colour theme for Power Plant. Power Plant stores this choice on
-    the local machine.
+    Choose how Power Plant looks. This choice stays on this machine.
   </p>
   {% if let Some(message) = error %}
     <p class="text-error mt-2 text-sm" role="alert">{{ message }}</p>
   {% endif %}
 </div>
 <div class="settings-control">
-  <label class="label" for="theme-select">Current theme</label>
+  <label class="label" for="theme-select">Colour theme</label>
   <select
     id="theme-select"
     name="theme"

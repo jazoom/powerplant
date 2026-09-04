@@ -72,9 +72,7 @@ pub(super) struct IndexRow {
     pub(super) id: String,
     pub(super) project_href: String,
     pub(super) project_name: String,
-    pub(super) uncatalogued: bool,
     pub(super) name: String,
-    pub(super) version: String,
     pub(super) state: String,
     pub(super) created: String,
     pub(super) current_step: String,
@@ -93,9 +91,7 @@ impl RunIndexView {
                         id: summary.id.as_hex(),
                         project_href,
                         project_name,
-                        uncatalogued: summary.workflow_id.is_none(),
                         name: summary.name.clone(),
-                        version: summary.version.as_hex(),
                         state: summary.state.clone(),
                         created: format_time(summary.created_at_ms),
                         current_step: summary.current_step.clone(),
@@ -118,6 +114,8 @@ pub(super) struct RunDetailView {
     pub(super) catalogue_note: String,
     pub(super) version: String,
     pub(super) state: &'static str,
+    pub(super) state_note: &'static str,
+    pub(super) review_href: String,
     pub(super) created: String,
     pub(super) current_step: String,
     pub(super) steps: Vec<StepView>,
@@ -146,6 +144,8 @@ pub(super) struct RunDetailContents<'a> {
     pub(super) catalogue_note: &'a str,
     pub(super) version: &'a str,
     pub(super) state: &'static str,
+    pub(super) state_note: &'static str,
+    pub(super) review_href: &'a str,
     pub(super) created: &'a str,
     pub(super) current_step: &'a str,
     pub(super) steps: &'a [StepView],
@@ -172,6 +172,13 @@ impl RunDetailView {
             catalogue_note,
             version: run.pinned.version.as_hex(),
             state: run.state.as_label(),
+            state_note: state_note(&run.state),
+            review_href: match &run.state {
+                crate::workflows::run::RunState::AwaitingHuman { gate, .. } => {
+                    format!("/runs/{}/gates/{}", run.id.as_hex(), gate.as_hex())
+                }
+                _ => String::new(),
+            },
             created: format_time(run.created_at_ms),
             current_step: run.current_step_name().unwrap_or("").to_owned(),
             steps: run
@@ -338,12 +345,47 @@ impl RunDetailView {
             catalogue_note: &self.catalogue_note,
             version: &self.version,
             state: self.state,
+            state_note: self.state_note,
+            review_href: &self.review_href,
             created: &self.created,
             current_step: &self.current_step,
             steps: &self.steps,
             environments: &self.environments,
             attempts: &self.attempts,
             artefacts: &self.artefacts,
+        }
+    }
+}
+
+fn state_note(state: &crate::workflows::run::RunState) -> &'static str {
+    match state {
+        crate::workflows::run::RunState::InitialisingSource => {
+            "Power Plant captures the project source before the first step starts."
+        }
+        crate::workflows::run::RunState::Ready { .. } => {
+            "The next step is queued. Only a commit step can change project files."
+        }
+        crate::workflows::run::RunState::Active { .. } => {
+            "The current step runs in an isolated sandbox. Only a commit step can change project files."
+        }
+        crate::workflows::run::RunState::AwaitingHuman { .. } => {
+            "Review the pinned candidate. Approval continues the run. Only a commit step can change project files."
+        }
+        crate::workflows::run::RunState::RevisionRequested { .. } => {
+            "The revision request ended this run. Start a new task to continue the work."
+        }
+        crate::workflows::run::RunState::Escalated { .. } => {
+            "Automatic work stopped. Inspect the latest review report before a new task."
+        }
+        crate::workflows::run::RunState::Completed => "All steps completed.",
+        crate::workflows::run::RunState::Failed => {
+            "A step failed. Inspect the latest attempt for the failure category."
+        }
+        crate::workflows::run::RunState::Cancelled => {
+            "The run was cancelled. No later steps will start."
+        }
+        crate::workflows::run::RunState::Interrupted => {
+            "The process restarted before this run finished. This run cannot continue."
         }
     }
 }
@@ -545,6 +587,7 @@ pub(super) struct ArtefactView {
     pub(super) producer: &'static str,
     pub(super) created: String,
     pub(super) body: String,
+    pub(super) content_unavailable: bool,
     pub(super) constraint: String,
     pub(super) preview: String,
     pub(super) truncated: bool,
@@ -556,9 +599,9 @@ impl ArtefactView {
         record: &crate::workflows::artefacts::ArtefactRecord,
         state: &crate::state::AppState,
     ) -> Self {
-        let body = match state.workflow_artefacts.get(&record.object_hash) {
-            Ok(bytes) => artefact_body(record.kind, bytes),
-            Err(_) => String::new(),
+        let (body, content_unavailable) = match state.workflow_artefacts.get(&record.object_hash) {
+            Ok(bytes) => (artefact_body(record.kind, bytes), false),
+            Err(_) => (String::new(), true),
         };
         let constraint = record.constraint_label();
         let (preview, truncated) = candidate_preview(run, record, state);
@@ -569,6 +612,7 @@ impl ArtefactView {
             producer: record.provenance.producer.as_label(),
             created: format_time(record.created_at_ms),
             body,
+            content_unavailable,
             constraint,
             preview,
             truncated,

@@ -4,8 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use super::definition::DefinitionVersion;
-use super::id::{RunId, WorkflowId};
+use super::id::RunId;
 use super::run::{AttemptRecord, RunRecordError, WorkflowRun, now_ms};
 use crate::projects::ProjectId;
 
@@ -15,9 +14,7 @@ pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
 pub(crate) struct RunSummary {
     pub(crate) id: RunId,
     pub(crate) project_id: ProjectId,
-    pub(crate) workflow_id: Option<WorkflowId>,
     pub(crate) name: String,
-    pub(crate) version: DefinitionVersion,
     pub(crate) state: String,
     pub(crate) created_at_ms: u64,
     pub(crate) current_step: String,
@@ -161,9 +158,7 @@ fn summary_of(run: &WorkflowRun) -> RunSummary {
     RunSummary {
         id: run.id,
         project_id: run.project_id,
-        workflow_id: run.pinned.workflow_id,
         name: run.pinned.definition.name().to_owned(),
-        version: run.pinned.version,
         state: run.state.as_label().to_owned(),
         created_at_ms: run.created_at_ms,
         current_step: run.current_step_name().unwrap_or("").to_owned(),

@@ -510,15 +510,6 @@
         font-size: 0.75rem;
     }
 
-    .app-index-label {
-        margin: 1.1rem 1.25rem 0.35rem;
-        color: var(--powerplant-on-cover-dim);
-        font-family: var(--font-mono);
-        font-size: 0.68rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-    }
-
     .app-index-nav-desktop {
         display: flex;
         flex: 1;
@@ -553,7 +544,7 @@
     }
 
     .app-index-group:first-child .app-index-group-label {
-        margin-top: 0.15rem;
+        margin-top: 1rem;
     }
 
     .app-index-nav-desktop a {
@@ -626,19 +617,6 @@
         background: var(--powerplant-action);
     }
 
-    .app-connection {
-        margin: auto 1rem 0.8rem;
-        padding: 0.7rem 0.25rem 0;
-        border-top: 1px solid var(--powerplant-cover-rule-soft);
-    }
-
-    .app-connection strong {
-        display: block;
-        color: var(--powerplant-on-cover-bright);
-        font-size: 0.8rem;
-    }
-
-    .app-connection i,
     .connect-local i {
         display: inline-block;
         width: 0.45rem;
@@ -661,7 +639,7 @@
         min-width: 0;
         min-height: 2.65rem;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-end;
         gap: 1rem;
         padding: 0.55rem 1.5rem;
         color: var(--powerplant-ink);
@@ -828,8 +806,32 @@
         background: var(--powerplant-paper);
     }
 
+    .btn-ghost {
+        color: var(--powerplant-ink);
+    }
+
     .btn-ghost:hover {
+        color: var(--powerplant-ink);
         background: var(--powerplant-paper-green);
+    }
+
+    .btn-error.btn-outline {
+        border-color: var(--color-error);
+        color: var(--powerplant-error-ink);
+        background: transparent;
+    }
+
+    .btn-error.btn-outline:hover {
+        color: var(--powerplant-error-ink);
+        background: var(--powerplant-error-wash);
+    }
+
+    .btn:disabled,
+    .input:disabled,
+    .select:disabled,
+    .textarea:disabled {
+        cursor: not-allowed;
+        opacity: 0.72;
     }
 
     .input,
@@ -949,14 +951,72 @@
     .status-stamp {
         display: inline-block;
         padding: 0.35rem 0.65rem;
-        color: var(--powerplant-success);
+        color: var(--powerplant-success-ink);
         border: 2px solid var(--powerplant-success);
+        background: var(--powerplant-success-wash);
         font-family: var(--font-mono);
         font-size: 0.72rem;
         font-weight: 600;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         transform: rotate(-1.5deg);
+    }
+
+    :is(.status-stamp, .state-badge)[data-state="Ready"],
+    :is(.status-stamp, .state-badge)[data-state="Completed"],
+    :is(.status-stamp, .state-badge)[data-state="Approved"],
+    :is(.status-stamp, .state-badge)[data-state="Current"] {
+        border-color: var(--powerplant-success);
+        color: var(--powerplant-success-ink);
+        background: var(--powerplant-success-wash);
+    }
+
+    :is(.status-stamp, .state-badge)[data-state="Active"],
+    :is(.status-stamp, .state-badge)[data-state="Source capture"],
+    :is(.status-stamp, .state-badge)[data-state="Awaiting decision"] {
+        border-color: var(--powerplant-info-border);
+        color: var(--powerplant-ink);
+        background: var(--powerplant-info-wash);
+    }
+
+    :is(.status-stamp, .state-badge)[data-state="Revision requested"],
+    :is(.status-stamp, .state-badge)[data-state="Waiting"],
+    :is(.status-stamp, .state-badge)[data-state="Superseded"],
+    :is(.status-stamp, .state-badge)[data-state="Stale"],
+    :is(.status-stamp, .state-badge)[data-state="Cancelled"],
+    :is(.status-stamp, .state-badge)[data-state="Interrupted"] {
+        border-color: var(--powerplant-action-deep);
+        color: var(--powerplant-ink);
+        background: var(--powerplant-warning-wash);
+    }
+
+    :is(.status-stamp, .state-badge)[data-state="Failed"],
+    :is(.status-stamp, .state-badge)[data-state^="Escalated"] {
+        border-color: var(--color-error);
+        color: var(--powerplant-error-ink);
+        background: var(--powerplant-error-wash);
+    }
+
+    .danger-zone {
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--color-error);
+    }
+
+    .file-disclosure {
+        border-top: 1px solid var(--powerplant-strong-rule);
+    }
+
+    .file-disclosure > summary {
+        min-height: 2.75rem;
+        padding-block: 0.75rem;
+        color: var(--powerplant-ink);
+        font-family: var(--font-heading);
+        font-weight: 600;
+    }
+
+    .file-disclosure[open] > summary {
+        border-bottom: 1px solid var(--powerplant-rule);
     }
 
     .chat-sheet {
@@ -1328,11 +1388,6 @@
         height: 2.15rem;
     }
 
-    .app-index-label,
-    .app-connection {
-        display: none;
-    }
-
     .app-index-nav-desktop {
         display: none;
     }
@@ -1487,6 +1542,7 @@
 
     .record-row {
         align-items: start;
+        gap: 0.75rem;
     }
 
     .settings-row {
@@ -1530,6 +1586,10 @@
 
     .composer-dock {
         padding: 0.8rem 0.9rem 1rem;
+    }
+
+    .shortcut-hint {
+        display: none;
     }
 
     .chat-sheet:has(.chat-task-examples) .composer-dock {
@@ -1605,6 +1665,14 @@
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+    animation: none !important;
+    transition: none !important;
 }
 
 [data-model-options] {

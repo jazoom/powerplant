@@ -1,4 +1,5 @@
 use super::{FormError, FormIntent, WorkflowFormState, can_move_step, can_remove_step};
+use crate::workflows::definition::MAXIMUM_DIRECTORIES;
 
 fn pair(key: &str, value: &str) -> (String, String) {
     (key.to_owned(), value.to_owned())
@@ -74,6 +75,28 @@ fn unknown_intents_are_rejected() {
         WorkflowFormState::parse(pairs).err(),
         Some(FormError::Intent)
     );
+}
+
+#[test]
+fn directory_intents_enforce_bounds() {
+    let mut full = valid_pairs();
+    full[0] = pair("intent", "add-directory:0");
+    for index in 0..MAXIMUM_DIRECTORIES {
+        full.extend([
+            pair(
+                &format!("step_0_dir_{index}_alias"),
+                &format!("extra-{index}"),
+            ),
+            pair(&format!("step_0_dir_{index}_access"), "read-only"),
+        ]);
+    }
+    let (mut form, intent) = WorkflowFormState::parse(full).expect("parse full directories");
+    assert_eq!(form.apply(intent), Err(FormError::Excessive));
+
+    let mut empty = valid_pairs();
+    empty[0] = pair("intent", "remove-directory:0:0");
+    let (mut form, intent) = WorkflowFormState::parse(empty).expect("parse empty directories");
+    assert_eq!(form.apply(intent), Err(FormError::Index));
 }
 
 #[test]

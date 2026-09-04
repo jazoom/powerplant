@@ -4,7 +4,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::agents::ToolId;
 use crate::workflows::WorkflowRecord;
-use crate::workflows::definition::{MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS};
+use crate::workflows::definition::{
+    MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS,
+};
 
 use super::forms::{
     FormErrors, RoleDraft, StepDraft, WorkflowFormState, can_move_step, can_remove_step,
@@ -26,7 +28,6 @@ pub(super) struct CatalogueItem {
     pub(super) name: String,
     pub(super) roles: usize,
     pub(super) steps: usize,
-    pub(super) version: String,
     pub(super) updated: String,
 }
 
@@ -46,7 +47,6 @@ impl CatalogueView {
                     name: record.definition.name().to_owned(),
                     roles: record.definition.roles().len(),
                     steps: record.definition.steps().len(),
-                    version: record.definition_version.short_hex(),
                     updated: format_time(record.updated_at_ms),
                 })
                 .collect(),
@@ -106,6 +106,7 @@ pub(super) struct ReviewPolicyRow {
 
 pub(super) struct RoleRow {
     pub(super) index: usize,
+    pub(super) position: usize,
     pub(super) key: String,
     pub(super) key_error: &'static str,
     pub(super) name: String,
@@ -127,6 +128,7 @@ pub(super) struct CommandChoice {
 
 pub(super) struct StepRow {
     pub(super) index: usize,
+    pub(super) position: usize,
     pub(super) key: String,
     pub(super) key_error: &'static str,
     pub(super) name: String,
@@ -147,11 +149,11 @@ pub(super) struct StepRow {
     pub(super) show_outputs: bool,
     pub(super) tools: Vec<ToolChoice>,
     pub(super) directories: Vec<DirectoryRow>,
+    pub(super) can_add_directory: bool,
     pub(super) inputs: Vec<InputRow>,
     pub(super) can_add_input: bool,
     pub(super) outputs: Vec<OutputRow>,
     pub(super) can_add_output: bool,
-    pub(super) transition: &'static str,
     pub(super) review_policy: Option<ReviewPolicyRow>,
     pub(super) review_policy_error: &'static str,
     pub(super) can_review_gate: bool,
@@ -174,7 +176,6 @@ pub(super) struct WorkflowFormView {
     pub(super) environment_options: Vec<EnvironmentOption>,
     pub(super) no_ready_environment: bool,
     pub(super) revision: String,
-    pub(super) version: String,
     pub(super) summary_error: &'static str,
     pub(super) roles: Vec<RoleRow>,
     pub(super) steps: Vec<StepRow>,
@@ -197,7 +198,6 @@ pub(super) struct WorkflowFormContents<'a> {
     pub(super) environment_options: &'a [EnvironmentOption],
     pub(super) no_ready_environment: bool,
     pub(super) revision: &'a str,
-    pub(super) version: &'a str,
     pub(super) summary_error: &'static str,
     pub(super) roles: &'a [RoleRow],
     pub(super) steps: &'a [StepRow],
@@ -217,7 +217,6 @@ impl WorkflowFormView {
             state,
             errors,
             "",
-            "",
             false,
             "",
         )
@@ -236,7 +235,6 @@ impl WorkflowFormView {
             state,
             errors,
             &record.revision.to_string(),
-            &record.definition_version.as_hex(),
             true,
             delete_error,
         )
@@ -263,7 +261,6 @@ impl WorkflowFormView {
         state: WorkflowFormState,
         errors: FormErrors,
         revision: &str,
-        version: &str,
         show_delete: bool,
         delete_error: &'static str,
     ) -> Self {
@@ -284,7 +281,6 @@ impl WorkflowFormView {
             environment_options: Vec::new(),
             no_ready_environment: false,
             revision,
-            version: version.to_owned(),
             summary_error: errors.summary,
             roles: state
                 .roles
@@ -296,15 +292,7 @@ impl WorkflowFormView {
                 .steps
                 .iter()
                 .enumerate()
-                .map(|(index, step)| {
-                    step_row(
-                        index,
-                        step_count,
-                        step,
-                        &state.steps,
-                        errors.steps.get(index),
-                    )
-                })
+                .map(|(index, step)| step_row(index, step, &state.steps, errors.steps.get(index)))
                 .collect(),
             can_add_role: role_count < MAXIMUM_ROLES,
             can_add_step: step_count < MAXIMUM_STEPS,
@@ -359,7 +347,6 @@ impl WorkflowFormView {
             environment_options: &self.environment_options,
             no_ready_environment: self.no_ready_environment,
             revision: &self.revision,
-            version: &self.version,
             summary_error: self.summary_error,
             roles: &self.roles,
             steps: &self.steps,
@@ -381,6 +368,7 @@ fn role_row(
     let errors = errors.cloned().unwrap_or_default();
     RoleRow {
         index,
+        position: index + 1,
         key: role.key,
         key_error: errors.key,
         name: role.name,
@@ -397,7 +385,6 @@ fn role_row(
 
 fn step_row(
     index: usize,
-    count: usize,
     step: &StepDraft,
     steps: &[StepDraft],
     errors: Option<&super::forms::StepErrors>,
@@ -415,6 +402,7 @@ fn step_row(
     let lock_outputs = !is_agent;
     StepRow {
         index,
+        position: index + 1,
         key: step.key.clone(),
         key_error: errors.key,
         name: step.name.clone(),
@@ -464,6 +452,7 @@ fn step_row(
                     .unwrap_or(""),
             })
             .collect(),
+        can_add_directory: step.directories.len() < MAXIMUM_DIRECTORIES,
         inputs: step
             .inputs
             .iter()
@@ -516,11 +505,6 @@ fn step_row(
             })
             .collect(),
         can_add_output: !lock_outputs && output_count < MAXIMUM_OUTPUTS,
-        transition: if index + 1 < count {
-            "Then"
-        } else {
-            "Complete run"
-        },
         review_policy: step.review_policy.as_ref().map(|policy| ReviewPolicyRow {
             report_output: policy.report_output.clone(),
             report_output_error: errors.report_output,

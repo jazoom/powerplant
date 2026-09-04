@@ -5,18 +5,21 @@
   <div class="page-intro">
     <div>
       <h1>Workflows</h1>
-      <p>Workflows connect roles, environments, steps and review policy.</p>
+      <p>Build reusable task flows with multiple steps, roles and reviews.</p>
     </div>
-    <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
-      >New workflow</a
-    >
+    {% if !workflows.is_empty() %}
+      <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
+        >New workflow</a
+      >
+    {% endif %}
   </div>
 
   {% if workflows.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">No workflows</h2>
+      <h2 class="text-lg font-semibold">Create your first workflow</h2>
       <p class="text-quiet max-w-[60ch]">
-        Tasks need a workflow before an agent can send work.
+        Use a workflow when a task needs multiple steps, roles or a review.
+        Quick tasks do not need one.
       </p>
       <a href="/workflows/new" data-graft class="btn btn-primary btn-sm"
         >Create the first workflow</a
@@ -34,8 +37,7 @@
               >{{ workflow.name }}</a
             >
             <p class="text-quiet text-xs">
-              {{ workflow.roles }} roles · {{ workflow.steps }} steps ·
-              <span class="font-mono">{{ workflow.version }}</span>
+              {{ workflow.roles }} roles · {{ workflow.steps }} steps
             </p>
           </div>
           <span class="text-quiet text-xs">{{ workflow.updated }}</span>

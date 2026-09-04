@@ -12,15 +12,10 @@
         <div>
           {% if has_stored_providers %}
             <h1>Providers</h1>
-            <p>
-              Connected providers are available to use from the project desk.
-            </p>
+            <p>Manage the model providers available on every project desk.</p>
           {% else %}
             <h1>Connect a provider</h1>
-            <p>
-              Connect as many providers as you like with a plan login or an API
-              key.
-            </p>
+            <p>Use a supported plan login or an API key from your provider.</p>
           {% endif %}
         </div>
         {% if has_stored_providers %}
@@ -60,7 +55,11 @@
                     name="provider"
                     value="{{ provider.value }}"
                   />
-                  <button class="btn btn-ghost btn-sm" type="submit">
+                  <button
+                    class="btn btn-ghost btn-sm"
+                    type="submit"
+                    aria-label="Forget {{ provider.label }}"
+                  >
                     Forget
                   </button>
                 </form>
@@ -77,7 +76,11 @@
           role="alert"
           tabindex="-1"
         >
-          <p><a href="#{{ error.target_id() }}">{{ error.message }}</a></p>
+          <p>
+            <a href="#{{ error.target_id() }}" class="link"
+              >{{ error.message }}</a
+            >
+          </p>
         </div>
       {% endif %}
 
@@ -88,8 +91,7 @@
               <div>
                 <h2 class="font-semibold">Connect with a plan</h2>
                 <p class="text-quiet mt-1 text-sm">
-                  Each button starts a separate sign-in for its provider. No API
-                  key is needed.
+                  Sign in with a supported plan. You do not need an API key.
                 </p>
               </div>
               {% if let Some(pending) = pending %}
@@ -176,8 +178,7 @@
               <div>
                 <h2 class="font-semibold">Connect with an API key</h2>
                 <p class="text-quiet mt-1 text-sm">
-                  Select one provider. Then enter an API key from that same
-                  provider.
+                  Choose the provider that issued your API key.
                 </p>
               </div>
               <fieldset
@@ -216,7 +217,7 @@
                   >2. API key from that provider</label
                 >
                 <p id="connect-key-help" class="text-quiet mb-2 text-sm">
-                  This key applies only to the provider selected in step 1.
+                  Enter the key from the provider that you selected above.
                 </p>
                 <input
                   id="connect-key"

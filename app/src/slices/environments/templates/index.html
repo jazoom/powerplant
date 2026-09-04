@@ -5,18 +5,20 @@
   <div class="page-intro">
     <div>
       <h1>Environments</h1>
-      <p>Prepare the guest images that workflow steps use inside sandboxes.</p>
+      <p>Prepare the software that agents use inside isolated sandboxes.</p>
     </div>
-    <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
-      >New environment</a
-    >
+    {% if !environments.is_empty() %}
+      <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
+        >New environment</a
+      >
+    {% endif %}
   </div>
 
   {% if environments.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">No environments</h2>
+      <h2 class="text-lg font-semibold">Create your first environment</h2>
       <p class="text-quiet max-w-[60ch]">
-        Workflows require a prepared environment before they can run.
+        A prepared environment gives agents the software that their work needs.
       </p>
       <a href="/environments/new" data-graft class="btn btn-primary btn-sm"
         >Create the first environment</a
@@ -36,18 +38,15 @@
             <p class="text-quiet font-mono text-xs break-all">
               {{ environment.image }}
             </p>
-            {% if environment.snapshot != "" %}
-              <p class="text-quiet font-mono text-xs break-all">
-                {{ environment.snapshot }}
-              </p>
-            {% endif %}
           </div>
           <div class="flex flex-col items-end gap-1 text-right">
             <span
               class="badge badge-sm {% if environment.readiness_tone == "success" %}badge-success{% else if environment.readiness_tone == "warning" %}badge-warning{% else if environment.readiness_tone == "info" %}badge-info{% else %}badge-ghost{% endif %}"
               >{{ environment.readiness }}</span
             >
-            <span class="text-quiet text-xs">{{ environment.prepared }}</span>
+            <span class="text-quiet text-xs"
+              >Updated {{ environment.prepared }}</span
+            >
           </div>
         </li>
       {% endfor %}
