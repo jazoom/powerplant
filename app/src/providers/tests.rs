@@ -1,9 +1,10 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    MAXIMUM_LISTED_MODELS, MAXIMUM_MODEL_BYTES, MAXIMUM_PROVIDER_DETAIL_BYTES, ProviderError,
-    ProviderKind, SecretString, classify_failure_status, classify_verify_status, provider_detail,
-    rig::{VERIFY_TIMEOUT, models_at, parse_model_list, verify_at},
+    MAXIMUM_LISTED_MODELS, MAXIMUM_MODEL_BYTES, MAXIMUM_PROVIDER_DETAIL_BYTES, ProviderConnection,
+    ProviderError, ProviderKind, SecretString, ThinkingLevel, classify_failure_status,
+    classify_verify_status, provider_detail,
+    rig::{VERIFY_TIMEOUT, models_at, parse_model_list, thinking_parameters, verify_at},
     with_json_detail, with_provider_detail,
 };
 
@@ -20,6 +21,36 @@ fn chatgpt_plan_replaces_retired_model_ids() {
     assert_eq!(
         super::effective_plan_model(ProviderKind::Xai, "grok-4.6"),
         "grok-4.6"
+    );
+}
+
+#[test]
+fn thinking_levels_map_to_each_provider_request_shape() {
+    let mut connection = ProviderConnection::with_key(ProviderKind::OpenaiCodex, "key", "model");
+    assert_eq!(thinking_parameters(&connection), None);
+
+    connection.thinking = ThinkingLevel::High;
+    assert_eq!(
+        thinking_parameters(&connection),
+        Some(serde_json::json!({"reasoning": {"effort": "high"}}))
+    );
+
+    connection.kind = ProviderKind::Synthetic;
+    assert_eq!(
+        thinking_parameters(&connection),
+        Some(serde_json::json!({"reasoning_effort": "high"}))
+    );
+
+    connection.kind = ProviderKind::Openrouter;
+    assert_eq!(
+        thinking_parameters(&connection),
+        Some(serde_json::json!({"reasoning": {"effort": "high"}}))
+    );
+
+    connection.kind = ProviderKind::Deepseek;
+    assert_eq!(
+        thinking_parameters(&connection),
+        Some(serde_json::json!({"thinking": {"type": "enabled"}}))
     );
 }
 

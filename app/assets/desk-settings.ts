@@ -4,6 +4,7 @@ type DeskControls = {
     provider: HTMLSelectElement;
     model: HTMLInputElement;
     providerModelSynced: HTMLInputElement;
+    thinking: HTMLSelectElement;
     combobox: HTMLElement;
     toggle: HTMLButtonElement;
     options: HTMLElement;
@@ -18,6 +19,7 @@ function controls(root: HTMLFormElement): DeskControls | null {
     const providerModelSynced = root.elements.namedItem(
         "provider_model_synced",
     );
+    const thinking = root.elements.namedItem("thinking");
     const combobox = root.querySelector<HTMLElement>("[data-model-combobox]");
     const toggle = root.querySelector<HTMLButtonElement>("[data-model-toggle]");
     const options = root.querySelector<HTMLElement>("[data-model-options]");
@@ -30,6 +32,7 @@ function controls(root: HTMLFormElement): DeskControls | null {
         !(provider instanceof HTMLSelectElement) ||
         !(model instanceof HTMLInputElement) ||
         !(providerModelSynced instanceof HTMLInputElement) ||
+        !(thinking instanceof HTMLSelectElement) ||
         !combobox ||
         !toggle ||
         !options ||
@@ -43,6 +46,7 @@ function controls(root: HTMLFormElement): DeskControls | null {
         provider,
         model,
         providerModelSynced,
+        thinking,
         combobox,
         toggle,
         options,
@@ -99,7 +103,6 @@ function syncModelSelection(root: HTMLFormElement): void {
     }
     const value = found.model.value.trim();
     found.label.textContent = value;
-    found.toggle.ariaLabel = `Model, ${value}`;
     for (const option of modelOptions(found)) {
         const selected = option.dataset.modelValue === value;
         option.ariaPressed = String(selected);
@@ -120,6 +123,7 @@ function syncProvider(root: HTMLFormElement): void {
     }
     const selected = found.provider.selectedOptions.item(0);
     found.model.value = selected?.dataset.model ?? "";
+    found.thinking.value = selected?.dataset.thinking ?? "default";
     found.providerModelSynced.value = "true";
     syncModelSelection(root);
     setExpanded(found, false);
@@ -215,13 +219,16 @@ export function initDeskSettings(
     root.addEventListener(
         "change",
         (event) => {
-            if (
-                event.target instanceof HTMLSelectElement &&
-                event.target.name === "provider"
-            ) {
+            if (!(event.target instanceof HTMLSelectElement)) {
+                return;
+            }
+            if (event.target.name === "provider") {
                 syncProvider(root);
                 submitDesk();
                 return;
+            }
+            if (event.target.name === "thinking") {
+                submitDesk();
             }
         },
         { signal },

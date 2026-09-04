@@ -11,8 +11,8 @@ use rig_core::{
 use super::{
     AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, ModelEvent, ModelStream,
     OPENROUTER_BASE_URL, ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
-    classify_failure_status_for, classify_verify_status, model_is_bounded, with_json_detail,
-    with_provider_detail, xai_plan,
+    ThinkingLevel, classify_failure_status_for, classify_verify_status, model_is_bounded,
+    with_json_detail, with_provider_detail, xai_plan,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -236,7 +236,7 @@ pub(super) async fn stream_turn(
             let client = xai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
         (ProviderKind::Xai, AuthMethod::Plan) => {
             let token = xai_plan_token(connection).await?;
@@ -248,18 +248,18 @@ pub(super) async fn stream_turn(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::Plan).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::ApiKey) => {
             let client = openai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::Plan) => {
             let client = chatgpt_plan_client(connection, false, preamble)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::Plan).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
         (ProviderKind::Synthetic, _) => {
             let client = openai::Client::builder()
@@ -269,21 +269,39 @@ pub(super) async fn stream_turn(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
         (ProviderKind::Openrouter, _) => {
             let client = openrouter::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
         (ProviderKind::Deepseek, _) => {
             let client = deepseek::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, AuthMethod::ApiKey).await
+            stream_messages(model, history, extra, tools, preamble, connection).await
         }
     }
+}
+
+pub(super) fn thinking_parameters(connection: &ProviderConnection) -> Option<serde_json::Value> {
+    let effort = match connection.thinking {
+        ThinkingLevel::Default => return None,
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+    };
+    Some(match (connection.kind, connection.auth) {
+        (ProviderKind::Deepseek, _) => serde_json::json!({"thinking": {"type": "enabled"}}),
+        (ProviderKind::Synthetic, _) | (ProviderKind::Xai, AuthMethod::Plan) => {
+            serde_json::json!({"reasoning_effort": effort})
+        }
+        (ProviderKind::Xai | ProviderKind::OpenaiCodex, _) | (ProviderKind::Openrouter, _) => {
+            serde_json::json!({"reasoning": {"effort": effort}})
+        }
+    })
 }
 
 fn chatgpt_plan_client(
@@ -361,7 +379,7 @@ async fn stream_messages<M>(
     extra: &[Message],
     tools: &[ToolDefinition],
     preamble: &str,
-    auth: AuthMethod,
+    connection: &ProviderConnection,
 ) -> Result<ModelStream, ProviderError>
 where
     M: CompletionModel + Clone,
@@ -381,13 +399,17 @@ where
         .completion_request(prompt)
         .preamble(preamble.to_owned())
         .messages(messages);
+    if let Some(parameters) = thinking_parameters(connection) {
+        request = request.additional_params(parameters);
+    }
     if !tools.is_empty() {
         request = request.tools(tools.to_vec());
     }
     let response = request
         .stream()
         .await
-        .map_err(|error| classify_completion_for(error, auth))?;
+        .map_err(|error| classify_completion_for(error, connection.auth))?;
+    let auth = connection.auth;
     Ok(Box::pin(response.filter_map(move |item| {
         std::future::ready(match item {
             Ok(StreamedAssistantContent::Text(text)) => Some(Ok(ModelEvent::Text(text.text))),

@@ -1,11 +1,15 @@
 use serde::Deserialize;
 
-use crate::providers::{ProviderKind, model_is_bounded, resolve_model};
+use crate::providers::{ProviderKind, ThinkingLevel, model_is_bounded, resolve_model};
 use crate::sessions::JobId;
 use crate::workflows::WorkflowSelection;
 
 pub(crate) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
 pub(crate) const MAXIMUM_CURSOR: u64 = 1_000_000;
+
+fn default_thinking() -> String {
+    ThinkingLevel::Default.as_str().to_owned()
+}
 
 #[derive(Deserialize)]
 pub(crate) struct ChatForm {
@@ -79,6 +83,8 @@ pub(crate) struct ModelForm {
     pub(crate) model: String,
     #[serde(default)]
     pub(crate) favourite: Option<String>,
+    #[serde(default = "default_thinking")]
+    pub(crate) thinking: String,
     #[serde(default)]
     pub(crate) provider_model_synced: bool,
     #[serde(default)]
@@ -91,6 +97,7 @@ pub(crate) struct ModelForm {
 pub(crate) enum ModelError {
     Provider,
     Model,
+    Thinking,
 }
 
 impl ModelForm {
@@ -101,12 +108,18 @@ impl ModelForm {
     pub(crate) fn validate(
         &self,
         stored: impl Fn(ProviderKind) -> bool,
-    ) -> Result<(ProviderKind, String), ModelError> {
+    ) -> Result<(ProviderKind, String, ThinkingLevel), ModelError> {
         let kind = self.stored_provider(stored)?;
         if !model_is_bounded(&self.model) {
             return Err(ModelError::Model);
         }
-        Ok((kind, resolve_model(kind, &self.model)))
+        let Some(thinking) = ThinkingLevel::parse(self.thinking.trim()) else {
+            return Err(ModelError::Thinking);
+        };
+        if !kind.thinking_levels().contains(&thinking) {
+            return Err(ModelError::Thinking);
+        }
+        Ok((kind, resolve_model(kind, &self.model), thinking))
     }
 
     pub(crate) fn validate_favourite(

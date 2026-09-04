@@ -39,7 +39,7 @@ Projects remains the first route and the brand destination. Providers uses `/con
 
 The desk title is the project name. The host path sits under the title as quiet monospace metadata. The project title and the composer are the strongest page elements.
 
-Model settings sit in a compact disclosure. Provider defaults stay active. Manage providers remains inside the disclosure. The `#desk-settings` patch target stays inside the disclosure.
+Provider, model and thinking controls stay visible above the desk title. Provider defaults stay active. The `#desk-settings` patch target contains these controls.
 
 The selected agent is a compact control. Each eligible agent choice is a real canonical link.
 

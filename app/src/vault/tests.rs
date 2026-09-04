@@ -113,7 +113,11 @@ fn replacing_a_key_keeps_the_saved_model() {
         .put(connection(ProviderKind::Xai, "grok-4.6"))
         .unwrap();
     vault
-        .select(ProviderKind::Xai, "grok-custom".to_owned())
+        .select_settings(
+            ProviderKind::Xai,
+            "grok-custom".to_owned(),
+            crate::providers::ThinkingLevel::Default,
+        )
         .unwrap();
     vault
         .put(connection(ProviderKind::Xai, "ignored-default"))
@@ -121,6 +125,30 @@ fn replacing_a_key_keeps_the_saved_model() {
     assert_eq!(
         vault.selected_connection().map(|item| item.model),
         Some("grok-custom".to_owned())
+    );
+}
+
+#[test]
+fn thinking_level_round_trips_and_survives_a_new_key() {
+    let (vault, _dir, path) = file_vault();
+    vault
+        .put(connection(ProviderKind::Xai, "grok-4.6"))
+        .unwrap();
+    vault
+        .select_settings(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            crate::providers::ThinkingLevel::High,
+        )
+        .unwrap();
+
+    let reloaded = ProviderVault::open(path).expect("reload");
+    reloaded
+        .put(connection(ProviderKind::Xai, "ignored-default"))
+        .unwrap();
+    assert_eq!(
+        reloaded.selected_connection().map(|item| item.thinking),
+        Some(crate::providers::ThinkingLevel::High)
     );
 }
 
@@ -425,6 +453,8 @@ fn invalid_provider_records_are_corrupt_and_leave_the_file_unchanged() {
         )
         .into_bytes(),
         br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"bad\nmodel"}]}"#.to_vec(),
+        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","thinking":"extreme"}]}"#.to_vec(),
+        br#"{"version":1,"selected":"deepseek","providers":[{"kind":"deepseek","auth":"api_key","api_key":"sk-one","model":"deepseek-v4-flash","thinking":"low"}]}"#.to_vec(),
         br#"{"version":1,"selected":"synthetic","providers":[{"kind":"synthetic","auth":"plan","model":"hf:custom"}]}"#.to_vec(),
         br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"plan","api_key":"sk-one","model":"grok-4.6"}]}"#.to_vec(),
         br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":["grok-4.6","grok-4.6"]}]}"#.to_vec(),

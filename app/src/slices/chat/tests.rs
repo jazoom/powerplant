@@ -1112,9 +1112,30 @@ async fn a_document_show_includes_the_desk_model_controls() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("id=\"desk-settings\""));
     assert!(text.contains("id=\"desk-model\""));
+    assert!(text.contains("id=\"desk-thinking\""));
     assert!(text.contains("href=\"/connect\""));
     assert!(!text.contains("/disconnect"));
     assert!(!text.contains("test-key"));
+}
+
+#[tokio::test]
+async fn the_desk_updates_the_thinking_level() {
+    let state = test_state();
+    let token = connected(&state).await;
+    let response = app(&state)
+        .oneshot(model_update_patch(
+            &state,
+            &token,
+            "provider=xai&model=grok-4.6&thinking=high",
+        ))
+        .await
+        .expect("thinking update");
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        state.vault.selected_connection().map(|item| item.thinking),
+        Some(crate::providers::ThinkingLevel::High)
+    );
 }
 
 #[tokio::test]
@@ -1341,7 +1362,11 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
         .unwrap();
     state
         .vault
-        .select(ProviderKind::Xai, "grok-4.6".to_owned())
+        .select_settings(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            crate::providers::ThinkingLevel::Default,
+        )
         .unwrap();
 
     let response = app(&state)

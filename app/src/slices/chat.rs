@@ -187,12 +187,12 @@ async fn update_model(
     }
 
     match form.validate(|kind| state.vault.contains(kind)) {
-        Ok((kind, model)) => {
+        Ok((kind, model, thinking)) => {
             let model = submitted_model(&state, &form, kind, model);
             state
                 .vault
-                .select(kind, model)
-                .map_err(|error| crate::error::AppError::new("store model", error))?;
+                .select_settings(kind, model, thinking)
+                .map_err(|error| crate::error::AppError::new("store model settings", error))?;
         }
         Err(forms::ModelError::Provider) => {
             let view = desk_view(&state, &desk).await;
@@ -201,6 +201,10 @@ async fn update_model(
         Err(forms::ModelError::Model) => {
             let view = desk_view(&state, &desk).await;
             return reject_model_view(&state, graft, view, "That model name is too long.").await;
+        }
+        Err(forms::ModelError::Thinking) => {
+            let view = desk_view(&state, &desk).await;
+            return reject_model_view(&state, graft, view, "Choose a thinking level.").await;
         }
     }
 
@@ -242,7 +246,7 @@ async fn toggle_favourite(
             let view = desk_view(state, desk).await;
             return reject_model_view(state, graft, view, "Choose a stored provider.").await;
         }
-        Err(forms::ModelError::Model) => {
+        Err(forms::ModelError::Model | forms::ModelError::Thinking) => {
             let view = desk_view(state, desk).await;
             return reject_model_view(state, graft, view, "Choose a model.").await;
         }

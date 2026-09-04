@@ -6,7 +6,7 @@ use crate::{
     markdown,
     models::ModelCatalogue,
     projects::ProjectRecord,
-    providers::{ChatTurn, Role},
+    providers::{ChatTurn, ProviderKind, Role, ThinkingLevel},
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
@@ -23,6 +23,13 @@ pub(crate) struct DeskProviderOption {
     pub(crate) value: &'static str,
     pub(crate) label: &'static str,
     pub(crate) model: String,
+    pub(crate) thinking: &'static str,
+    pub(crate) selected: bool,
+}
+
+pub(crate) struct ThinkingOption {
+    pub(crate) value: &'static str,
+    pub(crate) label: &'static str,
     pub(crate) selected: bool,
 }
 
@@ -43,6 +50,7 @@ pub(crate) struct ChatViewModel {
     pub(crate) document_title: String,
     pub(crate) providers: Vec<DeskProviderOption>,
     pub(crate) model: String,
+    pub(crate) thinking_options: Vec<ThinkingOption>,
     pub(crate) favourite_models: Vec<ModelOption>,
     pub(crate) catalogue_models: Vec<ModelOption>,
     pub(crate) catalogue_pending: bool,
@@ -243,6 +251,9 @@ impl ChatViewModel {
         let model = selected
             .map(|provider| provider.model.clone())
             .unwrap_or_default();
+        let thinking_options = selected
+            .map(|provider| thinking_options(provider.kind, provider.thinking))
+            .unwrap_or_default();
         let (favourite_models, catalogue_models) = selected
             .map(|provider| {
                 model_options(
@@ -260,10 +271,12 @@ impl ChatViewModel {
                     value: provider.kind.as_str(),
                     label: provider.kind.label(),
                     model: provider.model.clone(),
+                    thinking: provider.thinking.as_str(),
                     selected: provider.selected,
                 })
                 .collect(),
             model,
+            thinking_options,
             favourite_models,
             catalogue_models,
             catalogue_pending,
@@ -330,6 +343,7 @@ impl ChatViewModel {
         DeskSettingsContents {
             providers: &self.providers,
             model: &self.model,
+            thinking_options: &self.thinking_options,
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
             catalogue_pending: self.catalogue_pending,
@@ -421,6 +435,7 @@ pub(crate) fn turn_id(index: usize) -> String {
 pub(crate) struct DeskSettingsContents<'a> {
     pub(crate) providers: &'a [DeskProviderOption],
     pub(crate) model: &'a str,
+    pub(crate) thinking_options: &'a [ThinkingOption],
     pub(crate) favourite_models: &'a [ModelOption],
     pub(crate) catalogue_models: &'a [ModelOption],
     pub(crate) catalogue_pending: bool,
@@ -558,6 +573,17 @@ pub(crate) struct TurnArticle<'a> {
 #[template(path = "chat/templates/turn_body.html")]
 pub(crate) struct TurnBody<'a> {
     pub(crate) turn: &'a TurnView,
+}
+
+fn thinking_options(kind: ProviderKind, current: ThinkingLevel) -> Vec<ThinkingOption> {
+    kind.thinking_levels()
+        .iter()
+        .map(|level| ThinkingOption {
+            value: level.as_str(),
+            label: level.label(kind),
+            selected: *level == current,
+        })
+        .collect()
 }
 
 fn model_options(

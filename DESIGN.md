@@ -142,7 +142,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - More contains Agents, Workflows, Environments, Providers and Settings.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
-- The project desk uses model controls, a readiness route, a transcript sheet and an attached yellow composer.
+- The project desk uses visible provider, model and thinking controls, a readiness route, a transcript sheet and an attached yellow composer.
 - Connect uses a dark setup introduction beside a pale provider file.
 - Connect setup labels are Connect a model, Add a project and Send a task.
 - Forms use bordered field groups and dense controls without decorative cards.
@@ -176,6 +176,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Do not stop the server from the reset command.
 - Keep mobile navigation labels generic. Use the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
+- Keep the provider, model and thinking controls visible on the project desk.
+- Do not duplicate the Providers route beside the project desk controls.
 - Keep Quick task Send as the primary composer action.
 - Keep configured workflows inside an advanced disclosure.
 - Keep native links as navigation fallbacks for Hypergraft routes.
