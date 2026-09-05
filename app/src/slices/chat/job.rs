@@ -11,8 +11,8 @@ use rig_core::completion::{AssistantContent, Message};
 use crate::{
     agents::{AgentId, DirectoryPolicy, ToolId},
     providers::{
-        AssistantActivity, AssistantReply, ChatTurn, ModelEvent, ProviderConnection, ProviderError,
-        ToolOutput,
+        AssistantActivity, AssistantReply, ChatTurn, ModelEvent, ModelUsage, ProviderConnection,
+        ProviderError, ToolOutput,
     },
     sandbox::GuestSandbox,
     sessions::{Job, JobEventKind, JobStatus, SessionId},
@@ -21,8 +21,9 @@ use crate::{
 };
 
 use super::page::{
-    DeskStatusContents, JobCursorContents, JobObserveContents, TranscriptContents, TurnArticle,
-    TurnBody, TurnView, assistant_reply_turn, user_turn,
+    DeskStatusContents, JobCursorContents, JobObserveContents, ModelContextContents,
+    ModelContextView, TranscriptContents, TurnArticle, TurnBody, TurnView, assistant_reply_turn,
+    user_turn,
 };
 
 #[cfg(test)]
@@ -237,6 +238,15 @@ pub(crate) async fn run_agent_action(
                     name,
                     arguments,
                 }) => calls.push((id, name, arguments)),
+                Ok(ModelEvent::Usage { input_tokens }) => {
+                    let usage = ModelUsage {
+                        provider: spec.connection.kind,
+                        model: spec.connection.model.clone(),
+                        input_tokens,
+                    };
+                    reply.usage = Some(usage.clone());
+                    job.push_usage(usage);
+                }
                 Err(error) => {
                     thinking_progress.flush(&job, &reply.thinking);
                     publish_reply_remaining(
@@ -693,6 +703,10 @@ async fn observe_segment(
                     output.push_tool(tool);
                     true
                 }
+                JobEventKind::Usage { usage } => {
+                    output.usage = Some(usage);
+                    false
+                }
                 JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => false,
             };
             if !output_changed {
@@ -906,6 +920,20 @@ fn encode_observe_final(
         patches.children(
             "desk-status",
             &DeskStatusContents::idle(&review_href, quick_task_finished),
+        )?;
+    }
+    if let Some(usage) = snapshot.output.usage.as_ref() {
+        let context = ModelContextView::from_model(
+            &state.models_dev,
+            usage.provider,
+            &usage.model,
+            Some(usage),
+        );
+        patches.children(
+            "desk-model-context",
+            &ModelContextContents {
+                model_context: &context,
+            },
         )?;
     }
     let status = match snapshot.status {

@@ -100,10 +100,7 @@ async fn refresh_model_catalogue(
     _graft: PatchGraft,
 ) -> AppResult<Response> {
     let (status, message, error) = match state.models_dev.refresh_now().await {
-        RefreshResult::Updated => {
-            state.models.metadata_changed();
-            (PatchStatus::Ok, Some("Model catalogue updated."), None)
-        }
+        RefreshResult::Updated => (PatchStatus::Ok, Some("Model catalogue updated."), None),
         RefreshResult::Unchanged | RefreshResult::Skipped => (
             PatchStatus::Ok,
             Some("Model catalogue is up to date."),

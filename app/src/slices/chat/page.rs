@@ -4,16 +4,18 @@ use crate::{
     agents::AgentRecord,
     environments::{EnvironmentRecord, PreparationRecord, PreparationState, SnapshotAvailability},
     markdown,
-    models::{ModelCatalogue, models_dev::ModelsDevCatalogue},
+    models::models_dev::ModelsDevCatalogue,
     projects::ProjectRecord,
     providers::{
-        AssistantActivity, AssistantReply, ChatTurn, ProviderKind, Role, ThinkingEffort, ToolOutput,
+        AssistantActivity, AssistantReply, ChatTurn, ModelUsage, ProviderKind, Role,
+        ThinkingEffort, ToolOutput,
     },
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
 
 pub(crate) const DOCUMENT_TITLE: &str = "Chat | Power Plant";
+const MAXIMUM_MODEL_OPTIONS: usize = 512;
 
 pub(crate) struct TurnView {
     pub(crate) id: String,
@@ -55,7 +57,19 @@ pub(crate) struct ThinkingOption {
 pub(crate) struct ModelOption {
     pub(crate) id: String,
     pub(crate) efforts_json: String,
+    pub(crate) detail: String,
     pub(crate) selected: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct ModelContextView {
+    pub(crate) has_limit: bool,
+    pub(crate) limit: u64,
+    pub(crate) limit_label: String,
+    pub(crate) has_usage: bool,
+    pub(crate) usage: u64,
+    pub(crate) usage_label: String,
+    pub(crate) supports_attachments: bool,
 }
 
 pub(crate) struct AgentChoice {
@@ -73,7 +87,7 @@ pub(crate) struct ChatViewModel {
     pub(crate) thinking_options: Vec<ThinkingOption>,
     pub(crate) favourite_models: Vec<ModelOption>,
     pub(crate) catalogue_models: Vec<ModelOption>,
-    pub(crate) catalogue_pending: bool,
+    pub(crate) model_context: ModelContextView,
     pub(crate) desk_error: &'static str,
     pub(crate) turns: Vec<TurnView>,
     pub(crate) error: &'static str,
@@ -210,7 +224,6 @@ impl ChatViewModel {
         record: &AgentRecord,
         session: &SessionSnapshot,
         vault: &ProviderVault,
-        catalogue: &ModelCatalogue,
         models_dev: &ModelsDevCatalogue,
         error: &'static str,
         desk_error: &'static str,
@@ -218,7 +231,6 @@ impl ChatViewModel {
         Self::from_parts(
             record,
             &vault.desk_providers(),
-            catalogue,
             models_dev,
             &session.turns,
             session.job.as_ref(),
@@ -232,7 +244,6 @@ impl ChatViewModel {
     fn from_parts(
         record: &AgentRecord,
         providers: &[DeskProvider],
-        catalogue: &ModelCatalogue,
         models_dev: &ModelsDevCatalogue,
         turns: &[ChatTurn],
         job: Option<&JobSnapshot>,
@@ -245,6 +256,7 @@ impl ChatViewModel {
             .enumerate()
             .map(|(index, turn)| turn_view(index, turn))
             .collect();
+        let mut latest_usage = turns.iter().rev().find_map(|turn| turn.usage.clone());
         let mut job_id = String::new();
         let mut cursor = 0;
         let mut job_active = false;
@@ -253,6 +265,9 @@ impl ChatViewModel {
         let mut run_step = String::new();
         let mut workflow_name = String::new();
         if let Some(job) = job {
+            if job.output.usage.is_some() {
+                latest_usage = job.output.usage.clone();
+            }
             run_id = job.run_id.as_hex();
             run_step = job.step_label.clone();
             workflow_name = job.workflow_name.clone();
@@ -300,11 +315,19 @@ impl ChatViewModel {
                     models_dev,
                     &provider.model,
                     &provider.favourites,
-                    &catalogue.list(provider.kind),
                 )
             })
             .unwrap_or_default();
-        let catalogue_pending = selected.is_some_and(|provider| catalogue.pending(provider.kind));
+        let model_context = selected
+            .map(|provider| {
+                ModelContextView::from_model(
+                    models_dev,
+                    provider.kind,
+                    &provider.model,
+                    latest_usage.as_ref(),
+                )
+            })
+            .unwrap_or_default();
         Self {
             providers: providers
                 .iter()
@@ -328,7 +351,7 @@ impl ChatViewModel {
             thinking_options,
             favourite_models,
             catalogue_models,
-            catalogue_pending,
+            model_context,
             desk_error,
             turns: views,
             error,
@@ -397,7 +420,7 @@ impl ChatViewModel {
             thinking_options: &self.thinking_options,
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
-            catalogue_pending: self.catalogue_pending,
+            model_context: &self.model_context,
             desk_error: self.desk_error,
             job_active: self.session_busy,
             project_id: &self.project_id,
@@ -409,7 +432,6 @@ impl ChatViewModel {
         DeskModelCatalogueContents {
             favourite_models: &self.favourite_models,
             catalogue_models: &self.catalogue_models,
-            catalogue_pending: self.catalogue_pending,
         }
     }
 
@@ -417,6 +439,12 @@ impl ChatViewModel {
         ThinkingControlContents {
             thinking_options: &self.thinking_options,
             job_active: self.session_busy,
+        }
+    }
+
+    pub(crate) fn model_context(&self) -> ModelContextContents<'_> {
+        ModelContextContents {
+            model_context: &self.model_context,
         }
     }
 
@@ -597,7 +625,7 @@ pub(crate) struct DeskSettingsContents<'a> {
     pub(crate) thinking_options: &'a [ThinkingOption],
     pub(crate) favourite_models: &'a [ModelOption],
     pub(crate) catalogue_models: &'a [ModelOption],
-    pub(crate) catalogue_pending: bool,
+    pub(crate) model_context: &'a ModelContextView,
     pub(crate) desk_error: &'a str,
     pub(crate) job_active: bool,
     pub(crate) project_id: &'a str,
@@ -609,7 +637,6 @@ pub(crate) struct DeskSettingsContents<'a> {
 pub(crate) struct DeskModelCatalogueContents<'a> {
     pub(crate) favourite_models: &'a [ModelOption],
     pub(crate) catalogue_models: &'a [ModelOption],
-    pub(crate) catalogue_pending: bool,
 }
 
 #[derive(Template)]
@@ -617,6 +644,12 @@ pub(crate) struct DeskModelCatalogueContents<'a> {
 pub(crate) struct ThinkingControlContents<'a> {
     pub(crate) thinking_options: &'a [ThinkingOption],
     pub(crate) job_active: bool,
+}
+
+#[derive(Template)]
+#[template(path = "projects/templates/desk.html", block = "model_context")]
+pub(crate) struct ModelContextContents<'a> {
+    pub(crate) model_context: &'a ModelContextView,
 }
 
 #[derive(Template)]
@@ -772,37 +805,87 @@ fn model_options(
     metadata: &ModelsDevCatalogue,
     current: &str,
     favourites: &[String],
-    listed: &[String],
 ) -> (Vec<ModelOption>, Vec<ModelOption>) {
-    let current_favourite = favourites.iter().any(|item| item == current);
+    let model_ids: Vec<String> = metadata
+        .models(kind)
+        .into_iter()
+        .map(|model| model.id)
+        .take(MAXIMUM_MODEL_OPTIONS)
+        .collect();
     let favourite_models = favourites
         .iter()
-        .map(|id| ModelOption {
-            id: id.clone(),
-            efforts_json: efforts_json(metadata, kind, id),
-            selected: id == current,
-        })
+        .filter(|id| model_ids.contains(id))
+        .map(|id| model_option(kind, metadata, id, current))
         .collect();
-    let mut catalogue_models: Vec<ModelOption> = listed
+    let catalogue_models = model_ids
         .iter()
         .filter(|id| !favourites.contains(id))
-        .map(|id| ModelOption {
-            id: id.clone(),
-            efforts_json: efforts_json(metadata, kind, id),
-            selected: id == current,
-        })
+        .map(|id| model_option(kind, metadata, id, current))
         .collect();
-    if !current.is_empty() && !current_favourite && !listed.iter().any(|id| id == current) {
-        catalogue_models.insert(
-            0,
-            ModelOption {
-                id: current.to_owned(),
-                efforts_json: efforts_json(metadata, kind, current),
-                selected: true,
-            },
-        );
-    }
     (favourite_models, catalogue_models)
+}
+
+fn model_option(
+    kind: ProviderKind,
+    metadata: &ModelsDevCatalogue,
+    id: &str,
+    current: &str,
+) -> ModelOption {
+    let detail = metadata
+        .model(kind, id)
+        .map(|model| model_detail(model.context_limit, model.attachment))
+        .unwrap_or_default();
+    ModelOption {
+        id: id.to_owned(),
+        efforts_json: efforts_json(metadata, kind, id),
+        detail,
+        selected: id == current,
+    }
+}
+
+fn model_detail(context_limit: u64, supports_attachments: bool) -> String {
+    match (context_limit, supports_attachments) {
+        (0, false) => String::new(),
+        (0, true) => "Attachments".to_owned(),
+        (limit, false) => format!("{} token context", format_token_count(limit)),
+        (limit, true) => format!("{} token context · Attachments", format_token_count(limit)),
+    }
+}
+
+impl ModelContextView {
+    pub(crate) fn from_model(
+        catalogue: &ModelsDevCatalogue,
+        kind: ProviderKind,
+        model: &str,
+        usage: Option<&ModelUsage>,
+    ) -> Self {
+        let metadata = catalogue.model(kind, model);
+        let limit = metadata.as_ref().map_or(0, |item| item.context_limit);
+        let usage = usage
+            .filter(|item| item.provider == kind && item.model == model)
+            .map_or(0, |item| item.input_tokens);
+        Self {
+            has_limit: limit > 0,
+            limit,
+            limit_label: format_token_count(limit),
+            has_usage: usage > 0,
+            usage,
+            usage_label: format_token_count(usage),
+            supports_attachments: metadata.is_some_and(|item| item.attachment),
+        }
+    }
+}
+
+fn format_token_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(character);
+    }
+    formatted
 }
 
 fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
@@ -815,6 +898,7 @@ fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
                 thinking: turn.thinking.clone(),
                 tools: turn.tools.clone(),
                 activity: turn.activity.clone(),
+                usage: turn.usage.clone(),
             },
             false,
         ),

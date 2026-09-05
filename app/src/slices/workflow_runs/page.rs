@@ -70,13 +70,11 @@ pub(super) struct RunIndexView {
 
 pub(super) struct IndexRow {
     pub(super) id: String,
-    pub(super) project_href: String,
     pub(super) project_name: String,
     pub(super) name: String,
     pub(super) state: String,
     pub(super) created: String,
     pub(super) current_step: String,
-    pub(super) latest_attempt: String,
 }
 
 impl RunIndexView {
@@ -85,17 +83,21 @@ impl RunIndexView {
             runs: summaries
                 .iter()
                 .map(|summary| {
-                    let (project_href, project_name) =
-                        project_presentation(summary.project_id, projects);
+                    let (_, project_name) = project_presentation(summary.project_id, projects);
                     IndexRow {
                         id: summary.id.as_hex(),
-                        project_href,
                         project_name,
                         name: summary.name.clone(),
                         state: summary.state.clone(),
                         created: format_time(summary.created_at_ms),
-                        current_step: summary.current_step.clone(),
-                        latest_attempt: summary.latest_attempt.clone(),
+                        current_step: if matches!(
+                            summary.state.as_str(),
+                            "Initialising source" | "Ready" | "Active" | "Awaiting decision"
+                        ) {
+                            summary.current_step.clone()
+                        } else {
+                            String::new()
+                        },
                     }
                 })
                 .collect(),
@@ -204,13 +206,7 @@ impl RunDetailView {
                             | crate::workflows::definition::StepAction::HumanGate(_) => "",
                         },
                         environment: step_environment_label(run, step),
-                        status: gate.map_or_else(|| attempt.map_or("Waiting", |attempt| attempt.state.as_label()), |gate| match gate.state {
-                            crate::workflows::gates::HumanGateState::AwaitingDecision => "Awaiting decision",
-                            crate::workflows::gates::HumanGateState::Approved => "Approved",
-                            crate::workflows::gates::HumanGateState::RevisionRequested => "Revision requested",
-                            crate::workflows::gates::HumanGateState::Cancelled => "Cancelled",
-                            crate::workflows::gates::HumanGateState::Interrupted => "Interrupted",
-                        }),
+                        status: step_status(run, attempt, gate),
                         result: attempt
                             .and_then(|attempt| attempt.result.as_ref())
                             .map(|result| result.as_label())
@@ -357,6 +353,37 @@ impl RunDetailView {
     }
 }
 
+fn step_status(
+    run: &WorkflowRun,
+    attempt: Option<&crate::workflows::run::AttemptRecord>,
+    gate: Option<&crate::workflows::gates::HumanGateRecord>,
+) -> &'static str {
+    if let Some(gate) = gate {
+        return match gate.state {
+            crate::workflows::gates::HumanGateState::AwaitingDecision => "Awaiting decision",
+            crate::workflows::gates::HumanGateState::Approved => "Approved",
+            crate::workflows::gates::HumanGateState::RevisionRequested => "Revision requested",
+            crate::workflows::gates::HumanGateState::Cancelled => "Cancelled",
+            crate::workflows::gates::HumanGateState::Interrupted => "Interrupted",
+        };
+    }
+    if let Some(attempt) = attempt {
+        return attempt.state.as_label();
+    }
+    match run.state {
+        crate::workflows::run::RunState::Completed => "Not needed",
+        crate::workflows::run::RunState::RevisionRequested { .. }
+        | crate::workflows::run::RunState::Escalated { .. }
+        | crate::workflows::run::RunState::Failed
+        | crate::workflows::run::RunState::Cancelled
+        | crate::workflows::run::RunState::Interrupted => "Not started",
+        crate::workflows::run::RunState::InitialisingSource
+        | crate::workflows::run::RunState::Ready { .. }
+        | crate::workflows::run::RunState::Active { .. }
+        | crate::workflows::run::RunState::AwaitingHuman { .. } => "Waiting",
+    }
+}
+
 fn state_note(state: &crate::workflows::run::RunState) -> &'static str {
     match state {
         crate::workflows::run::RunState::InitialisingSource => {
@@ -377,7 +404,7 @@ fn state_note(state: &crate::workflows::run::RunState) -> &'static str {
         crate::workflows::run::RunState::Escalated { .. } => {
             "Automatic work stopped. Inspect the latest review report before a new task."
         }
-        crate::workflows::run::RunState::Completed => "All steps completed.",
+        crate::workflows::run::RunState::Completed => "The task is complete.",
         crate::workflows::run::RunState::Failed => {
             "A step failed. Inspect the latest attempt for the failure category."
         }
@@ -548,7 +575,7 @@ fn project_presentation(
 
 fn catalogue_presentation(run: &WorkflowRun, catalogue: &WorkflowCatalogue) -> (String, String) {
     let Some(id) = run.pinned.workflow_id else {
-        return (String::new(), "Uncatalogued definition".to_owned());
+        return (String::new(), String::new());
     };
     match catalogue.get(&id) {
         None => (String::new(), "Workflow deleted from catalogue".to_owned()),

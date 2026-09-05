@@ -33,6 +33,7 @@ fn tool_output_stays_html_text_in_the_transcript() {
                 output: "</code><script>alert(1)</script>".to_owned(),
             }],
             activity: Vec::new(),
+            usage: None,
         },
         false,
     );
@@ -63,6 +64,7 @@ fn assistant_activity_keeps_thinking_and_tools_in_event_order() {
                 AssistantActivity::Tool(tool),
                 AssistantActivity::Thinking("Use the result".to_owned()),
             ],
+            usage: None,
         },
         false,
     );
@@ -446,20 +448,6 @@ async fn sandbox_observe_text(
     )
     .unwrap();
     (status, text)
-}
-
-fn model_refresh_patch(state: &AppState, token: &str) -> Request<Body> {
-    Request::builder()
-        .uri(format!(
-            "/model?project={}&agent={}",
-            project_hex(state),
-            agent_hex(state)
-        ))
-        .header(header::COOKIE, cookie(token))
-        .header(hypergraft::GRAFT_REQUEST, "patch")
-        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-        .body(Body::empty())
-        .unwrap()
 }
 
 fn model_update_patch(state: &AppState, token: &str, body: &str) -> Request<Body> {
@@ -1319,7 +1307,7 @@ async fn model_updates_require_an_eligible_project_and_agent_pair() {
 }
 
 #[tokio::test]
-async fn the_model_live_projection_sends_current_truth_after_an_invalidation() {
+async fn the_model_live_projection_sends_current_catalogue_metadata() {
     let state = test_state();
     let token = connected(&state).await;
     let url = format!(
@@ -1328,12 +1316,12 @@ async fn the_model_live_projection_sends_current_truth_after_an_invalidation() {
         agent_hex(&state)
     );
     let harness = hypergraft::live::LiveHarness::new(super::live_router(), state.clone());
-    let mut projection = harness
+    let projection = harness
         .subscribe(&url, TestLiveGuard(session_id(&token)))
         .await
         .expect("live model projection");
 
-    assert_eq!(projection.first_patch().targets.len(), 2);
+    assert_eq!(projection.first_patch().targets.len(), 3);
     assert_eq!(
         projection.first_patch().targets[0].target,
         "desk-model-catalogue"
@@ -1342,17 +1330,15 @@ async fn the_model_live_projection_sends_current_truth_after_an_invalidation() {
         projection.first_patch().targets[1].target,
         "desk-thinking-control"
     );
-
-    state
-        .models
-        .set_catalogue(ProviderKind::Xai, vec!["grok-live".to_owned()], false);
-    let patch = tokio::time::timeout(std::time::Duration::from_secs(1), projection.next_patch())
-        .await
-        .expect("live patch timeout")
-        .expect("live patch");
-    assert_eq!(patch.targets[0].target, "desk-model-catalogue");
-    assert_eq!(patch.targets[1].target, "desk-thinking-control");
-    assert!(patch.targets[0].html.contains("grok-live"));
+    assert_eq!(
+        projection.first_patch().targets[2].target,
+        "desk-model-context"
+    );
+    assert!(
+        projection.first_patch().targets[0]
+            .html
+            .contains("grok-4.6")
+    );
 }
 
 #[tokio::test]
@@ -1374,7 +1360,7 @@ async fn the_model_live_projection_rejects_an_invalid_query() {
 }
 
 #[tokio::test]
-async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
+async fn the_model_picker_uses_only_catalogue_models() {
     let state = test_state();
     let token = connected(&state).await;
     state
@@ -1386,62 +1372,9 @@ async fn a_pending_catalogue_refresh_updates_the_rendered_desk() {
         ))
         .unwrap();
     state
-        .models
-        .set_catalogue(ProviderKind::Synthetic, Vec::new(), true);
-
-    let pending = app(&state)
-        .oneshot(model_refresh_patch(&state, &token))
-        .await
-        .expect("pending model refresh");
-    let pending_body = to_bytes(pending.into_body(), usize::MAX).await.unwrap();
-    let pending_text = String::from_utf8(pending_body.to_vec()).unwrap();
-    assert!(pending_text.contains("target=\"desk-model-catalogue\""));
-    assert!(!pending_text.contains("id=\"desk-provider\""));
-    assert!(pending_text.contains("data-catalogue-pending=\"true\""));
-    assert!(!pending_text.contains("data-model-value=\"syn:large:text\""));
-
-    state.models.set_catalogue(
-        ProviderKind::Synthetic,
-        vec![
-            "hf:moonshotai/Kimi-K3".to_owned(),
-            "syn:large:text".to_owned(),
-            "syn:small:text".to_owned(),
-        ],
-        false,
-    );
-    let refreshed = app(&state)
-        .oneshot(model_refresh_patch(&state, &token))
-        .await
-        .expect("completed model refresh");
-    let refreshed_body = to_bytes(refreshed.into_body(), usize::MAX).await.unwrap();
-    let refreshed_text = String::from_utf8(refreshed_body.to_vec()).unwrap();
-
-    assert!(refreshed_text.contains("data-catalogue-pending=\"false\""));
-    assert!(refreshed_text.contains("data-model-value=\"syn:large:text\""));
-    assert!(refreshed_text.contains("data-model-value=\"syn:small:text\""));
-}
-
-#[tokio::test]
-async fn multiple_synthetic_models_are_rendered_and_selectable() {
-    let state = test_state();
-    let token = connected(&state).await;
-    state
         .vault
-        .put(ProviderConnection::with_key(
-            ProviderKind::Synthetic,
-            "test-synthetic-key",
-            "hf:moonshotai/Kimi-K3",
-        ))
-        .unwrap();
-    state.models.set_catalogue(
-        ProviderKind::Synthetic,
-        vec![
-            "hf:moonshotai/Kimi-K3".to_owned(),
-            "syn:large:text".to_owned(),
-            "syn:small:text".to_owned(),
-        ],
-        false,
-    );
+        .toggle_favourite(ProviderKind::Synthetic, "unknown-live-model")
+        .expect("favourite");
 
     let document = app(&state)
         .oneshot(document_show(&state, &token))
@@ -1450,24 +1383,24 @@ async fn multiple_synthetic_models_are_rendered_and_selectable() {
     let document_body = to_bytes(document.into_body(), usize::MAX).await.unwrap();
     let document_text = String::from_utf8(document_body.to_vec()).unwrap();
     assert!(document_text.contains("data-model-value=\"hf:moonshotai/Kimi-K3\""));
-    assert!(document_text.contains("data-model-value=\"syn:large:text\""));
-    assert!(document_text.contains("data-model-value=\"syn:small:text\""));
+    assert!(document_text.contains("data-model-value=\"hf:openai/gpt-oss-120b\""));
+    assert!(!document_text.contains("unknown-live-model"));
 
     let response = app(&state)
         .oneshot(model_update_patch(
             &state,
             &token,
-            "provider=synthetic&model=syn%3Alarge%3Atext",
+            "provider=synthetic&model=hf%3Aopenai%2Fgpt-oss-120b",
         ))
         .await
         .expect("model update");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let response_text = String::from_utf8(response_body.to_vec()).unwrap();
-    assert!(response_text.contains("value=\"syn:large:text\""));
+    assert!(response_text.contains("value=\"hf:openai/gpt-oss-120b\""));
     assert_eq!(
         state.vault.selected_connection().map(|item| item.model),
-        Some("syn:large:text".to_owned())
+        Some("hf:openai/gpt-oss-120b".to_owned())
     );
 }
 
@@ -2352,7 +2285,6 @@ async fn a_desk_document_uses_quick_task_as_the_default_send() {
     assert!(text.contains("name=\"mode\""));
     assert!(text.contains("value=\"quick\""));
     assert!(text.contains("value=\"configured\""));
-    assert!(text.contains("Advanced run"));
     assert!(text.contains("Sandbox is ready"));
     assert!(!text.contains("data-observe-target=\"sandbox-status\""));
 }

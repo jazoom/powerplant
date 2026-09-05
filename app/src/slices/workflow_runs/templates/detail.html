@@ -1,7 +1,7 @@
 <main
   data-section="runs"
   data-context-detail
-  class="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
+  class="mx-auto w-full max-w-5xl flex-1 px-5 py-8 sm:px-8"
 >
   <div id="run-detail">
     {% block run_detail %}
@@ -14,257 +14,338 @@
           >{{ state }}</span
         >
       {% endif %}
-      <div class="page-intro">
-        <div>
-          <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">
-            {% if name_href != "" %}
-              <a href="{{ name_href }}" data-graft class="link link-hover"
-                >{{ name }}</a
-              >
-            {% else %}
+
+      <header
+        class="border-base-content flex items-start justify-between gap-8 border-b-2 pb-4 max-sm:block"
+      >
+        <div class="min-w-0">
+          <div
+            class="flex items-center gap-3 max-sm:items-start max-sm:justify-between"
+          >
+            <h1
+              class="font-heading text-[clamp(1.75rem,3vw,2.6rem)] font-semibold tracking-[-0.035em]"
+            >
               {{ name }}
-            {% endif %}
-          </h1>
-          {% if project_href != "" %}
-            <p class="mt-1 text-sm">
-              <a href="{{ project_href }}" data-graft class="link link-hover"
-                >{{ project_name }}</a
+            </h1>
+            <span class="badge state-badge" data-state="{{ state }}"
+              >{{ state }}</span
+            >
+          </div>
+          <p class="text-quiet mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+            {% if project_href != "" %}
+              <span
+                >Project
+                <a href="{{ project_href }}" data-graft class="link"
+                  >{{ project_name }}</a
+                ></span
               >
-            </p>
-          {% else if project_name != "" %}
-            <p class="mt-1 text-sm">{{ project_name }}</p>
-          {% endif %}
+            {% else if project_name != "" %}
+              <span>Project {{ project_name }}</span>
+            {% endif %}
+            <span>Started {{ created }}</span>
+          </p>
           {% if catalogue_note != "" %}
             <p class="text-quiet mt-1 text-sm">{{ catalogue_note }}</p>
           {% endif %}
         </div>
-        <form data-graft method="get" action="/runs/{{ run_id }}">
-          <button class="btn btn-outline btn-sm" type="submit">
-            Refresh status
-          </button>
-        </form>
-      </div>
-      <section class="border-base-300 space-y-3 border p-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <span class="status-stamp" data-state="{{ state }}">{{ state }}</span>
-          {% if current_step != "" %}
-            <p class="text-sm">
-              <span class="text-quiet">Current step</span> {{ current_step }}
+        {% if state == "Initialising source" || state == "Ready" || state == "Active" || state == "Awaiting decision" %}
+          <form
+            data-graft
+            method="get"
+            action="/runs/{{ run_id }}"
+            class="max-sm:mt-3"
+          >
+            <button class="btn btn-outline btn-sm" type="submit">
+              Refresh
+            </button>
+          </form>
+        {% endif %}
+      </header>
+
+      <section
+        class="run-summary mt-4 flex items-center justify-between gap-6 px-4 py-3 max-sm:flex-col max-sm:items-start max-sm:gap-3"
+        aria-label="Run status"
+      >
+        <div class="min-w-0">
+          {% if current_step != "" && (state == "Ready" || state == "Active" || state == "Awaiting decision") %}
+            <p class="mb-1 flex flex-wrap gap-x-2">
+              <span class="text-quiet">Current step</span>
+              <strong>{{ current_step }}</strong>
             </p>
           {% endif %}
+          <p>{{ state_note }}</p>
         </div>
-        <p class="max-w-[70ch]">{{ state_note }}</p>
         {% if review_href != "" %}
-          <a href="{{ review_href }}" data-graft class="btn btn-primary btn-sm"
+          <a
+            href="{{ review_href }}"
+            data-graft
+            class="btn btn-primary btn-sm shrink-0"
             >Review candidate</a
           >
         {% endif %}
-        <p class="text-quiet text-xs">
-          Started {{ created }} · Definition
-          <span class="font-mono break-all">{{ version }}</span>
-        </p>
       </section>
-      <section class="space-y-2">
-        <h2 class="text-base font-semibold">Steps</h2>
-        <ol class="list-decimal space-y-1 pl-5">
+
+      <section class="mt-7" aria-labelledby="run-steps-title">
+        <div class="mb-2 flex items-end justify-between gap-6 max-sm:block">
+          <h2 id="run-steps-title" class="text-lg font-semibold">Steps</h2>
+          <p class="text-quiet text-right text-sm max-sm:mt-1 max-sm:text-left">
+            Each run records the task from its first step to its result.
+          </p>
+        </div>
+        <ol class="run-step-list">
           {% for step in steps %}
-            <li class="border-base-300 border px-3 py-3">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <span class="font-medium">{{ step.name }}</span>
-                <span class="badge state-badge" data-state="{{ step.status }}"
-                  >{{ step.status }}</span
-                >
-              </div>
-              <p class="text-quiet text-xs">{{ step.action }}</p>
-              {% if step.role != "" %}
-                <p class="text-sm">Role: {{ step.role }}</p>
-              {% endif %}
-              {% if step.candidate_access != "" %}
-                <p class="text-sm">
-                  Candidate access: {{ step.candidate_access }}
-                </p>
-              {% endif %}
-              {% if step.review_phase != "" %}
-                <p class="text-sm">
-                  Review phase {{ step.review_phase }} · attempt limit
-                  {{ step.attempt_limit }}
-                </p>
-                {% if step.latest_verdict != "" %}
-                  <p class="text-sm">
-                    Latest verdict: {{ step.latest_verdict }}
-                  </p>
-                {% endif %}
-                {% if step.selected_route != "" %}
-                  <p class="text-sm">
-                    Selected route: {{ step.selected_route }}
-                  </p>
-                {% endif %}
-              {% endif %}
-              {% if step.environment != "" %}
-                <p class="text-quiet text-xs">{{ step.environment }}</p>
-              {% endif %}
-              {% if step.result != "" %}
-                <p class="text-sm">{{ step.result }}</p>
-              {% endif %}
-              {% if step.gate_href != "" %}
-                <a href="{{ step.gate_href }}" data-graft class="link text-sm"
-                  >View candidate review</a
-                >
-              {% endif %}
-              {% if step.commit != "" %}
-                <p class="font-mono text-sm">Commit {{ step.commit }}</p>
-              {% endif %}
-              {% for artefact in step.artefacts %}
-                <div class="flex flex-wrap items-center gap-2 text-sm">
-                  <a href="{{ artefact.href }}" data-graft class="link"
-                    >{{ artefact.key }} · {{ artefact.kind }}</a
+            <li class="run-step">
+              <div class="min-w-0">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 class="font-semibold">{{ step.name }}</h3>
+                    <p class="text-quiet text-sm">
+                      {{ step.action }}
+                      {% if step.role != "" %}· {{ step.role }}{% endif %}
+                    </p>
+                  </div>
+                  <span
+                    class="badge state-badge shrink-0"
+                    data-state="{{ step.status }}"
+                    >{{ step.status }}</span
                   >
-                  {% if artefact.candidate_hash != "" %}
-                    <span class="font-mono text-xs"
-                      >{{ artefact.candidate_hash }}</span
-                    >
+                </div>
+
+                <div class="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+                  {% if step.result != "" %}
+                    <p>
+                      <span class="text-quiet">Result</span> {{ step.result }}
+                    </p>
                   {% endif %}
-                  {% if artefact.note != "" %}
-                    <span>{{ artefact.note }}</span>
+                  {% if step.candidate_access != "" %}
+                    <p>
+                      <span class="text-quiet">Candidate access</span>
+                      {{ step.candidate_access }}
+                    </p>
                   {% endif %}
-                  {% if artefact.status != "" %}
-                    <span
-                      class="badge state-badge badge-sm"
-                      data-state="{{ artefact.status }}"
-                      >{{ artefact.status }}</span
-                    >
+                  {% if step.review_phase != "" %}
+                    <p>
+                      <span class="text-quiet">Review</span>
+                      Phase {{ step.review_phase }} · {{ step.attempt_limit }}
+                      attempts
+                    </p>
+                  {% endif %}
+                  {% if step.latest_verdict != "" %}
+                    <p>
+                      <span class="text-quiet">Latest verdict</span>
+                      {{ step.latest_verdict }}
+                    </p>
+                  {% endif %}
+                  {% if step.selected_route != "" %}
+                    <p>
+                      <span class="text-quiet">Route</span>
+                      {{ step.selected_route }}
+                    </p>
+                  {% endif %}
+                  {% if step.environment != "" %}
+                    <p class="font-mono text-xs">{{ step.environment }}</p>
+                  {% endif %}
+                  {% if step.commit != "" %}
+                    <p class="font-mono text-xs">Commit {{ step.commit }}</p>
                   {% endif %}
                 </div>
-              {% endfor %}
+
+                {% if step.gate_href != "" %}
+                  <p class="mt-2 text-sm">
+                    <a href="{{ step.gate_href }}" data-graft class="link"
+                      >Open candidate review</a
+                    >
+                  </p>
+                {% endif %}
+
+                {% if !step.artefacts.is_empty() %}
+                  <div
+                    class="border-base-300 mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 border-t pt-2 text-sm max-sm:grid-cols-1 max-sm:gap-1"
+                  >
+                    <p class="text-quiet">Outputs</p>
+                    <ul class="space-y-1">
+                      {% for artefact in step.artefacts %}
+                        <li class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <a href="{{ artefact.href }}" data-graft class="link"
+                            >{{ artefact.key }} · {{ artefact.kind }}</a
+                          >
+                          {% if artefact.candidate_hash != "" %}
+                            <span class="font-mono text-xs"
+                              >{{ artefact.candidate_hash }}</span
+                            >
+                          {% endif %}
+                          {% if artefact.note != "" %}
+                            <span class="text-quiet text-xs"
+                              >{{ artefact.note }}</span
+                            >
+                          {% endif %}
+                          {% if artefact.status != "" %}
+                            <span
+                              class="badge state-badge badge-sm"
+                              data-state="{{ artefact.status }}"
+                              >{{ artefact.status }}</span
+                            >
+                          {% endif %}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </div>
             </li>
           {% endfor %}
         </ol>
       </section>
-      <details class="file-disclosure">
-        <summary>Environment records</summary>
-        <div class="space-y-2 pt-3">
-          {% for environment in environments %}
-            <article
-              class="border-base-300 space-y-1 rounded-sm border px-3 py-2"
-            >
-              <p class="text-sm">{{ environment.name }}</p>
-              {% if environment.note != "" %}
-                <p class="text-quiet text-xs">{{ environment.note }}</p>
-              {% endif %}
-              <p class="text-quiet font-mono text-xs break-all">
-                Preparation {{ environment.preparation }}
+
+      <details class="file-disclosure mt-7">
+        <summary>Run records</summary>
+        <div class="space-y-6 pt-4">
+          <section>
+            <h2 class="text-lg font-semibold">Definition</h2>
+            <p class="text-quiet mt-1 font-mono text-xs break-all">
+              Version {{ version }}
+            </p>
+            <p class="text-quiet mt-1 font-mono text-xs break-all">
+              Run {{ run_id }}
+            </p>
+            {% if name_href != "" %}
+              <p class="mt-2 text-sm">
+                <a href="{{ name_href }}" data-graft class="link"
+                  >Open workflow configuration</a
+                >
               </p>
-              <p class="text-quiet font-mono text-xs break-all">
-                Recipe {{ environment.recipe }}
-              </p>
-              <p class="text-quiet font-mono text-xs break-all">
-                Snapshot {{ environment.snapshot }}
-              </p>
-              <p class="text-quiet font-mono text-xs break-all">
-                Image {{ environment.image }}
-              </p>
-            </article>
-          {% endfor %}
-        </div>
-      </details>
-      <details class="file-disclosure">
-        <summary>Attempt records</summary>
-        <div class="space-y-2 pt-3">
-          {% if attempts.is_empty() %}
-            <p class="text-quiet">No attempts yet.</p>
-          {% else %}
-            <ul class="space-y-2">
-              {% for attempt in attempts %}
-                <li class="border-base-300 border px-3 py-3">
+            {% endif %}
+          </section>
+
+          <section class="border-base-300 border-t pt-5">
+            <h2 class="text-lg font-semibold">Environments</h2>
+            <ul class="border-base-300 mt-2 border-t">
+              {% for environment in environments %}
+                <li class="border-base-300 space-y-1 border-b py-3">
                   <div
                     class="flex flex-wrap items-center justify-between gap-2"
                   >
-                    <p class="text-sm font-medium">
-                      Attempt {{ attempt.ordinal }} · {{ attempt.action }}
-                    </p>
-                    <span
-                      class="badge state-badge"
-                      data-state="{{ attempt.state }}"
-                      >{{ attempt.state }}</span
-                    >
+                    <h3 class="font-semibold">{{ environment.name }}</h3>
+                    {% if environment.note != "" %}
+                      <span class="text-quiet text-xs"
+                        >{{ environment.note }}</span
+                      >
+                    {% endif %}
                   </div>
-                  <p class="text-quiet text-xs">{{ attempt.step }}</p>
-                  <p class="text-quiet text-xs">
-                    Started {{ attempt.started }}
+                  <p class="text-quiet font-mono text-xs break-all">
+                    Preparation {{ environment.preparation }}
                   </p>
-                  {% if attempt.finished != "" %}
-                    <p class="text-quiet text-xs">
-                      Finished {{ attempt.finished }}
-                    </p>
-                  {% endif %}
-                  {% if attempt.result != "" %}
-                    <p class="text-sm">{{ attempt.result }}</p>
-                  {% endif %}
-                  <p class="text-quiet text-xs">Tools: {{ attempt.tools }}</p>
-                  <p class="text-quiet text-xs">
-                    Primary source: {{ attempt.primary_access }}
+                  <p class="text-quiet font-mono text-xs break-all">
+                    Recipe {{ environment.recipe }}
                   </p>
-                  <p class="text-quiet text-xs">
-                    Source location: {{ attempt.source_location }}
+                  <p class="text-quiet font-mono text-xs break-all">
+                    Snapshot {{ environment.snapshot }}
                   </p>
-                  <p class="text-quiet text-xs">
-                    Git administrative access: {{ attempt.git_admin }}
+                  <p class="text-quiet font-mono text-xs break-all">
+                    Image {{ environment.image }}
                   </p>
-                  <p class="text-quiet text-xs">
-                    Network: {{ attempt.network }}
-                  </p>
-                  {% if attempt.route != "" %}
-                    <p class="text-sm">Route: {{ attempt.route }}</p>
-                  {% endif %}
-                  {% for report in attempt.reports %}
-                    <div class="flex flex-wrap items-center gap-2 text-sm">
-                      <a href="{{ report.href }}" data-graft class="link"
-                        >{{ report.key }} · {{ report.kind }}</a
-                      >
-                      <span class="font-mono text-xs"
-                        >{{ report.candidate_hash }}</span
-                      >
-                      <span
-                        class="badge state-badge badge-sm"
-                        data-state="{{ report.status }}"
-                        >{{ report.status }}</span
-                      >
-                    </div>
-                  {% endfor %}
                 </li>
               {% endfor %}
             </ul>
-          {% endif %}
+          </section>
+
+          <section class="border-base-300 border-t pt-5">
+            <h2 class="text-lg font-semibold">Attempts</h2>
+            {% if attempts.is_empty() %}
+              <p class="text-quiet mt-2">No attempts yet.</p>
+            {% else %}
+              <ul class="border-base-300 mt-2 border-t">
+                {% for attempt in attempts %}
+                  <li class="border-base-300 space-y-1 border-b py-3 text-sm">
+                    <div
+                      class="flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <h3 class="font-semibold">
+                        Attempt {{ attempt.ordinal }} · {{ attempt.step }}
+                      </h3>
+                      <span
+                        class="badge state-badge badge-sm"
+                        data-state="{{ attempt.state }}"
+                        >{{ attempt.state }}</span
+                      >
+                    </div>
+                    <p class="text-quiet">
+                      {{ attempt.action }} · Started {{ attempt.started }}
+                      {% if attempt.finished != "" %}
+                        · Finished {{ attempt.finished }}
+                      {% endif %}
+                    </p>
+                    {% if attempt.result != "" %}
+                      <p>{{ attempt.result }}</p>
+                    {% endif %}
+                    <p class="text-quiet">
+                      Tools: {{ attempt.tools }} · Source:
+                      {{ attempt.primary_access }} ·
+                      {{ attempt.source_location }}
+                    </p>
+                    <p class="text-quiet">
+                      Git access: {{ attempt.git_admin }} · Network:
+                      {{ attempt.network }}
+                      {% if attempt.route != "" %}
+                        · Route: {{ attempt.route }}
+                      {% endif %}
+                    </p>
+                    {% for report in attempt.reports %}
+                      <p class="flex flex-wrap items-center gap-2">
+                        <a href="{{ report.href }}" data-graft class="link"
+                          >{{ report.key }} · {{ report.kind }}</a
+                        >
+                        <span class="font-mono text-xs"
+                          >{{ report.candidate_hash }}</span
+                        >
+                        <span
+                          class="badge state-badge badge-sm"
+                          data-state="{{ report.status }}"
+                          >{{ report.status }}</span
+                        >
+                      </p>
+                    {% endfor %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </section>
+
+          <section class="border-base-300 border-t pt-5">
+            <h2 class="text-lg font-semibold">Saved outputs</h2>
+            {% if artefacts.is_empty() %}
+              <p class="text-quiet mt-2">No saved outputs yet.</p>
+            {% else %}
+              <ul class="border-base-300 mt-2 border-t">
+                {% for artefact in artefacts %}
+                  <li
+                    class="border-base-300 flex items-start justify-between gap-4 border-b py-3 max-sm:flex-col max-sm:gap-1"
+                  >
+                    <div>
+                      <a href="{{ artefact.href }}" data-graft class="link"
+                        >{{ artefact.kind }}</a
+                      >
+                      <p class="text-quiet mt-1 text-xs">
+                        {{ artefact.producer }} · {{ artefact.created }}
+                      </p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="font-mono text-xs">{{ artefact.hash }}</span>
+                      {% if artefact.status != "" %}
+                        <span
+                          class="badge state-badge badge-sm"
+                          data-state="{{ artefact.status }}"
+                          >{{ artefact.status }}</span
+                        >
+                      {% endif %}
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </section>
         </div>
       </details>
-      <section class="space-y-2">
-        <h2 class="text-base font-semibold">Saved outputs</h2>
-        {% if artefacts.is_empty() %}
-          <p class="text-quiet">No saved outputs yet.</p>
-        {% else %}
-          <ul class="space-y-2">
-            {% for artefact in artefacts %}
-              <li class="border-base-300 border px-3 py-3">
-                <p class="text-sm">
-                  <a href="{{ artefact.href }}" data-graft class="link"
-                    >{{ artefact.kind }}</a
-                  >
-                </p>
-                <p class="text-quiet font-mono text-xs">{{ artefact.hash }}</p>
-                <p class="text-quiet text-xs">{{ artefact.producer }}</p>
-                <p class="text-quiet text-xs">{{ artefact.created }}</p>
-                {% if artefact.status != "" %}
-                  <span
-                    class="badge state-badge badge-sm"
-                    data-state="{{ artefact.status }}"
-                    >{{ artefact.status }}</span
-                  >
-                {% endif %}
-              </li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      </section>
     {% endblock %}
   </div>
 </main>

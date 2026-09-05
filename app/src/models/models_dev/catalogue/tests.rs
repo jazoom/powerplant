@@ -34,13 +34,64 @@ fn source_filter_uses_fallback_identifiers_and_deduplicates_efforts() {
             serde_json::json!({
                 "models": {
                     kind.default_model(): {
+                        "attachment": true,
                         "reasoning": true,
                         "reasoning_options": [{
                             "type": "effort",
                             "values": [null, "default", "high", "high"]
-                        }]
+                        }],
+                        "tool_call": true,
+                        "modalities": {"input": ["text"], "output": ["text"]},
+                        "limit": {"context": 128000, "input": 120000, "output": 8000}
                     }
                 }
+            }),
+        );
+    }
+
+    let openai_models = source
+        .get_mut(models_dev_id(ProviderKind::OpenaiCodex))
+        .and_then(|provider| provider.get_mut("models"))
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("OpenAI models");
+    for (id, tool_call, input, output, status) in [
+        (
+            "audio-output",
+            true,
+            serde_json::json!(["text"]),
+            serde_json::json!(["text", "audio"]),
+            serde_json::Value::Null,
+        ),
+        (
+            "no-text-input",
+            true,
+            serde_json::json!(["image"]),
+            serde_json::json!(["text"]),
+            serde_json::Value::Null,
+        ),
+        (
+            "no-tools",
+            false,
+            serde_json::json!(["text"]),
+            serde_json::json!(["text"]),
+            serde_json::Value::Null,
+        ),
+        (
+            "deprecated",
+            true,
+            serde_json::json!(["text"]),
+            serde_json::json!(["text"]),
+            serde_json::json!("deprecated"),
+        ),
+    ] {
+        openai_models.insert(
+            id.to_owned(),
+            serde_json::json!({
+                "attachment": false,
+                "tool_call": tool_call,
+                "modalities": {"input": input, "output": output},
+                "status": status,
+                "limit": {"context": 64000, "output": 4000}
             }),
         );
     }
@@ -53,11 +104,25 @@ fn source_filter_uses_fallback_identifiers_and_deduplicates_efforts() {
     .expect("filtered source");
 
     assert_eq!(snapshot.checked_at_unix_seconds, 42);
-    assert!(
-        snapshot.providers.iter().all(|provider| {
-            provider.models.len() == 1 && provider.models[0].efforts == ["high"]
-        })
-    );
+    assert!(snapshot.providers.iter().all(|provider| {
+        let model = provider
+            .models
+            .iter()
+            .find(|model| model.id == ProviderKind::parse(&provider.id).unwrap().default_model())
+            .expect("default model");
+        model.efforts == ["high"] && model.attachment && model.limit.context == 128_000
+    }));
+    let openai = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == ProviderKind::OpenaiCodex.as_str())
+        .expect("OpenAI provider");
+    assert_eq!(openai.models.len(), 1);
+
+    let stored = serde_json::to_value(&snapshot).expect("stored snapshot");
+    let model = &stored["providers"][0]["models"][0];
+    assert!(model.get("agent_compatible").is_none());
+    assert_eq!(model["limit"].as_object().expect("limit").len(), 1);
 }
 
 #[test]
@@ -67,7 +132,15 @@ fn source_filter_rejects_an_explicit_empty_identifier() {
         source.insert(
             models_dev_id(kind).to_owned(),
             serde_json::json!({
-                "models": { kind.default_model(): { "id": "" } }
+                "models": {
+                    kind.default_model(): {
+                        "id": "",
+                        "attachment": false,
+                        "tool_call": true,
+                        "modalities": {"input": ["text"], "output": ["text"]},
+                        "limit": {"context": 128000, "output": 8000}
+                    }
+                }
             }),
         );
     }

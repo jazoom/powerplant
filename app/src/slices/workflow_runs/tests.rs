@@ -106,7 +106,6 @@ async fn a_runs_document_uses_chat_main() {
     assert!(text.contains("href=\"/runs/"));
     assert!(text.contains("data-graft"));
     assert!(text.contains("Harbour"));
-    assert!(text.contains("href=\"/projects/"));
 }
 
 #[tokio::test]

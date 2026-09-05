@@ -7,10 +7,7 @@
 >
   <div class="chat-desk-bar">
     <section class="chat-model-settings" aria-label="Model settings">
-      <div
-        id="desk-settings"
-        class="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:justify-end"
-      >
+      <div id="desk-settings" class="w-full min-w-0">
         {% block desk_settings %}
           {% if desk_error != "" %}
             <div class="alert alert-error w-full" role="alert" tabindex="-1">
@@ -23,7 +20,7 @@
             data-island="desk-settings"
             method="post"
             action="/model"
-            class="grid w-full min-w-0 flex-1 grid-cols-[minmax(7.5rem,0.8fr)_minmax(0,1.4fr)] items-end gap-2 sm:grid-cols-[9rem_minmax(16rem,1fr)_9rem]"
+            class="chat-model-form"
           >
             <input type="hidden" name="provider_model_synced" value="false" />
             <input type="hidden" name="project" value="{{ project_id }}" />
@@ -58,7 +55,7 @@
             <div class="flex min-w-0 flex-col gap-1">
               <span id="desk-model-label">Model</span>
               <div
-                class="dropdown dropdown-end sm:dropdown-start w-full min-w-0 sm:w-72"
+                class="dropdown dropdown-start w-full min-w-0"
                 data-model-combobox
               >
                 <input
@@ -68,7 +65,7 @@
                   value="{{ model }}"
                 />
                 <button
-                  class="select select-bordered select-sm flex w-full min-w-0 items-center text-left sm:w-72"
+                  class="select select-bordered select-sm flex w-full min-w-0 items-center text-left"
                   type="button"
                   data-model-toggle
                   aria-labelledby="desk-model-label desk-model-value"
@@ -114,9 +111,7 @@
                   </div>
                   <div id="desk-model-catalogue">
                     {% block desk_model_catalogue %}
-                      <div
-                        data-catalogue-pending="{% if catalogue_pending %}true{% else %}false{% endif %}"
-                      >
+                      <div>
                         {% if !favourite_models.is_empty() %}
                           <div
                             role="group"
@@ -135,13 +130,21 @@
                                 data-model-row
                               >
                                 <button
-                                  class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 items-center py-2 pl-3 text-left font-mono"
+                                  class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center py-2 pl-3 text-left"
                                   type="button"
                                   data-model-value="{{ option.id }}"
                                   data-thinking-efforts="{{ option.efforts_json }}"
                                   aria-pressed="{% if option.selected %}true{% else %}false{% endif %}"
                                 >
-                                  <span class="truncate">{{ option.id }}</span>
+                                  <span class="w-full truncate font-mono"
+                                    >{{ option.id }}</span
+                                  >
+                                  {% if option.detail != "" %}
+                                    <span
+                                      class="text-quiet mt-0.5 w-full truncate text-xs"
+                                      >{{ option.detail }}</span
+                                    >
+                                  {% endif %}
                                 </button>
                                 <button
                                   class="btn btn-ghost btn-sm text-primary shrink-0 px-3"
@@ -186,13 +189,21 @@
                                 data-model-row
                               >
                                 <button
-                                  class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 items-center py-2 pl-3 text-left font-mono"
+                                  class="text-base-content {% if option.selected %}bg-base-300{% endif %} flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center py-2 pl-3 text-left"
                                   type="button"
                                   data-model-value="{{ option.id }}"
                                   data-thinking-efforts="{{ option.efforts_json }}"
                                   aria-pressed="{% if option.selected %}true{% else %}false{% endif %}"
                                 >
-                                  <span class="truncate">{{ option.id }}</span>
+                                  <span class="w-full truncate font-mono"
+                                    >{{ option.id }}</span
+                                  >
+                                  {% if option.detail != "" %}
+                                    <span
+                                      class="text-quiet mt-0.5 w-full truncate text-xs"
+                                      >{{ option.detail }}</span
+                                    >
+                                  {% endif %}
                                 </button>
                                 <button
                                   class="btn btn-ghost btn-sm text-quiet hover:text-primary shrink-0 px-3"
@@ -227,10 +238,7 @@
                 </div>
               </div>
             </div>
-            <div
-              id="desk-thinking-control"
-              class="col-span-2 min-w-0 sm:col-span-1"
-            >
+            <div id="desk-thinking-control" class="chat-thinking-field">
               {% block thinking_control %}
                 <label class="flex min-w-0 flex-col gap-1" for="desk-thinking">
                   <span>Thinking</span>
@@ -255,6 +263,49 @@
                     {% endif %}
                   </select>
                 </label>
+              {% endblock %}
+            </div>
+            <div id="desk-model-context" class="chat-model-context">
+              {% block model_context %}
+                <div class="chat-model-context-summary">
+                  <span class="chat-model-context-label">Context</span>
+                  {% if model_context.has_limit %}
+                    <span class="font-mono tabular-nums">
+                      {% if model_context.has_usage %}
+                        {{ model_context.usage_label }}
+                        /
+                      {% endif %}
+                      {{ model_context.limit_label }}
+                      tokens
+                    </span>
+                  {% else if model_context.has_usage %}
+                    <span class="font-mono tabular-nums"
+                      >{{ model_context.usage_label }} tokens used</span
+                    >
+                  {% else %}
+                    <span>Limit unavailable</span>
+                  {% endif %}
+                  {% if model_context.supports_attachments %}
+                    <span class="badge badge-sm badge-outline"
+                      >Model supports attachments</span
+                    >
+                  {% endif %}
+                </div>
+                {% if model_context.has_limit && model_context.has_usage %}
+                  <progress
+                    class="progress progress-primary chat-model-context-progress"
+                    value="{{ model_context.usage }}"
+                    max="{{ model_context.limit }}"
+                    aria-label="Context used in the last provider request"
+                  ></progress>
+                  <p class="chat-model-context-note">
+                    Last provider-reported input usage
+                  </p>
+                {% else if model_context.has_limit %}
+                  <p class="chat-model-context-note">
+                    Model limit · Usage appears after a reply
+                  </p>
+                {% endif %}
               {% endblock %}
             </div>
           </form>
@@ -285,7 +336,7 @@
       <div id="desk-status" class="contents">
         {% block desk_status %}
           <span
-            class="status-stamp"
+            class="desk-status-indicator"
             data-state="{% if review_href != "" %}Awaiting decision{% else if job_active %}Active{% else if quick_task_finished %}Completed{% else %}Ready{% endif %}"
           >
             {% if review_href != "" %}
@@ -295,21 +346,19 @@
             {% else if quick_task_finished %}
               Task complete
             {% else %}
-              Ready for work
+              Ready
             {% endif %}
           </span>
         {% endblock %}
       </div>
-      <details class="dropdown dropdown-end">
-        <summary class="btn btn-ghost h-auto min-h-11 px-3">
-          <span class="text-quiet text-xs">Agent</span>
-          <span>{{ agent_name }}</span>
+      <details class="dropdown dropdown-end chat-desk-options">
+        <summary class="btn btn-ghost btn-sm">
+          <span>Agent: {{ agent_name }}</span>
         </summary>
-        <ul
-          class="menu dropdown-content border-base-300 bg-base-100 z-40 mt-2 max-h-72 w-64 overflow-y-auto border p-1 shadow-[0_14px_32px_oklch(8%_0.01_80/0.45)]"
-        >
-          {% for choice in agent_choices %}
-            <li>
+        <div class="dropdown-content chat-desk-menu">
+          <p class="chat-desk-menu-label">Switch agent</p>
+          <nav aria-label="Project agents" class="chat-agent-list">
+            {% for choice in agent_choices %}
               <a
                 href="{{ choice.href }}"
                 data-graft
@@ -320,27 +369,26 @@
                   <span class="badge badge-sm">Current</span>
                 {% endif %}
               </a>
-            </li>
-          {% endfor %}
-        </ul>
+            {% endfor %}
+          </nav>
+          <form
+            id="thinking-visibility"
+            method="post"
+            action="/thinking-visibility"
+            data-graft
+            data-island="thinking-visibility"
+            class="chat-desk-thinking"
+          >
+            {% include "chat/templates/thinking_visibility.html" %}
+          </form>
+          <nav aria-label="Desk links" class="chat-desk-links">
+            <a href="/agents/{{ agent_id }}/configuration" data-graft
+              >Agent settings</a
+            >
+            <a href="/runs" data-graft>Runs</a>
+          </nav>
+        </div>
       </details>
-      <form
-        id="thinking-visibility"
-        method="post"
-        action="/thinking-visibility"
-        data-graft
-        data-island="thinking-visibility"
-        class="flex items-center"
-      >
-        {% include "chat/templates/thinking_visibility.html" %}
-      </form>
-      <a
-        href="/agents/{{ agent_id }}/configuration"
-        data-graft
-        class="btn btn-ghost btn-sm"
-        >Agent settings</a
-      >
-      <a href="/runs" data-graft class="btn btn-ghost btn-sm">View runs</a>
     </div>
   </div>
 
@@ -358,30 +406,30 @@
           <div class="mx-auto flex w-full max-w-4xl flex-col">
             <h2>Start with a task</h2>
             <div
-              class="flex flex-col gap-2"
+              class="chat-task-example-list"
               role="group"
               aria-label="Task examples"
             >
               <button
                 type="button"
-                class="btn btn-outline h-auto min-h-11 w-full justify-start py-2 text-left whitespace-normal"
+                class="btn btn-ghost chat-task-example"
                 data-task-example="Explain how this project is structured."
               >
-                Explain how this project is structured.
+                Explain the project structure
               </button>
               <button
                 type="button"
-                class="btn btn-outline h-auto min-h-11 w-full justify-start py-2 text-left whitespace-normal"
+                class="btn btn-ghost chat-task-example"
                 data-task-example="Review the current code and identify one concern."
               >
-                Review the current code and identify one concern.
+                Review the current code
               </button>
               <button
                 type="button"
-                class="btn btn-outline h-auto min-h-11 w-full justify-start py-2 text-left whitespace-normal"
+                class="btn btn-ghost chat-task-example"
                 data-task-example="Find one small improvement and make it."
               >
-                Find one small improvement and make it.
+                Make one small improvement
               </button>
             </div>
           </div>
@@ -525,7 +573,7 @@
               data-observe-active="true"
               data-observe-target="sandbox-status"
             >
-              <p class="text-composer-quiet mb-3 text-sm" role="status">
+              <p class="composer-readiness mb-2 text-sm" role="status">
                 {{ sandbox_status.message }}
               </p>
               <form data-graft method="get" action="{{ desk_href }}" hidden>
@@ -556,7 +604,7 @@
               </p>
             </div>
           {% else %}
-            <p class="text-composer-quiet mb-3 text-sm" role="status">
+            <p class="composer-readiness mb-2 text-sm" role="status">
               {{ sandbox_status.message }}
             </p>
           {% endif %}
@@ -588,30 +636,37 @@
             data-island="composer"
             method="post"
             action="{{ desk_href }}"
+            class="composer-form"
           >
-            <div class="flex items-end gap-3">
-              <label class="sr-only" for="composer-message">Message</label>
-              <textarea
-                id="composer-message"
-                class="textarea textarea-bordered min-h-20 flex-1"
-                name="message"
-                required
-                maxlength="32768"
-                rows="3"
-                {% if session_busy || !project_available %}disabled{% endif %}
-                placeholder="{% if !project_available %}
-                  Restore the project path to send work
-                {% else if session_busy %}
-                  Wait until this reply finishes
-                {% else if !quick_ready %}
-                  Write your task while the sandbox prepares
-                {% else %}
-                  Describe the task for this agent
-                {% endif %}"
-              >
+            <label class="sr-only" for="composer-message">Message</label>
+            <textarea
+              id="composer-message"
+              class="textarea composer-message"
+              name="message"
+              required
+              maxlength="32768"
+              rows="2"
+              {% if session_busy || !project_available %}disabled{% endif %}
+              placeholder="{% if !project_available %}
+                Restore the project path to send work
+              {% else if session_busy %}
+                Wait until this reply finishes
+              {% else if !quick_ready %}
+                Write your task while the sandbox prepares
+              {% else %}
+                Describe the task for this agent
+              {% endif %}"
+            >
 {{- draft_message -}}</textarea>
+            <div class="composer-toolbar">
+              <p
+                class="shortcut-hint text-composer-quiet text-xs"
+                data-island="shortcut-hint"
+              >
+                Ctrl or Cmd + Enter to send.
+              </p>
               <button
-                class="btn btn-primary"
+                class="btn btn-primary btn-sm"
                 type="submit"
                 name="mode"
                 value="quick"
@@ -620,25 +675,13 @@
                 Send
               </button>
             </div>
-            <p
-              class="shortcut-hint text-composer-quiet text-xs"
-              data-island="shortcut-hint"
-            >
-              Ctrl or Cmd + Enter to send.
-            </p>
           </form>
           {% if !session_busy %}
-            <details class="configured-workflow mt-3">
-              <summary>
-                <span>
-                  <strong>Advanced run</strong>
-                  <small>Use a configured multi-step workflow</small>
-                </span>
-              </summary>
-              <div class="flex flex-col gap-3 px-3 pb-3">
+            <details class="configured-workflow">
+              <summary>Use a workflow</summary>
+              <div class="configured-workflow-body">
                 <p class="text-composer-quiet text-sm">
-                  Quick task is the default. Choose this option for saved steps,
-                  roles and review rules.
+                  Run saved steps, roles and review rules.
                 </p>
                 {% if workflow_empty %}
                   <div class="flex flex-wrap items-center gap-3">
@@ -663,7 +706,6 @@
                         class="select select-bordered select-sm w-full"
                         name="workflow"
                         required
-                        data-graft-submit-on="change"
                         {% if session_busy %}disabled{% endif %}
                       >
                         <option value="">Choose a workflow</option>
@@ -678,7 +720,7 @@
                       </select>
                     </label>
                     <button class="btn btn-outline btn-sm" type="submit">
-                      Use workflow
+                      Preview workflow
                     </button>
                     <a href="/workflows" data-graft class="link text-sm"
                       >Manage workflows</a

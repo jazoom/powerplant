@@ -129,7 +129,7 @@ async fn model_live(
     Extension(session): Extension<SessionId>,
     Query(query): Query<ModelQuery>,
 ) -> Result<hypergraft::live::LiveProjection<SessionId>, hypergraft::live::LiveReject> {
-    let invalidations = state.models.subscribe();
+    let invalidations = state.models_dev.subscribe();
     let Some(project) = ProjectId::parse(query.project.trim()) else {
         return Err(hypergraft::live::LiveReject::Invalid);
     };
@@ -166,6 +166,7 @@ async fn refresh_model_projection(
     patches
         .children("desk-model-catalogue", &view.desk_model_catalogue())
         .and_then(|_| patches.children("desk-thinking-control", &view.thinking_control()))
+        .and_then(|_| patches.children("desk-model-context", &view.model_context()))
         .map_err(|_| hypergraft::live::ProjectionError::Retire)?;
     Ok(patches)
 }
@@ -569,7 +570,6 @@ pub(crate) async fn view(
         page.agent,
         page.snapshot,
         &state.vault,
-        &state.models,
         &state.models_dev,
         error,
         desk_error,

@@ -1202,10 +1202,6 @@ impl WorkflowRun {
             .map(|step| step.name.as_str())
     }
 
-    pub(crate) fn latest_attempt(&self) -> Option<&AttemptRecord> {
-        self.attempts.last()
-    }
-
     fn accepts_time(&self, at_ms: u64) -> bool {
         at_ms >= self.latest_fact_ms()
     }

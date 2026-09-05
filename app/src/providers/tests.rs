@@ -1,10 +1,9 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    MAXIMUM_LISTED_MODELS, MAXIMUM_MODEL_BYTES, MAXIMUM_PROVIDER_DETAIL_BYTES, ProviderConnection,
-    ProviderError, ProviderKind, SecretString, ThinkingEffort, classify_failure_status,
-    classify_verify_status, provider_detail,
-    rig::{VERIFY_TIMEOUT, models_at, parse_model_list, thinking_parameters, verify_at},
+    MAXIMUM_PROVIDER_DETAIL_BYTES, ProviderConnection, ProviderError, ProviderKind, SecretString,
+    ThinkingEffort, classify_failure_status, classify_verify_status, provider_detail,
+    rig::{VERIFY_TIMEOUT, thinking_parameters, verify_at},
     with_json_detail, with_provider_detail,
 };
 
@@ -44,13 +43,6 @@ fn thinking_levels_map_to_each_provider_request_shape() {
         thinking_parameters(&connection),
         Some(serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"}))
     );
-}
-
-#[test]
-fn plan_catalogues_include_the_provider_default() {
-    for kind in [ProviderKind::Xai, ProviderKind::OpenaiCodex] {
-        assert!(kind.plan_models().contains(&kind.default_model()));
-    }
 }
 
 #[test]
@@ -302,38 +294,6 @@ fn provider_detail_is_bounded_and_strips_controls() {
     );
 }
 
-#[test]
-fn the_model_list_parser_bounds_and_dedupes() {
-    let body = serde_json::json!({
-        "data": [
-            {"id": "grok-4.6"},
-            {"id": "grok-4.6"},
-            {"id": "  grok-4-mini  "},
-            {"id": ""},
-            {"id": "bad\u{0000}id"},
-            {"not-id": 3},
-            {"id": "a".repeat(MAXIMUM_MODEL_BYTES + 1)}
-        ]
-    })
-    .to_string();
-    assert_eq!(
-        parse_model_list(body.as_bytes()),
-        vec!["grok-4-mini".to_owned(), "grok-4.6".to_owned()]
-    );
-    assert_eq!(parse_model_list(b"{not-json"), Vec::<String>::new());
-
-    let many = serde_json::json!({
-        "data": (0..(MAXIMUM_LISTED_MODELS + 10))
-            .map(|index| serde_json::json!({"id": format!("model-{index}")}))
-            .collect::<Vec<_>>()
-    })
-    .to_string();
-    assert_eq!(
-        parse_model_list(many.as_bytes()).len(),
-        MAXIMUM_LISTED_MODELS
-    );
-}
-
 #[tokio::test]
 async fn stalled_verification_ends_within_the_configured_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -356,91 +316,6 @@ async fn stalled_verification_ends_within_the_configured_timeout() {
     assert!(elapsed >= timeout, "{elapsed:?}");
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
     assert_eq!(VERIFY_TIMEOUT, Duration::from_secs(10));
-}
-
-#[tokio::test]
-async fn a_stalled_model_body_ends_within_the_configured_timeout() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    tokio::spawn(async move {
-        let Ok((stream, _)) = listener.accept().await else {
-            return;
-        };
-        if stream.writable().await.is_err() {
-            return;
-        }
-        let _ = stream.try_write(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{",
-        );
-        std::future::pending::<()>().await;
-    });
-
-    let timeout = Duration::from_millis(80);
-    let started = Instant::now();
-    let result = models_at(
-        &format!("http://{addr}"),
-        "sk-test",
-        super::AuthMethod::ApiKey,
-        timeout,
-        None,
-    )
-    .await;
-    let elapsed = started.elapsed();
-
-    assert_eq!(result, Err(ProviderError::Unreachable));
-    assert!(elapsed >= timeout, "{elapsed:?}");
-    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
-}
-
-#[tokio::test]
-async fn a_successful_models_response_returns_synthetic_model_ids() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    tokio::spawn(async move {
-        let Ok((stream, _)) = listener.accept().await else {
-            return;
-        };
-        let body = serde_json::json!({
-            "object": "list",
-            "data": [
-                {"id": "syn:large:text", "object": "model"},
-                {"id": "hf:moonshotai/Kimi-K3", "object": "model"}
-            ]
-        })
-        .to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let mut written = 0;
-        while written < response.len() {
-            if stream.writable().await.is_err() {
-                return;
-            }
-            match stream.try_write(&response.as_bytes()[written..]) {
-                Ok(0) => return,
-                Ok(count) => written += count,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(_) => return,
-            }
-        }
-    });
-
-    let models = models_at(
-        &format!("http://{addr}"),
-        "sk-test",
-        super::AuthMethod::ApiKey,
-        Duration::from_secs(2),
-        None,
-    )
-    .await
-    .expect("models");
-
-    assert_eq!(models, ["hf:moonshotai/Kimi-K3", "syn:large:text"]);
 }
 
 #[tokio::test]
@@ -545,7 +420,6 @@ mod scripted_fixture {
     #[derive(Clone)]
     pub(crate) struct ScriptedBackend {
         pub(crate) verify_result: Result<(), ProviderError>,
-        models_result: Result<Vec<String>, ProviderError>,
         script: Result<Script, ProviderError>,
         round: Arc<AtomicUsize>,
         last_preamble: Arc<Mutex<Option<String>>>,
@@ -556,7 +430,6 @@ mod scripted_fixture {
         pub(crate) fn accept() -> Self {
             Self {
                 verify_result: Ok(()),
-                models_result: Ok(Vec::new()),
                 script: Ok(Script::Chunks(
                     chunk_reply("Hello from Power Plant.")
                         .into_iter()
@@ -569,18 +442,12 @@ mod scripted_fixture {
             }
         }
 
-        pub(crate) fn with_models(mut self, models: Vec<String>) -> Self {
-            self.models_result = Ok(models);
-            self
-        }
-
         pub(crate) fn chunks<I>(chunks: I) -> Self
         where
             I: IntoIterator<Item = Result<String, ProviderError>>,
         {
             Self {
                 verify_result: Ok(()),
-                models_result: Ok(Vec::new()),
                 script: Ok(Script::Chunks(chunks.into_iter().collect())),
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
@@ -591,7 +458,6 @@ mod scripted_fixture {
         pub(crate) fn thinking_then(thinking: &str, reply: &str) -> Self {
             Self {
                 verify_result: Ok(()),
-                models_result: Ok(Vec::new()),
                 script: Ok(Script::Rounds(vec![vec![
                     Ok(ModelEvent::Thinking(thinking.to_owned())),
                     Ok(ModelEvent::Text(reply.to_owned())),
@@ -605,7 +471,6 @@ mod scripted_fixture {
         pub(crate) fn tool_then(name: &str, arguments: serde_json::Value, reply: &str) -> Self {
             Self {
                 verify_result: Ok(()),
-                models_result: Ok(Vec::new()),
                 script: Ok(Script::Rounds(vec![
                     vec![Ok(ModelEvent::ToolCall {
                         id: "call-1".to_owned(),
@@ -626,7 +491,6 @@ mod scripted_fixture {
         pub(crate) fn hang() -> Self {
             Self {
                 verify_result: Ok(()),
-                models_result: Ok(Vec::new()),
                 script: Ok(Script::Hang {
                     started: None,
                     dropped: None,
@@ -640,7 +504,6 @@ mod scripted_fixture {
         pub(crate) fn hang_watched(started: Arc<AtomicBool>, dropped: Arc<AtomicBool>) -> Self {
             Self {
                 verify_result: Ok(()),
-                models_result: Ok(Vec::new()),
                 script: Ok(Script::Hang {
                     started: Some(started),
                     dropped: Some(dropped),
@@ -667,13 +530,6 @@ mod scripted_fixture {
 
         pub(crate) fn verify(&self, _connection: &ProviderConnection) -> Result<(), ProviderError> {
             self.verify_result.clone()
-        }
-
-        pub(crate) fn models(
-            &self,
-            _connection: &ProviderConnection,
-        ) -> Result<Vec<String>, ProviderError> {
-            self.models_result.clone()
         }
 
         pub(crate) fn stream_turn(

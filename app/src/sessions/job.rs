@@ -12,7 +12,7 @@ use rand::rngs::SysRng;
 use tokio::sync::Notify;
 
 use crate::hex;
-use crate::providers::{AssistantReply, ToolOutput};
+use crate::providers::{AssistantReply, ModelUsage, ToolOutput};
 use crate::workflows::RunId;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
@@ -77,6 +77,7 @@ pub(crate) enum JobEventKind {
     Response { delta: String },
     Thinking { delta: String },
     Tool { output: ToolOutput },
+    Usage { usage: ModelUsage },
     Completed,
     Failed,
     Cancelled,
@@ -303,10 +304,14 @@ impl Job {
         self.push_output_event(JobEventKind::Tool { output })
     }
 
+    pub(crate) fn push_usage(&self, usage: ModelUsage) -> Option<u64> {
+        self.push_output_event(JobEventKind::Usage { usage })
+    }
+
     fn push_output_event(&self, kind: JobEventKind) -> Option<u64> {
         let empty = match &kind {
             JobEventKind::Response { delta } | JobEventKind::Thinking { delta } => delta.is_empty(),
-            JobEventKind::Tool { .. } => false,
+            JobEventKind::Tool { .. } | JobEventKind::Usage { .. } => false,
             JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => true,
         };
         if empty {
@@ -394,6 +399,7 @@ fn apply_output_event(output: &mut AssistantReply, event: &JobEventKind) {
         JobEventKind::Response { delta } => output.text.push_str(delta),
         JobEventKind::Thinking { delta } => output.push_thinking(delta),
         JobEventKind::Tool { output: tool } => output.push_tool(tool.clone()),
+        JobEventKind::Usage { usage } => output.usage = Some(usage.clone()),
         JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => {}
     }
 }

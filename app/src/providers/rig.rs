@@ -11,16 +11,15 @@ use rig_core::{
 };
 
 use super::{
-    AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, MAXIMUM_LISTED_MODELS, ModelEvent, ModelStream,
-    OPENROUTER_BASE_URL, ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
-    classify_failure_status_for, classify_verify_status, model_is_bounded, with_json_detail,
-    with_provider_detail, xai_plan,
+    AuthMethod, ChatTurn, DEEPSEEK_BASE_URL, ModelEvent, ModelStream, OPENROUTER_BASE_URL,
+    ProviderConnection, ProviderError, ProviderKind, Role, SYNTHETIC_BASE_URL,
+    classify_failure_status_for, classify_verify_status, with_json_detail, with_provider_detail,
+    xai_plan,
 };
 
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
-const MAXIMUM_MODEL_LIST_BYTES: usize = 1_048_576;
 const MAXIMUM_PROVIDER_ERROR_BYTES: usize = 4_096;
 
 const PREAMBLE: &str = "You are Power Plant, a local coding agent. Help the user write, explain and review code. Be direct.";
@@ -89,76 +88,6 @@ pub(super) async fn verify_at(
     }
 }
 
-// Read only ids from the model list. Never log the provider body.
-pub(super) async fn models(connection: &ProviderConnection) -> Result<Vec<String>, ProviderError> {
-    match connection.auth {
-        AuthMethod::ApiKey => {
-            models_at(
-                base_url(connection.kind),
-                connection.api_key.expose(),
-                AuthMethod::ApiKey,
-                VERIFY_TIMEOUT,
-                None,
-            )
-            .await
-        }
-        AuthMethod::Plan => match connection.kind {
-            ProviderKind::Xai => {
-                let live = models_at(
-                    xai_plan::XAI_PLAN_BASE_URL,
-                    &xai_plan_token(connection).await?,
-                    AuthMethod::Plan,
-                    VERIFY_TIMEOUT,
-                    Some(&xai_plan::proxy_headers()),
-                )
-                .await
-                .unwrap_or_default();
-                Ok(merge_models(live, connection.kind.plan_models()))
-            }
-            ProviderKind::OpenaiCodex => {
-                Ok(merge_models(Vec::new(), connection.kind.plan_models()))
-            }
-            ProviderKind::Synthetic | ProviderKind::Openrouter | ProviderKind::Deepseek => {
-                Err(ProviderError::Refused)
-            }
-        },
-    }
-}
-
-pub(super) async fn models_at(
-    base_url: &str,
-    api_key: &str,
-    auth: AuthMethod,
-    timeout: Duration,
-    extra_headers: Option<&reqwest::header::HeaderMap>,
-) -> Result<Vec<String>, ProviderError> {
-    let operation = async {
-        let url = format!("{}/models", base_url.trim_end_matches('/'));
-        let mut request = reqwest::Client::new().get(url).bearer_auth(api_key);
-        if let Some(headers) = extra_headers {
-            request = request.headers(headers.clone());
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| ProviderError::Unreachable)?;
-        let status = response.status().as_u16();
-        if !(200..=299).contains(&status) {
-            let classified =
-                classify_failure_status_for(status, retry_after_value(response.headers()), auth);
-            let body = bounded_body(response, MAXIMUM_PROVIDER_ERROR_BYTES).await;
-            return Err(with_provider_detail(classified, body.as_deref()));
-        }
-        let Some(body) = bounded_body(response, MAXIMUM_MODEL_LIST_BYTES).await else {
-            return Err(ProviderError::Unreachable);
-        };
-        Ok(parse_model_list(&body))
-    };
-    tokio::time::timeout(timeout, operation)
-        .await
-        .unwrap_or(Err(ProviderError::Unreachable))
-}
-
 async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Option<Vec<u8>> {
     if response
         .content_length()
@@ -179,51 +108,6 @@ async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Option<V
             Err(_) => return None,
         }
     }
-}
-
-pub(super) fn parse_model_list(body: &[u8]) -> Vec<String> {
-    #[derive(serde::Deserialize)]
-    struct ModelListing {
-        #[serde(default)]
-        data: Vec<ModelEntry>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct ModelEntry {
-        #[serde(default)]
-        id: String,
-    }
-
-    let Ok(listing) = serde_json::from_slice::<ModelListing>(body) else {
-        return Vec::new();
-    };
-    let mut models: Vec<String> = Vec::new();
-    for entry in listing.data {
-        let id = entry.id.trim();
-        if id.is_empty() || !model_is_bounded(id) || models.iter().any(|listed| listed == id) {
-            continue;
-        }
-        if models.len() >= MAXIMUM_LISTED_MODELS {
-            break;
-        }
-        models.push(id.to_owned());
-    }
-    models.sort();
-    models
-}
-
-fn merge_models(mut models: Vec<String>, extras: &[&str]) -> Vec<String> {
-    for id in extras {
-        if id.is_empty() || !model_is_bounded(id) || models.iter().any(|listed| listed == id) {
-            continue;
-        }
-        if models.len() >= MAXIMUM_LISTED_MODELS {
-            break;
-        }
-        models.push((*id).to_owned());
-    }
-    models.sort();
-    models
 }
 
 pub(super) async fn stream_turn(
@@ -443,6 +327,11 @@ where
                         .join("\n\n");
                     (!text.is_empty()).then_some(Ok(ModelEvent::Thinking(text)))
                 }
+            }
+            Ok(StreamedAssistantContent::Final(final_response)) => {
+                (final_response.usage.input_tokens > 0).then_some(Ok(ModelEvent::Usage {
+                    input_tokens: final_response.usage.input_tokens,
+                }))
             }
             Ok(_) => None,
             Err(error) => Some(Err(classify_completion_for(error, auth))),

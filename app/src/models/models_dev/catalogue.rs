@@ -29,11 +29,18 @@ pub(super) struct Source {
     pub(super) origin: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct ModelLimit {
+    pub(super) context: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Model {
     pub(super) id: String,
     pub(super) reasoning: bool,
     pub(super) efforts: Vec<String>,
+    pub(super) attachment: bool,
+    pub(super) limit: ModelLimit,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -60,10 +67,22 @@ struct SourceProvider {
 #[derive(Deserialize)]
 struct SourceModel {
     id: Option<String>,
+    attachment: bool,
     #[serde(default)]
     reasoning: bool,
     #[serde(default)]
     reasoning_options: Vec<ReasoningOption>,
+    tool_call: bool,
+    modalities: SourceModalities,
+    #[serde(default)]
+    status: Option<String>,
+    limit: ModelLimit,
+}
+
+#[derive(Deserialize)]
+struct SourceModalities {
+    input: Vec<String>,
+    output: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -92,8 +111,22 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
         let mut models = Vec::new();
         for (key, model) in &provider.models {
             let id = model.id.as_deref().unwrap_or(key);
-            if id != key || !bounded(id, MAXIMUM_MODEL_BYTES) {
+            if id != key
+                || !bounded(id, MAXIMUM_MODEL_BYTES)
+                || !valid_modalities(&model.modalities)
+                || !matches!(
+                    model.status.as_deref(),
+                    None | Some("alpha" | "beta" | "deprecated")
+                )
+            {
                 return Err(());
+            }
+            if !model.tool_call
+                || !model.modalities.input.iter().any(|value| value == "text")
+                || model.modalities.output.as_slice() != ["text"]
+                || model.status.as_deref() == Some("deprecated")
+            {
+                continue;
             }
             let mut efforts = Vec::new();
             for option in &model.reasoning_options {
@@ -124,7 +157,12 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
                 id: id.to_owned(),
                 reasoning: model.reasoning,
                 efforts,
+                attachment: model.attachment,
+                limit: model.limit.clone(),
             });
+        }
+        if !models.iter().any(|model| model.id == kind.default_model()) {
+            return Err(());
         }
         models.sort_by(|left, right| left.id.cmp(&right.id));
         total += models.len();
@@ -341,6 +379,22 @@ fn valid_etag(value: &str) -> bool {
 
 fn bounded(value: &str, maximum: usize) -> bool {
     !value.is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
+}
+
+fn valid_modalities(modalities: &SourceModalities) -> bool {
+    [modalities.input.as_slice(), modalities.output.as_slice()]
+        .into_iter()
+        .all(|values| {
+            !values.is_empty()
+                && values.len() <= 5
+                && values.iter().all(|value| {
+                    matches!(value.as_str(), "text" | "audio" | "image" | "video" | "pdf")
+                })
+                && values
+                    .iter()
+                    .enumerate()
+                    .all(|(index, value)| !values[..index].contains(value))
+        })
 }
 
 pub(super) fn model_count(snapshot: &Snapshot) -> usize {

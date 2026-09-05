@@ -138,14 +138,6 @@ impl ProviderVault {
         connection_from(self.path.as_deref(), &state, state.selected?)
     }
 
-    pub(crate) fn connections(&self) -> Vec<ProviderConnection> {
-        let state = self.lock();
-        ProviderKind::ALL
-            .into_iter()
-            .filter_map(|kind| connection_from(self.path.as_deref(), &state, kind))
-            .collect()
-    }
-
     pub(crate) fn desk_providers(&self) -> Vec<DeskProvider> {
         let state = self.lock();
         ProviderKind::ALL
@@ -280,10 +272,6 @@ impl ProviderVault {
 
     pub(crate) fn provider_dir(&self) -> Option<PathBuf> {
         Some(self.path.as_ref()?.parent()?.to_path_buf())
-    }
-
-    pub(crate) fn plan_file(&self, kind: ProviderKind) -> Option<PathBuf> {
-        plan_file_path(self.path.as_deref(), kind)
     }
 
     pub(crate) fn forget(&self, kind: ProviderKind) -> Result<(), VaultError> {

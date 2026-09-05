@@ -17,7 +17,6 @@ use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 
 use crate::{
     error::AppResult,
-    models,
     plan_login::PendingPlan,
     providers::{ProviderConnection, ProviderError},
     responses,
@@ -110,10 +109,8 @@ async fn submit(
 
     state
         .vault
-        .insert_api_key(connection.clone())
+        .insert_api_key(connection)
         .map_err(|error| crate::error::AppError::new("store provider", error))?;
-    models::refresh(state.clone(), connection);
-
     let view = ConnectViewModel::initial(
         &state.vault,
         state.plan_login.snapshot(),
@@ -237,12 +234,6 @@ async fn complete_plan_login(
             match installation {
                 Some(Ok(())) => {
                     attempt.mark_installed();
-                    let connection = ProviderConnection::with_plan(
-                        kind,
-                        kind.default_model(),
-                        state.vault.plan_file(kind),
-                    );
-                    models::refresh(state.clone(), connection);
                     state.plan_login.finish(generation);
                 }
                 Some(Err(_)) => {
@@ -295,7 +286,6 @@ async fn forget(
             .vault
             .forget(kind)
             .map_err(|error| crate::error::AppError::new("forget provider", error))?;
-        state.models.remove(kind);
     }
 
     if !state.vault.has_providers() {

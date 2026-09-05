@@ -5,7 +5,10 @@
   <div class="page-intro">
     <div>
       <h1>Runs</h1>
-      <p>Track task progress, review changes and inspect results.</p>
+      <p>
+        Each task creates a run. Open a run to see its steps, outputs and review
+        status.
+      </p>
     </div>
   </div>
 
@@ -26,24 +29,13 @@
               href="/runs/{{ run.id }}"
               data-graft
               class="link link-hover font-medium"
-              >{{ run.name }}</a
             >
-            {% if run.project_href != "" %}
-              <p class="text-sm">
-                <a
-                  href="{{ run.project_href }}"
-                  data-graft
-                  class="link link-hover"
-                  >{{ run.project_name }}</a
-                >
-              </p>
-            {% else if run.project_name != "" %}
-              <p class="text-sm">{{ run.project_name }}</p>
-            {% endif %}
-
-            {% if run.latest_attempt != "" %}
-              <p class="text-sm">{{ run.latest_attempt }}</p>
-            {% endif %}
+              {% if run.project_name != "" %}
+                {{ run.project_name }}
+                ·
+              {% endif %}
+              {{ run.name }}
+            </a>
           </div>
           <div class="flex flex-col items-end gap-1 text-right">
             <span class="badge state-badge" data-state="{{ run.state }}"

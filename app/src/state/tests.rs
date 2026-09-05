@@ -25,7 +25,6 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         chat: Arc::new(ChatBackend::Scripted(
             crate::tests::ScriptedBackend::accept(),
         )),
-        models: Arc::new(ModelCatalogue::default()),
         models_dev: Arc::new(ModelsDevCatalogue::bundled()),
         plan_login: Arc::new(PlanLogin::new()),
         preferences: Arc::new(Preferences::in_memory()),

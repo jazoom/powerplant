@@ -29,7 +29,15 @@ pub(crate) struct ModelsDevCatalogue {
     path: Option<PathBuf>,
     active: RwLock<Snapshot>,
     refresh: tokio::sync::Mutex<()>,
+    invalidations: tokio::sync::broadcast::Sender<()>,
     client: reqwest::Client,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ModelMetadata {
+    pub(crate) id: String,
+    pub(crate) attachment: bool,
+    pub(crate) context_limit: u64,
 }
 
 impl ModelsDevCatalogue {
@@ -80,10 +88,12 @@ impl ModelsDevCatalogue {
             .user_agent(USER_AGENT)
             .build()
             .map_err(|_| "The model catalogue client is unavailable.".to_owned())?;
+        let (invalidations, _) = tokio::sync::broadcast::channel(16);
         Ok(Self {
             path: Some(path),
             active: RwLock::new(active),
             refresh: tokio::sync::Mutex::new(()),
+            invalidations,
             client,
         })
     }
@@ -91,12 +101,38 @@ impl ModelsDevCatalogue {
     #[cfg(test)]
     pub(crate) fn bundled() -> Self {
         let active = parse_snapshot(BUNDLED).expect("bundled catalogue");
+        let (invalidations, _) = tokio::sync::broadcast::channel(16);
         Self {
             path: None,
             active: RwLock::new(active),
             refresh: tokio::sync::Mutex::new(()),
+            invalidations,
             client: reqwest::Client::new(),
         }
+    }
+
+    pub(crate) fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.invalidations.subscribe()
+    }
+
+    pub(crate) fn models(&self, kind: ProviderKind) -> Vec<ModelMetadata> {
+        let active = self.read();
+        active
+            .providers
+            .iter()
+            .find(|provider| provider.id == kind.as_str())
+            .map(|provider| provider.models.iter().map(model_metadata).collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn model(&self, kind: ProviderKind, id: &str) -> Option<ModelMetadata> {
+        let active = self.read();
+        active
+            .providers
+            .iter()
+            .find(|provider| provider.id == kind.as_str())
+            .and_then(|provider| provider.models.iter().find(|model| model.id == id))
+            .map(model_metadata)
     }
 
     pub(crate) fn efforts(&self, kind: ProviderKind, model: &str) -> Vec<ThinkingEffort> {
@@ -235,6 +271,7 @@ impl ModelsDevCatalogue {
         *self.write() = snapshot;
         if changed {
             tracing::info!("model capability catalogue changed");
+            let _ = self.invalidations.send(());
         }
     }
     fn read(&self) -> std::sync::RwLockReadGuard<'_, Snapshot> {
@@ -251,10 +288,16 @@ impl ModelsDevCatalogue {
 
 pub(crate) async fn refresh_worker(state: crate::state::AppState) {
     loop {
-        if state.models_dev.refresh_if_due().await {
-            state.models.metadata_changed();
-        }
+        state.models_dev.refresh_if_due().await;
         tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+    }
+}
+
+fn model_metadata(model: &catalogue::Model) -> ModelMetadata {
+    ModelMetadata {
+        id: model.id.clone(),
+        attachment: model.attachment,
+        context_limit: model.limit.context,
     }
 }
 

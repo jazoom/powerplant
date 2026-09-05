@@ -2,8 +2,8 @@
     "version": 1,
     "source": {
         "url": "https://models.dev/api.json",
-        "etag": "W/\"c2945ea4e80cbb62e0100ce6e2148b3b\"",
-        "sha256": "c2945ea4e80cbb62e0100ce6e2148b3bfef5dc2caab6c403ff814fd923b65534",
+        "etag": "W/\"1b9b62bd4af44cbd12938610cedbcb37\"",
+        "sha256": "1b9b62bd4af44cbd12938610cedbcb3702f7be71e465af0d712aa8354a6cb5a4",
         "origin": "models.dev"
     },
     "checked_at_unix_seconds": 0,
@@ -16,17 +16,29 @@
                 {
                     "id": "deepseek-v4-flash",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "deepseek-v4-flash-vision-exp",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "deepseek-v4-pro",
                     "reasoning": true,
-                    "efforts": ["high", "max"]
+                    "efforts": ["high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 }
             ]
         },
@@ -35,239 +47,284 @@
             "models_dev_id": "openai",
             "models": [
                 {
-                    "id": "chatgpt-image-latest",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-3.5-turbo",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-4",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-4-turbo",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
                     "id": "gpt-4.1",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1047576
+                    }
                 },
                 {
                     "id": "gpt-4.1-mini",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-4.1-nano",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1047576
+                    }
                 },
                 {
                     "id": "gpt-4o",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-4o-2024-05-13",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "gpt-4o-2024-08-06",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "gpt-4o-2024-11-20",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "gpt-4o-mini",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "gpt-5",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5-mini",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5-nano",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5-pro",
                     "reasoning": true,
-                    "efforts": ["high"]
+                    "efforts": ["high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.1",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.2",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
-                },
-                {
-                    "id": "gpt-5.2-chat-latest",
-                    "reasoning": true,
-                    "efforts": ["medium"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.2-pro",
                     "reasoning": true,
-                    "efforts": ["medium", "high", "xhigh"]
-                },
-                {
-                    "id": "gpt-5.3-chat-latest",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.3-codex",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.3-codex-spark",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "gpt-5.4",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.4-mini",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.4-nano",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "gpt-5.4-pro",
                     "reasoning": true,
-                    "efforts": ["medium", "high", "xhigh"]
+                    "efforts": ["medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.5",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.5-pro",
                     "reasoning": true,
-                    "efforts": ["medium", "high", "xhigh"]
+                    "efforts": ["medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.6",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.6-luna",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.6-sol",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "gpt-5.6-terra",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
-                    "id": "gpt-image-1",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-image-1-mini",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-image-1.5",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-image-2",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gpt-realtime-2.1",
+                    "id": "gpt-6-astra",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
-                },
-                {
-                    "id": "o1",
-                    "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
-                },
-                {
-                    "id": "o1-pro",
-                    "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "o3",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
-                },
-                {
-                    "id": "o3-mini",
-                    "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "o3-pro",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
-                },
-                {
-                    "id": "o4-mini",
-                    "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
-                },
-                {
-                    "id": "text-embedding-3-large",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "text-embedding-3-small",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "text-embedding-ada-002",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 }
             ]
         },
@@ -278,1577 +335,2308 @@
                 {
                     "id": "aion-labs/aion-2.0",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "aion-labs/aion-3.0",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "aion-labs/aion-3.0-mini",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "aion-labs/aion-rp-llama-3.1-8b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "amazon/nova-2-lite-v1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "amazon/nova-lite-v1",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 300000
+                    }
                 },
                 {
                     "id": "amazon/nova-micro-v1",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "amazon/nova-premier-v1",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "amazon/nova-pro-v1",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "anthracite-org/magnum-v4-72b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 300000
+                    }
                 },
                 {
                     "id": "anthropic/claude-3-haiku",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "anthropic/claude-fable-5",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-fable-5.1",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-haiku-4.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-4",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-4.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-4.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-4.6",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "max"]
+                    "efforts": ["low", "medium", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-4.7",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-4.8",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-opus-5",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-sonnet-4",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-sonnet-4.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-sonnet-4.6",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "max"]
+                    "efforts": ["low", "medium", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "anthropic/claude-sonnet-5",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "arcee-ai/trinity-large-thinking",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "baidu/ernie-4.5-vl-424b-a47b",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "bytedance-seed/seed-1.6",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "bytedance-seed/seed-1.6-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "bytedance-seed/seed-2-1-turbo",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "bytedance-seed/seed-2.0-code",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "bytedance-seed/seed-2.0-lite",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "bytedance-seed/seed-2.0-mini",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
-                },
-                {
-                    "id": "bytedance/ui-tars-1.5-7b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "cohere/command-a",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "cohere/command-r-08-2024",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "cohere/command-r-plus-08-2024",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "cohere/command-r7b-12-2024",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "cohere/north-mini-code:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 256000
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-chat",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-chat-v3-0324",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-chat-v3.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-r1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 64000
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-r1-0528",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "deepseek/deepseek-r1-distill-llama-70b",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v3.1-terminus",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v3.2",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v3.2-exp",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 163840
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v4-flash",
                     "reasoning": true,
-                    "efforts": ["high", "xhigh"]
+                    "efforts": ["high", "xhigh"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v4-flash-0731",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1310720
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v4-flash-vision-exp",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v4-pro",
                     "reasoning": true,
-                    "efforts": ["high", "xhigh"]
+                    "efforts": ["high", "xhigh"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "deepseek/deepseek-v4-pro-0813",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "dots-studio/dots-3-note-preview:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 512000
+                    }
                 },
                 {
                     "id": "google/gemini-2.5-flash",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "google/gemini-2.5-flash-image",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-2.5-flash-lite",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-2.5-pro",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-2.5-pro-preview",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-2.5-pro-preview-05-06",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3-flash-preview",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
-                },
-                {
-                    "id": "google/gemini-3-pro-image",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "google/gemini-3-pro-image-preview",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "google/gemini-3.1-flash-image",
-                    "reasoning": true,
-                    "efforts": ["minimal", "high"]
-                },
-                {
-                    "id": "google/gemini-3.1-flash-image-preview",
-                    "reasoning": true,
-                    "efforts": ["minimal", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.1-flash-lite",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
-                },
-                {
-                    "id": "google/gemini-3.1-flash-lite-image",
-                    "reasoning": true,
-                    "efforts": ["minimal", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.1-flash-lite-preview",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.1-pro-preview",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.1-pro-preview-customtools",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.5-flash",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.5-flash-lite",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.6-flash",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.7-flash",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemini-3.8-flash",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
-                },
-                {
-                    "id": "google/gemma-2-27b-it",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "google/gemma-3-12b-it",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "google/gemma-3-27b-it",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "google/gemma-3-4b-it",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "google/gemma-4-26b-a4b-it",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "google/gemma-4-26b-a4b-it:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "google/gemma-4-31b-it",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "google/gemma-4-31b-it:free",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "google/lyria-3-clip-preview",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "google/lyria-3-pro-preview",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "gryphe/mythomax-l2-13b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "ibm-granite/granite-4.0-h-micro",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "ibm-granite/granite-4.1-8b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "ibm-granite/granite-4.2-8b",
                     "reasoning": true,
-                    "efforts": ["none", "low", "high"]
+                    "efforts": ["none", "low", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "inception/mercury-2",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "inception/mercury-2.5-preview",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 260000
+                    }
                 },
                 {
                     "id": "inclusionai/ling-3.0-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "inclusionai/ling-3.0-flash-fin",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "inclusionai/ling-3.0-flash-fin:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
+                },
+                {
+                    "id": "inclusionai/ling-3.0-flash-sante:free",
+                    "reasoning": true,
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "kwaipilot/kat-coder-pro-v2",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "kwaipilot/kat-coder-pro-v2.5",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "liquid/lfm-2.5-2.6b:free",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "mancer/weaver",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 65536
+                    }
                 },
                 {
                     "id": "meituan/longcat-2.0",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048756
+                    }
                 },
                 {
                     "id": "meta-llama/llama-3.1-70b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "meta-llama/llama-3.1-8b-instruct",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "meta-llama/llama-3.2-1b-instruct",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "meta-llama/llama-3.2-3b-instruct",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "meta-llama/llama-3.3-70b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "meta-llama/llama-4-maverick",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "meta-llama/llama-4-scout",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "meta-llama/llama-guard-4-12b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1310720
+                    }
                 },
                 {
                     "id": "meta/muse-glimmer-30b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "meta/muse-spark-1.1",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
+                    "efforts": ["minimal", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "meta/muse-spark-1.2",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
+                    "efforts": ["minimal", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "meta/muse-spark-1.2-contributor",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
+                    "efforts": ["minimal", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "meta/muse-spark-1.3",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
+                    "efforts": [
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "meta/muse-spark-1.3-contributor",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
-                },
-                {
-                    "id": "microsoft/phi-4",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "microsoft/wizardlm-2-8x22b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "minimax/minimax-01",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "minimax/minimax-m1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "minimax/minimax-m2",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "minimax/minimax-m2-her",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "minimax/minimax-m2.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "minimax/minimax-m2.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "minimax/minimax-m2.7",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "minimax/minimax-m2.7:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 196608
+                    }
                 },
                 {
                     "id": "minimax/minimax-m3",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "minimax/minimax-m3:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "mistralai/codestral-2508",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 256000
+                    }
                 },
                 {
                     "id": "mistralai/devstral-2512",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "mistralai/ministral-14b-2512",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "mistralai/ministral-3b-2512",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "mistralai/ministral-8b-2512",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "mistralai/mistral-large",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "mistralai/mistral-large-2407",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "mistralai/mistral-large-2512",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "mistralai/mistral-medium-3",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "mistralai/mistral-medium-3-5",
                     "reasoning": true,
-                    "efforts": ["none", "high"]
+                    "efforts": ["none", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "mistralai/mistral-medium-3.1",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "mistralai/mistral-nemo",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "mistralai/mistral-saba",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "mistralai/mistral-small-24b-instruct-2501",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 32768
+                    }
                 },
                 {
                     "id": "mistralai/mistral-small-2603",
                     "reasoning": true,
-                    "efforts": ["none", "high"]
-                },
-                {
-                    "id": "mistralai/mistral-small-3.1-24b-instruct",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["none", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "mistralai/mistral-small-3.2-24b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "mistralai/mixtral-8x22b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 65536
+                    }
                 },
                 {
                     "id": "mistralai/voxtral-small-24b-2507",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 32768
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k2",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k2-0905",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k2-thinking",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k2.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k2.6",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k2.7-code",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "moonshotai/kimi-k3",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
-                },
-                {
-                    "id": "morph/morph-v3-fast",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "morph/morph-v3-large",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "nex-agi/nex-n2-mini",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "nex-agi/nex-n2-pro",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "nousresearch/hermes-3-llama-3.1-405b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "nousresearch/hermes-3-llama-3.1-70b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "nousresearch/hermes-4-405b",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "nousresearch/hermes-4-70b",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3-nano-30b-a3b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 256000
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3-super-120b-a12b",
                     "reasoning": true,
-                    "efforts": ["low", "medium"]
+                    "efforts": ["low", "medium"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3-super-120b-a12b:free",
                     "reasoning": true,
-                    "efforts": ["low", "medium"]
+                    "efforts": ["low", "medium"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3-ultra-550b-a55b",
                     "reasoning": true,
-                    "efforts": ["medium", "high"]
+                    "efforts": ["medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
                     "reasoning": true,
-                    "efforts": ["medium", "high"]
-                },
-                {
-                    "id": "nvidia/nemotron-3.5-content-safety",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "nvidia/nemotron-3.5-content-safety:free",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": ["medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3.5-lightning",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "nvidia/nemotron-3.5-lightning:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "openai/gpt-3.5-turbo",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 16385
+                    }
                 },
                 {
                     "id": "openai/gpt-3.5-turbo-0613",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 4095
+                    }
                 },
                 {
                     "id": "openai/gpt-3.5-turbo-16k",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "openai/gpt-3.5-turbo-instruct",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 16385
+                    }
                 },
                 {
                     "id": "openai/gpt-4",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 8191
+                    }
                 },
                 {
                     "id": "openai/gpt-4-turbo",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4-turbo-preview",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4.1",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1047576
+                    }
                 },
                 {
                     "id": "openai/gpt-4.1-mini",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1047576
+                    }
                 },
                 {
                     "id": "openai/gpt-4.1-nano",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1047576
+                    }
                 },
                 {
                     "id": "openai/gpt-4o",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4o-2024-05-13",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4o-2024-08-06",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4o-2024-11-20",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4o-mini",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-4o-mini-2024-07-18",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-5",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
-                },
-                {
-                    "id": "openai/gpt-5-image",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "openai/gpt-5-image-mini",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5-mini",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5-nano",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high"]
+                    "efforts": ["minimal", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5-pro",
                     "reasoning": true,
-                    "efforts": ["high"]
+                    "efforts": ["high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.1",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.1-codex",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.1-codex-max",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.1-codex-mini",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.2",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.2-chat",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 128000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.2-codex",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.2-pro",
                     "reasoning": true,
-                    "efforts": ["medium", "high", "xhigh"]
+                    "efforts": ["medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.3-codex",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.4",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
-                },
-                {
-                    "id": "openai/gpt-5.4-image-2",
-                    "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.4-mini",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.4-nano",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.4-pro",
                     "reasoning": true,
-                    "efforts": ["medium", "high", "xhigh"]
+                    "efforts": ["medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.5",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.5-pro",
                     "reasoning": true,
-                    "efforts": ["medium", "high", "xhigh"]
+                    "efforts": ["medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.6-luna",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.6-luna-pro",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.6-sol",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.6-sol-pro",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.6-terra",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-5.6-terra-pro",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
-                    "id": "openai/gpt-audio",
-                    "reasoning": false,
-                    "efforts": []
+                    "id": "openai/gpt-6-astra",
+                    "reasoning": true,
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
-                    "id": "openai/gpt-audio-mini",
-                    "reasoning": false,
-                    "efforts": []
+                    "id": "openai/gpt-6-astra-pro",
+                    "reasoning": true,
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "openai/gpt-chat-latest",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "openai/gpt-oss-120b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "openai/gpt-oss-20b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "openai/gpt-oss-safeguard-20b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "openai/o1",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "openai/o1-pro",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openai/o3",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openai/o3-mini",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openai/o3-mini-high",
                     "reasoning": true,
-                    "efforts": ["high"]
+                    "efforts": ["high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openai/o3-pro",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openai/o4-mini",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openai/o4-mini-high",
                     "reasoning": true,
-                    "efforts": ["high"]
-                },
-                {
-                    "id": "openrouter/auto",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "openrouter/bodybuilder",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "openrouter/free",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "openrouter/fusion",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "openrouter/pareto-code",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "perceptron/perceptron-mk1",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "perplexity/sonar",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "perplexity/sonar-deep-research",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "perplexity/sonar-pro",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "perplexity/sonar-pro-search",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "perplexity/sonar-reasoning-pro",
-                    "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "poolside/laguna-s-2.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "poolside/laguna-s-2.1:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "poolside/laguna-xs-2.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "poolside/laguna-xs-2.1:free",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen-2.5-72b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 32768
+                    }
                 },
                 {
                     "id": "qwen/qwen-2.5-7b-instruct",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "qwen/qwen-2.5-coder-32b-instruct",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 32768
+                    }
                 },
                 {
                     "id": "qwen/qwen-plus",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen-plus-2025-07-28",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "qwen/qwen2.5-vl-72b-instruct",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3-14b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-235b-a22b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-235b-a22b-2507",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-235b-a22b-thinking-2507",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-30b-a3b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-30b-a3b-instruct-2507",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-30b-a3b-thinking-2507",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 81920
+                    }
                 },
                 {
                     "id": "qwen/qwen3-32b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-8b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-coder",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-coder-30b-a3b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-coder-flash",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3-coder-next",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-coder-plus",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3-max",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-max-thinking",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-next-80b-a3b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-next-80b-a3b-thinking",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-235b-a22b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-235b-a22b-thinking",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-30b-a3b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-30b-a3b-thinking",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-32b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-8b-instruct",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3-vl-8b-thinking",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-122b-a10b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-27b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-35b-a3b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-397b-a17b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-9b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-flash-02-23",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-plus-02-15",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.5-plus-20260420",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.6-27b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.6-35b-a3b",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.6-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.6-max-preview",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "qwen/qwen3.6-plus",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.7-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.7-max",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.7-plus",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.8-2.4t-a95b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "xhigh"]
+                    "efforts": ["low", "medium", "xhigh"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "qwen/qwen3.8-27b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "xhigh"]
+                    "efforts": ["low", "medium", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "qwen/qwen3.8-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
-                    "id": "qwen/qwen3.8-max",
+                    "id": "qwen/qwen3.8-max-0902",
                     "reasoning": true,
-                    "efforts": ["minimal", "low", "medium", "high", "xhigh"]
+                    "efforts": ["minimal", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "rekaai/reka-edge",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "rekaai/reka-flash-3",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "relace/relace-apply-3",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 16384
+                    }
                 },
                 {
                     "id": "relace/relace-search",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 256000
+                    }
                 },
                 {
                     "id": "sakana/fugu-ultra",
                     "reasoning": true,
-                    "efforts": ["high", "xhigh", "max"]
+                    "efforts": ["high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "sakana/sakana-namazu",
                     "reasoning": true,
-                    "efforts": ["none", "high"]
-                },
-                {
-                    "id": "sao10k/l3-lunaris-8b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["none", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "sao10k/l3.1-euryale-70b",
                     "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "sao10k/l3.3-euryale-70b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "stepfun/step-3.5-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "stepfun/step-3.7-flash",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
-                },
-                {
-                    "id": "tencent/hunyuan-a13b-instruct",
-                    "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "tencent/hy-mt2-1.8b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "tencent/hy-mt2-30b-a3b",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "tencent/hy-mt2-7b",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "tencent/hy3",
                     "reasoning": true,
-                    "efforts": ["none", "low", "high"]
+                    "efforts": ["none", "low", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "tencent/hy3-preview",
                     "reasoning": true,
-                    "efforts": ["none", "low", "high"]
+                    "efforts": ["none", "low", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "tencent/hy4-preview",
                     "reasoning": true,
-                    "efforts": ["none", "low", "high"]
-                },
-                {
-                    "id": "thedrummer/cydonia-24b-v4.1",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "thedrummer/skyfall-36b-v2",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": ["none", "low", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "thedrummer/unslopnemo-12b",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1024000
+                    }
                 },
                 {
                     "id": "thinkingmachines/inkling",
@@ -1860,7 +2648,11 @@
                         "medium",
                         "high",
                         "max"
-                    ]
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "thinkingmachines/inkling-small",
@@ -1872,7 +2664,11 @@
                         "medium",
                         "high",
                         "max"
-                    ]
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "thinkingmachines/inkling-small:free",
@@ -1884,7 +2680,11 @@
                         "medium",
                         "high",
                         "max"
-                    ]
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "thinkingmachines/inkling:free",
@@ -1896,207 +2696,351 @@
                         "medium",
                         "high",
                         "max"
-                    ]
-                },
-                {
-                    "id": "undi95/remm-slerp-l2-13b",
-                    "reasoning": false,
-                    "efforts": []
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "upstage/solar-pro-3",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "upstage/solar-pro4",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "writer/palmyra-x5",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 524288
+                    }
                 },
                 {
                     "id": "x-ai/grok-4.20",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "x-ai/grok-4.20-multi-agent",
-                    "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 2000000
+                    }
                 },
                 {
                     "id": "x-ai/grok-4.3",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "x-ai/grok-4.5",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 500000
+                    }
                 },
                 {
                     "id": "x-ai/grok-4.6",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 500000
+                    }
                 },
                 {
                     "id": "x-ai/grok-build-0.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 256000
+                    }
                 },
                 {
                     "id": "xiaomi/mimo-v2.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "xiaomi/mimo-v2.5-pro",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.5-air",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.5v",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 65536
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.6",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.6v",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.7",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "z-ai/glm-4.7-flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 202752
+                    }
                 },
                 {
                     "id": "z-ai/glm-5",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "z-ai/glm-5-turbo",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 202752
+                    }
                 },
                 {
                     "id": "z-ai/glm-5.1",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 204800
+                    }
                 },
                 {
                     "id": "z-ai/glm-5.2",
                     "reasoning": true,
-                    "efforts": ["high", "xhigh"]
+                    "efforts": ["high", "xhigh"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "z-ai/glm-5.2:free",
                     "reasoning": true,
-                    "efforts": ["high", "xhigh"]
+                    "efforts": ["high", "xhigh"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 256000
+                    }
                 },
                 {
                     "id": "z-ai/glm-5.3",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1310720
+                    }
                 },
                 {
                     "id": "z-ai/glm-5.3-flash",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1310720
+                    }
                 },
                 {
                     "id": "z-ai/glm-5v-turbo",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 202752
+                    }
                 },
                 {
                     "id": "~anthropic/claude-fable-latest",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "~anthropic/claude-haiku-latest",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 200000
+                    }
                 },
                 {
                     "id": "~anthropic/claude-opus-latest",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "~anthropic/claude-sonnet-latest",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh", "max"]
+                    "efforts": ["low", "medium", "high", "xhigh", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "~deepseek/deepseek-v4-flash-latest",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1310720
+                    }
                 },
                 {
                     "id": "~google/gemini-flash-latest",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "~google/gemini-pro-latest",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "~moonshotai/kimi-latest",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1048576
+                    }
                 },
                 {
                     "id": "~openai/gpt-latest",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+                    "efforts": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1050000
+                    }
                 },
                 {
                     "id": "~openai/gpt-mini-latest",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high", "xhigh"]
+                    "efforts": ["none", "low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 400000
+                    }
                 },
                 {
                     "id": "~x-ai/grok-latest",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 500000
+                    }
                 },
                 {
                     "id": "~z-ai/glm-flash-latest",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1310720
+                    }
                 },
                 {
                     "id": "~z-ai/glm-latest",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 1310720
+                    }
                 }
             ]
         },
@@ -2107,47 +3051,83 @@
                 {
                     "id": "hf:MiniMaxAI/MiniMax-M3",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 524288
+                    }
                 },
                 {
                     "id": "hf:Qwen/Qwen3.6-27B",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "hf:moonshotai/Kimi-K2.7-Code",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "hf:moonshotai/Kimi-K3",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 524288
+                    }
                 },
                 {
                     "id": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 262144
+                    }
                 },
                 {
                     "id": "hf:openai/gpt-oss-120b",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 131072
+                    }
                 },
                 {
                     "id": "hf:zai-org/GLM-4.7-Flash",
                     "reasoning": true,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": false,
+                    "limit": {
+                        "context": 196608
+                    }
                 },
                 {
                     "id": "hf:zai-org/GLM-5.2",
                     "reasoning": true,
-                    "efforts": ["none", "high", "xhigh"]
+                    "efforts": ["none", "high", "xhigh"],
+                    "attachment": false,
+                    "limit": {
+                        "context": 524288
+                    }
                 },
                 {
                     "id": "hf:zai-org/GLM-5.3-Flash",
                     "reasoning": true,
-                    "efforts": ["low", "high", "max"]
+                    "efforts": ["low", "high", "max"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 524288
+                    }
                 }
             ]
         },
@@ -2158,62 +3138,56 @@
                 {
                     "id": "grok-4.20-0309-non-reasoning",
                     "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "grok-4.20-0309-reasoning",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "grok-4.20-multi-agent-0309",
-                    "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "grok-4.3",
                     "reasoning": true,
-                    "efforts": ["none", "low", "medium", "high"]
+                    "efforts": ["none", "low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 1000000
+                    }
                 },
                 {
                     "id": "grok-4.5",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high"]
+                    "efforts": ["low", "medium", "high"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 500000
+                    }
                 },
                 {
                     "id": "grok-4.6",
                     "reasoning": true,
-                    "efforts": ["low", "medium", "high", "xhigh"]
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    "attachment": true,
+                    "limit": {
+                        "context": 500000
+                    }
                 },
                 {
                     "id": "grok-build-0.1",
                     "reasoning": true,
-                    "efforts": []
-                },
-                {
-                    "id": "grok-imagine-image",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "grok-imagine-image-2.0",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "grok-imagine-image-quality",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "grok-imagine-video",
-                    "reasoning": false,
-                    "efforts": []
-                },
-                {
-                    "id": "grok-imagine-video-1.5",
-                    "reasoning": false,
-                    "efforts": []
+                    "efforts": [],
+                    "attachment": true,
+                    "limit": {
+                        "context": 256000
+                    }
                 }
             ]
         }

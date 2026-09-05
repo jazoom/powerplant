@@ -15,7 +15,6 @@ pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 pub(crate) const MAXIMUM_API_KEY_BYTES: usize = 4_096;
 pub(crate) const MAXIMUM_MODEL_BYTES: usize = 256;
 pub(crate) const MAXIMUM_FAVOURITES: usize = 50;
-pub(crate) const MAXIMUM_LISTED_MODELS: usize = 512;
 pub(crate) const MAXIMUM_PROVIDER_DETAIL_BYTES: usize = 400;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -74,27 +73,6 @@ impl ProviderKind {
             Self::Synthetic => "hf:moonshotai/Kimi-K3",
             Self::Openrouter => "openai/gpt-4o-mini",
             Self::Deepseek => "deepseek-v4-flash",
-        }
-    }
-
-    // ChatGPT and SuperGrok plan endpoints do not publish a full catalogue.
-    pub(crate) fn plan_models(self) -> &'static [&'static str] {
-        match self {
-            Self::Xai => &[
-                "grok-4.6",
-                "grok-4.5",
-                "grok-4.3",
-                "grok-build",
-                "grok-composer-2.5-fast",
-            ],
-            Self::OpenaiCodex => &[
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
-                "gpt-5.5",
-                "gpt-5.3-codex-spark",
-            ],
-            Self::Synthetic | Self::Openrouter | Self::Deepseek => &[],
         }
     }
 
@@ -238,21 +216,6 @@ impl ProviderConnection {
             plan_file: None,
         }
     }
-
-    pub(crate) fn with_plan(
-        kind: ProviderKind,
-        model: impl Into<String>,
-        plan_file: Option<std::path::PathBuf>,
-    ) -> Self {
-        Self {
-            kind,
-            auth: AuthMethod::Plan,
-            api_key: SecretString::new(String::new()),
-            model: model.into(),
-            thinking: None,
-            plan_file,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,12 +236,20 @@ pub(crate) enum AssistantActivity {
     Tool(ToolOutput),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ModelUsage {
+    pub(crate) provider: ProviderKind,
+    pub(crate) model: String,
+    pub(crate) input_tokens: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct AssistantReply {
     pub(crate) text: String,
     pub(crate) thinking: String,
     pub(crate) tools: Vec<ToolOutput>,
     pub(crate) activity: Vec<AssistantActivity>,
+    pub(crate) usage: Option<ModelUsage>,
 }
 
 impl AssistantReply {
@@ -327,6 +298,7 @@ pub(crate) struct ChatTurn {
     pub(crate) thinking: String,
     pub(crate) tools: Vec<ToolOutput>,
     pub(crate) activity: Vec<AssistantActivity>,
+    pub(crate) usage: Option<ModelUsage>,
 }
 
 impl ChatTurn {
@@ -337,6 +309,7 @@ impl ChatTurn {
             thinking: String::new(),
             tools: Vec::new(),
             activity: Vec::new(),
+            usage: None,
         }
     }
 
@@ -347,6 +320,7 @@ impl ChatTurn {
             thinking: reply.thinking,
             tools: reply.tools,
             activity: reply.activity,
+            usage: reply.usage,
         }
     }
 }
@@ -511,6 +485,9 @@ pub(crate) enum ModelEvent {
         name: String,
         arguments: serde_json::Value,
     },
+    Usage {
+        input_tokens: u64,
+    },
 }
 
 pub(crate) type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent, ProviderError>> + Send>>;
@@ -547,17 +524,6 @@ impl ChatBackend {
             Self::Scripted(backend) => {
                 backend.stream_turn(connection, history, extra, tools, preamble)
             }
-        }
-    }
-
-    pub(crate) async fn models(
-        &self,
-        connection: &ProviderConnection,
-    ) -> Result<Vec<String>, ProviderError> {
-        match self {
-            Self::Rig => rig::models(connection).await,
-            #[cfg(test)]
-            Self::Scripted(backend) => backend.models(connection),
         }
     }
 }

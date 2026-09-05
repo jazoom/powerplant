@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use super::id::RunId;
-use super::run::{AttemptRecord, RunRecordError, WorkflowRun, now_ms};
+use super::run::{RunRecordError, WorkflowRun, now_ms};
 use crate::projects::ProjectId;
 
 pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
@@ -18,7 +18,6 @@ pub(crate) struct RunSummary {
     pub(crate) state: String,
     pub(crate) created_at_ms: u64,
     pub(crate) current_step: String,
-    pub(crate) latest_attempt: String,
 }
 
 pub(crate) struct WorkflowRunStore {
@@ -162,27 +161,6 @@ fn summary_of(run: &WorkflowRun) -> RunSummary {
         state: run.state.as_label().to_owned(),
         created_at_ms: run.created_at_ms,
         current_step: run.current_step_name().unwrap_or("").to_owned(),
-        latest_attempt: run
-            .latest_attempt()
-            .map(attempt_summary)
-            .unwrap_or_default(),
-    }
-}
-
-fn attempt_summary(attempt: &AttemptRecord) -> String {
-    match &attempt.result {
-        Some(result) => format!(
-            "{} {} {}",
-            attempt.ordinal,
-            attempt.action_kind.as_label(),
-            result.as_label()
-        ),
-        None => format!(
-            "{} {} {}",
-            attempt.ordinal,
-            attempt.action_kind.as_label(),
-            attempt.state.as_label()
-        ),
     }
 }
 

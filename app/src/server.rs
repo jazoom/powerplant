@@ -51,7 +51,6 @@ pub(crate) async fn run(log_level: tracing::Level) -> Result<(), Box<dyn std::er
         .map_err(|error| format!("startup error: {error}"))?;
     tokio::spawn(sessions::purge_expired_sessions(state.clone()));
     tokio::spawn(models::models_dev::refresh_worker(state.clone()));
-    models::refresh_all(&state);
     tracing::info!(
         environment = ?state.config.environment(),
         public_origin = %state.config.public_origin(),
