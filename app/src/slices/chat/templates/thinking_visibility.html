@@ -1,0 +1,15 @@
+<label class="chat-thinking-toggle" for="show-thinking">
+  <span>Show thinking</span>
+  <input
+    id="show-thinking"
+    class="toggle toggle-sm"
+    type="checkbox"
+    name="show_thinking"
+    value="true"
+    data-thinking-toggle
+    {% if show_thinking %}checked{% endif %}
+  />
+</label>
+{% if let Some(message) = thinking_visibility_error %}
+  <span class="text-error text-xs" role="alert">{{ message }}</span>
+{% endif %}

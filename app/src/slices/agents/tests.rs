@@ -538,6 +538,7 @@ async fn configuration_document_renders_stored_directory_rows() {
     assert!(text.contains("name=\"alias_0\""));
     assert!(!text.contains("name=\"alias_1\""));
     assert!(text.contains("value=\"add-directory\""));
+    assert!(!text.contains("href=\"\""));
     state.keep_temp_dir(dir);
 }
 
@@ -675,6 +676,7 @@ async fn starter_form_omits_the_project_path_field() {
         "action=\"/agents?project={}\"",
         project.id.as_hex()
     )));
+    assert!(text.contains(&format!("href=\"/projects/{}\"", project.id.as_hex())));
     assert!(text.contains("value=\"Desk\""));
     assert!(text.contains(&project.host_path.to_string_lossy().into_owned()));
     assert!(!text.contains("name=\"path_0\""));

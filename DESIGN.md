@@ -145,6 +145,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
 - The project desk uses visible provider, model and thinking controls, a readiness route, a transcript sheet and an attached yellow composer.
+- The Show thinking control sets one local preference for every project desk.
 - The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.
 - The thinking control shows Not available when no adjustable effort exists.
 - First-time connect uses a dark setup introduction beside a pale provider file.

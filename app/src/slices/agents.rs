@@ -385,7 +385,7 @@ fn create_form_view(
 ) -> AgentFormView {
     match project {
         Some(record) => AgentFormView::create_for_project(form, error, record),
-        None => AgentFormView::create(form, error, ""),
+        None => AgentFormView::create(form, error),
     }
 }
 

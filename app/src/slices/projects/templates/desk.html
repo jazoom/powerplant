@@ -2,6 +2,7 @@
   data-section="projects"
   data-context-current-href="/projects/{{ project_id }}"
   data-context-leaf="{{ agent_name }}"
+  data-context-leaf-prefix="Agent"
   class="chat-sheet"
 >
   <div class="chat-desk-bar">
@@ -281,20 +282,24 @@
       </p>
     </div>
     <div class="chat-title-actions">
-      <span
-        class="status-stamp"
-        data-state="{% if review_href != "" %}Awaiting decision{% else if job_active %}Active{% else if quick_task_finished %}Completed{% else %}Ready{% endif %}"
-      >
-        {% if review_href != "" %}
-          Awaiting decision
-        {% else if job_active %}
-          {{ job_status }}
-        {% else if quick_task_finished %}
-          Task complete
-        {% else %}
-          Ready for work
-        {% endif %}
-      </span>
+      <div id="desk-status" class="contents">
+        {% block desk_status %}
+          <span
+            class="status-stamp"
+            data-state="{% if review_href != "" %}Awaiting decision{% else if job_active %}Active{% else if quick_task_finished %}Completed{% else %}Ready{% endif %}"
+          >
+            {% if review_href != "" %}
+              Awaiting decision
+            {% else if job_active %}
+              {{ job_status }}
+            {% else if quick_task_finished %}
+              Task complete
+            {% else %}
+              Ready for work
+            {% endif %}
+          </span>
+        {% endblock %}
+      </div>
       <details class="dropdown dropdown-end">
         <summary class="btn btn-ghost h-auto min-h-11 px-3">
           <span class="text-quiet text-xs">Agent</span>
@@ -319,6 +324,16 @@
           {% endfor %}
         </ul>
       </details>
+      <form
+        id="thinking-visibility"
+        method="post"
+        action="/thinking-visibility"
+        data-graft
+        data-island="thinking-visibility"
+        class="flex items-center"
+      >
+        {% include "chat/templates/thinking_visibility.html" %}
+      </form>
       <a
         href="/agents/{{ agent_id }}/configuration"
         data-graft
@@ -335,6 +350,7 @@
     aria-labelledby="chat-title"
     class="chat-transcript"
     tabindex="0"
+    data-show-thinking="{% if show_thinking %}true{% else %}false{% endif %}"
   >
     {% block transcript %}
       {% if turns.is_empty() %}
@@ -401,42 +417,39 @@
           {% endif %}
           {% if job_active %}
             <div
-              class="mb-3"
+              class="agent-work-state mb-3"
               data-island="observe"
               data-observe-active="true"
               data-observe-target="job-observe"
+              role="status"
+              aria-live="polite"
             >
-              <p
-                class="text-composer-quiet text-sm"
-                role="status"
-                aria-live="polite"
-              >
-                {{ job_status }}
-                {% if workflow_name != "" %}
-                  <span>{{ workflow_name }}</span>
-                {% endif %}
-                {% if run_step != "" %}
-                  <span>{{ run_step }}</span>
-                {% endif %}
-              </p>
-              {% if run_id != "" %}
-                <p class="text-sm">
-                  <a href="/runs/{{ run_id }}" data-graft class="link"
+              <div class="min-w-0 flex-1">
+                <p class="agent-work-state-title">
+                  <span class="agent-work-pulse" aria-hidden="true"></span>
+                  Agent working
+                </p>
+                <p class="text-composer-quiet text-xs">
+                  {{ job_status }}
+                  {% if workflow_name != "" %}
+                    <span> · {{ workflow_name }}</span>
+                  {% endif %}
+                  {% if run_step != "" %}
+                    <span> · {{ run_step }}</span>
+                  {% endif %}
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                {% if run_id != "" %}
+                  <a href="/runs/{{ run_id }}" data-graft class="link text-sm"
                     >View run</a
                   >
-                </p>
-              {% endif %}
-              {% if job_error != "" %}
-                <div class="alert alert-error" role="alert" tabindex="-1">
-                  <p>{{ job_error }}</p>
-                </div>
-              {% endif %}
-              <div class="flex flex-wrap items-center gap-3">
+                {% endif %}
                 <form data-graft method="get" action="{{ desk_href }}">
                   <div id="job-cursor">
                     {% include "chat/templates/job_cursor.html" %}
                   </div>
-                  <button class="btn btn-outline" type="submit">
+                  <button class="btn btn-outline btn-sm" type="submit">
                     Check status
                   </button>
                 </form>
@@ -445,11 +458,20 @@
                   method="post"
                   action="{{ desk_href }}/jobs/{{ job_id }}/cancel"
                 >
-                  <button class="btn btn-outline" type="submit">
+                  <button class="btn btn-outline btn-sm" type="submit">
                     Stop task
                   </button>
                 </form>
               </div>
+              {% if job_error != "" %}
+                <div
+                  class="alert alert-error basis-full"
+                  role="alert"
+                  tabindex="-1"
+                >
+                  <p>{{ job_error }}</p>
+                </div>
+              {% endif %}
             </div>
           {% else %}
             {% if job_error != "" || run_id != "" || review_href != "" || quick_task_finished %}
@@ -605,91 +627,103 @@
               Ctrl or Cmd + Enter to send.
             </p>
           </form>
-          <details class="border-base-300 rounded-box mt-3 border">
-            <summary class="cursor-pointer px-3 py-2 text-sm">
-              Configured workflow
-            </summary>
-            <div class="flex flex-col gap-3 px-3 pb-3">
-              {% if workflow_empty %}
-                <p class="text-sm">
-                  No configured workflows yet.
-                  <a href="/workflows/new" data-graft class="link"
-                    >Create a workflow</a
-                  >
+          {% if !session_busy %}
+            <details class="configured-workflow mt-3">
+              <summary>
+                <span>
+                  <strong>Advanced run</strong>
+                  <small>Use a configured multi-step workflow</small>
+                </span>
+              </summary>
+              <div class="flex flex-col gap-3 px-3 pb-3">
+                <p class="text-composer-quiet text-sm">
+                  Quick task is the default. Choose this option for saved steps,
+                  roles and review rules.
                 </p>
-              {% else %}
-                <form
-                  data-graft
-                  method="get"
-                  action="{{ desk_href }}"
-                  class="flex flex-wrap items-end gap-3"
-                >
-                  <label class="flex min-w-0 flex-1 flex-col gap-1">
-                    <span class="text-sm">Workflow</span>
-                    <select
-                      class="select select-bordered select-sm w-full"
-                      name="workflow"
-                      required
-                      data-graft-submit-on="change"
-                      {% if session_busy %}disabled{% endif %}
+                {% if workflow_empty %}
+                  <div class="flex flex-wrap items-center gap-3">
+                    <p class="text-sm">No workflows are configured.</p>
+                    <a
+                      href="/workflows/new"
+                      data-graft
+                      class="btn btn-outline btn-sm"
+                      >Create a workflow</a
                     >
-                      <option value="">Choose a workflow</option>
-                      {% for option in workflow_options %}
-                        <option
-                          value="{{ option.token }}"
-                          {% if option.selected %}selected{% endif %}
-                        >
-                          {{ option.label }}
-                        </option>
-                      {% endfor %}
-                    </select>
-                  </label>
-                  <button class="btn btn-outline btn-sm" type="submit">
-                    Use workflow
-                  </button>
-                  <a href="/workflows" data-graft class="link text-sm"
-                    >Manage workflows</a
+                  </div>
+                {% else %}
+                  <form
+                    data-graft
+                    method="get"
+                    action="{{ desk_href }}"
+                    class="flex flex-wrap items-end gap-3"
                   >
-                </form>
-                {% for option in workflow_options %}
-                  {% if option.selected %}
-                    <p class="text-composer-quiet text-sm">
-                      Review: {{ option.policy }}
+                    <label class="flex min-w-0 flex-1 flex-col gap-1">
+                      <span class="text-sm">Workflow</span>
+                      <select
+                        class="select select-bordered select-sm w-full"
+                        name="workflow"
+                        required
+                        data-graft-submit-on="change"
+                        {% if session_busy %}disabled{% endif %}
+                      >
+                        <option value="">Choose a workflow</option>
+                        {% for option in workflow_options %}
+                          <option
+                            value="{{ option.token }}"
+                            {% if option.selected %}selected{% endif %}
+                          >
+                            {{ option.label }}
+                          </option>
+                        {% endfor %}
+                      </select>
+                    </label>
+                    <button class="btn btn-outline btn-sm" type="submit">
+                      Use workflow
+                    </button>
+                    <a href="/workflows" data-graft class="link text-sm"
+                      >Manage workflows</a
+                    >
+                  </form>
+                  {% for option in workflow_options %}
+                    {% if option.selected %}
+                      <p class="text-composer-quiet text-sm">
+                        Review: {{ option.policy }}
+                      </p>
+                    {% endif %}
+                  {% endfor %}
+                  {% if environment_preview_error != "" %}
+                    <p class="text-error text-sm">
+                      {{ environment_preview_error }}
                     </p>
                   {% endif %}
-                {% endfor %}
-                {% if environment_preview_error != "" %}
-                  <p class="text-error text-sm">
-                    {{ environment_preview_error }}
-                  </p>
-                {% endif %}
-                {% if !environment_preview.is_empty() %}
-                  <ul
-                    class="text-composer-quiet list-disc space-y-1 pl-5 text-sm"
-                  >
-                    {% for line in environment_preview %}
-                      <li>{{ line.text }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
-                {% for option in workflow_options %}
-                  {% if option.selected %}
-                    <button
-                      form="composer-send"
-                      formaction="{{ desk_href }}?workflow={{ option.token }}"
-                      class="btn btn-outline btn-sm self-start"
-                      type="submit"
-                      name="mode"
-                      value="configured"
-                      {% if session_busy || !preview_ready || !project_available %}disabled{% endif %}
+                  {% if !environment_preview.is_empty() %}
+                    <ul
+                      class="text-composer-quiet list-disc space-y-1 pl-5 text-sm"
                     >
-                      Send with workflow
-                    </button>
+                      {% for line in environment_preview %}
+                        <li>{{ line.text }}</li>
+                      {% endfor %}
+                    </ul>
                   {% endif %}
-                {% endfor %}
-              {% endif %}
-            </div>
-          </details>
+                  {% for option in workflow_options %}
+                    {% if option.selected %}
+                      <button
+                        form="composer-send"
+                        formaction="{{ desk_href }}?workflow={{ option.token }}"
+                        class="btn btn-outline btn-sm self-start"
+                        type="submit"
+                        name="mode"
+                        value="configured"
+                        {% if session_busy || !preview_ready || !project_available %}disabled{% endif %}
+                      >
+                        Send with workflow
+                      </button>
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              </div>
+            </details>
+          {% endif %}
         {% endblock %}
       </div>
     </div>

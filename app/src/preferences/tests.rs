@@ -15,6 +15,37 @@ fn a_saved_theme_survives_a_new_store_instance() {
 }
 
 #[test]
+fn thinking_visibility_survives_a_new_store_instance() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("preferences.json");
+
+    let writer = Preferences::open(path.clone());
+    writer.set_show_thinking(true).expect("save visibility");
+
+    let reader = Preferences::open(path);
+    assert!(reader.show_thinking());
+    assert_eq!(reader.theme(), Theme::Springfield);
+}
+
+#[test]
+fn preference_updates_preserve_other_values() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("preferences.json");
+    let preferences = Preferences::open(path.clone());
+
+    preferences
+        .set_theme(Theme::EvergreenTerrace)
+        .expect("save theme");
+    preferences
+        .set_show_thinking(true)
+        .expect("save visibility");
+
+    let reader = Preferences::open(path);
+    assert_eq!(reader.theme(), Theme::EvergreenTerrace);
+    assert!(reader.show_thinking());
+}
+
+#[test]
 fn missing_or_invalid_files_default_to_light() {
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("preferences.json");
@@ -22,9 +53,9 @@ fn missing_or_invalid_files_default_to_light() {
 
     for bytes in [
         b"not json".as_slice(),
-        br#"{"version":2,"theme":"sector-7-g"}"#,
-        br#"{"version":1,"theme":"unknown"}"#,
-        br#"{"version":1,"theme":"sector-7-g","removed-field":true}"#,
+        br#"{"version":2,"theme":"sector-7-g","show_thinking":true}"#,
+        br#"{"version":1,"theme":"unknown","show_thinking":true}"#,
+        br#"{"version":1,"theme":"sector-7-g","show_thinking":true,"removed-field":true}"#,
     ] {
         fs::write(&path, bytes).expect("write invalid preferences");
         assert_eq!(Preferences::open(path.clone()).theme(), Theme::Springfield);

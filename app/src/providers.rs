@@ -261,10 +261,94 @@ pub(crate) enum Role {
     Assistant,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ToolOutput {
+    pub(crate) label: String,
+    pub(crate) output: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AssistantActivity {
+    Thinking(String),
+    Tool(ToolOutput),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AssistantReply {
+    pub(crate) text: String,
+    pub(crate) thinking: String,
+    pub(crate) tools: Vec<ToolOutput>,
+    pub(crate) activity: Vec<AssistantActivity>,
+}
+
+impl AssistantReply {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.text.trim().is_empty() && self.thinking.trim().is_empty() && self.tools.is_empty()
+    }
+
+    pub(crate) fn push_thinking(&mut self, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        self.thinking.push_str(delta);
+        match self.activity.last_mut() {
+            Some(AssistantActivity::Thinking(thinking)) => thinking.push_str(delta),
+            Some(AssistantActivity::Tool(_)) | None => self
+                .activity
+                .push(AssistantActivity::Thinking(delta.to_owned())),
+        }
+    }
+
+    pub(crate) fn push_tool(&mut self, tool: ToolOutput) {
+        self.tools.push(tool.clone());
+        self.activity.push(AssistantActivity::Tool(tool));
+    }
+}
+
+impl From<String> for AssistantReply {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&str> for AssistantReply {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ChatTurn {
     pub(crate) role: Role,
     pub(crate) text: String,
+    pub(crate) thinking: String,
+    pub(crate) tools: Vec<ToolOutput>,
+    pub(crate) activity: Vec<AssistantActivity>,
+}
+
+impl ChatTurn {
+    pub(crate) fn user(text: String) -> Self {
+        Self {
+            role: Role::User,
+            text,
+            thinking: String::new(),
+            tools: Vec::new(),
+            activity: Vec::new(),
+        }
+    }
+
+    pub(crate) fn assistant(reply: AssistantReply) -> Self {
+        Self {
+            role: Role::Assistant,
+            text: reply.text,
+            thinking: reply.thinking,
+            tools: reply.tools,
+            activity: reply.activity,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -421,6 +505,7 @@ fn sanitise_detail(text: &str) -> Option<String> {
 #[derive(Clone, Debug)]
 pub(crate) enum ModelEvent {
     Text(String),
+    Thinking(String),
     ToolCall {
         id: String,
         name: String,

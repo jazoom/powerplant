@@ -60,6 +60,13 @@ impl Theme {
 struct PreferencesFile {
     version: u32,
     theme: String,
+    show_thinking: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PreferenceValues {
+    theme: Theme,
+    show_thinking: bool,
 }
 
 #[derive(Debug)]
@@ -75,13 +82,13 @@ impl std::error::Error for PreferenceError {}
 
 pub(crate) struct Preferences {
     path: Option<PathBuf>,
-    theme: Mutex<Theme>,
+    values: Mutex<PreferenceValues>,
 }
 
 impl Preferences {
     pub(crate) fn open(path: PathBuf) -> Self {
         Self {
-            theme: Mutex::new(load(&path)),
+            values: Mutex::new(load(&path)),
             path: Some(path),
         }
     }
@@ -90,52 +97,79 @@ impl Preferences {
     pub(crate) fn in_memory() -> Self {
         Self {
             path: None,
-            theme: Mutex::new(Theme::default()),
+            values: Mutex::new(PreferenceValues::default()),
         }
     }
 
     pub(crate) fn theme(&self) -> Theme {
+        self.values().theme
+    }
+
+    pub(crate) fn set_theme(&self, theme: Theme) -> Result<(), PreferenceError> {
+        self.update(|values| values.theme = theme)
+    }
+
+    pub(crate) fn show_thinking(&self) -> bool {
+        self.values().show_thinking
+    }
+
+    pub(crate) fn set_show_thinking(&self, show: bool) -> Result<(), PreferenceError> {
+        self.update(|values| values.show_thinking = show)
+    }
+
+    fn values(&self) -> PreferenceValues {
         *self
-            .theme
+            .values
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub(crate) fn set_theme(&self, theme: Theme) -> Result<(), PreferenceError> {
+    fn update(&self, change: impl FnOnce(&mut PreferenceValues)) -> Result<(), PreferenceError> {
         let mut current = self
-            .theme
+            .values
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut next = *current;
+        change(&mut next);
         if let Some(path) = self.path.as_deref() {
-            persist(path, theme)?;
+            persist(path, next)?;
         }
-        *current = theme;
+        *current = next;
         Ok(())
     }
 }
 
-fn load(path: &std::path::Path) -> Theme {
+fn load(path: &std::path::Path) -> PreferenceValues {
     match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Theme::default(),
-        Err(_) => return Theme::default(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return PreferenceValues::default();
+        }
+        Err(_) => return PreferenceValues::default(),
         Ok(_) => {}
     }
     let Ok(bytes) = crate::storage::read_private_bounded(path, MAXIMUM_FILE_BYTES) else {
-        return Theme::default();
+        return PreferenceValues::default();
     };
     let Ok(file) = serde_json::from_slice::<PreferencesFile>(&bytes) else {
-        return Theme::default();
+        return PreferenceValues::default();
     };
     if file.version != FILE_VERSION {
-        return Theme::default();
+        return PreferenceValues::default();
     }
-    Theme::parse(&file.theme).unwrap_or_default()
+    let Some(theme) = Theme::parse(&file.theme) else {
+        return PreferenceValues::default();
+    };
+    PreferenceValues {
+        theme,
+        show_thinking: file.show_thinking,
+    }
 }
 
-fn persist(path: &std::path::Path, theme: Theme) -> Result<(), PreferenceError> {
+fn persist(path: &std::path::Path, values: PreferenceValues) -> Result<(), PreferenceError> {
     let file = PreferencesFile {
         version: FILE_VERSION,
-        theme: theme.as_str().to_owned(),
+        theme: values.theme.as_str().to_owned(),
+        show_thinking: values.show_thinking,
     };
     let bytes = serde_json::to_vec_pretty(&file).map_err(|_| PreferenceError)?;
     let dir = path.parent().ok_or(PreferenceError)?;

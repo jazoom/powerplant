@@ -31,8 +31,9 @@ test("the context identifies a nested project desk", () => {
             data-section="projects"
             data-context-current-href="/projects/project-1"
             data-context-leaf="Ada"
+            data-context-leaf-prefix="Agent"
         >
-            <h1>Projects</h1>
+            <h1>Workshop</h1>
             <span
                 hidden
                 data-app-context-status-source
@@ -45,7 +46,7 @@ test("the context identifies a nested project desk", () => {
     const island = initAppContext(root);
 
     expect(root.querySelector("ol")?.textContent).toContain(
-        "WorkProjectsProjectsAda",
+        "WorkProjectsWorkshopAgent: Ada",
     );
     const links = [...root.querySelectorAll<HTMLAnchorElement>("ol a")];
     expect(links.map((link) => link.pathname)).toEqual([

@@ -497,7 +497,7 @@ async fn create_rejects_a_symlink_alias_of_a_stored_path() {
 }
 
 #[tokio::test]
-async fn detail_shows_name_path_and_availability() {
+async fn detail_shows_name_and_path_without_a_success_status() {
     let state = test_state();
     let token = connected(&state);
     let dir = git_worktree();
@@ -519,7 +519,7 @@ async fn detail_shows_name_path_and_availability() {
     let text = body_text(response).await;
     assert!(text.contains("Desk"));
     assert!(text.contains(&record.host_path.to_string_lossy().into_owned()));
-    assert!(text.contains("Available"));
+    assert!(!text.contains(">Available<"));
 }
 
 #[tokio::test]
@@ -547,7 +547,7 @@ async fn detail_keeps_an_unavailable_record_visible() {
     let text = body_text(response).await;
     assert!(text.contains("Desk"));
     assert!(text.contains(&path));
-    assert!(text.contains("not available on the host"));
+    assert!(text.contains("cannot access this project folder"));
     assert!(state.projects.get(&record.id).is_some());
 }
 
@@ -1041,9 +1041,9 @@ async fn no_agent_detail_shows_starter_and_grant_actions() {
         "action=\"/projects/{}/agents/starter\"",
         project.id.as_hex()
     )));
-    assert!(text.contains("Create starter agent"));
-    assert!(text.contains("Your project stays unchanged until you apply the proposed changes."));
-    assert!(text.contains("Set custom permissions instead"));
+    assert!(text.contains("Create agent and open desk"));
+    assert!(text.contains("Project files change only after you approve their proposal."));
+    assert!(text.contains("Set custom permissions"));
     assert!(text.contains(&format!(
         "href=\"/agents/new?project={}\"",
         project.id.as_hex()
@@ -1319,7 +1319,7 @@ async fn starter_creates_exact_path_authority_and_opens_the_desk() {
     let agents = state.agents.list();
     assert_eq!(agents.len(), 1);
     let agent = &agents[0];
-    assert_eq!(agent.name, project.name);
+    assert_eq!(agent.name, format!("{} agent", project.name));
     assert!(agent.instructions.is_empty());
     assert_eq!(agent.tools, ToolId::ALL.to_vec());
     assert_eq!(agent.network, crate::agents::NetworkAccess::None);

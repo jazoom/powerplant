@@ -15,5 +15,5 @@ pub(crate) use record::{
     NetworkAccess, guest_path_for,
 };
 pub(crate) use run::{AgentLeaseCoordinator, LeaseGuard};
-pub(crate) use store::{AgentStore, StarterAgent};
+pub(crate) use store::{AgentStore, StarterAgent, starter_name};
 pub(crate) use tool_id::ToolId;

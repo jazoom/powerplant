@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use askama::Template;
 use axum::{
     body::{Body, to_bytes},
-    http::{Request, header},
+    http::{Method, Request, header},
     middleware::from_fn_with_state,
 };
 use tower::ServiceExt;
@@ -11,13 +12,70 @@ use crate::{
     agents::{AccessMode, AgentDraft, DirectoryGrant, ToolId},
     config::RuntimeConfig,
     providers::{
-        ChatBackend, ProviderConnection, ProviderError, ProviderKind, Role, tests::ScriptedBackend,
+        AssistantActivity, AssistantReply, ChatBackend, ProviderConnection, ProviderError,
+        ProviderKind, Role, ToolOutput, tests::ScriptedBackend,
     },
     sessions::{self, JobStatus},
     state::AppState,
 };
 
 use super::job::MAXIMUM_MODEL_REPLY_BYTES;
+
+#[test]
+fn tool_output_stays_html_text_in_the_transcript() {
+    let turn = super::page::assistant_reply_turn(
+        1,
+        &AssistantReply {
+            text: "Done.".to_owned(),
+            thinking: String::new(),
+            tools: vec![ToolOutput {
+                label: "<img src=x onerror=alert(1)>".to_owned(),
+                output: "</code><script>alert(1)</script>".to_owned(),
+            }],
+            activity: Vec::new(),
+        },
+        false,
+    );
+    let html = super::page::TurnArticle { turn: &turn }
+        .render()
+        .expect("turn");
+    assert!(!html.contains("<script>"));
+    assert!(!html.contains("<img src=x"));
+    assert!(html.contains("&lt;") || html.contains("&#60;"));
+    assert!(html.contains("img src=x"));
+    assert!(html.contains("script"));
+}
+
+#[test]
+fn assistant_activity_keeps_thinking_and_tools_in_event_order() {
+    let tool = ToolOutput {
+        label: "read `/project/src/lib.rs`".to_owned(),
+        output: "source".to_owned(),
+    };
+    let turn = super::page::assistant_reply_turn(
+        1,
+        &AssistantReply {
+            text: "Done.".to_owned(),
+            thinking: "Inspect the projectUse the result".to_owned(),
+            tools: vec![tool.clone()],
+            activity: vec![
+                AssistantActivity::Thinking("Inspect the project".to_owned()),
+                AssistantActivity::Tool(tool),
+                AssistantActivity::Thinking("Use the result".to_owned()),
+            ],
+        },
+        false,
+    );
+    let html = super::page::TurnArticle { turn: &turn }
+        .render()
+        .expect("turn");
+
+    let first_thought = html.find("Inspect the project").expect("first thought");
+    let tool = html.find("read `/project/src/lib.rs`").expect("tool");
+    let second_thought = html.find("Use the result").expect("second thought");
+    assert!(first_thought < tool);
+    assert!(tool < second_thought);
+}
 
 fn test_state() -> AppState {
     crate::tests::test_state(RuntimeConfig::development())
@@ -574,6 +632,8 @@ async fn a_patch_send_starts_a_job_without_streaming() {
     assert!(text.contains("Check status"));
     assert!(text.contains("Stop"));
     assert!(text.contains("target=\"job-observe\""));
+    assert!(text.contains("target=\"desk-status\""));
+    assert!(text.contains("Agent working"));
     assert!(!text.contains("target=\"composer\""));
     assert!(!text.contains("composer-message"));
 
@@ -1120,6 +1180,61 @@ async fn a_document_show_includes_the_desk_model_controls() {
 }
 
 #[tokio::test]
+async fn thinking_visibility_is_an_app_wide_preference() {
+    let state = test_state();
+    let token = connected(&state).await;
+
+    let response = app(&state)
+        .oneshot(thinking_visibility_patch(&token, "show_thinking=true"))
+        .await
+        .expect("thinking visibility");
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(state.preferences.show_thinking());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"thinking-visibility\""));
+    assert!(text.contains("checked"));
+
+    let desk = app(&state)
+        .oneshot(document_show(&state, &token))
+        .await
+        .expect("chat document");
+    let body = to_bytes(desk.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("data-show-thinking=\"true\""));
+}
+
+#[tokio::test]
+async fn malformed_thinking_visibility_is_rejected() {
+    let state = test_state();
+    let token = connected(&state).await;
+
+    let response = app(&state)
+        .oneshot(thinking_visibility_patch(&token, "show_thinking=unknown"))
+        .await
+        .expect("thinking visibility");
+
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert!(!state.preferences.show_thinking());
+}
+
+fn thinking_visibility_patch(token: &str, body: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/thinking-visibility")
+        .header(header::COOKIE, cookie(token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from(body.to_owned()))
+        .unwrap()
+}
+
+#[tokio::test]
 async fn the_desk_updates_the_thinking_level() {
     let state = test_state();
     let token = connected(&state).await;
@@ -1594,6 +1709,38 @@ async fn a_workflow_preview_patch_updates_composer() {
 }
 
 #[tokio::test]
+async fn an_agent_turn_streams_thinking_separately_from_the_response() {
+    let state = state_with_backend(ScriptedBackend::thinking_then(
+        "I will inspect the project first.",
+        "The project is ready.",
+    ));
+    let token = connected(&state).await;
+    let started = app(&state)
+        .oneshot(patch_send_message(&state, &token, "Inspect the project"))
+        .await
+        .expect("chat send");
+    let started_body = to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let job = job_id_from_body(&started_body);
+    wait_until_job_idle(&state, &token).await;
+
+    let response = app(&state)
+        .oneshot(observe_patch(&state, &token, &job, 0))
+        .await
+        .expect("observe");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let frames = stream_frames(&body);
+    let text = frames.join("");
+    assert!(text.contains("data-thinking-content"));
+    assert!(text.contains("I will inspect the project first."));
+    assert!(text.contains("The project is ready."));
+
+    let stored = session_snapshot(&state, &token);
+    let assistant = stored.turns.last().expect("assistant");
+    assert_eq!(assistant.thinking, "I will inspect the project first.");
+    assert_eq!(assistant.text, "The project is ready.");
+}
+
+#[tokio::test]
 async fn an_agent_turn_streams_a_tool_trace() {
     let state = state_with_backend(ScriptedBackend::tool_then(
         "write",
@@ -1630,8 +1777,10 @@ async fn an_agent_turn_streams_a_tool_trace() {
         .iter()
         .find(|turn| turn.role == Role::Assistant)
         .expect("assistant");
-    assert!(assistant.text.contains("write"));
-    assert!(assistant.text.contains("/project/note.txt"));
+    let tool = assistant.tools.first().expect("tool output");
+    assert!(tool.label.contains("write"));
+    assert!(tool.label.contains("/project/note.txt"));
+    assert!(!tool.output.is_empty());
     assert!(assistant.text.contains("Wrote the note."));
 }
 
@@ -2203,7 +2352,7 @@ async fn a_desk_document_uses_quick_task_as_the_default_send() {
     assert!(text.contains("name=\"mode\""));
     assert!(text.contains("value=\"quick\""));
     assert!(text.contains("value=\"configured\""));
-    assert!(text.contains("Configured workflow"));
+    assert!(text.contains("Advanced run"));
     assert!(text.contains("Sandbox is ready"));
     assert!(!text.contains("data-observe-target=\"sandbox-status\""));
 }

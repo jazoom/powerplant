@@ -1,9 +1,11 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use futures_util::StreamExt;
 use rig_core::{
     client::CompletionClient,
-    completion::{CompletionError, CompletionModel, Message, ToolDefinition},
+    completion::{
+        CompletionError, CompletionModel, Message, ToolDefinition, message::ReasoningContent,
+    },
     providers::{chatgpt, deepseek, openai, openrouter, xai},
     streaming::StreamedAssistantContent,
 };
@@ -408,8 +410,9 @@ where
         .await
         .map_err(|error| classify_completion_for(error, connection.auth))?;
     let auth = connection.auth;
+    let mut reasoning_deltas = HashSet::new();
     Ok(Box::pin(response.filter_map(move |item| {
-        std::future::ready(match item {
+        let event = match item {
             Ok(StreamedAssistantContent::Text(text)) => Some(Ok(ModelEvent::Text(text.text))),
             Ok(StreamedAssistantContent::ToolCall { tool_call, .. }) => {
                 Some(Ok(ModelEvent::ToolCall {
@@ -418,8 +421,32 @@ where
                     arguments: tool_call.function.arguments,
                 }))
             }
+            Ok(StreamedAssistantContent::ReasoningDelta { id, reasoning, .. }) => {
+                reasoning_deltas.insert(id);
+                Some(Ok(ModelEvent::Thinking(reasoning)))
+            }
+            Ok(StreamedAssistantContent::Reasoning { reasoning, id }) => {
+                if reasoning_deltas.contains(&id) {
+                    None
+                } else {
+                    let text = reasoning
+                        .content
+                        .into_iter()
+                        .filter_map(|content| match content {
+                            ReasoningContent::Text { text, .. }
+                            | ReasoningContent::Summary(text) => Some(text),
+                            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    (!text.is_empty()).then_some(Ok(ModelEvent::Thinking(text)))
+                }
+            }
             Ok(_) => None,
             Err(error) => Some(Err(classify_completion_for(error, auth))),
-        })
+        };
+        std::future::ready(event)
     })))
 }

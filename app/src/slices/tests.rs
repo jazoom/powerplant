@@ -347,7 +347,7 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     let project_path = format!("/projects/{}", project.id.as_hex());
     let (status, _, text) = send(&state, document(&project_path, Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("Create starter agent"));
+    assert!(text.contains("Create agent and open desk"));
     assert!(text.contains(&format!(
         "action=\"/projects/{}/agents/starter\"",
         project.id.as_hex()

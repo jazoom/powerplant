@@ -6,7 +6,9 @@ use crate::{
     markdown,
     models::{ModelCatalogue, models_dev::ModelsDevCatalogue},
     projects::ProjectRecord,
-    providers::{ChatTurn, ProviderKind, Role, ThinkingEffort},
+    providers::{
+        AssistantActivity, AssistantReply, ChatTurn, ProviderKind, Role, ThinkingEffort, ToolOutput,
+    },
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
     vault::{DeskProvider, ProviderVault},
 };
@@ -16,7 +18,23 @@ pub(crate) const DOCUMENT_TITLE: &str = "Chat | Power Plant";
 pub(crate) struct TurnView {
     pub(crate) id: String,
     pub(crate) is_user: bool,
-    pub(crate) html: String,
+    pub(crate) response_html: String,
+    pub(crate) activities: Vec<ActivityView>,
+    pub(crate) streaming: bool,
+    pub(crate) thinking_active: bool,
+}
+
+pub(crate) struct ActivityView {
+    pub(crate) is_thinking: bool,
+    pub(crate) thinking_html: String,
+    pub(crate) tools: Vec<ToolOutputView>,
+    pub(crate) thinking_active: bool,
+}
+
+pub(crate) struct ToolOutputView {
+    pub(crate) label: String,
+    pub(crate) output: String,
+    pub(crate) preview: String,
 }
 
 pub(crate) struct DeskProviderOption {
@@ -73,6 +91,8 @@ pub(crate) struct ChatViewModel {
     pub(crate) agent_id: String,
     pub(crate) agent_name: String,
     pub(crate) agent_choices: Vec<AgentChoice>,
+    pub(crate) show_thinking: bool,
+    pub(crate) thinking_visibility_error: Option<&'static str>,
     pub(crate) run_id: String,
     pub(crate) run_step: String,
     pub(crate) workflow_name: String,
@@ -237,7 +257,11 @@ impl ChatViewModel {
             run_step = job.step_label.clone();
             workflow_name = job.workflow_name.clone();
             if !job.output.is_empty() && views.len() == job.assistant_index {
-                views.push(assistant_turn(job.assistant_index, &job.output));
+                views.push(assistant_reply_turn(
+                    job.assistant_index,
+                    &job.output,
+                    job.status == JobStatus::Running,
+                ));
             }
             if job.status == JobStatus::Running {
                 job_id = job.id.as_hex();
@@ -323,6 +347,8 @@ impl ChatViewModel {
             agent_id: record.id.as_hex(),
             agent_name: record.name.clone(),
             agent_choices: Vec::new(),
+            show_thinking: false,
+            thinking_visibility_error: None,
             run_id,
             run_step,
             workflow_name,
@@ -446,20 +472,121 @@ pub(crate) fn user_turn(index: usize, text: &str) -> TurnView {
     TurnView {
         id: turn_id(index),
         is_user: true,
-        html: format!("<p>{}</p>", markdown::escape_plain(text)),
+        response_html: format!("<p>{}</p>", markdown::escape_plain(text)),
+        activities: Vec::new(),
+        streaming: false,
+        thinking_active: false,
     }
 }
 
-pub(crate) fn assistant_turn(index: usize, text: &str) -> TurnView {
+pub(crate) fn assistant_reply_turn(
+    index: usize,
+    reply: &AssistantReply,
+    streaming: bool,
+) -> TurnView {
+    let mut activities = activity_views(reply);
+    if streaming
+        && reply.text.is_empty()
+        && let Some(activity) = activities.last_mut()
+        && activity.is_thinking
+    {
+        activity.thinking_active = true;
+    }
+    let thinking_active = streaming && reply.text.is_empty() && activities.is_empty();
     TurnView {
         id: turn_id(index),
         is_user: false,
-        html: markdown::render(text),
+        response_html: markdown::render(&reply.text),
+        activities,
+        streaming,
+        thinking_active,
     }
+}
+
+fn activity_views(reply: &AssistantReply) -> Vec<ActivityView> {
+    let mut views = Vec::new();
+    if reply.activity.is_empty() {
+        push_thinking_view(&mut views, &reply.thinking);
+        for tool in &reply.tools {
+            push_tool_view(&mut views, tool);
+        }
+        return views;
+    }
+    for activity in &reply.activity {
+        match activity {
+            AssistantActivity::Thinking(thinking) => push_thinking_view(&mut views, thinking),
+            AssistantActivity::Tool(tool) => push_tool_view(&mut views, tool),
+        }
+    }
+    views
+}
+
+fn push_thinking_view(views: &mut Vec<ActivityView>, thinking: &str) {
+    if thinking.is_empty() {
+        return;
+    }
+    views.push(ActivityView {
+        is_thinking: true,
+        thinking_html: markdown::render(thinking),
+        tools: Vec::new(),
+        thinking_active: false,
+    });
+}
+
+fn push_tool_view(views: &mut Vec<ActivityView>, tool: &ToolOutput) {
+    let tool = tool_output_view(tool);
+    if let Some(activity) = views.last_mut()
+        && !activity.is_thinking
+    {
+        activity.tools.push(tool);
+        return;
+    }
+    views.push(ActivityView {
+        is_thinking: false,
+        thinking_html: String::new(),
+        tools: vec![tool],
+        thinking_active: false,
+    });
 }
 
 pub(crate) fn turn_id(index: usize) -> String {
     format!("turn-{}", index + 1)
+}
+
+#[derive(Template)]
+#[template(path = "chat/templates/thinking_visibility.html")]
+pub(crate) struct ThinkingVisibilityControl {
+    pub(crate) show_thinking: bool,
+    pub(crate) thinking_visibility_error: Option<&'static str>,
+}
+
+#[derive(Template)]
+#[template(path = "projects/templates/desk.html", block = "desk_status")]
+pub(crate) struct DeskStatusContents<'a> {
+    pub(crate) review_href: &'a str,
+    pub(crate) job_active: bool,
+    pub(crate) quick_task_finished: bool,
+    pub(crate) job_status: &'a str,
+}
+
+impl<'a> DeskStatusContents<'a> {
+    pub(crate) fn active(status: &'a str) -> Self {
+        Self {
+            review_href: "",
+            job_active: true,
+            quick_task_finished: false,
+            job_status: status,
+        }
+    }
+
+    pub(crate) fn idle(review_href: &'a str, quick_task_finished: bool) -> Self {
+        Self {
+            review_href,
+            job_active: false,
+            quick_task_finished,
+            job_status: "",
+        }
+    }
 }
 
 #[derive(Template)]
@@ -681,6 +808,44 @@ fn model_options(
 fn turn_view(index: usize, turn: &ChatTurn) -> TurnView {
     match turn.role {
         Role::User => user_turn(index, &turn.text),
-        Role::Assistant => assistant_turn(index, &turn.text),
+        Role::Assistant => assistant_reply_turn(
+            index,
+            &AssistantReply {
+                text: turn.text.clone(),
+                thinking: turn.thinking.clone(),
+                tools: turn.tools.clone(),
+                activity: turn.activity.clone(),
+            },
+            false,
+        ),
     }
+}
+
+fn tool_output_view(tool: &ToolOutput) -> ToolOutputView {
+    ToolOutputView {
+        label: tool.label.clone(),
+        output: tool.output.clone(),
+        preview: tool_preview(&tool.output),
+    }
+}
+
+fn tool_preview(output: &str) -> String {
+    const MAXIMUM_PREVIEW_BYTES: usize = 720;
+    const MAXIMUM_PREVIEW_LINES: usize = 6;
+    let line_end = output
+        .char_indices()
+        .filter(|(_, character)| *character == '\n')
+        .nth(MAXIMUM_PREVIEW_LINES - 1)
+        .map(|(index, _)| index)
+        .unwrap_or(output.len());
+    let mut end = line_end.min(MAXIMUM_PREVIEW_BYTES).min(output.len());
+    while end > 0 && !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    let truncated = end < output.len();
+    let mut preview = output[..end].trim_end().to_owned();
+    if truncated {
+        preview.push_str("\n…");
+    }
+    preview
 }

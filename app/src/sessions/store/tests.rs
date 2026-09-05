@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use crate::agents::AgentId;
 use crate::projects::{MAXIMUM_PROJECTS, ProjectId};
-use crate::providers::{ChatTurn, Role};
+use crate::providers::ChatTurn;
 use crate::sessions::{self, BeginTurnError, ConversationKey, SESSION_LIFETIME};
 use crate::workflows::RunId;
 
@@ -58,10 +58,7 @@ fn parallel_commands_cannot_overwrite_a_completed_turn() {
     ));
     assert_eq!(
         store.snapshot(&id, &key).expect("session").turns,
-        [ChatTurn {
-            role: Role::User,
-            text: "First".to_owned(),
-        }]
+        [ChatTurn::user("First".to_owned())]
     );
 
     assert!(store.finish_turn(&id, &key, &first.job.id(), "Done".to_owned()));
@@ -75,18 +72,9 @@ fn parallel_commands_cannot_overwrite_a_completed_turn() {
     assert_eq!(
         snapshot.turns,
         [
-            ChatTurn {
-                role: Role::User,
-                text: "First".to_owned(),
-            },
-            ChatTurn {
-                role: Role::Assistant,
-                text: "Done".to_owned(),
-            },
-            ChatTurn {
-                role: Role::User,
-                text: "Third".to_owned(),
-            },
+            ChatTurn::user("First".to_owned()),
+            ChatTurn::assistant("Done".into()),
+            ChatTurn::user("Third".to_owned()),
         ]
     );
 
@@ -121,6 +109,24 @@ fn one_session_job_blocks_another_conversation() {
             .is_empty()
     );
     assert!(store.snapshot(&id, &first).expect("session").session_busy);
+}
+
+#[test]
+fn whitespace_assistant_output_does_not_add_a_turn() {
+    let store = super::SessionStore::new();
+    let token = sessions::generate_session_token().expect("token");
+    let id = token.id();
+    let key = conversation();
+    store.insert(id);
+    let begun = store
+        .begin_turn(&id, key, run(), "Hello".to_owned())
+        .expect("begin");
+
+    assert!(store.fail_turn(&id, &key, &begun.job.id(), " \n ".to_owned()));
+    assert_eq!(
+        store.snapshot(&id, &key).expect("session").turns,
+        [ChatTurn::user("Hello".to_owned())]
+    );
 }
 
 #[test]
@@ -262,13 +268,7 @@ fn a_stale_rollback_cannot_remove_a_later_turn() {
         .expect("second");
     assert!(!store.rollback_turn(&id, &key, &first.job.id()));
     let snapshot = store.snapshot(&id, &key).expect("session");
-    assert_eq!(
-        snapshot.turns,
-        [ChatTurn {
-            role: Role::User,
-            text: "Second".to_owned(),
-        }]
-    );
+    assert_eq!(snapshot.turns, [ChatTurn::user("Second".to_owned())]);
     assert_eq!(
         snapshot.job.as_ref().map(|job| job.id),
         Some(second.job.id())

@@ -1074,6 +1074,26 @@
         background: var(--powerplant-info-wash);
     }
 
+    .status-stamp[data-state="Active"] {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+    }
+
+    .status-stamp[data-state="Active"]::before {
+        width: 0.48rem;
+        height: 0.48rem;
+        flex: none;
+        content: "";
+        border-radius: 50%;
+        background: var(--powerplant-info-border);
+        animation: agent-work-pulse 1.35s ease-in-out infinite;
+    }
+
+    .app-context-status[data-state="Active"]::before {
+        animation: agent-work-pulse 1.35s ease-in-out infinite;
+    }
+
     :is(.status-stamp, .state-badge)[data-state="Revision requested"],
     :is(.status-stamp, .state-badge)[data-state="Waiting"],
     :is(.status-stamp, .state-badge)[data-state="Superseded"],
@@ -1175,6 +1195,23 @@
         gap: 0.5rem;
     }
 
+    .chat-thinking-toggle {
+        display: inline-flex;
+        min-height: 2.25rem;
+        align-items: center;
+        gap: 0.55rem;
+        padding-inline: 0.65rem;
+        color: var(--powerplant-quiet-ink);
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+
+    .chat-thinking-toggle:has(:focus-visible) {
+        outline: 3px solid var(--powerplant-focus);
+        outline-offset: 2px;
+    }
+
     .chat-transcript {
         display: flex;
         min-height: 0;
@@ -1213,6 +1250,175 @@
     .chat-turn-body {
         min-width: 0;
         overflow-wrap: anywhere;
+    }
+
+    .chat-turn-agent .chat-turn-body {
+        padding-top: 0.05rem;
+    }
+
+    .chat-content-heading {
+        display: flex;
+        min-height: 1.5rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 0 0 0.55rem;
+        color: var(--powerplant-quiet-ink);
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.045em;
+        text-transform: uppercase;
+    }
+
+    .chat-thinking {
+        margin-bottom: 1rem;
+        padding: 0.8rem 1rem;
+        border: 1px solid var(--powerplant-info-border);
+        background: var(--powerplant-info-wash);
+    }
+
+    .chat-thinking .chat-prose {
+        color: var(--powerplant-quiet-ink);
+        font-size: 0.875rem;
+    }
+
+    .chat-thinking-progress {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 0 0 0.8rem;
+        color: var(--powerplant-quiet-ink);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 500;
+        letter-spacing: 0.035em;
+        text-transform: uppercase;
+    }
+
+    .chat-content-heading .chat-thinking-progress {
+        margin: 0;
+    }
+
+    .chat-transcript:not([data-show-thinking="true"])
+        [data-thinking-content]
+        .chat-prose {
+        display: none;
+    }
+
+    .chat-transcript:not([data-show-thinking="true"]) [data-thinking-content] {
+        padding-block: 0.55rem;
+    }
+
+    .chat-transcript:not([data-show-thinking="true"])
+        [data-thinking-content]
+        .chat-content-heading {
+        margin-bottom: 0;
+    }
+
+    .chat-response + .chat-tools,
+    .chat-thinking + .chat-tools {
+        margin-top: 1rem;
+    }
+
+    .chat-tools {
+        margin-bottom: 1rem;
+    }
+
+    .chat-tools-heading {
+        margin: 0 0 0.45rem;
+        color: var(--powerplant-quiet-ink);
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.045em;
+        text-transform: uppercase;
+    }
+
+    .chat-tool-list {
+        display: grid;
+        gap: 0.45rem;
+    }
+
+    .chat-tool-output {
+        min-height: 0;
+        border: 1px solid var(--powerplant-rule);
+        border-radius: 0.125rem;
+        background: var(--powerplant-paper-green);
+    }
+
+    .chat-tool-output > summary {
+        display: block;
+        min-height: 2.75rem;
+        padding: 0;
+        cursor: pointer;
+    }
+
+    .chat-tool-summary-row {
+        display: flex;
+        min-height: 2.75rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.65rem 0.8rem;
+    }
+
+    .chat-tool-label {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--powerplant-ink);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        font-weight: 500;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .chat-tool-action {
+        flex: none;
+        color: var(--powerplant-link);
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+
+    .chat-tool-action::before {
+        content: "Expand";
+    }
+
+    .chat-tool-output[open] .chat-tool-action::before {
+        content: "Collapse";
+    }
+
+    .chat-tool-preview,
+    .chat-tool-full pre {
+        overflow: auto;
+        margin: 0;
+        border-top: 1px solid var(--powerplant-rule);
+        background: var(--powerplant-control);
+        padding: 0.7rem 0.8rem;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+    }
+
+    .chat-tool-preview {
+        display: block;
+        max-height: 9.25rem;
+        overflow: hidden;
+        color: var(--powerplant-quiet-ink);
+    }
+
+    .chat-tool-output[open] .chat-tool-preview {
+        display: none;
+    }
+
+    .chat-tool-full {
+        padding: 0;
+    }
+
+    .chat-tool-full pre {
+        max-height: min(28rem, 60vh);
     }
 
     .chat-prose {
@@ -1286,6 +1492,85 @@
     .prose ol {
         list-style: decimal;
         padding-left: 1.25rem;
+    }
+
+    .agent-work-state {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem 1.25rem;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid var(--powerplant-action-deep);
+        background: var(--powerplant-warning-wash);
+    }
+
+    .agent-work-state-title {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        margin: 0 0 0.1rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+    }
+
+    .agent-work-pulse {
+        width: 0.55rem;
+        height: 0.55rem;
+        flex: none;
+        border: 1px solid var(--powerplant-success-ink);
+        border-radius: 50%;
+        background: var(--powerplant-success);
+        animation: agent-work-pulse 1.35s ease-in-out infinite;
+    }
+
+    .configured-workflow {
+        border: 1px solid var(--powerplant-action-deep);
+        border-radius: 0.125rem;
+        background: color-mix(
+            in oklch,
+            var(--powerplant-composer) 72%,
+            var(--powerplant-control)
+        );
+    }
+
+    .configured-workflow > summary {
+        min-height: 3.2rem;
+        padding: 0.65rem 0.8rem;
+        cursor: pointer;
+    }
+
+    .configured-workflow > summary > span,
+    .configured-workflow > summary strong,
+    .configured-workflow > summary small {
+        display: block;
+    }
+
+    .configured-workflow > summary strong {
+        font-size: 0.875rem;
+    }
+
+    .configured-workflow > summary small {
+        margin-top: 0.05rem;
+        color: var(--powerplant-composer-quiet);
+        font-size: 0.72rem;
+        font-weight: 400;
+    }
+
+    .configured-workflow[open] > summary {
+        margin-bottom: 0.65rem;
+        border-bottom: 1px solid var(--powerplant-action-deep);
+    }
+
+    @keyframes agent-work-pulse {
+        0%,
+        100% {
+            opacity: 0.55;
+            transform: scale(0.82);
+        }
+        45% {
+            opacity: 1;
+            transform: scale(1);
+        }
     }
 
     .composer-dock {
@@ -1697,6 +1982,27 @@
 
     .chat-turn-meta strong {
         display: inline;
+    }
+
+    .chat-thinking-toggle {
+        min-height: 2.75rem;
+        padding-inline: 0.25rem;
+    }
+
+    .chat-thinking,
+    .chat-tool-summary-row,
+    .chat-tool-preview,
+    .chat-tool-full pre {
+        padding-inline: 0.75rem;
+    }
+
+    .agent-work-state {
+        align-items: start;
+    }
+
+    .agent-work-state > :nth-child(2) {
+        width: 100%;
+        justify-content: start;
     }
 
     .composer-dock {

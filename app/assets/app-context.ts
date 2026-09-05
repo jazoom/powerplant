@@ -68,6 +68,8 @@ function pageBreadcrumbs(page: HTMLElement): Breadcrumb[] {
     const section = SECTIONS[page.dataset.section ?? ""];
     const current = text(page.querySelector("h1")) || documentLabel();
     const leaf = page.dataset.contextLeaf?.trim() ?? "";
+    const leafPrefix = page.dataset.contextLeafPrefix?.trim() ?? "";
+    const leafLabel = leaf && leafPrefix ? `${leafPrefix}: ${leaf}` : leaf;
     const currentHref = page.dataset.contextCurrentHref?.trim() ?? "";
     if (!section) return [{ label: current, href: "", current: true }];
 
@@ -90,7 +92,7 @@ function pageBreadcrumbs(page: HTMLElement): Breadcrumb[] {
             current: !leaf,
         });
     }
-    if (leaf) breadcrumbs.push({ label: leaf, href: "", current: true });
+    if (leaf) breadcrumbs.push({ label: leafLabel, href: "", current: true });
     return breadcrumbs;
 }
 

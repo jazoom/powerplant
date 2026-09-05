@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::{
     agents::AgentId,
     projects::{MAXIMUM_PROJECTS, ProjectId},
-    providers::{ChatTurn, Role},
+    providers::{AssistantReply, ChatTurn},
     sessions::{
         SESSION_LIFETIME,
         job::{Job, JobId, JobSnapshot},
@@ -207,10 +207,7 @@ impl SessionStore {
                 job: None,
                 preferred_workflow: None,
             });
-        conversation.turns.push(ChatTurn {
-            role: Role::User,
-            text: message,
-        });
+        conversation.turns.push(ChatTurn::user(message));
         let job = Job::new(job_id, run_id, conversation.turns.len());
         conversation.job = Some(job.clone());
         session.active = Some((key, job_id));
@@ -225,9 +222,9 @@ impl SessionStore {
         id: &SessionId,
         key: &ConversationKey,
         job_id: &JobId,
-        reply: String,
+        reply: impl Into<AssistantReply>,
     ) -> bool {
-        self.complete_turn(id, key, job_id, reply)
+        self.complete_turn(id, key, job_id, reply.into())
     }
 
     pub(crate) fn fail_turn(
@@ -235,9 +232,9 @@ impl SessionStore {
         id: &SessionId,
         key: &ConversationKey,
         job_id: &JobId,
-        partial: String,
+        partial: impl Into<AssistantReply>,
     ) -> bool {
-        self.complete_turn(id, key, job_id, partial)
+        self.complete_turn(id, key, job_id, partial.into())
     }
 
     pub(crate) fn rollback_turn(
@@ -304,7 +301,7 @@ impl SessionStore {
         id: &SessionId,
         key: &ConversationKey,
         job_id: &JobId,
-        reply: String,
+        reply: AssistantReply,
     ) -> bool {
         let mut sessions = self.lock();
         let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
@@ -314,12 +311,9 @@ impl SessionStore {
             return false;
         }
         if let Some(conversation) = session.conversations.get_mut(key)
-            && !reply.trim().is_empty()
+            && !reply.is_empty()
         {
-            conversation.turns.push(ChatTurn {
-                role: Role::Assistant,
-                text: reply,
-            });
+            conversation.turns.push(ChatTurn::assistant(reply));
         }
         session.active = None;
         true

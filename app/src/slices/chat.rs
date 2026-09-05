@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use axum::{
     Extension, Form, Router,
-    extract::{Query, State},
+    extract::{Query, State, rejection::FormRejection},
     response::Response,
-    routing::get,
+    routing::{get, post},
 };
 
 use hypergraft::{GraftRequest, PatchGraft, PatchSet, PatchStatus};
@@ -32,7 +32,7 @@ use crate::{
 use self::{
     forms::{CursorError, ModelForm},
     job::{observe_response, user_transcript_patch},
-    page::{ChatViewModel, JobObserveContents, TranscriptContents},
+    page::{ChatViewModel, DeskStatusContents, JobObserveContents, TranscriptContents},
 };
 
 pub(crate) use forms::{ChatForm, DeskMode, ObserveQuery};
@@ -53,7 +53,54 @@ pub(crate) struct DeskPage<'a> {
 }
 
 pub(super) fn router() -> Router<AppState> {
-    Router::new().route("/model", get(refresh_model_options).post(update_model))
+    Router::new()
+        .route("/model", get(refresh_model_options).post(update_model))
+        .route("/thinking-visibility", post(update_thinking_visibility))
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ThinkingVisibilityForm {
+    #[serde(default)]
+    show_thinking: bool,
+}
+
+async fn update_thinking_visibility(
+    State(state): State<AppState>,
+    _session: crate::sessions::RequiredSession,
+    _graft: PatchGraft,
+    form: Result<Form<ThinkingVisibilityForm>, FormRejection>,
+) -> AppResult<Response> {
+    let Ok(Form(form)) = form else {
+        return thinking_visibility_patch(
+            PatchStatus::UnprocessableEntity,
+            state.preferences.show_thinking(),
+            Some("Choose whether to show thinking."),
+        );
+    };
+    if let Err(error) = state.preferences.set_show_thinking(form.show_thinking) {
+        crate::error::trace_operation_failure("store thinking visibility preference", &error);
+        return thinking_visibility_patch(
+            PatchStatus::UnprocessableEntity,
+            state.preferences.show_thinking(),
+            Some("Power Plant could not save this preference. Try again."),
+        );
+    }
+    thinking_visibility_patch(PatchStatus::Ok, form.show_thinking, None)
+}
+
+fn thinking_visibility_patch(
+    status: PatchStatus,
+    show_thinking: bool,
+    error: Option<&'static str>,
+) -> AppResult<Response> {
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "thinking-visibility",
+        &page::ThinkingVisibilityControl {
+            show_thinking,
+            thinking_visibility_error: error,
+        },
+    )?)
 }
 
 pub(super) fn live_router() -> hypergraft::live::LiveRouter<AppState> {
@@ -444,6 +491,7 @@ pub(crate) fn accept_job_patch(
             workflow_name,
         ),
     )?;
+    patches.children("desk-status", &DeskStatusContents::active(run_step))?;
     Ok(patches.respond(PatchStatus::Ok)?)
 }
 
@@ -527,6 +575,7 @@ pub(crate) async fn view(
         desk_error,
     )
     .with_project(page.project, page.agent, page.eligible);
+    rendered.show_thinking = state.preferences.show_thinking();
     attach_workflow_ui(state, page.snapshot, &mut rendered, workflow_query);
     attach_environment_preview(state, &mut rendered).await;
     attach_sandbox_status(state, &mut rendered).await;

@@ -75,7 +75,11 @@ impl CatalogueView {
 #[derive(Template)]
 #[template(path = "agents/templates/form.html")]
 pub(super) struct AgentFormView {
-    pub(super) title: &'static str,
+    pub(super) title: String,
+    pub(super) lead: String,
+    pub(super) section: &'static str,
+    pub(super) back_href: String,
+    pub(super) back_label: &'static str,
     pub(super) action: String,
     pub(super) submit: &'static str,
     pub(super) name: String,
@@ -95,6 +99,8 @@ pub(super) struct AgentFormView {
 #[derive(Template)]
 #[template(path = "agents/templates/form.html", block = "agent_form")]
 pub(super) struct AgentFormContents<'a> {
+    pub(super) back_href: &'a str,
+    pub(super) back_label: &'static str,
     pub(super) action: &'a str,
     pub(super) submit: &'static str,
     pub(super) name: &'a str,
@@ -112,10 +118,10 @@ pub(super) struct AgentFormContents<'a> {
 }
 
 impl AgentFormView {
-    pub(super) fn create(state: AgentFormState, error: &'static str, project: &str) -> Self {
+    pub(super) fn create(state: AgentFormState, error: &'static str) -> Self {
         Self::from_state(
             "New agent",
-            &create_action(project),
+            "/agents",
             "Create agent",
             state,
             error,
@@ -130,15 +136,23 @@ impl AgentFormView {
         project: &ProjectRecord,
     ) -> Self {
         state.assign_project_path(&project.host_path);
+        let project_id = project.id.as_hex();
         let mut view = Self::from_state(
             "New agent",
-            &create_action(&project.id.as_hex()),
-            "Create agent",
+            &format!("/agents?project={project_id}"),
+            "Create agent and open desk",
             state,
             error,
             "",
             false,
         );
+        view.title = format!("Set up an agent for {}", project.name);
+        view.lead =
+            "This form sets their instructions, tools and access. The project folder is already included."
+                .to_owned();
+        view.section = "projects";
+        view.back_href = format!("/projects/{project_id}");
+        view.back_label = "Back to agent choice";
         if let Some(first) = view.grants.first_mut() {
             first.path_locked = true;
             first.can_remove = false;
@@ -147,7 +161,7 @@ impl AgentFormView {
     }
 
     pub(super) fn edit(record: &AgentRecord, state: AgentFormState, error: &'static str) -> Self {
-        Self::from_state(
+        let mut view = Self::from_state(
             "Configure agent",
             &format!("/agents/{}/configuration", record.id.as_hex()),
             "Save",
@@ -155,7 +169,10 @@ impl AgentFormView {
             error,
             &record.id.as_hex(),
             true,
-        )
+        );
+        view.back_href.clear();
+        view.back_label = "";
+        view
     }
 
     fn from_state(
@@ -169,7 +186,12 @@ impl AgentFormView {
     ) -> Self {
         let grant_count = state.directories.len();
         Self {
-            title,
+            title: title.to_owned(),
+            lead: "Define how this agent works and which local projects they can access."
+                .to_owned(),
+            section: "agents",
+            back_href: "/agents".to_owned(),
+            back_label: "Back to agents",
             action: action.to_owned(),
             submit,
             name: state.name,
@@ -208,6 +230,8 @@ impl AgentFormView {
 
     pub(super) fn contents(&self) -> AgentFormContents<'_> {
         AgentFormContents {
+            back_href: &self.back_href,
+            back_label: self.back_label,
             action: &self.action,
             submit: self.submit,
             name: &self.name,
@@ -223,13 +247,5 @@ impl AgentFormView {
             revision: &self.revision,
             show_delete: self.show_delete,
         }
-    }
-}
-
-fn create_action(project: &str) -> String {
-    if project.is_empty() {
-        "/agents".to_owned()
-    } else {
-        format!("/agents?project={project}")
     }
 }

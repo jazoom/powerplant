@@ -57,7 +57,7 @@ On the new project page, the primary action is Add project.
 
 The project folder group always shows the path field and the Choose folder action.
 
-On project detail with no eligible agent, the primary action is Create starter agent.
+On project detail with no eligible agent, the primary action is Create agent and open desk.
 
 On project detail with two or more eligible agents and no remembered agent, the primary action is the canonical desk link for each agent.
 
@@ -111,7 +111,7 @@ Configured workflow send stays in the advanced disclosure. It uses that workflow
 
 No projects: `/projects` opens the new project page. That page chooses an existing Git folder. Manual path entry remains available.
 
-No agent: the project page states that no current agent has an exact directory grant. It explains that the agent can list, read, propose changes, and run sandbox commands. It states that host files remain unchanged until candidate approval. The primary command is Create starter agent. Configure permissions first remains the secondary route. It offers grant access when other agents exist.
+No agent: the project page asks who will work on the project. It explains the recommended agent permissions and the candidate approval boundary. The primary command is Create agent and open desk. Existing agents appear as familiar alternatives. Set custom permissions remains the advanced route.
 
 Empty transcript: the desk leads with Start with a task. Three example controls fill the composer and move focus to it:
 
@@ -121,7 +121,9 @@ Empty transcript: the desk leads with Start with a task. Three example controls 
 
 The examples use `button type="button"`. They read a bounded server-authored `data-task-example` value. They never submit a task and they do not change the composer disabled state. The examples leave after the first transcript turn.
 
-Unavailable project path: the desk shows a warning with a link to project configuration.
+Available project folders have no status badge.
+
+Unavailable project folder: detail and desk pages show a warning. Catalogue rows use the Folder unavailable badge.
 
 Sandbox not ready: the desk shows the sandbox status before the composer. Failed, unavailable and invalid states include the relevant environment route.
 
@@ -185,7 +187,7 @@ The default agent uses the project name and empty instructions. It uses every bu
 
 If one eligible agent exists, the command opens that desk and does not create another record. If several eligible agents exist, the command returns to project detail and does not create another record. After a successful create, the command opens the new desk.
 
-Configure permissions first remains a real link to `/agents/new?project={project_id}`.
+Set custom permissions remains a real link to `/agents/new?project={project_id}`. The custom form keeps project context and links back to the agent choice.
 
 The canonical desk URL is `/projects/{project_id}/agents/{agent_id}`.
 

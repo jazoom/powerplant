@@ -1,6 +1,6 @@
 use askama::Template;
 
-use crate::agents::AgentRecord;
+use crate::agents::{AgentRecord, starter_name};
 use crate::projects::{ProjectRecord, desk_path};
 
 pub(super) const INDEX_TITLE: &str = "Projects | Power Plant";
@@ -55,6 +55,7 @@ pub(super) struct DetailView {
     pub(super) path: String,
     pub(super) available: bool,
     pub(super) agents: Vec<EligibleAgentLink>,
+    pub(super) starter_name: String,
     pub(super) starter_action: String,
     pub(super) starter_href: String,
     pub(super) grant_action: String,
@@ -93,6 +94,7 @@ impl DetailView {
                     href: desk_path(&record.id, &agent.id),
                 })
                 .collect(),
+            starter_name: starter_name(&record.name),
             starter_action: format!("/projects/{}/agents/starter", record.id.as_hex()),
             starter_href: format!("/agents/new?project={}", record.id.as_hex()),
             grant_action: format!("/projects/{}/agents/grant", record.id.as_hex()),

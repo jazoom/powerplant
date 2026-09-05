@@ -1,12 +1,22 @@
 <main
-  data-section="agents"
+  data-section="{{ section }}"
+  data-context-detail
   class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
 >
   <div class="page-intro">
     <div>
       <h1>{{ title }}</h1>
-      <p>Define how this agent works and which local projects it can access.</p>
+      <p>{{ lead }}</p>
     </div>
+    {% if back_href != "" %}
+      <a
+        href="{{ back_href }}"
+        data-graft
+        class="link link-hover mt-3 whitespace-nowrap sm:mt-0"
+      >
+        {{ back_label }}
+      </a>
+    {% endif %}
   </div>
   <div id="agent-form">
     {% block agent_form %}
@@ -52,13 +62,13 @@
           >
 {{- instructions -}}</textarea>
           <span id="agent-instructions-help" class="text-quiet text-xs">
-            Describe the work, context and rules for this agent.
+            Give this agent a role, context and project rules.
           </span>
         </label>
-        <fieldset class="space-y-2">
+        <fieldset class="file-section space-y-2">
           <legend class="text-sm">Tools</legend>
           <p class="text-quiet text-xs">
-            Choose what the agent can do inside its sandbox.
+            Choose what they can do inside the sandbox.
           </p>
           {% for tool in tools %}
             <label class="flex items-center gap-2">
@@ -72,10 +82,10 @@
             </label>
           {% endfor %}
         </fieldset>
-        <fieldset class="space-y-3" data-network-access>
+        <fieldset class="file-section space-y-3" data-network-access>
           <legend class="text-sm">Network access</legend>
           <p id="agent-network-help" class="text-quiet text-xs">
-            Control outbound connections from commands inside the sandbox. Model
+            Control their outbound connections inside the sandbox. Model
             requests always stay outside the sandbox.
           </p>
           <div
@@ -93,7 +103,7 @@
               <span>
                 <span class="block text-sm">No network</span>
                 <span class="text-quiet block text-xs">
-                  Block all outbound connections. This is the default.
+                  Block all outbound connections.
                 </span>
               </span>
             </label>
@@ -150,10 +160,10 @@
             </span>
           </label>
         </fieldset>
-        <fieldset class="space-y-3">
+        <fieldset class="file-section space-y-3">
           <legend class="text-sm">Project access</legend>
           <p class="text-quiet text-xs">
-            Add each local folder that this agent can use.
+            Add each local folder that they can use.
           </p>
           <label class="flex flex-col gap-1">
             <span class="text-sm">Primary folder alias</span>
@@ -241,14 +251,23 @@
             </button>
           {% endif %}
         </fieldset>
-        <button
-          class="btn btn-primary self-start"
-          type="submit"
-          name="intent"
-          value="save"
+        <div
+          class="border-base-300 flex flex-col items-start gap-3 border-t pt-5 sm:flex-row sm:items-center"
         >
-          {{ submit }}
-        </button>
+          <button
+            class="btn btn-primary"
+            type="submit"
+            name="intent"
+            value="save"
+          >
+            {{ submit }}
+          </button>
+          {% if back_href != "" %}
+            <a href="{{ back_href }}" data-graft class="link link-hover">
+              {{ back_label }}
+            </a>
+          {% endif %}
+        </div>
       </form>
       {% if show_delete %}
         <details class="danger-zone file-disclosure">

@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use super::id::AgentId;
 use super::record::{
     AccessMode, AgentDraft, AgentError, AgentFile, AgentRecord, DEFAULT_PRIMARY_ALIAS,
-    DirectoryGrant, MAXIMUM_AGENTS, NetworkAccess,
+    DirectoryGrant, MAXIMUM_AGENTS, MAXIMUM_NAME_BYTES, NetworkAccess,
 };
 use super::tool_id::ToolId;
 use crate::projects::{ProjectRecord, exact_grant};
@@ -67,7 +67,7 @@ impl AgentStore {
         match eligible.as_slice() {
             [] => {
                 let draft = AgentDraft {
-                    name: project.name.clone(),
+                    name: starter_name(&project.name),
                     instructions: String::new(),
                     tools: ToolId::ALL.to_vec(),
                     network: NetworkAccess::None,
@@ -173,6 +173,16 @@ fn load_dir(dir: &Path) -> Result<BTreeMap<AgentId, AgentRecord>, AgentError> {
         }
     }
     Ok(agents)
+}
+
+pub(crate) fn starter_name(project_name: &str) -> String {
+    const SUFFIX: &str = " agent";
+    let maximum_project_bytes = MAXIMUM_NAME_BYTES - SUFFIX.len();
+    let mut end = project_name.len().min(maximum_project_bytes);
+    while end > 0 && !project_name.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", project_name[..end].trim_end(), SUFFIX)
 }
 
 fn insert_created(

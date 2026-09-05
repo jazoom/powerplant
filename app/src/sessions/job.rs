@@ -12,6 +12,7 @@ use rand::rngs::SysRng;
 use tokio::sync::Notify;
 
 use crate::hex;
+use crate::providers::{AssistantReply, ToolOutput};
 use crate::workflows::RunId;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
@@ -73,7 +74,9 @@ pub(crate) enum JobStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum JobEventKind {
-    Output { delta: String },
+    Response { delta: String },
+    Thinking { delta: String },
+    Tool { output: ToolOutput },
     Completed,
     Failed,
     Cancelled,
@@ -90,7 +93,7 @@ pub(crate) struct JobSnapshot {
     pub(crate) id: JobId,
     pub(crate) run_id: RunId,
     pub(crate) status: JobStatus,
-    pub(crate) output: String,
+    pub(crate) output: AssistantReply,
     pub(crate) latest_seq: u64,
     pub(crate) assistant_index: usize,
     pub(crate) error: Option<String>,
@@ -113,7 +116,7 @@ pub(crate) struct Job {
 struct JobInner {
     status: JobStatus,
     events: Vec<JobEvent>,
-    output: String,
+    output: AssistantReply,
     latest_seq: u64,
     error: Option<String>,
 }
@@ -127,7 +130,7 @@ impl Job {
             inner: Mutex::new(JobInner {
                 status: JobStatus::Running,
                 events: Vec::new(),
-                output: String::new(),
+                output: AssistantReply::default(),
                 latest_seq: 0,
                 error: None,
             }),
@@ -264,29 +267,49 @@ impl Job {
             .collect()
     }
 
-    pub(crate) fn output_up_to(&self, cursor: u64) -> String {
+    pub(crate) fn output_up_to(&self, cursor: u64) -> AssistantReply {
         let inner = self.lock();
-        let mut text = String::new();
+        let mut output = AssistantReply::default();
         for event in &inner.events {
             if event.seq > cursor {
                 break;
             }
-            if let JobEventKind::Output { delta } = &event.kind {
-                text.push_str(delta);
-            }
+            apply_output_event(&mut output, &event.kind);
         }
-        text
+        output
     }
 
     pub(crate) fn has_output_at_or_before(&self, cursor: u64) -> bool {
-        self.lock()
-            .events
-            .iter()
-            .any(|event| event.seq <= cursor && matches!(event.kind, JobEventKind::Output { .. }))
+        self.lock().events.iter().any(|event| {
+            event.seq <= cursor
+                && matches!(
+                    event.kind,
+                    JobEventKind::Response { .. }
+                        | JobEventKind::Thinking { .. }
+                        | JobEventKind::Tool { .. }
+                )
+        })
     }
 
-    pub(crate) fn push_output(&self, delta: String) -> Option<u64> {
-        if delta.is_empty() {
+    pub(crate) fn push_response(&self, delta: String) -> Option<u64> {
+        self.push_output_event(JobEventKind::Response { delta })
+    }
+
+    pub(crate) fn push_thinking(&self, delta: String) -> Option<u64> {
+        self.push_output_event(JobEventKind::Thinking { delta })
+    }
+
+    pub(crate) fn push_tool(&self, output: ToolOutput) -> Option<u64> {
+        self.push_output_event(JobEventKind::Tool { output })
+    }
+
+    fn push_output_event(&self, kind: JobEventKind) -> Option<u64> {
+        let empty = match &kind {
+            JobEventKind::Response { delta } | JobEventKind::Thinking { delta } => delta.is_empty(),
+            JobEventKind::Tool { .. } => false,
+            JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => true,
+        };
+        if empty {
             return None;
         }
         let mut inner = self.lock();
@@ -295,11 +318,8 @@ impl Job {
         }
         inner.latest_seq += 1;
         let seq = inner.latest_seq;
-        inner.output.push_str(&delta);
-        inner.events.push(JobEvent {
-            seq,
-            kind: JobEventKind::Output { delta },
-        });
+        apply_output_event(&mut inner.output, &kind);
+        inner.events.push(JobEvent { seq, kind });
         drop(inner);
         self.notify.notify_waiters();
         Some(seq)
@@ -366,5 +386,14 @@ impl Job {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+fn apply_output_event(output: &mut AssistantReply, event: &JobEventKind) {
+    match event {
+        JobEventKind::Response { delta } => output.text.push_str(delta),
+        JobEventKind::Thinking { delta } => output.push_thinking(delta),
+        JobEventKind::Tool { output: tool } => output.push_tool(tool.clone()),
+        JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => {}
     }
 }

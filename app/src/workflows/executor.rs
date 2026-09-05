@@ -1573,7 +1573,7 @@ async fn run_agent_step(
     if ended.outcome == AgentOutcome::Completed {
         *job.eligible_reply
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ended.reply.clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ended.reply.text.clone();
     }
     match ended.outcome {
         AgentOutcome::Completed => StepOutcome::Completed,
@@ -2690,11 +2690,10 @@ fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
-    let reply = if eligible.is_empty() {
-        workflow.job.snapshot().output
-    } else {
-        eligible
-    };
+    let mut reply = workflow.job.snapshot().output;
+    if !eligible.is_empty() {
+        reply.text = eligible;
+    }
     settle_with_reply(
         state,
         &workflow.session_id,
@@ -2713,9 +2712,9 @@ fn settle_with_reply(
     job: &Job,
     status: JobStatus,
     error: Option<&str>,
-    reply: &str,
+    reply: &crate::providers::AssistantReply,
 ) {
-    let reply = crate::slices::bound_reply(reply).to_owned();
+    let reply = crate::slices::bound_reply(reply);
     match status {
         JobStatus::Completed => {
             let _ = state

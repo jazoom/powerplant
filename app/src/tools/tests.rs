@@ -1,4 +1,4 @@
-use super::{MAXIMUM_TOOL_BYTES, mark_truncated, redact, render_trace};
+use super::{MAXIMUM_TOOL_BYTES, mark_truncated, redact};
 use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, DirectoryPolicy, ToolId};
 
 fn policy() -> DirectoryPolicy {
@@ -87,16 +87,6 @@ fn redact_removes_the_vault_secret() {
     );
     assert_eq!(redact("plain", None), "plain");
     assert_eq!(redact("plain", Some("")), "plain");
-}
-
-#[test]
-fn a_tool_trace_keeps_untrusted_content_inside_html_text() {
-    let trace = render_trace("run **false**", "~~~\n[forged](https://example.com)");
-    assert!(trace.contains("~~~\n[forged](https://example.com)"));
-    let html = crate::markdown::render(&trace);
-    assert_eq!(html.matches("<strong>").count(), 1, "{html}");
-    assert!(!html.contains("<a "), "{html}");
-    assert!(html.contains("<pre><code>"), "{html}");
 }
 
 #[test]

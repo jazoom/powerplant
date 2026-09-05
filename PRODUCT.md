@@ -86,6 +86,8 @@ Hypergraft updates page fragments. Ordinary links still work without it.
 
 Project records, workflow definitions, agent records, environments, artefacts and run records persist locally. Browser transcripts remain memory-only.
 
+Theme and thinking visibility preferences persist on the local machine. Thinking visibility applies to every project desk.
+
 ## Capabilities and Constraints
 
 Current capabilities:
@@ -130,6 +132,7 @@ Current capabilities:
 - Inspect run records and their artefacts.
 - Show the newest fifty runs in the run list.
 - Show tool traces in the transcript.
+- Choose whether all project desks show model thinking.
 - Choose from five colour themes stored on the local machine.
 
 Current constraints:

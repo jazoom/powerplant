@@ -566,55 +566,5 @@ pub(crate) fn redact(text: &str, secret: Option<&str>) -> String {
     text.replace(secret, "[redacted]")
 }
 
-pub(crate) fn render_trace(label: &str, output: &str) -> String {
-    let label = escape_markdown_text(label);
-    let fence = "~".repeat(longest_tilde_run(output).saturating_add(1).max(3));
-    format!("**{label}**\n\n{fence}\n{output}\n{fence}\n")
-}
-
-pub(crate) fn render_trace_preview(label: &str, output: &str, maximum: usize) -> String {
-    if output.len() <= maximum {
-        return render_trace(label, output);
-    }
-    const MARKER: &str = "\n[output truncated]";
-    let mut end = maximum.saturating_sub(MARKER.len());
-    while end > 0 && !output.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut preview = String::with_capacity(maximum);
-    preview.push_str(&output[..end]);
-    preview.push_str(MARKER);
-    render_trace(label, &preview)
-}
-
-fn escape_markdown_text(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        if character.is_control() {
-            escaped.push(' ');
-        } else {
-            if character.is_ascii_punctuation() {
-                escaped.push('\\');
-            }
-            escaped.push(character);
-        }
-    }
-    escaped
-}
-
-fn longest_tilde_run(text: &str) -> usize {
-    let mut longest = 0usize;
-    let mut current = 0usize;
-    for character in text.chars() {
-        if character == '~' {
-            current += 1;
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    longest
-}
-
 #[cfg(test)]
 mod tests;

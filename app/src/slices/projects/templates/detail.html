@@ -16,51 +16,73 @@
     </div>
   {% endif %}
 
-  {% if available %}
-    <p><span class="badge badge-success">Available</span></p>
-  {% else %}
+  {% if !available %}
     <div class="alert alert-warning" role="status">
       <p>
-        This project path is not available on the host. The record stays in the
-        catalogue.
+        Power Plant cannot access this project folder at its saved path. The
+        project record stays in the catalogue.
       </p>
     </div>
   {% endif %}
 
   {% if agents.is_empty() %}
-    <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">Choose how to start</h2>
-      <p class="text-quiet max-w-[60ch]">
-        No agent can access this project yet. A starter agent can inspect files,
-        run sandbox commands and propose changes.
-      </p>
-      <p class="text-quiet max-w-[60ch]">
-        Your project stays unchanged until you apply the proposed changes.
-      </p>
-      <form data-graft method="post" action="{{ starter_action }}">
-        <button class="btn btn-primary btn-sm" type="submit">
-          Create starter agent
-        </button>
-      </form>
-      <p>
-        <a href="{{ starter_href }}" data-graft class="link link-hover"
-          >Set custom permissions instead</a
-        >
-      </p>
+    <section class="file-section space-y-6">
+      <div class="max-w-[62ch] space-y-2">
+        <h2 class="text-xl font-semibold">Who will work on this project?</h2>
+        <p class="text-quiet">
+          No agent has access yet. Use the standard setup, or choose the exact
+          permissions yourself.
+        </p>
+      </div>
+
+      <div
+        class="border-base-300 bg-base-200 grid gap-5 border p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:p-5"
+      >
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="text-lg font-semibold">Start with a project agent</h3>
+            <span class="badge badge-info badge-sm">Recommended</span>
+          </div>
+          <p class="text-quiet mt-1 max-w-[58ch]">
+            Power Plant will create an agent named {{ starter_name }} for this
+            project.
+          </p>
+          <ul
+            class="border-base-300 divide-base-300 mt-4 grid divide-y border-y text-sm"
+          >
+            <li class="py-2">They can list, read and write project files.</li>
+            <li class="py-2">
+              They can run commands inside an isolated sandbox.
+            </li>
+            <li class="py-2">Their sandbox has no network access.</li>
+          </ul>
+          <p class="text-quiet mt-3 text-sm">
+            Project files change only after you approve their proposal.
+          </p>
+        </div>
+        <form data-graft method="post" action="{{ starter_action }}">
+          <button class="btn btn-primary" type="submit">
+            Create agent and open desk
+          </button>
+        </form>
+      </div>
+
       {% if !grant_candidates.is_empty() %}
         <div class="space-y-3">
-          <h3 class="text-base font-semibold">Use an existing agent</h3>
-          <p class="text-quiet max-w-[60ch]">
-            Give an existing agent access to this project.
-          </p>
-          <ul class="record-list">
+          <div>
+            <h3 class="text-lg font-semibold">Use an agent you already know</h3>
+            <p class="text-quiet mt-1 max-w-[60ch]">
+              Give one of your agents access, then open the project desk.
+            </p>
+          </div>
+          <ul class="border-base-300 border-t">
             {% for agent in grant_candidates %}
-              <li class="record-row">
+              <li class="border-base-300 border-b py-4">
                 <form
                   data-graft
                   method="post"
                   action="{{ grant_action }}"
-                  class="flex w-full flex-col gap-3 sm:flex-row sm:items-end"
+                  class="grid w-full gap-3 sm:grid-cols-[minmax(8rem,1fr)_minmax(8rem,0.7fr)_minmax(10rem,0.9fr)_auto] sm:items-end"
                 >
                   <input type="hidden" name="agent_id" value="{{ agent.id }}" />
                   <input
@@ -68,13 +90,13 @@
                     name="revision"
                     value="{{ agent.revision }}"
                   />
-                  <div class="min-w-0 flex-1">
+                  <div class="min-w-0 self-center">
                     <p class="font-medium">{{ agent.name }}</p>
                   </div>
                   <label class="flex flex-col gap-1">
-                    <span class="text-quiet text-xs">Alias</span>
+                    <span class="text-quiet text-xs">Folder alias</span>
                     <input
-                      class="input input-bordered input-sm font-mono"
+                      class="input input-bordered input-sm w-full font-mono"
                       name="alias"
                       required
                       maxlength="32"
@@ -84,7 +106,7 @@
                   <label class="flex flex-col gap-1">
                     <span class="text-quiet text-xs">Project access</span>
                     <select
-                      class="select select-bordered select-sm"
+                      class="select select-bordered select-sm w-full"
                       name="access"
                     >
                       <option
@@ -101,8 +123,8 @@
                       </option>
                     </select>
                   </label>
-                  <button class="btn btn-primary btn-sm" type="submit">
-                    Grant access
+                  <button class="btn btn-outline btn-sm" type="submit">
+                    Give access and open desk
                   </button>
                 </form>
               </li>
@@ -110,6 +132,24 @@
           </ul>
         </div>
       {% endif %}
+
+      <div
+        class="border-base-300 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div>
+          <h3 class="text-base font-semibold">Create a custom agent</h3>
+          <p class="text-quiet mt-1 max-w-[58ch] text-sm">
+            Give a new agent different instructions, tools or network access.
+          </p>
+        </div>
+        <a
+          href="{{ starter_href }}"
+          data-graft
+          class="btn btn-outline btn-sm self-start"
+        >
+          Set custom permissions
+        </a>
+      </div>
     </section>
   {% else %}
     <section class="file-section space-y-3">
