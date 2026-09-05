@@ -36,21 +36,22 @@
     <ul class="record-list">
       {% for agent in agents %}
         <li class="record-row">
-          <div>
-            <span class="font-medium">{{ agent.name }}</span>
+          <div class="min-w-0">
+            <p class="font-medium break-words">{{ agent.name }}</p>
+            <p class="text-quiet mt-2 text-xs">Project access</p>
             {% if agent.projects.is_empty() %}
-              <p class="text-quiet text-xs">No matching project</p>
+              <p class="text-quiet text-xs">No registered project access</p>
             {% else %}
-              <p class="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+              <ul class="mt-1 space-y-1">
                 {% for project in agent.projects %}
-                  <a
-                    href="{{ project.href }}"
-                    data-graft
-                    class="link link-hover"
-                    >{{ project.name }}</a
-                  >
+                  <li class="min-w-0">
+                    <p class="text-sm break-words">{{ project.name }}</p>
+                    <p class="text-quiet font-mono text-xs break-all">
+                      {{ project.path }}
+                    </p>
+                  </li>
                 {% endfor %}
-              </p>
+              </ul>
             {% endif %}
           </div>
           <a

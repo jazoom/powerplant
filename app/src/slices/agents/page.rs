@@ -1,7 +1,7 @@
 use askama::Template;
 
 use crate::agents::{AgentRecord, MAXIMUM_GRANTS, ToolId};
-use crate::projects::{ProjectRecord, desk_path, eligible_projects};
+use crate::projects::{ProjectRecord, eligible_projects};
 use crate::sandbox::OrphanSandbox;
 
 use super::forms::AgentFormState;
@@ -13,12 +13,12 @@ pub(super) const CONFIG_TITLE: &str = "Configure agent | Power Plant";
 pub(super) struct AgentListItem {
     pub(super) id: String,
     pub(super) name: String,
-    pub(super) projects: Vec<AgentProjectLink>,
+    pub(super) projects: Vec<AgentProjectMetadata>,
 }
 
-pub(super) struct AgentProjectLink {
+pub(super) struct AgentProjectMetadata {
     pub(super) name: String,
-    pub(super) href: String,
+    pub(super) path: String,
 }
 
 pub(super) struct GrantRow {
@@ -59,9 +59,9 @@ impl CatalogueView {
                     name: agent.name.clone(),
                     projects: eligible_projects(agent, projects)
                         .into_iter()
-                        .map(|project| AgentProjectLink {
+                        .map(|project| AgentProjectMetadata {
                             name: project.name.clone(),
-                            href: desk_path(&project.id, &agent.id),
+                            path: project.host_path.to_string_lossy().into_owned(),
                         })
                         .collect(),
                 })

@@ -14,7 +14,7 @@ pub(crate) use record::{
 };
 pub(crate) use store::ProjectStore;
 
-use crate::agents::{AgentId, AgentRecord};
+use crate::agents::AgentId;
 
 pub(crate) fn desk_path(project_id: &ProjectId, agent_id: &AgentId) -> String {
     format!(
@@ -22,13 +22,4 @@ pub(crate) fn desk_path(project_id: &ProjectId, agent_id: &AgentId) -> String {
         project_id.as_hex(),
         agent_id.as_hex()
     )
-}
-
-pub(crate) fn unique_desk_path(agent: &AgentRecord, projects: &[ProjectRecord]) -> Option<String> {
-    let mut matched = eligible_projects(agent, projects).into_iter();
-    let first = matched.next()?;
-    if matched.next().is_some() {
-        return None;
-    }
-    Some(desk_path(&first.id, &agent.id))
 }

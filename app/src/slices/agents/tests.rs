@@ -74,12 +74,13 @@ async fn a_catalogue_document_uses_chat_main() {
 }
 
 #[tokio::test]
-async fn the_catalogue_links_each_exact_grant_match() {
+async fn the_catalogue_shows_metadata_for_each_exact_grant_match() {
     let state = test_state();
     let token = connected(&state);
     let harbour_dir = git_worktree();
     let quay_dir = git_worktree();
-    let other_dir = git_worktree();
+    let unrelated_dir = git_worktree();
+    let unmatched_dir = tempfile::tempdir().expect("unmatched");
     let harbour = state
         .projects
         .create("Harbour".to_owned(), harbour_dir.path().to_path_buf())
@@ -88,6 +89,10 @@ async fn the_catalogue_links_each_exact_grant_match() {
         .projects
         .create("Quay".to_owned(), quay_dir.path().to_path_buf())
         .expect("quay");
+    let unrelated = state
+        .projects
+        .create("Distant".to_owned(), unrelated_dir.path().to_path_buf())
+        .expect("unrelated");
     let both = state
         .agents
         .create(AgentDraft {
@@ -110,7 +115,7 @@ async fn the_catalogue_links_each_exact_grant_match() {
             primary_directory: "harbour".to_owned(),
         })
         .expect("both");
-    let none = state
+    state
         .agents
         .create(AgentDraft {
             name: "None".to_owned(),
@@ -119,15 +124,12 @@ async fn the_catalogue_links_each_exact_grant_match() {
             network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
                 alias: "project".to_owned(),
-                host_path: other_dir.path().to_path_buf(),
+                host_path: unmatched_dir.path().to_path_buf(),
                 access: AccessMode::ReadWrite,
             }],
             primary_directory: "project".to_owned(),
         })
         .expect("none");
-    keep_dir(&state, harbour_dir);
-    keep_dir(&state, quay_dir);
-    keep_dir(&state, other_dir);
     let response = app(&state)
         .oneshot(
             Request::builder()
@@ -142,20 +144,31 @@ async fn the_catalogue_links_each_exact_grant_match() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("Both"));
     assert!(text.contains("None"));
-    assert!(text.contains(&crate::projects::desk_path(&harbour.id, &both.id)));
-    assert!(text.contains(&crate::projects::desk_path(&quay.id, &both.id)));
-    assert!(!text.contains(&crate::projects::desk_path(&harbour.id, &none.id)));
-    assert!(!text.contains(&crate::projects::desk_path(&quay.id, &none.id)));
-    assert!(text.contains("No matching project"));
+    assert!(text.contains("Harbour"));
+    assert!(text.contains(&harbour.host_path.to_string_lossy().into_owned()));
+    assert!(text.contains("Quay"));
+    assert!(text.contains(&quay.host_path.to_string_lossy().into_owned()));
+    assert!(!text.contains("Distant"));
+    assert!(!text.contains(&unrelated.host_path.to_string_lossy().into_owned()));
+    assert!(!text.contains(&crate::projects::desk_path(&harbour.id, &both.id)));
+    assert!(!text.contains(&crate::projects::desk_path(&quay.id, &both.id)));
+    assert!(text.contains("No registered project access"));
+    keep_dir(&state, harbour_dir);
+    keep_dir(&state, quay_dir);
+    keep_dir(&state, unrelated_dir);
+    keep_dir(&state, unmatched_dir);
 }
 
 #[tokio::test]
-async fn create_redirects_to_the_new_agent() {
+async fn generic_create_redirects_to_the_new_agent_configuration() {
     let state = test_state();
     let token = connected(&state);
-    let dir = tempfile::tempdir().expect("dir");
-    let path = dir.path().canonicalize().expect("canonical");
-    let encoded = path.to_string_lossy().replace(' ', "%20");
+    let dir = git_worktree();
+    let project = state
+        .projects
+        .create("Exact match".to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    let encoded = project.host_path.to_string_lossy().replace(' ', "%20");
     let response = app(&state)
         .oneshot(
             Request::builder()
@@ -175,9 +188,14 @@ async fn create_redirects_to_the_new_agent() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("navigate=\"/agents/"));
-    assert_eq!(state.agents.list().len(), 1);
-    assert_eq!(state.agents.list()[0].name, "Reader");
+    let agents = state.agents.list();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].name, "Reader");
+    assert!(text.contains(&format!(
+        "navigate=\"/agents/{}/configuration\"",
+        agents[0].id.as_hex()
+    )));
+    assert!(!text.contains(&crate::projects::desk_path(&project.id, &agents[0].id)));
     state.keep_temp_dir(dir);
 }
 

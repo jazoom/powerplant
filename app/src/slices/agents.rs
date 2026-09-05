@@ -17,7 +17,7 @@ use crate::{
     agents::{AgentError, AgentId, AgentRecord},
     error::{AppError, AppResult},
     local_data::HOST_PATH_RESET_PENDING,
-    projects::{ProjectId, ProjectRecord, desk_path, unique_desk_path},
+    projects::{ProjectId, ProjectRecord, desk_path},
     responses,
     sessions::RequiredSession,
     state::AppState,
@@ -147,8 +147,7 @@ async fn create(
         Ok(record) => {
             let destination = match &starter {
                 Some(project) => desk_path(&project.id, &record.id),
-                None => unique_desk_path(&record, &state.projects.list())
-                    .unwrap_or_else(|| format!("/agents/{}/configuration", record.id.as_hex())),
+                None => format!("/agents/{}/configuration", record.id.as_hex()),
             };
             Ok(responses::command_navigation(&destination))
         }
