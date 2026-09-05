@@ -5,7 +5,6 @@ fn form(name: &str, path: &str, revision: &str) -> ProjectForm {
     ProjectForm {
         name: name.to_owned(),
         path: path.to_owned(),
-        entry: String::new(),
         revision: revision.to_owned(),
     }
 }

@@ -49,13 +49,13 @@ The composer dock is last. Sandbox status sits before the composer. Quick task S
 
 ## Primary action
 
-On the catalogue, the primary action is New project.
+On the catalogue, the primary action is New project. Each project row has Rename as a secondary action.
 
-On an empty catalogue, the primary action is Create the first project.
+Project detail does not repeat the Rename action. A successful rename returns to `/projects`.
 
-On the new project page, the primary action is Choose project folder.
+On the new project page, the primary action is Add project.
 
-After a selected or manual path, the primary action is Add project.
+The project folder group always shows the path field and the Choose folder action.
 
 On project detail with no eligible agent, the primary action is Create starter agent.
 
@@ -109,7 +109,7 @@ Configured workflow send stays in the advanced disclosure. It uses that workflow
 
 ## Empty states
 
-No projects: the catalogue asks the user to create the first project. The new project page chooses an existing Git folder. Manual path entry remains available.
+No projects: `/projects` opens the new project page. That page chooses an existing Git folder. Manual path entry remains available.
 
 No agent: the project page states that no current agent has an exact directory grant. It explains that the agent can list, read, propose changes, and run sandbox commands. It states that host files remain unchanged until candidate approval. The primary command is Create starter agent. Configure permissions first remains the secondary route. It offers grant access when other agents exist.
 
@@ -157,21 +157,25 @@ One project redirects to `/projects/{project_id}`. Agent selection still occurs 
 
 Two or more projects redirect to `/projects`.
 
+`/projects` also redirects to `/projects/new` when the catalogue is empty.
+
 The catalogue orders projects by recent session use, then by stable catalogue order.
 
-`/projects/new` presents the native folder chooser action. `POST /projects/folder` is a patch-only command.
+`/projects/new` presents one form for folder selection and manual path entry. `POST /projects/folder` is a patch-only command.
 
 The command opens a native dialog on the Power Plant host. It only accepts an existing Git project folder.
 
-A selected folder fills the form with its canonical path. The folder command does not create or clone a project.
+A selected folder updates the path field with its canonical absolute path. It supplies a default name only when the name field is empty.
 
-Cancellation returns the current form without an error.
+The folder command does not create or clone a project.
+
+Cancellation returns the current form without an error. It preserves the name and path values.
 
 A busy chooser returns a conflict patch and leaves the form intact.
 
-`/projects/new?entry=manual` shows the Git project path field as the fallback.
+The path field and Choose folder action remain visible after each folder command.
 
-The selected path stays visible and immutable before submission. The final `/projects` command validates and stores the project.
+The final `/projects` command validates and stores the project.
 
 After a successful create, the product redirects to `/projects/{project_id}`.
 
@@ -217,7 +221,7 @@ Do not require a configured workflow or an onboarding completion record for the 
 
 On a machine with a display, make sure that the native folder chooser opens a host dialog.
 
-Use `/projects/new?entry=manual` for automated first-task checks.
+Use the path field on `/projects/new` for automated first-task checks.
 
 ## Unresolved
 

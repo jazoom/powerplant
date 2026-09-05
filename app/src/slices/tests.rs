@@ -325,22 +325,15 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
 
     let (status, _, text) = send(&state, document("/projects/new", Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("Choose project folder"));
-    assert!(text.contains("href=\"/projects/new?entry=manual\""));
-
-    let (status, _, text) =
-        send(&state, document("/projects/new?entry=manual", Some(&token))).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(text.contains("Choose folder"));
     assert!(text.contains("Git project folder"));
+    assert!(text.contains("formaction=\"/projects/folder\""));
     assert!(text.contains("action=\"/projects\""));
 
     let worktree = git_worktree();
     let path = worktree.path().canonicalize().expect("canonical");
     state.keep_temp_dir(worktree);
-    let create_body = format!(
-        "name=Desk&path={}&entry=manual",
-        form_value(&path.to_string_lossy())
-    );
+    let create_body = format!("name=Desk&path={}", form_value(&path.to_string_lossy()));
     let (status, _, text) = send(&state, patch("/projects", Some(&token), &create_body)).await;
     assert_eq!(status, StatusCode::OK);
     let project = &state.projects.list()[0];

@@ -42,7 +42,7 @@ Projects are the first product object. Each project has a name and one immutable
 
 The product marks a project unavailable when its stored path no longer resolves. Unavailable records stay visible.
 
-The `/` route uses the project catalogue. An empty catalogue redirects to `/projects/new`. One project redirects to `/projects/{project_id}`. Two or more projects redirect to `/projects`.
+The `/` route uses the project catalogue. An empty catalogue redirects to `/projects/new`. One project redirects to `/projects/{project_id}`. Two or more projects redirect to `/projects`. The `/projects` route also redirects to `/projects/new` when the catalogue is empty.
 
 The project catalogue is not host access authority. An agent directory grant is the only authority for an agent to access a project. An agent is eligible when one stored canonical grant path equals the project path. Prefix matches give no authority. Project registration gives no authority.
 

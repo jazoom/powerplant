@@ -1,4 +1,9 @@
-<main data-section="projects" class="chat-sheet">
+<main
+  data-section="projects"
+  data-context-current-href="/projects/{{ project_id }}"
+  data-context-leaf="{{ agent_name }}"
+  class="chat-sheet"
+>
   <div class="chat-desk-bar">
     <section class="chat-model-settings" aria-label="Model settings">
       <div
@@ -280,8 +285,15 @@
         class="status-stamp"
         data-state="{% if review_href != "" %}Awaiting decision{% else if job_active %}Active{% else if quick_task_finished %}Completed{% else %}Ready{% endif %}"
       >
-        {% if review_href != "" %}Awaiting decision{% else if job_active %}{{ job_status }}{% else if quick_task_finished %}Task
-        complete{% else %}Ready for work{% endif %}
+        {% if review_href != "" %}
+          Awaiting decision
+        {% else if job_active %}
+          {{ job_status }}
+        {% else if quick_task_finished %}
+          Task complete
+        {% else %}
+          Ready for work
+        {% endif %}
       </span>
       <details class="dropdown dropdown-end">
         <summary class="btn btn-ghost h-auto min-h-11 px-3">
@@ -370,6 +382,23 @@
     <div class="mx-auto flex w-full max-w-4xl flex-col">
       <div id="job-observe">
         {% block job_observe %}
+          {% if review_href != "" %}
+            <span
+              hidden
+              data-app-context-status-source
+              data-state="Awaiting decision"
+              data-href="{{ review_href }}"
+              >Awaiting decision</span
+            >
+          {% else if job_active %}
+            <span
+              hidden
+              data-app-context-status-source
+              data-state="Active"
+              {% if run_id != "" %}data-href="/runs/{{ run_id }}"{% endif %}
+              >{{ job_status }}</span
+            >
+          {% endif %}
           {% if job_active %}
             <div
               class="mb-3"

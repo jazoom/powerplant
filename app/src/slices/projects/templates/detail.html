@@ -1,5 +1,6 @@
 <main
   data-section="projects"
+  data-context-detail
   class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
 >
   <div class="page-intro">
@@ -7,12 +8,6 @@
       <h1>{{ name }}</h1>
       <p class="text-quiet font-mono text-xs break-all">{{ path }}</p>
     </div>
-    <a
-      href="/projects/{{ id }}/configuration"
-      data-graft
-      class="btn btn-primary btn-sm"
-      >Rename</a
-    >
   </div>
 
   {% if error != "" %}
@@ -133,8 +128,4 @@
       </ul>
     </section>
   {% endif %}
-
-  <p>
-    <a href="/projects" data-graft class="link link-hover">All projects</a>
-  </p>
 </main>

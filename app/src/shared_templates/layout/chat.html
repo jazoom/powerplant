@@ -68,8 +68,22 @@
       </nav>
     </aside>
     <div class="app-file">
-      <header class="app-file-bar" aria-label="Application location">
-        <span class="app-local-badge">Runs on this machine</span>
+      <header
+        class="app-file-bar"
+        aria-label="Current location and activity"
+        data-island="app-context"
+      >
+        <nav class="app-context-breadcrumbs" aria-label="Breadcrumb">
+          <ol data-app-context-breadcrumbs>
+            <li class="app-context-current">
+              <span aria-current="page">{{ page_label }}</span>
+            </li>
+          </ol>
+        </nav>
+        <div class="app-context-status" data-app-context-status hidden>
+          <a href="/runs" data-graft data-app-context-status-link hidden></a>
+          <span data-app-context-status-label hidden></span>
+        </div>
       </header>
       <div id="chat-main" tabindex="-1" class="app-page">
         {{ content|safe }}

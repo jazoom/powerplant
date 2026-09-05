@@ -453,7 +453,7 @@ async fn host_path_mutations_conflict_after_reset_is_pending() {
         .oneshot(patch_form(
             &token,
             "/projects",
-            format!("name=Desk&path={create_path}&entry=manual"),
+            format!("name=Desk&path={create_path}"),
         ))
         .await
         .expect("create");
@@ -571,7 +571,7 @@ async fn reset_and_a_project_under_the_data_root_cannot_both_succeed() {
         router.oneshot(patch_form(
             &token,
             "/projects",
-            format!("name=Nested&path={encoded}&entry=manual"),
+            format!("name=Nested&path={encoded}"),
         )),
     );
     let reset = reset.expect("reset");

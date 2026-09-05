@@ -5,6 +5,11 @@
     data-observe-target="environment-preparation"
   {% endif %}
 >
+  {% if active %}
+    <span hidden data-app-context-status-source data-state="Active"
+      >{{ readiness }}</span
+    >
+  {% endif %}
   <h2 class="text-base font-semibold">Preparation</h2>
   <p
     class="badge {% if readiness_tone == "success" %}badge-success{% else if readiness_tone == "warning" %}badge-warning{% else if readiness_tone == "info" %}badge-info{% else %}badge-ghost{% endif %}"

@@ -15,39 +15,43 @@
           <p>{{ error }}</p>
         </div>
       {% endif %}
-      {% if mode.is_initial() %}
-        <form
-          data-graft
-          method="post"
-          action="/projects/folder"
-          class="flex flex-col gap-4"
-        >
-          <button class="btn btn-primary self-start" type="submit">
-            Choose project folder
-          </button>
-        </form>
-        <a href="/projects/new?entry=manual" data-graft class="link link-hover"
-          >Enter path manually</a
-        >
-      {% else if mode.is_selected() %}
-        <div>
-          <p class="text-sm font-semibold">Selected project folder</p>
-          <p class="text-quiet mt-1 font-mono text-xs break-all">{{ path }}</p>
-        </div>
-        <p class="text-quiet">
-          You cannot change this folder after you add the project.
-        </p>
+      {% if mode.is_create() %}
         <form
           data-graft
           method="post"
           action="{{ action }}"
           class="flex flex-col gap-4"
         >
-          <input type="hidden" name="path" value="{{ path }}" />
-          <input type="hidden" name="entry" value="selected" />
-          <label class="flex flex-col gap-1">
+          <div
+            class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+          >
+            <label class="flex min-w-0 flex-col gap-1" for="project-path">
+              <span class="text-sm">Git project folder</span>
+              <input
+                id="project-path"
+                class="input input-bordered w-full font-mono"
+                name="path"
+                required
+                maxlength="4096"
+                value="{{ path }}"
+                placeholder="/home/me/projects/my-app"
+                spellcheck="false"
+              />
+            </label>
+            <button
+              class="btn btn-outline self-start sm:self-auto"
+              type="submit"
+              formaction="/projects/folder"
+              formmethod="post"
+              formnovalidate
+            >
+              Choose folder
+            </button>
+          </div>
+          <label class="flex flex-col gap-1" for="project-name">
             <span class="text-sm">Name</span>
             <input
+              id="project-name"
               class="input input-bordered"
               name="name"
               required
@@ -55,58 +59,6 @@
               value="{{ name }}"
             />
           </label>
-          <button class="btn btn-primary self-start" type="submit">
-            {{ submit }}
-          </button>
-        </form>
-        <form
-          data-graft
-          method="post"
-          action="/projects/folder"
-          class="flex flex-col gap-4"
-        >
-          <input type="hidden" name="name" value="{{ name }}" />
-          <input type="hidden" name="path" value="{{ path }}" />
-          <button class="btn btn-ghost self-start" type="submit">
-            Choose another folder
-          </button>
-        </form>
-        <a href="/projects/new?entry=manual" data-graft class="link link-hover"
-          >Enter path manually</a
-        >
-      {% else if mode.is_manual() %}
-        <form
-          data-graft
-          method="post"
-          action="{{ action }}"
-          class="flex flex-col gap-4"
-        >
-          <input type="hidden" name="entry" value="manual" />
-          <label class="flex flex-col gap-1">
-            <span class="text-sm">Name</span>
-            <input
-              class="input input-bordered"
-              name="name"
-              required
-              maxlength="80"
-              value="{{ name }}"
-            />
-          </label>
-          <label class="flex flex-col gap-1">
-            <span class="text-sm">Git project folder</span>
-            <input
-              class="input input-bordered font-mono"
-              name="path"
-              required
-              maxlength="4096"
-              value="{{ path }}"
-              placeholder="/home/me/projects/my-app"
-            />
-          </label>
-          <p class="text-quiet">
-            Enter the absolute path to an existing Git project. You cannot
-            change this folder later.
-          </p>
           <button class="btn btn-primary self-start" type="submit">
             {{ submit }}
           </button>

@@ -3,6 +3,7 @@ import {
     listenForDiagnostics,
     startHypergraft,
 } from "hypergraft/browser";
+import { initAppContext } from "./app-context";
 import { initComposer, initShortcutHint } from "./composer";
 import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
@@ -25,6 +26,7 @@ export function startApp(): void {
     startHypergraft({
         feedback: bound.feedback,
         islands: {
+            "app-context": initAppContext,
             composer: initComposer,
             "connect-errors": initConnectErrors,
             "connect-plan": initConnectPlan,

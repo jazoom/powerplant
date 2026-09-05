@@ -1,9 +1,19 @@
 <main
   data-section="runs"
+  data-context-detail
   class="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
 >
   <div id="run-detail">
     {% block run_detail %}
+      {% if state != "Ready" && state != "Completed" && state != "Cancelled" %}
+        <span
+          hidden
+          data-app-context-status-source
+          data-state="{{ state }}"
+          {% if review_href != "" %}data-href="{{ review_href }}"{% endif %}
+          >{{ state }}</span
+        >
+      {% endif %}
       <div class="page-intro">
         <div>
           <h1 class="font-heading text-2xl font-semibold tracking-[-0.03em]">

@@ -7,7 +7,7 @@ mod tests;
 
 use axum::{
     Form, Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     response::Response,
     routing::{get, post},
 };
@@ -27,7 +27,7 @@ use crate::{
 };
 
 use self::{
-    forms::{GrantForm, NewProjectQuery, ProjectForm, REVISION_MESSAGE},
+    forms::{GrantForm, ProjectForm, REVISION_MESSAGE},
     page::{CatalogueView, DetailView, ProjectFormView},
 };
 
@@ -82,13 +82,8 @@ async fn new_project(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: PageGraft,
-    Query(query): Query<NewProjectQuery>,
 ) -> AppResult<Response> {
-    let view = if query.is_manual() {
-        ProjectFormView::manual("", "", "")
-    } else {
-        ProjectFormView::initial("")
-    };
+    let view = ProjectFormView::create("", "", "");
     render_form_page(&state, graft.into(), PatchStatus::Ok, page::NEW_TITLE, view)
 }
 
@@ -104,25 +99,29 @@ async fn choose_folder(
             graft,
             PatchStatus::Conflict,
             page::NEW_TITLE,
-            draft_form(&form, forms::CHOOSER_BUSY),
+            create_form(&form, forms::CHOOSER_BUSY),
         ),
         FolderPick::Cancelled => render_form_command(
             &state,
             graft,
             PatchStatus::Ok,
             page::NEW_TITLE,
-            draft_form(&form, ""),
+            create_form(&form, ""),
         ),
         FolderPick::Selected(path) => match submitted_host_path(&path) {
             Ok(path) => {
-                let name = derived_project_name(&path);
+                let name = if form.name.is_empty() {
+                    derived_project_name(&path)
+                } else {
+                    form.name.clone()
+                };
                 let presented = path.to_string_lossy().into_owned();
                 render_form_command(
                     &state,
                     graft,
                     PatchStatus::Ok,
                     page::NEW_TITLE,
-                    ProjectFormView::selected(&name, &presented, ""),
+                    ProjectFormView::create(&name, &presented, ""),
                 )
             }
             Err(error) => render_form_command(
@@ -130,7 +129,7 @@ async fn choose_folder(
                 graft,
                 status_for(error),
                 page::NEW_TITLE,
-                draft_form(&form, error.message()),
+                create_form(&form, error.message()),
             ),
         },
     }
@@ -148,7 +147,7 @@ async fn create(
             graft,
             PatchStatus::Conflict,
             page::NEW_TITLE,
-            create_error_form(&form, HOST_PATH_RESET_PENDING),
+            create_form(&form, HOST_PATH_RESET_PENDING),
         );
     };
     let name = match form.submitted_name() {
@@ -159,7 +158,7 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                create_error_form(&form, error.message()),
+                create_form(&form, error.message()),
             );
         }
     };
@@ -171,7 +170,7 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                create_error_form(&form, error.message()),
+                create_form(&form, error.message()),
             );
         }
     };
@@ -188,7 +187,7 @@ async fn create(
             graft,
             status_for(error),
             page::NEW_TITLE,
-            create_error_form(&form, error.message()),
+            create_form(&form, error.message()),
         ),
     }
 }
@@ -439,13 +438,7 @@ async fn update_configuration(
         }
     };
     match state.projects.update_name(&record.id, revision, name) {
-        Ok(updated) => render_form_command(
-            &state,
-            graft,
-            PatchStatus::Ok,
-            page::CONFIG_TITLE,
-            ProjectFormView::edit(&updated, &updated.name, ""),
-        ),
+        Ok(_) => Ok(responses::command_navigation("/projects")),
         Err(error) => render_configuration_error(&state, graft, record, form.name, error),
     }
 }
@@ -569,7 +562,11 @@ fn render_catalogue(
     session: crate::sessions::SessionId,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    let view = CatalogueView::from_records(&ordered_projects(state, session));
+    let projects = ordered_projects(state, session);
+    if projects.is_empty() {
+        return Ok(responses::request_navigation(graft, "/projects/new"));
+    }
+    let view = CatalogueView::from_records(&projects);
     match graft {
         PageGraft::Document => {
             let mut response = responses::chat_page_response(page::INDEX_TITLE, state, &view)?;
@@ -620,22 +617,8 @@ fn render_form_command(
     )?)
 }
 
-fn create_error_form(form: &ProjectForm, error: &'static str) -> ProjectFormView {
-    if form.is_manual() {
-        ProjectFormView::manual(&form.name, &form.path, error)
-    } else {
-        ProjectFormView::selected(&form.name, &form.path, error)
-    }
-}
-
-fn draft_form(form: &ProjectForm, error: &'static str) -> ProjectFormView {
-    if form.is_manual() {
-        ProjectFormView::manual(&form.name, &form.path, error)
-    } else if !form.path.is_empty() {
-        ProjectFormView::selected(&form.name, &form.path, error)
-    } else {
-        ProjectFormView::initial(error)
-    }
+fn create_form(form: &ProjectForm, error: &'static str) -> ProjectFormView {
+    ProjectFormView::create(&form.name, &form.path, error)
 }
 
 fn derived_project_name(path: &std::path::Path) -> String {

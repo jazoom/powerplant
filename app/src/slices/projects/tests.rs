@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use crate::{
     agents::{AccessMode, AgentDraft, AgentError, DirectoryGrant, ToolId},
     config::RuntimeConfig,
-    projects::ProjectError,
+    projects::{ProjectError, ProjectRecord},
     providers::{ProviderConnection, ProviderKind},
     sessions,
     state::AppState,
@@ -65,6 +65,16 @@ fn git_worktree() -> tempfile::TempDir {
     dir
 }
 
+fn create_project(state: &AppState, name: &str) -> ProjectRecord {
+    let dir = git_worktree();
+    let record = state
+        .projects
+        .create(name.to_owned(), dir.path().to_path_buf())
+        .expect("project");
+    state.keep_temp_dir(dir);
+    record
+}
+
 fn encoded_path(dir: &tempfile::TempDir) -> String {
     dir.path()
         .canonicalize()
@@ -79,9 +89,31 @@ async fn body_text(response: axum::http::Response<Body>) -> String {
 }
 
 #[tokio::test]
+async fn an_empty_catalogue_document_redirects_to_new_project() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("catalogue");
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "/projects/new"
+    );
+}
+
+#[tokio::test]
 async fn a_catalogue_document_uses_chat_main() {
     let state = test_state();
     let token = connected(&state);
+    let record = create_project(&state, "Desk");
     let response = app(&state)
         .oneshot(
             Request::builder()
@@ -97,6 +129,10 @@ async fn a_catalogue_document_uses_chat_main() {
     assert!(text.contains("<!doctype html>"));
     assert_eq!(text.matches("id=\"chat-main\"").count(), 1);
     assert!(text.contains("href=\"/projects/new\""));
+    assert!(text.contains(&format!(
+        "href=\"/projects/{}/configuration\"",
+        record.id.as_hex()
+    )));
     assert!(text.contains("data-graft"));
 }
 
@@ -104,6 +140,7 @@ async fn a_catalogue_document_uses_chat_main() {
 async fn a_chat_document_enhances_provider_navigation() {
     let state = test_state();
     let token = connected(&state);
+    create_project(&state, "Desk");
     let response = app(&state)
         .oneshot(
             Request::builder()
@@ -129,9 +166,31 @@ async fn a_chat_document_enhances_provider_navigation() {
 }
 
 #[tokio::test]
+async fn an_empty_catalogue_navigation_redirects_to_new_project() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/projects")
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "navigation")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("navigation");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("navigate=\"/projects/new\""));
+}
+
+#[tokio::test]
 async fn a_catalogue_navigation_patches_chat_main() {
     let state = test_state();
     let token = connected(&state);
+    create_project(&state, "Desk");
     let response = app(&state)
         .oneshot(
             Request::builder()
@@ -461,10 +520,6 @@ async fn detail_shows_name_path_and_availability() {
     assert!(text.contains("Desk"));
     assert!(text.contains(&record.host_path.to_string_lossy().into_owned()));
     assert!(text.contains("Available"));
-    assert!(text.contains(&format!(
-        "href=\"/projects/{}/configuration\"",
-        record.id.as_hex()
-    )));
 }
 
 #[tokio::test]
@@ -572,6 +627,7 @@ async fn rename_ignores_a_submitted_path_and_updates_the_name() {
         .await
         .expect("rename");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(body_text(response).await.contains("navigate=\"/projects\""));
     let updated = state.projects.get(&record.id).expect("updated");
     assert_eq!(updated.name, "Later");
     assert_eq!(updated.host_path, original);
@@ -1525,7 +1581,7 @@ fn named_git_worktree(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[tokio::test]
-async fn new_project_defaults_to_the_folder_chooser() {
+async fn new_project_combines_folder_selection_and_manual_entry() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
@@ -1539,50 +1595,12 @@ async fn new_project_defaults_to_the_folder_chooser() {
         .await
         .expect("new project");
     let text = body_text(response).await;
-    assert!(text.contains("Choose project folder"));
-    assert!(text.contains("action=\"/projects/folder\""));
-    assert!(text.contains("href=\"/projects/new?entry=manual\""));
-    assert!(text.contains("Enter path manually"));
-    assert!(!text.contains("Add project"));
-    assert!(!text.contains("Git project path"));
-}
-
-#[tokio::test]
-async fn new_project_manual_entry_uses_the_canonical_query() {
-    let state = test_state();
-    let token = connected(&state);
-    let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .uri("/projects/new?entry=manual")
-                .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("manual");
-    let text = body_text(response).await;
     assert!(text.contains("Git project folder"));
-    assert!(text.contains("/home/me/projects/my-app"));
+    assert!(text.contains("name=\"path\""));
+    assert!(text.contains("formaction=\"/projects/folder\""));
+    assert!(text.contains("Choose folder"));
     assert!(text.contains("Add project"));
-    assert!(!text.contains("action=\"/projects/folder\""));
-}
-
-#[tokio::test]
-async fn new_project_rejects_an_unknown_entry_query() {
-    let state = test_state();
-    let token = connected(&state);
-    let response = app(&state)
-        .oneshot(
-            Request::builder()
-                .uri("/projects/new?entry=selected")
-                .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("unknown entry");
-    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert!(!text.contains("entry=manual"));
 }
 
 #[tokio::test]
@@ -1610,9 +1628,13 @@ async fn folder_selection_fills_the_form_without_creating_a_project() {
     let text = body_text(response).await;
     assert!(text.contains("target=\"project-form\""));
     assert!(text.contains("value=\"my-app\""));
-    assert!(text.contains(&path.to_string_lossy().into_owned()));
+    assert!(text.contains(&format!(
+        "value=\"{}\"",
+        path.to_string_lossy().into_owned()
+    )));
     assert!(text.contains("Add project"));
-    assert!(text.contains("Choose another folder"));
+    assert!(text.contains("Choose folder"));
+    assert!(text.contains("name=\"path\""));
     assert!(state.projects.list().is_empty());
 }
 
@@ -1727,7 +1749,7 @@ async fn folder_validation_returns_project_error_copy_without_creating() {
     let text = body_text(response).await;
     assert!(text.contains("target=\"project-form\""));
     assert!(text.contains(ProjectError::Worktree.message()));
-    assert!(text.contains("Choose project folder"));
+    assert!(text.contains("Choose folder"));
     assert!(state.projects.list().is_empty());
 }
 
@@ -1818,9 +1840,7 @@ async fn create_rejects_a_forged_path_after_folder_selection() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-                .body(Body::from(format!(
-                    "name=Desk&path={encoded}&entry=selected"
-                )))
+                .body(Body::from(format!("name=Desk&path={encoded}")))
                 .unwrap(),
         )
         .await

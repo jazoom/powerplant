@@ -51,7 +51,6 @@ pub(super) struct GrantCandidate {
 #[template(path = "projects/templates/detail.html")]
 pub(super) struct DetailView {
     pub(super) document_title: String,
-    pub(super) id: String,
     pub(super) name: String,
     pub(super) path: String,
     pub(super) available: bool,
@@ -84,7 +83,6 @@ impl DetailView {
     ) -> Self {
         Self {
             document_title: format!("{} | Power Plant", record.name),
-            id: record.id.as_hex(),
             name: record.name.clone(),
             path: record.host_path.to_string_lossy().into_owned(),
             available: record.host_path_is_available(),
@@ -115,23 +113,13 @@ impl DetailView {
 
 #[derive(Clone, Copy)]
 pub(super) enum ProjectFormMode {
-    Initial,
-    Selected,
-    Manual,
+    Create,
     Edit,
 }
 
 impl ProjectFormMode {
-    pub(super) fn is_initial(self) -> bool {
-        matches!(self, Self::Initial)
-    }
-
-    pub(super) fn is_selected(self) -> bool {
-        matches!(self, Self::Selected)
-    }
-
-    pub(super) fn is_manual(self) -> bool {
-        matches!(self, Self::Manual)
+    pub(super) fn is_create(self) -> bool {
+        matches!(self, Self::Create)
     }
 }
 
@@ -164,31 +152,19 @@ pub(super) struct ProjectFormContents<'a> {
 }
 
 impl ProjectFormView {
-    pub(super) fn initial(error: &'static str) -> Self {
-        Self::create_state(
-            ProjectFormMode::Initial,
-            String::new(),
-            String::new(),
+    pub(super) fn create(name: &str, path: &str, error: &'static str) -> Self {
+        Self {
+            title: "New project",
+            lead: "Add an existing Git project from this machine.",
+            mode: ProjectFormMode::Create,
+            action: "/projects".to_owned(),
+            submit: "Add project",
+            name: name.to_owned(),
+            path: path.to_owned(),
+            host_path: String::new(),
+            revision: String::new(),
             error,
-        )
-    }
-
-    pub(super) fn selected(name: &str, path: &str, error: &'static str) -> Self {
-        Self::create_state(
-            ProjectFormMode::Selected,
-            name.to_owned(),
-            path.to_owned(),
-            error,
-        )
-    }
-
-    pub(super) fn manual(name: &str, path: &str, error: &'static str) -> Self {
-        Self::create_state(
-            ProjectFormMode::Manual,
-            name.to_owned(),
-            path.to_owned(),
-            error,
-        )
+        }
     }
 
     pub(super) fn edit(record: &ProjectRecord, name: &str, error: &'static str) -> Self {
@@ -202,26 +178,6 @@ impl ProjectFormView {
             path: String::new(),
             host_path: record.host_path.to_string_lossy().into_owned(),
             revision: record.revision.to_string(),
-            error,
-        }
-    }
-
-    fn create_state(
-        mode: ProjectFormMode,
-        name: String,
-        path: String,
-        error: &'static str,
-    ) -> Self {
-        Self {
-            title: "New project",
-            lead: "Add an existing Git project from this machine. Power Plant does not create or clone repositories.",
-            mode,
-            action: "/projects".to_owned(),
-            submit: "Add project",
-            name,
-            path,
-            host_path: String::new(),
-            revision: String::new(),
             error,
         }
     }

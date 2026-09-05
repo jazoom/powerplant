@@ -11,33 +11,12 @@ pub(super) const AGENT_MESSAGE: &str = "That agent does not exist.";
 pub(super) const ACCESS_MESSAGE: &str = "Choose read-only or read-write access.";
 pub(super) const CHOOSER_BUSY: &str = "Another project folder chooser is open.";
 
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct NewProjectQuery {
-    #[serde(default)]
-    entry: Option<NewProjectEntry>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum NewProjectEntry {
-    Manual,
-}
-
-impl NewProjectQuery {
-    pub(super) fn is_manual(&self) -> bool {
-        matches!(self.entry, Some(NewProjectEntry::Manual))
-    }
-}
-
 #[derive(Deserialize)]
 pub(super) struct ProjectForm {
     #[serde(default)]
     pub(super) name: String,
     #[serde(default)]
     pub(super) path: String,
-    #[serde(default)]
-    pub(super) entry: String,
     #[serde(default)]
     pub(super) revision: String,
 }
@@ -49,10 +28,6 @@ impl ProjectForm {
 
     pub(super) fn submitted_path(&self) -> Result<PathBuf, ProjectError> {
         submitted_host_path(Path::new(&self.path))
-    }
-
-    pub(super) fn is_manual(&self) -> bool {
-        self.entry == "manual"
     }
 
     pub(super) fn revision(&self) -> Result<u32, &'static str> {

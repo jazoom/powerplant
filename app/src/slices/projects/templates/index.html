@@ -7,54 +7,39 @@
       <h1>Projects</h1>
       <p>Add an existing Git project from this machine.</p>
     </div>
-    {% if !projects.is_empty() %}
-      <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
-        >New project</a
-      >
-    {% endif %}
+    <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
+      >New project</a
+    >
   </div>
 
-  {% if projects.is_empty() %}
-    <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">Create your first project</h2>
-      <p class="text-quiet max-w-[60ch]">
-        Choose an existing Git project folder. You cannot change its folder
-        after you add it.
-      </p>
-      <a href="/projects/new" data-graft class="btn btn-primary btn-sm"
-        >Create the first project</a
-      >
-    </section>
-  {% else %}
-    <ul class="record-list">
-      {% for project in projects %}
-        <li class="record-row">
-          <div>
-            <a
-              href="/projects/{{ project.id }}"
-              data-graft
-              class="link link-hover font-medium"
-              >{{ project.name }}</a
-            >
-            <p class="text-quiet font-mono text-xs break-all">
-              {{ project.path }}
-            </p>
-          </div>
-          <div class="flex flex-col items-end gap-1 text-right">
-            {% if project.available %}
-              <span class="badge badge-sm badge-success">Available</span>
-            {% else %}
-              <span class="badge badge-sm badge-warning">Unavailable</span>
-            {% endif %}
-            <a
-              href="/projects/{{ project.id }}/configuration"
-              data-graft
-              class="btn btn-ghost btn-sm"
-              >Rename</a
-            >
-          </div>
-        </li>
-      {% endfor %}
-    </ul>
-  {% endif %}
+  <ul class="record-list">
+    {% for project in projects %}
+      <li class="record-row">
+        <div>
+          <a
+            href="/projects/{{ project.id }}"
+            data-graft
+            class="link link-hover font-medium"
+            >{{ project.name }}</a
+          >
+          <p class="text-quiet font-mono text-xs break-all">
+            {{ project.path }}
+          </p>
+        </div>
+        <div class="flex flex-col items-end gap-1 text-right">
+          {% if project.available %}
+            <span class="badge badge-sm badge-success">Available</span>
+          {% else %}
+            <span class="badge badge-sm badge-warning">Unavailable</span>
+          {% endif %}
+          <a
+            href="/projects/{{ project.id }}/configuration"
+            data-graft
+            class="btn btn-ghost btn-sm"
+            >Rename</a
+          >
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
 </main>

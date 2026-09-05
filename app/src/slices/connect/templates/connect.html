@@ -90,9 +90,6 @@
             <section id="connect-plan" class="space-y-4 py-6">
               <div>
                 <h2 class="font-semibold">Connect with a plan</h2>
-                <p class="text-quiet mt-1 text-sm">
-                  Sign in with a supported plan. You do not need an API key.
-                </p>
               </div>
               {% if let Some(pending) = pending %}
                 <div
@@ -108,7 +105,10 @@
                       <p>{{ message }}</p>
                     </div>
                   {% else %}
-                    <p>Open the provider link and enter this code.</p>
+                    <p>
+                      Open the provider link and enter this code. This page will
+                      update automatically when sign-in is complete.
+                    </p>
                     <p>
                       <a
                         href="{{ pending.verification_uri }}"
@@ -177,9 +177,6 @@
             >
               <div>
                 <h2 class="font-semibold">Connect with an API key</h2>
-                <p class="text-quiet mt-1 text-sm">
-                  Choose the provider that issued your API key.
-                </p>
               </div>
               <fieldset
                 id="connect-provider"
