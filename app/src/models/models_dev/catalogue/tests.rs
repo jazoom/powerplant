@@ -6,11 +6,12 @@ const BUNDLED: &[u8] = include_bytes!("../../../../catalogue/models-dev-v1.json"
 fn canonical_validation_rejects_unknown_fields_and_order_changes() {
     let value: serde_json::Value = serde_json::from_slice(BUNDLED).expect("catalogue");
     let mut unknown = value.clone();
-    unknown["providers"][0]["unexpected"] = serde_json::Value::Bool(true);
+    unknown["providers"][0]["models"][0]["agent_compatible"] = serde_json::Value::Bool(true);
+    let unknown = serde_json::to_vec(&unknown).expect("unknown");
+    assert!(parse_snapshot(&unknown).is_err());
     assert_eq!(
-        validate_canonical_catalogue(&serde_json::to_vec(&unknown).expect("unknown"))
-            .expect_err("unknown field"),
-        "The checked-in catalogue is not canonical."
+        validate_canonical_catalogue(&unknown).expect_err("unknown field"),
+        "The checked-in catalogue is invalid."
     );
 
     let mut reordered = value;

@@ -25,6 +25,13 @@ pub(crate) enum RefreshResult {
     Skipped,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RefreshPolicy {
+    IfDue,
+    OnStart,
+    Force,
+}
+
 pub(crate) struct ModelsDevCatalogue {
     path: Option<PathBuf>,
     active: RwLock<Snapshot>,
@@ -51,7 +58,7 @@ impl ModelsDevCatalogue {
         );
         let active = match crate::storage::read_private_bounded(&path, MAXIMUM_CACHE_BYTES) {
             Ok(bytes) => match parse_snapshot(&bytes) {
-                Ok(snapshot) => {
+                Ok(snapshot) if local_is_newer(&bundled, &snapshot) => {
                     tracing::info!(
                         source = "local",
                         model_count = model_count(&snapshot),
@@ -59,6 +66,7 @@ impl ModelsDevCatalogue {
                     );
                     snapshot
                 }
+                Ok(_) => bundled,
                 Err(()) => {
                     tracing::warn!(
                         source = "local",
@@ -182,18 +190,24 @@ impl ModelsDevCatalogue {
     }
 
     pub(crate) async fn refresh_if_due(&self) -> bool {
-        self.refresh(false).await == RefreshResult::Updated
+        self.refresh(RefreshPolicy::IfDue).await == RefreshResult::Updated
+    }
+
+    async fn refresh_on_start(&self) {
+        self.refresh(RefreshPolicy::OnStart).await;
     }
 
     pub(crate) async fn refresh_now(&self) -> RefreshResult {
-        self.refresh(true).await
+        self.refresh(RefreshPolicy::Force).await
     }
 
-    async fn refresh(&self, force: bool) -> RefreshResult {
+    async fn refresh(&self, policy: RefreshPolicy) -> RefreshResult {
         let _guard = self.refresh.lock().await;
         let now = unix_seconds();
         let previous = self.read().clone();
-        if !force && timestamp_is_recent(previous.last_attempt_at_unix_seconds, now) {
+        if policy == RefreshPolicy::IfDue
+            && timestamp_is_recent(previous.last_attempt_at_unix_seconds, now)
+        {
             tracing::debug!(source = "local", "model capability refresh skipped");
             return RefreshResult::Skipped;
         }
@@ -202,7 +216,7 @@ impl ModelsDevCatalogue {
             .client
             .get(SOURCE_URL)
             .header(reqwest::header::ACCEPT, "application/json");
-        if !force && !previous.source.etag.is_empty() {
+        if policy != RefreshPolicy::Force && !previous.source.etag.is_empty() {
             request = request.header(reqwest::header::IF_NONE_MATCH, &previous.source.etag);
         }
         let mut attempted = previous.clone();
@@ -287,9 +301,10 @@ impl ModelsDevCatalogue {
 }
 
 pub(crate) async fn refresh_worker(state: crate::state::AppState) {
+    state.models_dev.refresh_on_start().await;
     loop {
-        state.models_dev.refresh_if_due().await;
         tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+        state.models_dev.refresh_if_due().await;
     }
 }
 
@@ -304,6 +319,11 @@ fn model_metadata(model: &catalogue::Model) -> ModelMetadata {
 fn capabilities_differ(left: &Snapshot, right: &Snapshot) -> bool {
     serde_json::to_value(&left.providers).ok() != serde_json::to_value(&right.providers).ok()
 }
+
+fn local_is_newer(bundled: &Snapshot, local: &Snapshot) -> bool {
+    local.checked_at_unix_seconds > bundled.checked_at_unix_seconds
+}
+
 fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

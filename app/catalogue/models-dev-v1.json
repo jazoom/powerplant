@@ -6,8 +6,8 @@
         "sha256": "1b9b62bd4af44cbd12938610cedbcb3702f7be71e465af0d712aa8354a6cb5a4",
         "origin": "models.dev"
     },
-    "checked_at_unix_seconds": 0,
-    "last_attempt_at_unix_seconds": 0,
+    "checked_at_unix_seconds": 1788610391,
+    "last_attempt_at_unix_seconds": 1788610391,
     "providers": [
         {
             "id": "deepseek",

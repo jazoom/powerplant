@@ -23,6 +23,31 @@ fn bundled_snapshot_has_required_dynamic_efforts() {
 }
 
 #[test]
+fn bundled_snapshot_records_its_source_check() {
+    let snapshot = parse_snapshot(BUNDLED).expect("bundled snapshot");
+
+    assert!(snapshot.checked_at_unix_seconds > 0);
+    assert_eq!(
+        snapshot.last_attempt_at_unix_seconds,
+        snapshot.checked_at_unix_seconds
+    );
+}
+
+#[test]
+fn snapshot_selection_uses_the_latest_successful_check() {
+    let mut bundled = parse_snapshot(BUNDLED).expect("bundled snapshot");
+    let mut local = bundled.clone();
+    bundled.checked_at_unix_seconds = 20;
+    local.checked_at_unix_seconds = 21;
+
+    assert!(local_is_newer(&bundled, &local));
+
+    local.checked_at_unix_seconds = 19;
+    local.last_attempt_at_unix_seconds = 30;
+    assert!(!local_is_newer(&bundled, &local));
+}
+
+#[test]
 fn snapshot_rejects_duplicate_provider_identifiers() {
     let mut snapshot = parse_snapshot(BUNDLED).expect("bundled snapshot");
     snapshot.providers.push(snapshot.providers[0].clone());

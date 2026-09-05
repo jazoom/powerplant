@@ -22,6 +22,7 @@ const SOURCE_ORIGIN: &str = "models.dev";
 pub(super) const USER_AGENT: &str = "PowerPlant-model-catalogue/1";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Source {
     pub(super) url: String,
     pub(super) etag: String,
@@ -30,11 +31,13 @@ pub(super) struct Source {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ModelLimit {
     pub(super) context: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Model {
     pub(super) id: String,
     pub(super) reasoning: bool,
@@ -44,6 +47,7 @@ pub(super) struct Model {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Provider {
     pub(super) id: String,
     pub(super) models_dev_id: String,
@@ -51,6 +55,7 @@ pub(super) struct Provider {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Snapshot {
     pub(super) version: u32,
     pub(super) source: Source,
@@ -76,7 +81,12 @@ struct SourceModel {
     modalities: SourceModalities,
     #[serde(default)]
     status: Option<String>,
-    limit: ModelLimit,
+    limit: SourceLimit,
+}
+
+#[derive(Deserialize)]
+struct SourceLimit {
+    context: u64,
 }
 
 #[derive(Deserialize)]
@@ -158,7 +168,9 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
                 reasoning: model.reasoning,
                 efforts,
                 attachment: model.attachment,
-                limit: model.limit.clone(),
+                limit: ModelLimit {
+                    context: model.limit.context,
+                },
             });
         }
         if !models.iter().any(|model| model.id == kind.default_model()) {
@@ -461,7 +473,7 @@ async fn update_repository(
     let source_bytes = bounded_body(response, MAXIMUM_SOURCE_BYTES)
         .await
         .ok_or("The models.dev response exceeds the size limit.")?;
-    let snapshot = filter_source(&source_bytes, &etag, 0)
+    let snapshot = filter_source(&source_bytes, &etag, super::unix_seconds())
         .map_err(|()| "The models.dev response is invalid.")?;
     let mut output = serde_json::to_vec_pretty(&snapshot)?;
     output.push(b'\n');
