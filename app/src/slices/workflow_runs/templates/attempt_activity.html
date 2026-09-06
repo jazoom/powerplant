@@ -1,0 +1,71 @@
+<main
+  data-section="runs"
+  class="mx-auto w-full max-w-5xl flex-1 px-5 py-8 sm:px-8"
+>
+  <div class="page-intro">
+    <div>
+      <h1>Attempt activity</h1>
+      <p>{{ attempt }} · {{ status }}</p>
+    </div>
+    <a href="{{ run_href }}" data-graft class="btn btn-ghost btn-sm"
+      >Back to run</a
+    >
+  </div>
+  <section
+    class="file-section mt-6 space-y-4"
+    aria-labelledby="activity-heading"
+  >
+    <div>
+      <h2 id="activity-heading" class="text-lg font-semibold">Activity</h2>
+      <p class="text-quiet mt-1 text-sm">
+        Phase {{ phase }}. Events keep the worker phase identity. They do not
+        enter the conversation history.
+      </p>
+    </div>
+    {% if unavailable %}
+      <div class="alert alert-warning" role="status">
+        <p>
+          Activity evidence is unavailable. The run record remains available.
+        </p>
+      </div>
+    {% else %}
+      {% if activity_truncated %}
+        <div class="alert alert-warning" role="status">
+          <p>
+            Activity reached its retention bound. This list does not contain
+            every event.
+          </p>
+        </div>
+      {% endif %}
+      {% if events.is_empty() %}
+        <p class="text-quiet">No activity was retained for this attempt.</p>
+      {% else %}
+        <ol class="border-base-300 divide-y border-y">
+          {% for event in events %}
+            <li class="space-y-2 py-4">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <span class="font-mono text-xs">#{{ event.sequence }}</span>
+                <strong>{{ event.kind }}</strong>
+                <span class="text-quiet">Phase {{ event.phase }}</span>
+                {% if event.truncated %}<span
+                  class="badge badge-warning badge-sm"
+                  >Truncated</span
+                >{% endif %}
+              </div>
+              {% if event.label != "" %}<p class="font-mono text-xs">
+                {{ event.label }}
+              </p>{% endif %}
+              {% if event.text != "" %}<pre
+                class="bg-base-200 overflow-x-auto p-3 text-sm whitespace-pre-wrap"
+              >
+{{ event.text }}</pre>{% endif %}
+              {% if event.provider != "" %}<p class="text-quiet text-xs">
+                {{ event.provider }} · {{ event.input_tokens }} input tokens
+              </p>{% endif %}
+            </li>
+          {% endfor %}
+        </ol>
+      {% endif %}
+    {% endif %}
+  </section>
+</main>

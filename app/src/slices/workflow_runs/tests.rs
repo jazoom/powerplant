@@ -441,6 +441,91 @@ async fn context_routes_reject_cross_run_attempts_and_unsupported_patches() {
 }
 
 #[tokio::test]
+async fn evidence_routes_reject_cross_run_attempts_and_unsupported_patches() {
+    let state = test_state();
+    let token = connected(&state);
+    let run_id = stored_run(&state);
+    let other_run = stored_run(&state);
+    let attempt_id = crate::workflows::AttemptId::generate().expect("attempt");
+    state
+        .workflow_runs
+        .mutate(&run_id, |run| {
+            let sandbox = crate::workflows::run::AttemptSandboxRecord {
+                kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+                snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
+            };
+            run.start_attempt(
+                attempt_id,
+                vec![],
+                crate::tests::test_agent_capabilities(),
+                sandbox,
+                2,
+            )
+        })
+        .expect("attempt");
+    let phase = state.workflow_runs.get(&run_id).unwrap().attempts[0]
+        .step
+        .as_str()
+        .to_owned();
+    let evidence = crate::workflows::AttemptEvidenceContext::new(
+        state.workflow_evidence.clone(),
+        run_id,
+        attempt_id,
+        phase,
+    );
+    for _ in 0..crate::workflows::evidence::MAXIMUM_ACTIVITY_EVENTS {
+        evidence.response(&"<&'\"".repeat(64), None);
+    }
+    let mut reply = crate::providers::AssistantReply::from("<&'\"".repeat(16 * 1024));
+    reply.thinking = reply.text.clone();
+    reply.tools = vec![
+        crate::providers::ToolOutput {
+            label: reply.text.clone(),
+            output: reply.text.clone(),
+        };
+        8
+    ];
+    evidence.terminal(
+        crate::workflows::evidence::TerminalState::Completed,
+        &reply,
+        Some(&reply.text),
+        None,
+    );
+    for view in ["activity", "changes", "result"] {
+        for (owner, representation, status) in [
+            (run_id, None, 200),
+            (run_id, Some("navigation"), 200),
+            (run_id, Some("patch"), 400),
+            (other_run, None, 303),
+        ] {
+            let mut request = Request::builder()
+                .uri(format!(
+                    "/runs/{}/attempts/{}/{view}",
+                    owner.as_hex(),
+                    attempt_id.as_hex()
+                ))
+                .header(header::COOKIE, cookie(&token));
+            if let Some(representation) = representation {
+                request = request
+                    .header(hypergraft::GRAFT_REQUEST, representation)
+                    .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+            }
+            let response = app(&state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .expect("evidence response");
+            assert_eq!(response.status().as_u16(), status, "{view}");
+            if status == 303 {
+                assert_eq!(
+                    response.headers()[header::LOCATION],
+                    format!("/runs/{}", other_run.as_hex())
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn an_unknown_run_redirects_to_the_index() {
     let state = test_state();
     let token = connected(&state);

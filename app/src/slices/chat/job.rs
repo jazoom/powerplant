@@ -32,6 +32,7 @@ pub(crate) struct AgentRunSpec {
     pub(crate) output_drafts:
         Option<std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>>,
     pub(crate) required_outputs: Vec<crate::workflows::definition::RequiredOutput>,
+    pub(crate) evidence: Option<crate::workflows::AttemptEvidenceContext>,
 }
 
 pub(super) const MIN_PROGRESS_INTERVAL: Duration = if cfg!(test) {
@@ -156,6 +157,9 @@ pub(crate) async fn run_agent_action(
                 Ok(ModelEvent::Text(piece)) => {
                     thinking_progress.flush(&job, &reply.thinking);
                     let piece = response_redactor.push(&piece);
+                    if let Some(evidence) = &spec.evidence {
+                        evidence.response(&piece, secret);
+                    }
                     text.push_str(&piece);
                     let truncated =
                         append_model_piece(&mut reply.text, &piece, &mut model_reply_bytes);
@@ -183,6 +187,9 @@ pub(crate) async fn run_agent_action(
                 }
                 Ok(ModelEvent::Thinking(piece)) => {
                     let piece = thinking_redactor.push(&piece);
+                    if let Some(evidence) = &spec.evidence {
+                        evidence.thinking(&piece, secret);
+                    }
                     append_thinking_piece(&mut reply, &piece, &mut thinking_bytes);
                     thinking_progress.note_pending(&reply.thinking, Instant::now());
                 }
@@ -198,6 +205,9 @@ pub(crate) async fn run_agent_action(
                         input_tokens,
                     };
                     reply.usage = Some(usage.clone());
+                    if let Some(evidence) = &spec.evidence {
+                        evidence.usage(&usage);
+                    }
                     job.push_usage(usage);
                 }
                 Err(error) => {
@@ -222,12 +232,17 @@ pub(crate) async fn run_agent_action(
         }
 
         if calls.is_empty() {
-            let truncated = append_model_piece(
-                &mut reply.text,
-                &response_redactor.finish(),
-                &mut model_reply_bytes,
-            );
-            append_thinking_piece(&mut reply, &thinking_redactor.finish(), &mut thinking_bytes);
+            let response_tail = response_redactor.finish();
+            if let Some(evidence) = &spec.evidence {
+                evidence.response(&response_tail, secret);
+            }
+            let thinking_tail = thinking_redactor.finish();
+            if let Some(evidence) = &spec.evidence {
+                evidence.thinking(&thinking_tail, secret);
+            }
+            let truncated =
+                append_model_piece(&mut reply.text, &response_tail, &mut model_reply_bytes);
+            append_thinking_piece(&mut reply, &thinking_tail, &mut thinking_bytes);
             thinking_progress.flush(&job, &reply.thinking);
             publish_reply_remaining(
                 &job,
@@ -278,6 +293,15 @@ pub(crate) async fn run_agent_action(
                 return cancel_action(&job, &reply);
             }
             let output = tools::redact(&trace.output, secret);
+            if let Some(evidence) = &spec.evidence {
+                evidence.tool(
+                    &ToolOutput {
+                        label: trace.label.clone(),
+                        output: output.clone(),
+                    },
+                    secret,
+                );
+            }
             if let Some(visible) =
                 visible_tool_output(trace.label, &output, &mut visible_tool_bytes)
             {

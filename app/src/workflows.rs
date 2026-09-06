@@ -7,6 +7,7 @@ mod catalogue;
 pub(crate) mod commands;
 mod commit;
 pub(crate) mod definition;
+pub(crate) mod evidence;
 mod execution;
 mod executor;
 pub(crate) mod gates;
@@ -27,6 +28,7 @@ pub(crate) use catalogue::{
     definition_fits_agent,
 };
 pub(crate) use commit::CommitJournals;
+pub(crate) use evidence::{AttemptEvidenceContext, WorkflowEvidenceStore};
 pub(crate) use execution::{ExecutionGuard, WorkflowExecution};
 pub(crate) use executor::{
     WorkflowContinuationRegistry, WorkflowJob, execute_run, interrupt_provider_continuations,

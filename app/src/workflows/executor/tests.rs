@@ -154,6 +154,8 @@ async fn configured_dispatch_excludes_history_but_quick_tasks_keep_it() {
                 Ok(())
             })
             .expect("brief");
+        job.conversation_id =
+            Some(crate::conversations::ConversationId::generate().expect("conversation"));
         job.turns = vec![crate::providers::ChatTurn::user(
             "PRIVATE DISCUSSION".to_owned(),
         )];
@@ -194,6 +196,17 @@ async fn configured_dispatch_excludes_history_but_quick_tasks_keep_it() {
             && let StepOutcome::Failed { error, .. } = outcome
         {
             panic!("dispatch failed: {error:?}");
+        }
+        let evidence = state
+            .workflow_evidence
+            .get(&job.run_id, &attempt)
+            .expect("attempt evidence");
+        let terminal = evidence.terminal.expect("terminal response");
+        assert!(!terminal.text.is_empty());
+        if kind == crate::workflows::RunKind::Configured {
+            assert!(job.job.snapshot().output.text.is_empty());
+        } else {
+            assert_eq!(job.job.snapshot().output.text, terminal.text);
         }
         let preamble = backend.last_preamble().expect("provider request");
         let snapshot = state

@@ -51,6 +51,71 @@ pub(super) struct AttemptView {
     pub(super) reports: Vec<StepArtefactView>,
     pub(super) route: String,
     pub(super) context_href: String,
+    pub(super) activity_href: String,
+    pub(super) changes_href: String,
+    pub(super) result_href: String,
+    pub(super) evidence_state: &'static str,
+}
+
+pub(super) struct AttemptActivityItem {
+    pub(super) sequence: u64,
+    pub(super) phase: String,
+    pub(super) kind: &'static str,
+    pub(super) text: String,
+    pub(super) label: String,
+    pub(super) provider: String,
+    pub(super) input_tokens: String,
+    pub(super) truncated: bool,
+}
+
+#[derive(Template)]
+#[template(path = "workflow_runs/templates/attempt_activity.html")]
+pub(super) struct AttemptActivityView {
+    pub(super) run_href: String,
+    pub(super) attempt: String,
+    pub(super) phase: String,
+    pub(super) status: String,
+    pub(super) unavailable: bool,
+    pub(super) activity_truncated: bool,
+    pub(super) events: Vec<AttemptActivityItem>,
+}
+
+pub(super) struct AttemptToolView {
+    pub(super) label: String,
+    pub(super) output: String,
+    pub(super) truncated: bool,
+}
+
+#[derive(Template)]
+#[template(path = "workflow_runs/templates/attempt_result.html")]
+pub(super) struct AttemptResultView {
+    pub(super) run_href: String,
+    pub(super) attempt: String,
+    pub(super) phase: String,
+    pub(super) status: String,
+    pub(super) unavailable: bool,
+    pub(super) text: String,
+    pub(super) response_html: String,
+    pub(super) thinking: String,
+    pub(super) error: String,
+    pub(super) truncated: bool,
+    pub(super) tools: Vec<AttemptToolView>,
+}
+
+pub(super) struct AttemptChangeView {
+    pub(super) href: String,
+    pub(super) kind: String,
+    pub(super) hash: String,
+    pub(super) preview: String,
+    pub(super) truncated: bool,
+}
+
+#[derive(Template)]
+#[template(path = "workflow_runs/templates/attempt_changes.html")]
+pub(super) struct AttemptChangesView {
+    pub(super) run_href: String,
+    pub(super) attempt: String,
+    pub(super) changes: Vec<AttemptChangeView>,
 }
 
 pub(super) struct StepArtefactView {
@@ -190,6 +255,7 @@ impl RunDetailView {
         workflows: &WorkflowCatalogue,
         environments: &EnvironmentCatalogue,
         projects: &ProjectStore,
+        evidence: &crate::workflows::WorkflowEvidenceStore,
     ) -> Self {
         let (name_href, catalogue_note) = catalogue_presentation(run, workflows);
         let (project_href, project_name) = project_presentation(run.project_id, projects);
@@ -361,6 +427,26 @@ impl RunDetailView {
                     } else {
                         String::new()
                     },
+                    activity_href: format!(
+                        "/runs/{}/attempts/{}/activity",
+                        run.id.as_hex(),
+                        attempt.id.as_hex()
+                    ),
+                    changes_href: format!(
+                        "/runs/{}/attempts/{}/changes",
+                        run.id.as_hex(),
+                        attempt.id.as_hex()
+                    ),
+                    result_href: format!(
+                        "/runs/{}/attempts/{}/result",
+                        run.id.as_hex(),
+                        attempt.id.as_hex()
+                    ),
+                    evidence_state: if evidence.get(&run.id, &attempt.id).is_some() {
+                        "Available"
+                    } else {
+                        "Unavailable"
+                    },
                 })
                 .collect(),
             artefacts: artefact_rows(run),
@@ -480,6 +566,137 @@ pub(super) fn initial_context_view(
         estimated_total_tokens: packet.budget.estimated_total_tokens.to_string(),
         model_capacity: packet.budget.capacity_label(),
     })
+}
+
+pub(super) fn attempt_activity_view(
+    run: &WorkflowRun,
+    attempt: &crate::workflows::run::AttemptRecord,
+    evidence: Option<crate::workflows::evidence::AttemptEvidence>,
+) -> AttemptActivityView {
+    let run_href = format!("/runs/{}", run.id.as_hex());
+    let attempt_label = format!("Attempt {} · {}", attempt.ordinal, attempt.step.as_str());
+    let Some(evidence) = evidence else {
+        return AttemptActivityView {
+            run_href,
+            attempt: attempt_label,
+            phase: attempt.step.as_str().to_owned(),
+            status: attempt.state.as_label().to_owned(),
+            unavailable: true,
+            activity_truncated: false,
+            events: Vec::new(),
+        };
+    };
+    AttemptActivityView {
+        run_href,
+        attempt: attempt_label,
+        phase: evidence.phase,
+        status: attempt.state.as_label().to_owned(),
+        unavailable: false,
+        activity_truncated: evidence.activity_truncated,
+        events: evidence
+            .events
+            .into_iter()
+            .map(|event| AttemptActivityItem {
+                sequence: event.sequence,
+                phase: event.phase,
+                kind: event.kind.label(),
+                text: event.text,
+                label: event.label,
+                provider: event.provider.unwrap_or_default(),
+                input_tokens: event
+                    .input_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_default(),
+                truncated: event.truncated,
+            })
+            .collect(),
+    }
+}
+
+pub(super) fn attempt_result_view(
+    run: &WorkflowRun,
+    attempt: &crate::workflows::run::AttemptRecord,
+    evidence: Option<crate::workflows::evidence::AttemptEvidence>,
+) -> AttemptResultView {
+    let run_href = format!("/runs/{}", run.id.as_hex());
+    let attempt_label = format!("Attempt {} · {}", attempt.ordinal, attempt.step.as_str());
+    let Some(terminal) = evidence.and_then(|evidence| evidence.terminal) else {
+        return AttemptResultView {
+            run_href,
+            attempt: attempt_label,
+            phase: attempt.step.as_str().to_owned(),
+            status: attempt.state.as_label().to_owned(),
+            unavailable: true,
+            text: String::new(),
+            response_html: String::new(),
+            thinking: String::new(),
+            error: String::new(),
+            truncated: false,
+            tools: Vec::new(),
+        };
+    };
+    AttemptResultView {
+        run_href,
+        attempt: attempt_label,
+        phase: terminal.phase,
+        status: format!(
+            "{} · Response {}",
+            attempt.state.as_label(),
+            terminal.state.label()
+        ),
+        unavailable: false,
+        response_html: crate::markdown::render(&terminal.text),
+        text: terminal.text,
+        thinking: terminal.thinking,
+        error: terminal.error.unwrap_or_default(),
+        truncated: terminal.truncated,
+        tools: terminal
+            .tools
+            .into_iter()
+            .map(|tool| AttemptToolView {
+                label: tool.label,
+                output: tool.output,
+                truncated: tool.truncated,
+            })
+            .collect(),
+    }
+}
+
+pub(super) fn attempt_changes_view(
+    run: &WorkflowRun,
+    attempt: &crate::workflows::run::AttemptRecord,
+    state: &crate::state::AppState,
+) -> AttemptChangesView {
+    let changes = attempt
+        .outputs
+        .iter()
+        .filter(|output| {
+            output.artefact.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+        })
+        .filter_map(|output| {
+            let record = run.artefact(&output.artefact.id)?;
+            let (preview, truncated) = candidate_preview(run, record, state);
+            Some(AttemptChangeView {
+                href: format!(
+                    "/runs/{}/artefacts/{}",
+                    run.id.as_hex(),
+                    output.artefact.id.as_hex()
+                ),
+                kind: output.artefact.kind.as_str().to_owned(),
+                hash: record
+                    .candidate_hash()
+                    .map(|hash| hash.short())
+                    .unwrap_or_default(),
+                preview,
+                truncated,
+            })
+        })
+        .collect();
+    AttemptChangesView {
+        run_href: format!("/runs/{}", run.id.as_hex()),
+        attempt: format!("Attempt {} · {}", attempt.ordinal, attempt.step.as_str()),
+        changes,
+    }
 }
 
 fn phase_model_label(

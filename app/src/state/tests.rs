@@ -42,6 +42,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(WorkflowCatalogue::in_memory()),
         workflow_runs: Arc::new(WorkflowRunStore::in_memory()),
+        workflow_evidence: Arc::new(crate::workflows::evidence::WorkflowEvidenceStore::in_memory()),
         workflow_artefacts,
         workflow_execution: Arc::new(WorkflowExecution::new()),
         gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),

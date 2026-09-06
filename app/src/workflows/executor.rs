@@ -590,6 +590,7 @@ pub(crate) async fn execute_run(
                 captured,
             } => (outcome, cleanup, drafts, captured),
         };
+        record_missing_terminal_evidence(&state, &job, &step, attempt_id, &outcome);
         let recovery_pending = state.workflow_runs.get(&job.run_id).is_some_and(|run| {
             run.attempts
                 .iter()
@@ -1891,6 +1892,12 @@ async fn run_agent_step(
             error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
         };
     }
+    let evidence = crate::workflows::AttemptEvidenceContext::new(
+        state.workflow_evidence.clone(),
+        run.id,
+        attempt_id,
+        step_key.as_str(),
+    );
     let spec = AgentRunSpec {
         agent_id: job.authority.is_none().then_some(job.agent_id),
         revision: 0,
@@ -1902,9 +1909,22 @@ async fn run_agent_step(
         sandbox: sandbox.clone(),
         output_drafts: Some(drafts),
         required_outputs: action.required_outputs.clone(),
+        evidence: Some(evidence.clone()),
     };
+    // Conversation workflow output belongs to attempt evidence, not the conversation reply.
+    if job.conversation_id.is_some() && run.kind == super::run::RunKind::Configured {
+        job.job.set_output_visible(false);
+    }
     let turns = packet.request_messages();
     let ended = crate::slices::run_agent_action(state, spec, turns, job.job.clone()).await;
+    let terminal_state = match ended.outcome {
+        AgentOutcome::Completed => crate::workflows::evidence::TerminalState::Completed,
+        AgentOutcome::ProviderFailure | AgentOutcome::ToolFailure => {
+            crate::workflows::evidence::TerminalState::Failed
+        }
+        AgentOutcome::Cancelled => crate::workflows::evidence::TerminalState::Cancelled,
+    };
+    evidence.terminal(terminal_state, &ended.reply, ended.error.as_deref(), secret);
     if ended.outcome == AgentOutcome::Completed {
         *job.eligible_reply
             .lock()
@@ -1921,6 +1941,53 @@ async fn run_agent_step(
             error: ended.error,
         },
         AgentOutcome::Cancelled => StepOutcome::Cancelled,
+    }
+}
+
+fn record_missing_terminal_evidence(
+    state: &AppState,
+    job: &WorkflowJob,
+    step: &StepDefinition,
+    attempt_id: AttemptId,
+    outcome: &StepOutcome,
+) {
+    if state
+        .workflow_evidence
+        .get(&job.run_id, &attempt_id)
+        .is_some_and(|evidence| evidence.terminal.is_some())
+    {
+        return;
+    }
+    let evidence = crate::workflows::AttemptEvidenceContext::new(
+        state.workflow_evidence.clone(),
+        job.run_id,
+        attempt_id,
+        step.key.as_str(),
+    );
+    let (terminal_state, error) = terminal_for_outcome(outcome);
+    let connection = job.active_connection();
+    let secret = match &connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
+        crate::providers::AuthMethod::Plan => None,
+    };
+    evidence.terminal(
+        terminal_state,
+        &crate::providers::AssistantReply::default(),
+        error,
+        secret,
+    );
+}
+
+fn terminal_for_outcome(
+    outcome: &StepOutcome,
+) -> (crate::workflows::evidence::TerminalState, Option<&str>) {
+    match outcome {
+        StepOutcome::Completed => (crate::workflows::evidence::TerminalState::Completed, None),
+        StepOutcome::Failed { error, .. } => (
+            crate::workflows::evidence::TerminalState::Failed,
+            error.as_deref(),
+        ),
+        StepOutcome::Cancelled => (crate::workflows::evidence::TerminalState::Cancelled, None),
     }
 }
 
@@ -3076,6 +3143,11 @@ fn settle_with_reply(
     reply: &crate::providers::AssistantReply,
 ) {
     let reply = crate::slices::bound_reply(reply);
+    let conversation_reply = state
+        .workflow_runs
+        .get(&workflow.run_id)
+        .filter(|run| run.kind == super::run::RunKind::Configured)
+        .map(|_| conversation_run_result(workflow.run_id, status, &reply.text));
     if let Some(conversation_id) = workflow.conversation_id {
         let message_status = match status {
             JobStatus::Completed => crate::conversations::MessageStatus::Complete,
@@ -3087,7 +3159,7 @@ fn settle_with_reply(
         let _ = state.conversations.settle_message(
             &conversation_id,
             workflow.job.id(),
-            reply.text,
+            conversation_reply.unwrap_or(reply.text),
             message_status,
         );
         let _ = state.sessions.finish_conversation_job(
@@ -3114,6 +3186,34 @@ fn settle_with_reply(
         }
     }
     let _ = workflow.job.finish(status, error);
+}
+
+fn conversation_run_result(run_id: RunId, status: JobStatus, response: &str) -> String {
+    const MAXIMUM_CONCISE_RESULT_BYTES: usize = 2 * 1024;
+    let outcome = match status {
+        JobStatus::Completed => "completed",
+        JobStatus::Cancelled => "was cancelled",
+        JobStatus::Failed => "did not complete",
+        JobStatus::Running | JobStatus::AwaitingDecision => "is still active",
+    };
+    let mut response = response.trim().to_owned();
+    if response.len() > MAXIMUM_CONCISE_RESULT_BYTES {
+        let mut end = MAXIMUM_CONCISE_RESULT_BYTES;
+        while end > 0 && !response.is_char_boundary(end) {
+            end -= 1;
+        }
+        response.truncate(end);
+        response.push_str("\n[terminal result truncated]");
+    }
+    let result = if response.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nTerminal response:\n\n{response}")
+    };
+    format!(
+        "Workflow {outcome}.{result}\n\n[Open the run record](/runs/{}) for detailed activity, changes and result.",
+        run_id.as_hex()
+    )
 }
 
 fn recovery_project_path(

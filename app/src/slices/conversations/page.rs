@@ -322,6 +322,7 @@ pub(super) struct WorkflowProgressView {
     pub(super) name: String,
     pub(super) state: &'static str,
     pub(super) current_step: String,
+    pub(super) result: &'static str,
 }
 
 pub(super) struct ModelSources<'a> {
@@ -729,6 +730,23 @@ pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
             .current_step_name()
             .map(str::to_owned)
             .unwrap_or_else(|| "Finished".to_owned()),
+        result: workflow_result_label(&run.state),
+    }
+}
+
+fn workflow_result_label(state: &crate::workflows::run::RunState) -> &'static str {
+    match state {
+        crate::workflows::run::RunState::Completed => {
+            "The terminal result and detailed worker evidence stay in the run record."
+        }
+        crate::workflows::run::RunState::Failed
+        | crate::workflows::run::RunState::Escalated { .. } => {
+            "The run stopped. Open the run record for its terminal result and retained evidence."
+        }
+        crate::workflows::run::RunState::Cancelled => {
+            "The run was cancelled. Earlier evidence stays in the run record."
+        }
+        _ => "Worker activity stays in the run record and does not enter this conversation.",
     }
 }
 

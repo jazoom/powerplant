@@ -15,7 +15,10 @@ use crate::{
     error::AppResult, responses, sessions::RequiredSession, state::AppState, workflows::RunId,
 };
 
-use self::page::{ArtefactView, RunDetailView, RunIndexView};
+use self::page::{
+    ArtefactView, RunDetailView, RunIndexView, attempt_activity_view, attempt_changes_view,
+    attempt_result_view,
+};
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -24,6 +27,18 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/runs/{run_id}/attempts/{attempt_id}/context",
             get(initial_context),
+        )
+        .route(
+            "/runs/{run_id}/attempts/{attempt_id}/activity",
+            get(attempt_activity),
+        )
+        .route(
+            "/runs/{run_id}/attempts/{attempt_id}/changes",
+            get(attempt_changes),
+        )
+        .route(
+            "/runs/{run_id}/attempts/{attempt_id}/result",
+            get(attempt_result),
         )
         .route("/runs/{run_id}/artefacts/{artefact_id}", get(artefact))
 }
@@ -60,8 +75,13 @@ async fn detail(
     let Some(run) = state.workflow_runs.get(&id) else {
         return Ok(responses::request_navigation(graft, "/runs"));
     };
-    let view =
-        RunDetailView::from_run(&run, &state.workflows, &state.environments, &state.projects);
+    let view = RunDetailView::from_run(
+        &run,
+        &state.workflows,
+        &state.environments,
+        &state.projects,
+        &state.workflow_evidence,
+    );
     match graft {
         GraftRequest::Document => {
             let mut response = responses::chat_page_response(page::DETAIL_TITLE, &state, &view)?;
@@ -117,6 +137,109 @@ async fn initial_context(
         PageGraft::Document => responses::chat_page_response("Initial context", &state, &view),
         PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
             "Initial context",
+            "chat-main",
+            &view,
+        )?),
+    }
+}
+
+async fn attempt_activity(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PageGraft,
+    Path((run_id, attempt_id)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let Some(run_id) = RunId::parse(&run_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(attempt) = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id.as_hex() == attempt_id)
+    else {
+        return Ok(responses::request_navigation(
+            graft,
+            &format!("/runs/{}", run.id.as_hex()),
+        ));
+    };
+    let evidence = crate::workflows::AttemptId::parse(&attempt_id)
+        .and_then(|attempt_id| state.workflow_evidence.get(&run.id, &attempt_id));
+    let view = attempt_activity_view(&run, attempt, evidence);
+    match graft {
+        PageGraft::Document => responses::chat_page_response("Attempt activity", &state, &view),
+        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
+            "Attempt activity",
+            "chat-main",
+            &view,
+        )?),
+    }
+}
+
+async fn attempt_changes(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PageGraft,
+    Path((run_id, attempt_id)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let Some(run_id) = RunId::parse(&run_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(attempt) = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id.as_hex() == attempt_id)
+    else {
+        return Ok(responses::request_navigation(
+            graft,
+            &format!("/runs/{}", run.id.as_hex()),
+        ));
+    };
+    let view = attempt_changes_view(&run, attempt, &state);
+    match graft {
+        PageGraft::Document => responses::chat_page_response("Attempt changes", &state, &view),
+        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
+            "Attempt changes",
+            "chat-main",
+            &view,
+        )?),
+    }
+}
+
+async fn attempt_result(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PageGraft,
+    Path((run_id, attempt_id)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let Some(run_id) = RunId::parse(&run_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(attempt) = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id.as_hex() == attempt_id)
+    else {
+        return Ok(responses::request_navigation(
+            graft,
+            &format!("/runs/{}", run.id.as_hex()),
+        ));
+    };
+    let evidence = crate::workflows::AttemptId::parse(&attempt_id)
+        .and_then(|attempt_id| state.workflow_evidence.get(&run.id, &attempt_id));
+    let view = attempt_result_view(&run, attempt, evidence);
+    match graft {
+        PageGraft::Document => responses::chat_page_response("Attempt result", &state, &view),
+        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
+            "Attempt result",
             "chat-main",
             &view,
         )?),

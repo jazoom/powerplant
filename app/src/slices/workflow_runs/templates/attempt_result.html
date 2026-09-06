@@ -1,0 +1,77 @@
+<main
+  data-section="runs"
+  class="mx-auto w-full max-w-5xl flex-1 px-5 py-8 sm:px-8"
+>
+  <div class="page-intro">
+    <div>
+      <h1>Attempt result</h1>
+      <p>{{ attempt }} · {{ status }}</p>
+    </div>
+    <a href="{{ run_href }}" data-graft class="btn btn-ghost btn-sm"
+      >Back to run</a
+    >
+  </div>
+  <section class="file-section mt-6 space-y-4" aria-labelledby="result-heading">
+    <div>
+      <h2 id="result-heading" class="text-lg font-semibold">Result</h2>
+      <p class="text-quiet mt-1 text-sm">
+        This response belongs to phase {{ phase }}.
+      </p>
+    </div>
+    {% if unavailable %}
+      <div class="alert alert-warning" role="status">
+        <p>
+          The terminal response is unavailable. The run record remains
+          available.
+        </p>
+      </div>
+    {% else %}
+      {% if truncated %}
+        <div class="alert alert-warning" role="status">
+          <p>
+            The retained response reached an evidence bound. The model output is
+            incomplete.
+          </p>
+        </div>
+      {% endif %}
+      {% if error != "" %}
+        <div class="alert alert-error" role="alert"><p>{{ error }}</p></div>
+      {% endif %}
+      {% if text != "" %}
+        <div>
+          <h3 class="text-sm font-semibold">Response</h3>
+          <div class="prose mt-2 max-w-none">{{ response_html|safe }}</div>
+        </div>
+      {% endif %}
+      {% if thinking != "" %}
+        <details class="file-disclosure">
+          <summary>Thinking</summary>
+          <pre class="mt-3 overflow-x-auto text-sm whitespace-pre-wrap">
+{{ thinking }}</pre>
+        </details>
+      {% endif %}
+      {% if !tools.is_empty() %}
+        <div>
+          <h3 class="text-sm font-semibold">Tool output</h3>
+          <ul class="border-base-300 mt-2 divide-y border-y">
+            {% for tool in tools %}
+              <li class="space-y-2 py-3">
+                <p class="font-mono text-xs">{{ tool.label }}</p>
+                <pre
+                  class="bg-base-200 overflow-x-auto p-3 text-sm whitespace-pre-wrap"
+                >
+{{ tool.output }}</pre>
+                {% if tool.truncated %}<p class="text-quiet text-xs">
+                  This tool output is truncated.
+                </p>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+      {% if text == "" && thinking == "" && tools.is_empty() && error == "" %}
+        <p class="text-quiet">No terminal response was retained.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+</main>

@@ -114,6 +114,7 @@ pub(crate) struct Job {
     inner: Mutex<JobInner>,
     notify: Notify,
     cancel: AtomicBool,
+    output_visible: AtomicBool,
     step_label: Mutex<String>,
     workflow_name: Mutex<String>,
 }
@@ -149,6 +150,7 @@ impl Job {
             }),
             notify: Notify::new(),
             cancel: AtomicBool::new(false),
+            output_visible: AtomicBool::new(true),
             step_label: Mutex::new(String::new()),
             workflow_name: Mutex::new(String::new()),
         })
@@ -223,6 +225,10 @@ impl Job {
         drop(inner);
         self.notify.notify_waiters();
         true
+    }
+
+    pub(crate) fn set_output_visible(&self, visible: bool) {
+        self.output_visible.store(visible, Ordering::SeqCst);
     }
 
     pub(crate) fn cancel_requested(&self) -> bool {
@@ -300,7 +306,7 @@ impl Job {
             JobEventKind::Tool { .. } | JobEventKind::Usage { .. } => false,
             JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => true,
         };
-        if empty {
+        if empty || !self.output_visible.load(Ordering::SeqCst) {
             return None;
         }
         let mut inner = self.lock();

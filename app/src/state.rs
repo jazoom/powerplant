@@ -19,7 +19,7 @@ use crate::{
     vault::ProviderVault,
     workflows::{
         CommitJournals, WorkflowArtefactRepository, WorkflowCatalogue,
-        WorkflowContinuationRegistry, WorkflowExecution, WorkflowRunStore,
+        WorkflowContinuationRegistry, WorkflowEvidenceStore, WorkflowExecution, WorkflowRunStore,
         workspace::WorkflowWorkspaces,
     },
 };
@@ -44,6 +44,7 @@ pub(crate) struct AppState {
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,
     pub(crate) workflows: Arc<WorkflowCatalogue>,
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
+    pub(crate) workflow_evidence: Arc<WorkflowEvidenceStore>,
     pub(crate) workflow_artefacts: Arc<WorkflowArtefactRepository>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
     pub(crate) gate_continuations: Arc<WorkflowContinuationRegistry>,
@@ -89,6 +90,8 @@ pub(crate) async fn build(
     )
     .map_err(|error| error.message().to_owned())?;
     let workflow_runs = WorkflowRunStore::open(data_dir.join("workflow-runs"))
+        .map_err(|error| error.message().to_owned())?;
+    let workflow_evidence = WorkflowEvidenceStore::open(data_dir.join("workflow-evidence"))
         .map_err(|error| error.message().to_owned())?;
     let environment_snapshots =
         EnvironmentSnapshotRepository::open(data_dir.join("environment-snapshots"))
@@ -139,6 +142,7 @@ pub(crate) async fn build(
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(workflows),
         workflow_runs: Arc::new(workflow_runs),
+        workflow_evidence: Arc::new(workflow_evidence),
         workflow_artefacts,
         workflow_execution: Arc::new(WorkflowExecution::new()),
         gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),

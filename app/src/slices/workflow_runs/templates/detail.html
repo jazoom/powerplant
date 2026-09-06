@@ -316,14 +316,39 @@
                         >
                       </p>
                     {% endfor %}
-                    {% if !attempt.context_href.is_empty() %}
-                      <a
-                        class="link mt-3 inline-block"
-                        href="{{ attempt.context_href }}"
-                        data-graft
-                        >Inspect initial context</a
+                    <div
+                      class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+                    >
+                      <span class="text-quiet"
+                        >Evidence · {{ attempt.evidence_state }}</span
                       >
-                    {% endif %}
+                      <a
+                        class="link"
+                        href="{{ attempt.activity_href }}"
+                        data-graft
+                        >Activity</a
+                      >
+                      <a
+                        class="link"
+                        href="{{ attempt.changes_href }}"
+                        data-graft
+                        >Changes</a
+                      >
+                      <a
+                        class="link"
+                        href="{{ attempt.result_href }}"
+                        data-graft
+                        >Result</a
+                      >
+                      {% if !attempt.context_href.is_empty() %}
+                        <a
+                          class="link"
+                          href="{{ attempt.context_href }}"
+                          data-graft
+                          >Inspect initial context</a
+                        >
+                      {% endif %}
+                    </div>
                   </li>
                 {% endfor %}
               </ul>
