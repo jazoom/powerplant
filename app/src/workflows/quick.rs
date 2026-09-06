@@ -5,9 +5,9 @@ use crate::environments::{EnvironmentCatalogue, EnvironmentId};
 use super::commands::SystemCommandId;
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    DefinitionError, GuestDirectoryAccess, HumanGateStep, InputKey, OutputKey, OutputKind,
-    PinnedWorkflowDefinition, RequiredInput, RequiredOutput, RoleDefinition, RoleKey, StepAction,
-    StepDefinition, StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition,
+    DefinitionError, GuestDirectoryAccess, HumanGateStep, HumanRevisionPolicy, InputKey, OutputKey,
+    OutputKind, PinnedWorkflowDefinition, RequiredInput, RequiredOutput, RoleDefinition, RoleKey,
+    StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition,
     candidate_revision_output, initial_candidate_input,
 };
 use super::resolve::ResolveEnvironmentError;
@@ -67,10 +67,19 @@ fn agent_step(
     } else {
         (CandidateAuthority::ReadOnly, vec![assistant_output()])
     };
+    let candidate_input = if access.is_writable() {
+        RequiredInput {
+            key: InputKey::parse("candidate").expect("quick candidate"),
+            kind: ArtefactKind::CandidateRevision,
+            source: ArtefactSource::RunCurrentCandidate,
+        }
+    } else {
+        initial_candidate_input()
+    };
     Ok(StepDefinition {
         key: StepKey::parse(AGENT_STEP_KEY).expect("quick task step"),
         name: "Work on task".to_owned(),
-        inputs: vec![initial_candidate_input()],
+        inputs: vec![candidate_input],
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse(ROLE_KEY).expect("quick task role"),
             environment: StepEnvironment::WorkflowDefault,
@@ -116,6 +125,10 @@ fn gate_step() -> StepDefinition {
                 key: OutputKey::parse(DECISION_OUTPUT_KEY).expect("quick task decision"),
                 kind: OutputKind::HumanDecision,
             },
+            revision: Some(HumanRevisionPolicy {
+                revision_target: StepKey::parse(AGENT_STEP_KEY).expect("quick task work"),
+                attempt_limit: 3,
+            }),
         }),
         review: None,
     }

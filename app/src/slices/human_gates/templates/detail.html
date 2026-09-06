@@ -74,7 +74,7 @@
           <p class="text-sm">{{ host_unchanged }}</p>
         {% endif %}
         <div
-          class="{% if quick_task %}sm:grid-cols-2{% else %}lg:grid-cols-3{% endif %} grid gap-4 pt-2"
+          class="{% if quick_task && !can_request_revision %}sm:grid-cols-2{% else %}lg:grid-cols-3{% endif %} grid gap-4 pt-2"
         >
           <form
             method="post"
@@ -95,7 +95,7 @@
               {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
             </button>
           </form>
-          {% if !quick_task %}
+          {% if can_request_revision %}
             <form
               method="post"
               action="/runs/{{ run_id }}/gates/{{ gate_id }}/request-revision"
@@ -109,7 +109,10 @@
               />
               <input type="hidden" name="candidate" value="{{ target }}" />
               <p class="text-sm">
-                End this run and save a note for the next task.
+                Start a fresh {{ revision_target }} attempt with the current
+                candidate. The attempt limit is {{ revision_attempt_limit }}. If
+                the limit is exhausted, this decision blocks the run without
+                another attempt.
               </p>
               <label class="form-control gap-1">
                 <span class="text-sm">Revision note</span>
@@ -121,7 +124,7 @@
                 ></textarea>
               </label>
               <button type="submit" class="btn btn-outline w-full">
-                Request revision
+                Request changes
               </button>
             </form>
           {% endif %}

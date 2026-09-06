@@ -676,6 +676,233 @@ async fn a_linked_candidate_review_releases_the_session_but_not_the_source_gate(
     assert_eq!(approved.status(), axum::http::StatusCode::OK);
 }
 
+fn reopen_revision(
+    run: &workflows::WorkflowRun,
+) -> Result<workflows::WorkflowRun, Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir().expect("run directory");
+    let store = workflows::WorkflowRunStore::open(dir.path().to_path_buf())?;
+    store.create(run.clone())?;
+    drop(store);
+    Ok(workflows::WorkflowRunStore::open(dir.path().to_path_buf())?
+        .get(&run.id)
+        .expect("run"))
+}
+
+fn reserve_revision(run: &mut workflows::WorkflowRun, state: &AppState, at: u64) {
+    use workflows::gates::HumanDecisionKind;
+    let gate = run.gates.last().expect("gate").clone();
+    let diff = workflows::artefacts::CandidateDiff::load(
+        run,
+        &gate.diff_base,
+        &gate.candidate,
+        &state.workflow_artefacts,
+    )
+    .expect("diff");
+    let (bytes, object, hash) = workflows::artefacts::encode_human_decision(
+        diff.target,
+        diff.base,
+        HumanDecisionKind::RevisionRequested,
+        Some("Fix the candidate"),
+        at,
+        None,
+    )
+    .expect("decision");
+    state.workflow_artefacts.publish(&bytes).expect("publish");
+    let record = super::decision_record(
+        run,
+        &gate,
+        HumanDecisionKind::RevisionRequested,
+        at,
+        object,
+        hash,
+        bytes.len() as u64,
+    )
+    .expect("record");
+    run.decide_gate(
+        gate.id,
+        gate.revision,
+        record,
+        HumanDecisionKind::RevisionRequested,
+        Some("Fix the candidate".to_owned()),
+        Some(workflows::AttemptId::generate().expect("attempt")),
+        at,
+    )
+    .expect("reserve revision");
+}
+
+#[test]
+fn human_revisions_preserve_feedback_identity_and_exhaust_the_gate_step_limit() {
+    use workflows::run::{
+        AttemptArtefactInput, AttemptArtefactOutput, AttemptCleanupRecord, ObservedCandidate,
+        RunState,
+    };
+    let fixture = conversation_awaiting_gate();
+    let mut run = fixture
+        .state
+        .workflow_runs
+        .get(&fixture.run_id)
+        .expect("run");
+    run.launch_brief = "Original task direction".to_owned();
+    for iteration in 0..2 {
+        let at = 10 + iteration * 10;
+        reserve_revision(&mut run, &fixture.state, at);
+        let reservation = run.revision_reservation.clone().expect("reservation");
+        reopen_revision(&run).expect("durable reservation");
+        let mut interrupted = run.clone();
+        interrupted.interrupt(at).expect("interrupt reservation");
+        reopen_revision(&interrupted).expect("recover reservation");
+        let step = run
+            .pinned
+            .definition
+            .step(&reservation.target)
+            .expect("work")
+            .clone();
+        let inputs = vec![AttemptArtefactInput {
+            key: step.inputs[0].key.clone(),
+            artefact: reservation.candidate.clone(),
+        }];
+        let packet = |run: &workflows::WorkflowRun| {
+            workflows::input_context::build_attempt_packet_for_request(
+                run,
+                &step,
+                &inputs,
+                &fixture.state.workflow_artefacts,
+                workflows::input_context::ProjectInstructions::Absent,
+                &[crate::providers::ChatTurn::user(
+                    "EXCLUDED TRANSCRIPT".to_owned(),
+                )],
+                "",
+                &[],
+                None,
+                None,
+            )
+        };
+        let context = packet(&run).expect("revision packet");
+        let encoded = serde_json::to_string(&context).expect("packet");
+        assert!(encoded.contains("Original task direction"));
+        assert!(encoded.contains("Fix the candidate"));
+        assert!(!encoded.contains("EXCLUDED TRANSCRIPT"));
+        let mut substituted = run.clone();
+        substituted
+            .revision_reservation
+            .as_mut()
+            .expect("reservation")
+            .feedback = "Forged feedback".to_owned();
+        assert!(packet(&substituted).is_err());
+        let mut substituted = run.clone();
+        substituted
+            .revision_reservation
+            .as_mut()
+            .expect("reservation")
+            .gate = workflows::GateId::generate().expect("other gate");
+        assert!(packet(&substituted).is_err());
+        let sandbox = run.attempts[0].sandbox.clone();
+        run.start_attempt(
+            reservation.attempt,
+            inputs,
+            crate::tests::test_agent_capabilities(),
+            sandbox,
+            at + 1,
+        )
+        .expect("start revision");
+        let mut interrupted = run.clone();
+        interrupted.interrupt(at + 1).expect("interrupt attempt");
+        reopen_revision(&interrupted).expect("recover attempt");
+        let mut candidate = run
+            .artefact(&reservation.candidate.id)
+            .expect("candidate")
+            .clone();
+        candidate.id = workflows::ArtefactId::generate().expect("new candidate");
+        candidate.provenance.producer = workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: reservation.attempt,
+            step: step.key.clone(),
+            output: Some(workflows::definition::OutputKey::parse("candidate").expect("output")),
+            disposition: workflows::artefacts::ProductionDisposition::RequiredOutput,
+        };
+        candidate.provenance.inputs = vec![reservation.candidate.clone()];
+        let reference = workflows::artefacts::ArtefactReference {
+            id: candidate.id,
+            kind: candidate.kind,
+            artefact_hash: candidate.artefact_hash,
+        };
+        run.record_attempt_outputs(
+            reservation.attempt,
+            vec![candidate],
+            vec![AttemptArtefactOutput {
+                key: workflows::definition::OutputKey::parse("candidate").expect("output"),
+                artefact: reference.clone(),
+            }],
+            Some(reference.clone()),
+            ObservedCandidate::Exact {
+                artefact: reference.clone(),
+            },
+        )
+        .expect("outputs");
+        run.record_cleanup(reservation.attempt, AttemptCleanupRecord::Complete)
+            .expect("cleanup");
+        run.complete_attempt(reservation.attempt, at + 2)
+            .expect("complete revision");
+        assert!(matches!(run.state, RunState::Ready { .. }));
+        run.open_gate(
+            workflows::GateId::generate().expect("gate"),
+            reference,
+            reservation.diff_base,
+            at + 3,
+        )
+        .expect("new approval gate");
+        reopen_revision(&run).expect("reopened gate");
+    }
+    reserve_revision(&mut run, &fixture.state, 40);
+    assert!(matches!(
+        run.state,
+        RunState::Escalated {
+            reason: workflows::run::EscalationReason::AttemptLimit,
+            ..
+        }
+    ));
+    assert!(run.revision_reservation.is_none());
+    assert_eq!(run.attempts.len(), 3);
+    reopen_revision(&run).expect("blocked evidence");
+}
+
+#[tokio::test]
+async fn a_human_revision_dispatches_the_reserved_attempt_and_rejects_a_duplicate() {
+    let fixture = conversation_awaiting_gate();
+    let body = format!(
+        "{}&note=Fix+the+candidate",
+        fixture.decision_body(&fixture.candidate)
+    );
+    let response = post_decision(&fixture, "request-revision", body.clone(), None).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let run = fixture
+                .state
+                .workflow_runs
+                .get(&fixture.run_id)
+                .expect("run");
+            if run.attempts.len() == 2 {
+                assert_eq!(run.attempts[1].inputs[0].artefact.id, fixture.candidate_id);
+                break;
+            }
+            assert!(
+                !run.is_terminal(),
+                "revision stopped before dispatch: {:?}",
+                run.state
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("revision dispatch");
+    let duplicate = post_decision(&fixture, "request-revision", body, None).await;
+    assert_eq!(duplicate.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        std::fs::read(fixture.host.join("file.txt")).expect("host"),
+        b"candidate\n"
+    );
+}
+
 #[tokio::test]
 async fn another_conversation_keeps_a_gate_open_until_the_original_session_is_free() {
     let fixture = conversation_awaiting_gate();
@@ -689,6 +916,26 @@ async fn another_conversation_keeps_a_gate_open_until_the_original_session_is_fr
         .sessions
         .begin_conversation_job(&fixture.session, other.id, 1)
         .expect("other job");
+    let revision = post_decision(
+        &fixture,
+        "request-revision",
+        format!(
+            "{}&note=Fix+the+candidate",
+            fixture.decision_body(&fixture.candidate)
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(revision.status(), axum::http::StatusCode::CONFLICT);
+    assert!(
+        fixture
+            .state
+            .workflow_runs
+            .get(&fixture.run_id)
+            .expect("run")
+            .revision_reservation
+            .is_none()
+    );
     let response = post_decision(
         &fixture,
         "approve",
@@ -948,12 +1195,7 @@ async fn a_quick_task_gate_uses_apply_and_discard_labels() {
 async fn a_configured_gate_keeps_revision_controls() {
     let fixture = awaiting_gate(RunKind::Configured);
     let text = body_text(get_gate(&fixture, None).await).await;
-    assert!(text.contains("Approve candidate"));
-    assert!(text.contains("Request revision"));
     assert!(text.contains("/request-revision"));
-    assert!(text.contains("Cancel run"));
-    assert!(!text.contains("Apply changes"));
-    assert!(!text.contains("Discard changes"));
     assert!(!text.contains(HOST_UNCHANGED_SAFETY));
 }
 

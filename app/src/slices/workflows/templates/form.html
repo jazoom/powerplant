@@ -682,6 +682,85 @@
                   {% endif %}
                 </fieldset>
               {% else if step.is_gate %}
+                <fieldset
+                  class="border-base-300 space-y-3 rounded-sm border p-3"
+                >
+                  <legend class="text-sm">Human revision route</legend>
+                  <p class="text-quiet text-xs">
+                    Request changes sends the current candidate to an earlier
+                    implementation phase in a fresh attempt.
+                  </p>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-sm">Policy</span>
+                    <select
+                      class="select select-bordered"
+                      name="step_{{ step.index }}_human-revision-policy"
+                    >
+                      <option
+                        value="none"
+                        {% if step.human_revision.is_none() %}selected{% endif %}
+                      >
+                        No revision route
+                      </option>
+                      <option
+                        value="request-changes"
+                        {% if step.human_revision.is_some() %}selected{% endif %}
+                      >
+                        Request changes
+                      </option>
+                    </select>
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-sm">Revision target</span>
+                    <select
+                      class="select select-bordered"
+                      name="step_{{ step.index }}_human-revision-target"
+                    >
+                      {% for option in step.human_revision_options %}
+                        <option
+                          value="{{ option.value }}"
+                          {% if option.selected %}selected{% endif %}
+                        >
+                          {{ option.label }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                    {% if step.human_revision_policy_error != "" %}
+                      <p class="text-error text-sm">
+                        {{ step.human_revision_policy_error }}
+                      </p>
+                    {% endif %}
+                    {% if let Some(policy) = step.human_revision %}
+                      {% if policy.revision_target_error != "" %}
+                        <p class="text-error text-sm">
+                          {{ policy.revision_target_error }}
+                        </p>
+                      {% endif %}
+                    {% endif %}
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-sm">Revision attempt limit</span>
+                    <input
+                      class="input input-bordered"
+                      type="number"
+                      min="1"
+                      max="8"
+                      name="step_{{ step.index }}_human-attempt-limit"
+                      value="{% if let Some(policy) = step.human_revision %}{{ policy.attempt_limit }}{% else %}3{% endif %}"
+                    />
+                    {% if let Some(policy) = step.human_revision %}
+                      {% if policy.attempt_limit_error != "" %}
+                        <p class="text-error text-sm">
+                          {{ policy.attempt_limit_error }}
+                        </p>
+                      {% endif %}
+                    {% endif %}
+                  </label>
+                  <p class="text-quiet text-xs">
+                    The limit counts implementation attempts across reopened
+                    gates.
+                  </p>
+                </fieldset>
                 <p class="text-quiet text-sm">
                   Pauses the run for a decision on the exact candidate diff.
                 </p>

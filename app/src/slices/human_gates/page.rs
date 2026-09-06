@@ -52,6 +52,9 @@ pub(super) struct GatePage {
     pub(super) back_href: String,
     pub(super) back_label: &'static str,
     pub(super) quick_task: bool,
+    pub(super) can_request_revision: bool,
+    pub(super) revision_target: String,
+    pub(super) revision_attempt_limit: u8,
     pub(super) host_unchanged: &'static str,
 }
 
@@ -136,6 +139,9 @@ impl GatePage {
             String::new()
         };
         let quick_task = run.kind == RunKind::QuickTask;
+        let revision_policy = run.human_revision_policy(&gate.step);
+        let can_request_revision = revision_policy.is_some()
+            && (run.kind != RunKind::QuickTask || run.conversation_id.is_some());
         Some(Self {
             run_id: run.id.as_hex(),
             gate_id: gate.id.as_hex(),
@@ -186,6 +192,11 @@ impl GatePage {
                 "Back to project"
             },
             quick_task,
+            can_request_revision,
+            revision_target: revision_policy
+                .map(|policy| policy.revision_target.as_str().to_owned())
+                .unwrap_or_default(),
+            revision_attempt_limit: revision_policy.map_or(0, |policy| policy.attempt_limit),
             host_unchanged: crate::workflows::HOST_UNCHANGED,
         })
     }

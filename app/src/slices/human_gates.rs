@@ -296,14 +296,17 @@ async fn decide(
         );
     };
 
-    if matches!(action, DecisionAction::Revision) && run.kind == RunKind::QuickTask {
-        return command_error_for_run(
-            graft,
-            PatchStatus::Conflict,
-            "That gate page is stale. Reload it.",
-            &run,
-            form.conversation_surface,
-        );
+    if matches!(action, DecisionAction::Revision) {
+        let valid_route = run.human_revision_policy(&gate.step).is_some();
+        if run.kind == RunKind::QuickTask && run.conversation_id.is_none() || !valid_route {
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "That gate has no available revision route.",
+                &run,
+                form.conversation_surface,
+            );
+        }
     }
     let destination = decision_destination(&run);
     let Some(continuation) = state.gate_continuations.take(&run_id) else {
@@ -348,7 +351,7 @@ async fn decide(
     } else {
         false
     };
-    let leases = if matches!(action, DecisionAction::Approve) {
+    let leases = if matches!(action, DecisionAction::Approve | DecisionAction::Revision) {
         let Ok(execution) = state.workflow_execution.acquire() else {
             return_continuation(&state, continuation, reservation_acquired);
             return command_error_for_run(
@@ -380,7 +383,7 @@ async fn decide(
     } else {
         None
     };
-    if matches!(action, DecisionAction::Approve) {
+    if matches!(action, DecisionAction::Approve | DecisionAction::Revision) {
         match continuation_authority(&state, &run, &continuation) {
             ContinuationAuthority::Ready => {}
             ContinuationAuthority::Unavailable => {
@@ -442,6 +445,27 @@ async fn decide(
     } else {
         crate::workflows::gates::HumanDecisionKind::RevisionRequested
     };
+    let reserved_attempt = if matches!(action, DecisionAction::Revision) {
+        match crate::workflows::AttemptId::generate() {
+            Ok(attempt) => Some(attempt),
+            Err(_) => {
+                if let Some((agent, execution)) = leases {
+                    drop(agent);
+                    drop(execution);
+                }
+                return_continuation(&state, continuation, reservation_acquired);
+                return command_error_for_run(
+                    graft,
+                    PatchStatus::Conflict,
+                    "Power Plant could not prepare the revision. Try again.",
+                    &run,
+                    form.conversation_surface,
+                );
+            }
+        }
+    } else {
+        None
+    };
     let connection = continuation
         .active_connection
         .lock()
@@ -500,7 +524,22 @@ async fn decide(
         );
     };
     let changed = state.workflow_runs.mutate(&run_id, |run| {
-        run.decide_gate(gate_id, form.revision, record, kind, decided_at)
+        run.decide_gate(
+            gate_id,
+            form.revision,
+            record,
+            kind,
+            if matches!(
+                kind,
+                crate::workflows::gates::HumanDecisionKind::RevisionRequested
+            ) {
+                form.note.clone()
+            } else {
+                None
+            },
+            reserved_attempt,
+            decided_at,
+        )
     });
     let Ok(changed) = changed else {
         return_continuation(&state, continuation, reservation_acquired);
@@ -515,7 +554,7 @@ async fn decide(
 
     if let Some((agent, execution)) = leases {
         if changed.is_terminal() {
-            crate::workflows::settle_completed_job(&state, &continuation);
+            crate::workflows::settle_terminal_job(&state, &continuation, &changed);
         } else {
             continuation.job.resume();
             tokio::spawn(crate::workflows::execute_run(
@@ -524,18 +563,6 @@ async fn decide(
                 agent,
                 execution,
             ));
-        }
-    } else {
-        let note = form.note.unwrap_or_default();
-        if let Some(key) = continuation.conversation_key() {
-            let _ = state
-                .sessions
-                .fail_turn(&session, &key, &continuation.job.id(), note);
-            continuation
-                .job
-                .finish(JobStatus::Failed, Some("Revision requested"));
-        } else {
-            settle_cancelled_job(&state, &continuation);
         }
     }
     Ok(responses::command_navigation(&destination))

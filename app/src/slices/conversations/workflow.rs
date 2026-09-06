@@ -18,7 +18,7 @@ use crate::{
     state::AppState,
     workflows::{
         self, PhaseModelSelection, PinnedPreset, ResolveWorkflowError, WorkflowJob, WorkflowRun,
-        WorkflowSelection,
+        WorkflowSelection, definition::CommitPolicy,
     },
 };
 
@@ -30,6 +30,7 @@ pub(super) struct WorkflowQuery {
     workflow: String,
     target: String,
     brief: String,
+    commit_policy: String,
     #[serde(default)]
     phase: Vec<String>,
 }
@@ -41,9 +42,13 @@ pub(super) struct WorkflowLaunchForm {
     brief: String,
     target: String,
     #[serde(default)]
+    commit_policy: String,
+    #[serde(default)]
     preview_workflow: String,
     #[serde(default)]
     preview_target: String,
+    #[serde(default)]
+    preview_commit_policy: String,
     #[serde(default)]
     phase: Vec<String>,
 }
@@ -78,6 +83,13 @@ struct PhaseModelOption {
     choices: Vec<PhaseChoice>,
 }
 
+struct CommitPolicyOption {
+    value: String,
+    label: String,
+    detail: String,
+    selected: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 struct PhaseChoiceToken {
     step: String,
@@ -97,6 +109,7 @@ struct WorkflowLaunchView {
     brief: String,
     workflows: Vec<WorkflowOption>,
     targets: Vec<TargetOption>,
+    commit_policies: Vec<CommitPolicyOption>,
     phase_models: Vec<PhaseModelOption>,
     model_summary: String,
     access_summary: String,
@@ -112,6 +125,7 @@ struct WorkflowLaunchContents<'a> {
     brief: &'a str,
     workflows: &'a [WorkflowOption],
     targets: &'a [TargetOption],
+    commit_policies: &'a [CommitPolicyOption],
     phase_models: &'a [PhaseModelOption],
     model_summary: &'a str,
     access_summary: &'a str,
@@ -127,6 +141,7 @@ impl WorkflowLaunchView {
             brief: &self.brief,
             workflows: &self.workflows,
             targets: &self.targets,
+            commit_policies: &self.commit_policies,
             phase_models: &self.phase_models,
             model_summary: &self.model_summary,
             access_summary: &self.access_summary,
@@ -180,6 +195,7 @@ pub(super) async fn show(
             Some(query.target.as_str())
         },
         &query.brief,
+        &query.commit_policy,
         &query.phase,
         "",
     )
@@ -207,6 +223,7 @@ pub(super) async fn launch(
         let workflow = form.workflow.clone();
         let target = form.target.clone();
         let brief = form.brief.clone();
+        let commit_policy = form.commit_policy.clone();
         let phase = form.phase.clone();
         async move {
             let view = launch_view(
@@ -215,6 +232,7 @@ pub(super) async fn launch(
                 Some(workflow.as_str()),
                 Some(target.as_str()),
                 &brief,
+                &commit_policy,
                 &phase,
                 error,
             )
@@ -258,13 +276,35 @@ pub(super) async fn launch(
             return error_view(status, error.message()).await;
         }
     };
-    if form.workflow != form.preview_workflow || form.target != form.preview_target {
+    if form.workflow != form.preview_workflow
+        || form.target != form.preview_target
+        || form.commit_policy != form.preview_commit_policy
+    {
         return error_view(
             PatchStatus::Conflict,
             "The selection changed. Review its access and environment readiness before launch.",
         )
         .await;
     }
+    let commit_policy = if form.commit_policy.trim().is_empty() {
+        resolved.pinned.definition.commit_policy()
+    } else {
+        let Some(policy) = CommitPolicy::parse(form.commit_policy.trim()) else {
+            return error_view(
+                PatchStatus::UnprocessableEntity,
+                "Choose a valid commit policy.",
+            )
+            .await;
+        };
+        policy
+    };
+    let pinned = match resolved.pinned.definition.with_commit_policy(commit_policy) {
+        Ok(definition) => workflows::definition::PinnedWorkflowDefinition::pin(
+            resolved.pinned.workflow_id,
+            definition,
+        ),
+        Err(error) => return error_view(PatchStatus::UnprocessableEntity, error.message()).await,
+    };
     let run_id = workflows::RunId::generate()
         .map_err(|error| AppError::new("create workflow run identifier", error))?;
     let Some(target) = ProjectId::parse(form.target.trim()) else {
@@ -301,7 +341,7 @@ pub(super) async fn launch(
         Err(error) => return error_view(PatchStatus::Conflict, error.message()).await,
     };
     if !workflows::definition_fits_agent(
-        &resolved.pinned.definition,
+        &pinned.definition,
         &authority.tools,
         &authority
             .policy
@@ -317,17 +357,12 @@ pub(super) async fn launch(
         )
         .await;
     }
-    let phase_models = match resolve_phase_models(&state, &resolved.pinned.definition, &form.phase)
-    {
+    let phase_models = match resolve_phase_models(&state, &pinned.definition, &form.phase) {
         Ok(models) => models,
         Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
     };
-    if let Err(error) = validate_phase_models(
-        &state,
-        &resolved.pinned.definition,
-        &authority,
-        &phase_models,
-    ) {
+    if let Err(error) = validate_phase_models(&state, &pinned.definition, &authority, &phase_models)
+    {
         return error_view(PatchStatus::UnprocessableEntity, error).await;
     }
     let selection = phase_models
@@ -345,7 +380,7 @@ pub(super) async fn launch(
         .await;
     };
     let environments = match workflows::resolve_environments(
-        &resolved.pinned.definition,
+        &pinned.definition,
         &state.environments,
         &state.environment_snapshots,
     )
@@ -427,7 +462,7 @@ pub(super) async fn launch(
         authority.project_id,
         started.id,
         brief,
-        resolved.pinned,
+        pinned,
         environments,
         phase_models.clone(),
     );
@@ -477,12 +512,14 @@ pub(super) async fn launch(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn launch_view(
     state: &AppState,
     record: &ConversationRecord,
     workflow_raw: Option<&str>,
     target_raw: Option<&str>,
     brief: &str,
+    commit_policy_raw: &str,
     phase_raw: &[String],
     error: &'static str,
 ) -> WorkflowLaunchView {
@@ -495,17 +532,54 @@ async fn launch_view(
                 workflow_id: record.id,
                 definition_version: record.definition_version,
             };
+            let selected = selected_workflow == selection.as_token();
+            let resolved_policy = selected
+                .then(|| CommitPolicy::parse(commit_policy_raw.trim()))
+                .flatten()
+                .and_then(|policy| record.definition.with_commit_policy(policy).ok());
+            let definition = resolved_policy.as_ref().unwrap_or(&record.definition);
             WorkflowOption {
                 token: selection.as_token(),
-                name: record.definition.name().to_owned(),
-                summary: workflows::summary::process_summary(&record.definition),
-                effects: workflows::summary::code_effects(&record.definition),
+                name: definition.name().to_owned(),
+                summary: workflows::summary::process_summary(definition),
+                effects: workflows::summary::code_effects(definition),
                 inputs: workflows::summary::REQUIRED_INPUTS.to_owned(),
-                approvals: workflows::summary::approval_stops(&record.definition),
-                selected: selected_workflow == selection.as_token(),
+                approvals: workflows::summary::approval_stops(definition),
+                selected,
             }
         })
         .collect();
+    let selected_policy = WorkflowSelection::parse(&selected_workflow)
+        .and_then(|selection| state.workflows.resolve(&selection).ok())
+        .map(|resolved| resolved.pinned.definition)
+        .and_then(|definition| {
+            let choices = definition.commit_policy_choices();
+            let requested = CommitPolicy::parse(commit_policy_raw.trim());
+            requested
+                .filter(|policy| choices.contains(policy))
+                .or_else(|| choices.first().copied())
+        });
+    let commit_policies = WorkflowSelection::parse(&selected_workflow)
+        .and_then(|selection| state.workflows.resolve(&selection).ok())
+        .map(|resolved| resolved.pinned.definition)
+        .map(|definition| {
+            let selected = selected_policy;
+            definition
+                .commit_policy_choices()
+                .into_iter()
+                .map(|policy| CommitPolicyOption {
+                    value: policy.as_str().to_owned(),
+                    label: policy.label().to_owned(),
+                    detail: match policy {
+                        CommitPolicy::NoCommit => "The workflow stops without changing project files.".to_owned(),
+                        CommitPolicy::HumanApproval => "The exact candidate waits for a human decision before commit.".to_owned(),
+                        CommitPolicy::AutomaticAfterReview => "An approved exact-candidate review permits commit without a human gate.".to_owned(),
+                    },
+                    selected: selected == Some(policy),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let selected_target = target_raw
         .and_then(|raw| ProjectId::parse(raw.trim()))
         .or(record.execution_target)
@@ -533,6 +607,7 @@ async fn launch_view(
         brief: brief.to_owned(),
         workflows,
         targets,
+        commit_policies,
         phase_models,
         model_summary,
         access_summary,

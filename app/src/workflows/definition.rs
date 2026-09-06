@@ -27,6 +27,40 @@ pub(crate) const ASSISTANT_REPLY: &str = "assistant-reply";
 pub(crate) const PRIMARY_SOURCE_ALIAS: &str = "project";
 pub(crate) const CANDIDATE_OUTPUT_KEY: &str = "candidate";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommitPolicy {
+    NoCommit,
+    HumanApproval,
+    AutomaticAfterReview,
+}
+
+impl CommitPolicy {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "no-commit" => Some(Self::NoCommit),
+            "human-approval" => Some(Self::HumanApproval),
+            "automatic-after-review" => Some(Self::AutomaticAfterReview),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NoCommit => "no-commit",
+            Self::HumanApproval => "human-approval",
+            Self::AutomaticAfterReview => "automatic-after-review",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::NoCommit => "No commit",
+            Self::HumanApproval => "Human approval before commit",
+            Self::AutomaticAfterReview => "Automatic commit after approved review",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowDefinition {
     format_version: u32,
@@ -34,6 +68,7 @@ pub(crate) struct WorkflowDefinition {
     default_environment: EnvironmentId,
     roles: Vec<RoleDefinition>,
     steps: Vec<StepDefinition>,
+    commit_policy: CommitPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +98,13 @@ pub(crate) enum StepAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HumanGateStep {
     pub(crate) required_output: RequiredOutput,
+    pub(crate) revision: Option<HumanRevisionPolicy>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HumanRevisionPolicy {
+    pub(crate) revision_target: StepKey,
+    pub(crate) attempt_limit: u8,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -241,6 +283,7 @@ pub(crate) enum DefinitionError {
     HumanGate,
     ReviewPolicy,
     AttemptLimit,
+    CommitPolicy,
     RunBound,
 }
 
@@ -292,6 +335,7 @@ impl DefinitionError {
             }
             Self::ReviewPolicy => "Configure a valid review policy.",
             Self::AttemptLimit => "Set the review attempt limit from one through eight.",
+            Self::CommitPolicy => "Choose a commit policy that matches this workflow.",
             Self::RunBound => "This workflow can create too many attempts or artefacts.",
         }
     }
@@ -313,6 +357,8 @@ pub(crate) struct DefinitionFile {
     default_environment: String,
     roles: Vec<RoleFile>,
     steps: Vec<StepFile>,
+    #[serde(default)]
+    commit_policy: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -356,6 +402,10 @@ enum ActionFile {
     HumanGate {
         #[serde(rename = "required-output")]
         required_output: OutputFile,
+        #[serde(default, rename = "revision-target")]
+        revision_target: Option<String>,
+        #[serde(default, rename = "attempt-limit")]
+        attempt_limit: Option<u8>,
     },
 }
 
@@ -425,7 +475,7 @@ impl WorkflowDefinition {
         roles: Vec<RoleDefinition>,
         steps: Vec<StepDefinition>,
     ) -> Result<Self, DefinitionError> {
-        assemble(name, default_environment, roles, steps)
+        assemble(name, default_environment, roles, steps, None)
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -434,6 +484,64 @@ impl WorkflowDefinition {
 
     pub(crate) fn default_environment(&self) -> EnvironmentId {
         self.default_environment
+    }
+
+    pub(crate) fn commit_policy(&self) -> CommitPolicy {
+        self.commit_policy
+    }
+
+    pub(crate) fn with_commit_policy(&self, policy: CommitPolicy) -> Result<Self, DefinitionError> {
+        let mut steps = self.steps.clone();
+        if policy == CommitPolicy::AutomaticAfterReview {
+            let removed_gates: Vec<_> = steps
+                .iter()
+                .filter_map(|step| match &step.action {
+                    StepAction::HumanGate(action) => {
+                        Some((step.key.clone(), action.required_output.key.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if removed_gates.is_empty() {
+                return assemble(
+                    self.name.clone(),
+                    self.default_environment,
+                    self.roles.clone(),
+                    steps,
+                    Some(policy),
+                );
+            }
+            steps.retain(|step| !matches!(step.action, StepAction::HumanGate(_)));
+            for step in &mut steps {
+                step.inputs.retain(|input| {
+                    !removed_gates.iter().any(|(gate, output)| {
+                        matches!(
+                            &input.source,
+                            ArtefactSource::StepOutput { step, output: input_output }
+                                if step == gate && input_output == output
+                        )
+                    })
+                });
+            }
+        }
+        assemble(
+            self.name.clone(),
+            self.default_environment,
+            self.roles.clone(),
+            steps,
+            Some(policy),
+        )
+    }
+
+    pub(crate) fn commit_policy_choices(&self) -> Vec<CommitPolicy> {
+        [
+            CommitPolicy::NoCommit,
+            CommitPolicy::HumanApproval,
+            CommitPolicy::AutomaticAfterReview,
+        ]
+        .into_iter()
+        .filter(|policy| self.with_commit_policy(*policy).is_ok())
+        .collect()
     }
 
     pub(crate) fn referenced_environments(&self) -> Vec<EnvironmentId> {
@@ -504,6 +612,14 @@ impl WorkflowDefinition {
                     let start = self.step_position(&policy.revision_target)?;
                     Some((end - start + 1) * usize::from(policy.attempt_limit - 1))
                 })
+                .chain(self.steps.iter().enumerate().filter_map(|(end, step)| {
+                    let StepAction::HumanGate(action) = &step.action else {
+                        return None;
+                    };
+                    let policy = action.revision.as_ref()?;
+                    let start = self.step_position(&policy.revision_target)?;
+                    Some((end - start + 1) * usize::from(policy.attempt_limit - 1))
+                }))
                 .sum::<usize>()
     }
 
@@ -520,6 +636,7 @@ impl WorkflowDefinition {
             format_version: self.format_version,
             name: self.name.clone(),
             default_environment: self.default_environment.as_hex(),
+            commit_policy: Some(self.commit_policy.as_str().to_owned()),
             roles: self
                 .roles
                 .iter()
@@ -673,10 +790,23 @@ impl StepAction {
                 environment: StepEnvironment::from_file(environment)?,
                 required_outputs: parse_outputs(required_outputs)?,
             })),
-            ActionFile::HumanGate { required_output } => {
+            ActionFile::HumanGate {
+                required_output,
+                revision_target,
+                attempt_limit,
+            } => {
                 let mut outputs = parse_outputs(vec![required_output])?;
+                let revision = match (revision_target, attempt_limit) {
+                    (None, None) => None,
+                    (Some(target), Some(limit)) => Some(HumanRevisionPolicy {
+                        revision_target: StepKey::parse(&target)?,
+                        attempt_limit: limit,
+                    }),
+                    _ => return Err(DefinitionError::Format),
+                };
                 Ok(Self::HumanGate(HumanGateStep {
                     required_output: outputs.remove(0),
+                    revision,
                 }))
             }
         }
@@ -699,6 +829,14 @@ impl StepAction {
             Self::HumanGate(step) => ActionFile::HumanGate {
                 required_output: outputs_to_file(std::slice::from_ref(&step.required_output))
                     .remove(0),
+                revision_target: step
+                    .revision
+                    .as_ref()
+                    .map(|revision| revision.revision_target.as_str().to_owned()),
+                attempt_limit: step
+                    .revision
+                    .as_ref()
+                    .map(|revision| revision.attempt_limit),
             },
         }
     }
@@ -1003,6 +1141,7 @@ fn assemble(
     default_environment: EnvironmentId,
     roles: Vec<RoleDefinition>,
     mut steps: Vec<StepDefinition>,
+    requested_policy: Option<CommitPolicy>,
 ) -> Result<WorkflowDefinition, DefinitionError> {
     let name = normalise_name(&name)?;
     if roles.len() > MAXIMUM_ROLES {
@@ -1030,19 +1169,27 @@ fn assemble(
     reject_secondary_writes(&steps)?;
     reject_role_use(&roles, &steps)?;
     reject_review_policies(&steps)?;
+    reject_human_revisions(&steps)?;
     reject_handoff(&steps)?;
+    let commit_policy = requested_policy.unwrap_or_else(|| derive_commit_policy(&steps));
+    reject_commit_policy(&steps, commit_policy)?;
     Ok(WorkflowDefinition {
         format_version: DEFINITION_FORMAT_VERSION,
         name,
         default_environment,
         roles,
         steps,
+        commit_policy,
     })
 }
 
 fn from_current_file(file: DefinitionFile) -> Result<WorkflowDefinition, DefinitionError> {
+    let requested_policy = match file.commit_policy.as_deref() {
+        None => None,
+        Some(value) => Some(CommitPolicy::parse(value).ok_or(DefinitionError::Format)?),
+    };
     let (name, default_environment, roles, steps) = parse_file_parts(file)?;
-    assemble(name, default_environment, roles, steps)
+    assemble(name, default_environment, roles, steps, requested_policy)
 }
 
 type FileParts = (
@@ -1417,6 +1564,70 @@ fn reject_step_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
     Ok(())
 }
 
+fn derive_commit_policy(steps: &[StepDefinition]) -> CommitPolicy {
+    let has_commit = steps.iter().any(|step| {
+        matches!(
+            &step.action,
+            StepAction::SystemCommand(action)
+                if action.command == SystemCommandId::CommitCandidate
+        )
+    });
+    if !has_commit {
+        return CommitPolicy::NoCommit;
+    }
+    if steps
+        .iter()
+        .any(|step| matches!(step.action, StepAction::HumanGate(_)))
+    {
+        CommitPolicy::HumanApproval
+    } else {
+        CommitPolicy::AutomaticAfterReview
+    }
+}
+
+fn reject_commit_policy(
+    steps: &[StepDefinition],
+    policy: CommitPolicy,
+) -> Result<(), DefinitionError> {
+    let commits: Vec<_> = steps
+        .iter()
+        .filter(|step| {
+            matches!(
+                &step.action,
+                StepAction::SystemCommand(action)
+                    if action.command == SystemCommandId::CommitCandidate
+            )
+        })
+        .collect();
+    if policy == CommitPolicy::NoCommit {
+        return if commits.is_empty() {
+            Ok(())
+        } else {
+            Err(DefinitionError::CommitPolicy)
+        };
+    }
+    if commits.len() != 1 {
+        return Err(DefinitionError::CommitPolicy);
+    }
+    let commit = commits[0];
+    let decision = commit
+        .inputs
+        .iter()
+        .any(|input| input.kind == ArtefactKind::HumanDecision);
+    let reviews = commit
+        .inputs
+        .iter()
+        .any(|input| input.kind == ArtefactKind::ReviewReport);
+    match policy {
+        CommitPolicy::NoCommit => Err(DefinitionError::CommitPolicy),
+        CommitPolicy::HumanApproval if !decision => Err(DefinitionError::CommitPolicy),
+        CommitPolicy::AutomaticAfterReview if decision || !reviews => {
+            Err(DefinitionError::CommitPolicy)
+        }
+        CommitPolicy::HumanApproval | CommitPolicy::AutomaticAfterReview => Ok(()),
+    }
+}
+
 fn reject_review_policies(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
     let mut attempt_bound = steps.len();
     let mut artefact_bound = 1usize;
@@ -1452,7 +1663,26 @@ fn reject_review_policies(steps: &[StepDefinition]) -> Result<(), DefinitionErro
             return Err(DefinitionError::ReviewPolicy);
         }
         let interval = &steps[target_index..=gate_index];
-        if !interval.iter().any(StepDefinition::writes_primary_source) {
+        if !matches!(
+            steps[target_index].action,
+            StepAction::Agent(AgentStep {
+                candidate_authority: CandidateAuthority::Edit,
+                ..
+            })
+        ) || steps[target_index]
+            .inputs
+            .iter()
+            .find(|input| input.kind == ArtefactKind::CandidateRevision)
+            .is_none_or(|input| input.source != ArtefactSource::RunCurrentCandidate)
+            || !interval.iter().any(StepDefinition::writes_primary_source)
+            || interval.iter().any(|item| {
+                matches!(
+                    &item.action,
+                    StepAction::SystemCommand(action)
+                        if action.command == SystemCommandId::CommitCandidate
+                )
+            })
+        {
             return Err(DefinitionError::ReviewPolicy);
         }
         for interval_step in &steps[target_index..] {
@@ -1522,6 +1752,136 @@ fn reject_review_policies(steps: &[StepDefinition]) -> Result<(), DefinitionErro
                 return Err(DefinitionError::AssuranceInput);
             }
         }
+    }
+    Ok(())
+}
+
+fn reject_human_revisions(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    let mut attempt_bound = steps.len();
+    let mut artefact_bound = 1usize
+        .checked_add(
+            steps
+                .iter()
+                .map(|step| {
+                    step.required_outputs()
+                        .iter()
+                        .filter(|output| output.kind.as_artefact_kind().is_some())
+                        .count()
+                })
+                .sum::<usize>(),
+        )
+        .ok_or(DefinitionError::RunBound)?;
+    for (gate_index, step) in steps.iter().enumerate() {
+        let StepAction::HumanGate(action) = &step.action else {
+            continue;
+        };
+        let Some(policy) = &action.revision else {
+            continue;
+        };
+        if !(MINIMUM_REVIEW_ATTEMPTS..=MAXIMUM_REVIEW_ATTEMPTS).contains(&policy.attempt_limit) {
+            return Err(DefinitionError::AttemptLimit);
+        }
+        let Some(target_index) = steps
+            .iter()
+            .position(|item| item.key == policy.revision_target)
+        else {
+            return Err(DefinitionError::UnknownStep);
+        };
+        if target_index >= gate_index
+            || steps[target_index]
+                .required_outputs()
+                .iter()
+                .any(|output| output.kind.as_artefact_kind() == Some(ArtefactKind::ReviewReport))
+            || !matches!(
+                steps[target_index].action,
+                StepAction::Agent(AgentStep {
+                    candidate_authority: CandidateAuthority::Edit,
+                    ..
+                })
+            )
+            || steps[target_index]
+                .inputs
+                .iter()
+                .find(|input| input.kind == ArtefactKind::CandidateRevision)
+                .is_none_or(|input| input.source != ArtefactSource::RunCurrentCandidate)
+            || steps[target_index..=gate_index].iter().any(|item| {
+                matches!(
+                    &item.action,
+                    StepAction::SystemCommand(action)
+                        if action.command == SystemCommandId::CommitCandidate
+                )
+            })
+        {
+            return Err(DefinitionError::ReviewPolicy);
+        }
+        let interval = &steps[target_index..=gate_index];
+        let repeats = usize::from(policy.attempt_limit - 1);
+        attempt_bound = attempt_bound
+            .checked_add(
+                interval
+                    .len()
+                    .checked_mul(repeats)
+                    .ok_or(DefinitionError::RunBound)?,
+            )
+            .ok_or(DefinitionError::RunBound)?;
+        let interval_outputs = interval
+            .iter()
+            .map(|item| {
+                item.required_outputs()
+                    .iter()
+                    .filter(|output| output.kind.as_artefact_kind().is_some())
+                    .count()
+            })
+            .sum::<usize>();
+        artefact_bound = artefact_bound
+            .checked_add(
+                interval_outputs
+                    .checked_mul(repeats)
+                    .ok_or(DefinitionError::RunBound)?,
+            )
+            .ok_or(DefinitionError::RunBound)?;
+    }
+    for (gate_index, step) in steps.iter().enumerate() {
+        let Some(policy) = step.review.as_ref() else {
+            continue;
+        };
+        let Some(target_index) = steps
+            .iter()
+            .position(|item| item.key == policy.revision_target)
+        else {
+            return Err(DefinitionError::UnknownStep);
+        };
+        let interval = &steps[target_index..=gate_index];
+        let repeats = usize::from(policy.attempt_limit - 1);
+        attempt_bound = attempt_bound
+            .checked_add(
+                interval
+                    .len()
+                    .checked_mul(repeats)
+                    .ok_or(DefinitionError::RunBound)?,
+            )
+            .ok_or(DefinitionError::RunBound)?;
+        let interval_outputs = interval
+            .iter()
+            .map(|item| {
+                item.required_outputs()
+                    .iter()
+                    .filter(|output| output.kind.as_artefact_kind().is_some())
+                    .count()
+            })
+            .sum::<usize>();
+        artefact_bound = artefact_bound
+            .checked_add(
+                interval_outputs
+                    .checked_mul(repeats)
+                    .ok_or(DefinitionError::RunBound)?,
+            )
+            .ok_or(DefinitionError::RunBound)?;
+    }
+    if attempt_bound > MAXIMUM_RUN_ATTEMPTS
+        || artefact_bound > crate::workflows::artefacts::MAXIMUM_ARTEFACTS
+    {
+        return Err(DefinitionError::RunBound);
     }
     Ok(())
 }

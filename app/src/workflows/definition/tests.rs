@@ -50,10 +50,10 @@ pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
 
 use super::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    DefinitionError, GuestDirectoryAccess, InputKey, OutputKey, OutputKind, RequiredInput,
-    RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction, StepDefinition,
-    StepEnvironment, StepKey, SystemCommandId, SystemCommandStep, WorkflowDefinition,
-    candidate_revision_output, initial_candidate_input,
+    CommitPolicy, DefinitionError, GuestDirectoryAccess, InputKey, OutputKey, OutputKind,
+    RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction,
+    StepDefinition, StepEnvironment, StepKey, SystemCommandId, SystemCommandStep,
+    WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
 use crate::agents::{AccessMode, ToolId};
 use crate::environments::EnvironmentId;
@@ -638,6 +638,78 @@ fn rebuild_review_definition(
         source.roles().to_vec(),
         steps,
     )
+}
+
+#[test]
+fn commit_policy_choices_match_the_candidate_assurance_shape() {
+    let approval =
+        crate::workflows::seeds::implement_with_approval_definition(test_environment_id());
+    assert_eq!(approval.commit_policy(), CommitPolicy::HumanApproval);
+    assert!(
+        approval
+            .commit_policy_choices()
+            .contains(&CommitPolicy::HumanApproval)
+    );
+    assert!(
+        !approval
+            .commit_policy_choices()
+            .contains(&CommitPolicy::AutomaticAfterReview)
+    );
+
+    let reviewed = crate::workflows::seeds::implement_and_review_definition(test_environment_id());
+    let automatic = reviewed
+        .with_commit_policy(CommitPolicy::AutomaticAfterReview)
+        .expect("automatic review policy");
+    assert_eq!(
+        automatic.commit_policy(),
+        CommitPolicy::AutomaticAfterReview
+    );
+    assert!(
+        automatic
+            .steps()
+            .iter()
+            .all(|step| !matches!(step.action, StepAction::HumanGate(_)))
+    );
+    assert!(automatic.steps().iter().any(|step| {
+        matches!(
+            &step.action,
+            StepAction::SystemCommand(action)
+                if action.command == SystemCommandId::CommitCandidate
+        ) && step
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::ReviewReport)
+            && !step
+                .inputs
+                .iter()
+                .any(|input| input.kind == ArtefactKind::HumanDecision)
+    }));
+    assert!(reviewed.with_commit_policy(CommitPolicy::NoCommit).is_err());
+}
+
+#[test]
+fn human_revision_routes_reject_unknown_targets() {
+    let source = crate::workflows::seeds::implement_with_approval_definition(test_environment_id());
+    let mut steps = source.steps().to_vec();
+    let gate = steps
+        .iter_mut()
+        .find(|step| matches!(step.action, StepAction::HumanGate(_)))
+        .expect("gate");
+    let StepAction::HumanGate(action) = &mut gate.action else {
+        panic!("gate")
+    };
+    let revision = action.revision.as_mut().expect("revision route");
+    revision.revision_target = StepKey::parse("missing").expect("target");
+    assert_eq!(
+        WorkflowDefinition::from_parts(
+            source.name().to_owned(),
+            source.default_environment(),
+            source.roles().to_vec(),
+            steps,
+        )
+        .err(),
+        Some(DefinitionError::UnknownStep)
+    );
 }
 
 #[test]

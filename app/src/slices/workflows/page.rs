@@ -117,6 +117,12 @@ pub(super) struct ReviewPolicyRow {
     pub(super) revision_options: Vec<SourceOption>,
 }
 
+pub(super) struct HumanRevisionRow {
+    pub(super) revision_target_error: &'static str,
+    pub(super) attempt_limit: String,
+    pub(super) attempt_limit_error: &'static str,
+}
+
 pub(super) struct RoleRow {
     pub(super) index: usize,
     pub(super) position: usize,
@@ -168,6 +174,9 @@ pub(super) struct StepRow {
     pub(super) outputs: Vec<OutputRow>,
     pub(super) can_add_output: bool,
     pub(super) review_policy: Option<ReviewPolicyRow>,
+    pub(super) human_revision: Option<HumanRevisionRow>,
+    pub(super) human_revision_options: Vec<SourceOption>,
+    pub(super) human_revision_policy_error: &'static str,
     pub(super) review_policy_error: &'static str,
     pub(super) can_review_gate: bool,
     pub(super) phase: usize,
@@ -534,6 +543,23 @@ fn step_row(
                 })
                 .collect(),
         }),
+        human_revision: step.human_revision.as_ref().map(|policy| HumanRevisionRow {
+            revision_target_error: errors.human_revision_target,
+            attempt_limit: policy.attempt_limit.clone(),
+            attempt_limit_error: errors.human_attempt_limit,
+        }),
+        human_revision_options: earlier
+            .iter()
+            .map(|item| SourceOption {
+                value: item.key.clone(),
+                label: item.name.clone(),
+                selected: step
+                    .human_revision
+                    .as_ref()
+                    .is_some_and(|policy| item.key == policy.revision_target),
+            })
+            .collect(),
+        human_revision_policy_error: errors.human_revision_policy,
         review_policy_error: errors.review_policy,
         can_review_gate: is_agent && !earlier.is_empty(),
         phase: earlier

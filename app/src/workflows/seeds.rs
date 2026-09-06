@@ -4,9 +4,10 @@ use crate::environments::EnvironmentId;
 use super::commands::SystemCommandId;
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    HumanGateStep, InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput, ReviewPolicy,
-    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
-    SystemCommandStep, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
+    HumanGateStep, HumanRevisionPolicy, InputKey, OutputKey, OutputKind, RequiredInput,
+    RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction, StepDefinition,
+    StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition, candidate_revision_output,
+    initial_candidate_input,
 };
 pub(crate) const PLAN_A_CHANGE_V1: &str = "plan-a-change-v1";
 pub(crate) const REVIEW_CURRENT_CODE_V1: &str = "review-current-code-v1";
@@ -142,7 +143,7 @@ pub(crate) fn implement_with_approval_definition(
         "implementer",
         CandidateAuthority::Edit,
         ToolId::ALL.to_vec(),
-        vec![initial_candidate_input()],
+        vec![current_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
         None,
     );
@@ -179,7 +180,7 @@ pub(crate) fn implement_and_review_definition(
         "implementer",
         CandidateAuthority::Edit,
         ToolId::ALL.to_vec(),
-        vec![initial_candidate_input()],
+        vec![current_candidate_input()],
         vec![assistant_output(), candidate_revision_output()],
         None,
     );
@@ -636,6 +637,10 @@ fn human_approval_step(candidate_step: &str, review_step: Option<&str>) -> StepD
         inputs,
         action: StepAction::HumanGate(HumanGateStep {
             required_output: output("decision", OutputKind::HumanDecision),
+            revision: Some(HumanRevisionPolicy {
+                revision_target: StepKey::parse(candidate_step).expect("revision target"),
+                attempt_limit: 3,
+            }),
         }),
         review: None,
     }

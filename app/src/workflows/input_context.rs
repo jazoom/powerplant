@@ -483,7 +483,16 @@ pub(crate) fn build_attempt_packet_for_request(
     } else {
         "No source files are available through tools for this phase. Project instructions above are the only automatic source context.".to_owned()
     };
-    let excluded_context = if run.kind == super::run::RunKind::Configured {
+    let revision_feedback = verify_revision_feedback(run, step, resolved, store)?
+        .map(|feedback| {
+            format!(
+                "\n\n# Human revision feedback\n\n{feedback}\n\nThe rejected candidate remains the revision input. The original task brief and immutable diff base remain unchanged."
+            )
+        })
+        .unwrap_or_default();
+    let excluded_context = if run.kind == super::run::RunKind::Configured
+        || run.revision_feedback(&step.key).is_some()
+    {
         "The source conversation, its messages, thoughts and tool output, plus worker transcripts from other attempts, are excluded.".to_owned()
     } else {
         "Worker transcripts from other attempts are excluded. The ordinary conversation messages below remain part of this request.".to_owned()
@@ -498,10 +507,11 @@ pub(crate) fn build_attempt_packet_for_request(
         }
     };
     let context = format!(
-        "Task brief:\n{}\n\n{}\n\n{}\n\n# Context boundary\n\nSource available through tools: {}\n\nExcluded context: {}",
+        "Task brief:\n{}\n\n{}\n\n{}{}\n\n# Context boundary\n\nSource available through tools: {}\n\nExcluded context: {}",
         brief.trim(),
         format_agent_context(&verified, step.writes_primary_source()),
         instructions,
+        revision_feedback,
         source_available,
         excluded_context,
     );
@@ -510,7 +520,10 @@ pub(crate) fn build_attempt_packet_for_request(
     } else {
         format!("{}\n\n{}", role_preamble.trim(), context)
     };
-    let messages = if run.kind == super::run::RunKind::QuickTask && !conversation_turns.is_empty() {
+    let messages = if run.kind == super::run::RunKind::QuickTask
+        && run.revision_feedback(&step.key).is_none()
+        && !conversation_turns.is_empty()
+    {
         conversation_turns
             .iter()
             .map(|turn| match turn.role {
@@ -613,6 +626,86 @@ fn estimate_tokens(bytes: usize) -> Option<u64> {
         .ok()
         .and_then(|bytes| bytes.checked_add(3))
         .map(|bytes| bytes / 4)
+}
+
+fn verify_revision_feedback(
+    run: &WorkflowRun,
+    step: &StepDefinition,
+    resolved: &[AttemptArtefactInput],
+    store: &super::artefacts::WorkflowArtefactRepository,
+) -> Result<Option<String>, InputContextError> {
+    let Some(reservation) = &run.revision_reservation else {
+        return Ok(None);
+    };
+    let gate = run
+        .gates
+        .iter()
+        .find(|gate| gate.id == reservation.gate)
+        .ok_or(InputContextError::Source)?;
+    let super::run::RunSource::Captured { source } = &run.source else {
+        return Err(InputContextError::Source);
+    };
+    if reservation.target != step.key
+        || gate.state != super::gates::HumanGateState::RevisionRequested
+        || gate.decision.as_ref() != Some(&reservation.decision)
+        || gate.candidate != reservation.candidate
+        || gate.diff_base != reservation.diff_base
+        || source.initial != reservation.diff_base
+        || !resolved
+            .iter()
+            .any(|input| input.artefact == reservation.candidate)
+        || run
+            .human_revision_policy(&gate.step)
+            .is_none_or(|policy| policy.revision_target != step.key)
+    {
+        return Err(InputContextError::Source);
+    }
+    let declared = RequiredInput {
+        key: super::definition::InputKey::parse("human-revision-feedback")
+            .expect("revision input key"),
+        kind: ArtefactKind::HumanDecision,
+        source: ArtefactSource::StepOutput {
+            step: gate.step.clone(),
+            output: gate.output.clone(),
+        },
+    };
+    let input = AttemptArtefactInput {
+        key: declared.key.clone(),
+        artefact: reservation.decision.clone(),
+    };
+    let verified = verify_one(run, &declared, &input, store, &mut 0)?;
+    let record = run
+        .artefact(&verified.artefact_id)
+        .ok_or(InputContextError::Missing)?;
+    if !matches!(&record.provenance.producer,
+        ArtefactProducer::HumanGate { gate_id: id, .. } if *id == gate.id)
+    {
+        return Err(InputContextError::Provenance);
+    }
+    let bytes = store
+        .get(&record.object_hash)
+        .map_err(|_| InputContextError::Missing)?;
+    let TypedPayload::HumanDecision(decision) =
+        parse_typed_payload(record.kind, &bytes).map_err(map_payload)?
+    else {
+        return Err(InputContextError::Kind);
+    };
+    let candidate = run
+        .artefact(&reservation.candidate.id)
+        .and_then(super::artefacts::ArtefactRecord::candidate_hash)
+        .ok_or(InputContextError::Changed)?;
+    let base = run
+        .artefact(&reservation.diff_base.id)
+        .and_then(super::artefacts::ArtefactRecord::candidate_hash)
+        .ok_or(InputContextError::Changed)?;
+    if decision.decision != super::gates::HumanDecisionKind::RevisionRequested
+        || decision.candidate != candidate.as_str()
+        || decision.diff_base != base.as_str()
+        || decision.note.as_deref() != Some(reservation.feedback.as_str())
+    {
+        return Err(InputContextError::Changed);
+    }
+    Ok(decision.note)
 }
 
 pub(crate) fn verify_inputs(

@@ -333,6 +333,51 @@ fn with_decision_input(mut step: StepDefinition) -> StepDefinition {
     step
 }
 
+fn use_human_policy(run: &mut WorkflowRun) {
+    use crate::workflows::definition::{
+        HumanGateStep, OutputKind, RequiredOutput, StepAction, WorkflowDefinition,
+    };
+    let definition = &run.pinned.definition;
+    let mut steps = definition.steps().to_vec();
+    let index = steps
+        .iter()
+        .position(|step| step.key == commit_step(run).key)
+        .expect("commit");
+    let candidate = steps[index]
+        .inputs
+        .iter()
+        .find(|input| input.kind == ArtefactKind::CandidateRevision)
+        .expect("candidate")
+        .clone();
+    steps[index].inputs.push(decision_input());
+    steps.insert(
+        index,
+        StepDefinition {
+            key: StepKey::parse("approve").expect("gate"),
+            name: "Approve candidate".to_owned(),
+            inputs: vec![candidate],
+            action: StepAction::HumanGate(HumanGateStep {
+                required_output: RequiredOutput {
+                    key: OutputKey::parse("decision").expect("decision"),
+                    kind: OutputKind::HumanDecision,
+                },
+                revision: None,
+            }),
+            review: None,
+        },
+    );
+    run.pinned = crate::workflows::definition::PinnedWorkflowDefinition::pin(
+        None,
+        WorkflowDefinition::from_parts(
+            definition.name().to_owned(),
+            definition.default_environment(),
+            definition.roles().to_vec(),
+            steps,
+        )
+        .expect("human policy"),
+    );
+}
+
 fn decision_only_step(mut step: StepDefinition) -> StepDefinition {
     step.inputs
         .retain(|input| input.kind == ArtefactKind::CandidateRevision);
@@ -506,15 +551,23 @@ fn commit_approval_accepts_review_and_decision_shapes() {
             &decision_only,
             &store
         )
+        .is_err()
+    );
+    use_human_policy(&mut run);
+    assert!(require_commit_approval(&run, &commit_step(&run), &reviews, &store).is_err());
+    assert!(
+        require_commit_approval(
+            &run,
+            &decision_only_step(commit_step(&run)),
+            &decision_only,
+            &store
+        )
         .is_ok()
     );
 
     let mut both = reviews;
     both.push(decision_attempt_input(&decision_reference));
-    assert!(
-        require_commit_approval(&run, &with_decision_input(commit_step(&run)), &both, &store)
-            .is_ok()
-    );
+    assert!(require_commit_approval(&run, &commit_step(&run), &both, &store).is_ok());
 }
 
 #[test]
@@ -530,6 +583,7 @@ fn commit_approval_rejects_missing_and_unrelated_authority() {
     );
     run.artefacts.push(decision);
     run.gates.push(gate);
+    use_human_policy(&mut run);
     let step = decision_only_step(commit_step(&run));
     let decision_input = decision_attempt_input(&decision_reference);
     let candidate = candidate_input(&reference);
@@ -585,7 +639,8 @@ fn commit_approval_rejects_missing_and_unrelated_authority() {
 #[test]
 fn commit_approval_rejects_decision_provenance_mismatches() {
     let store = store();
-    let (run, _, reference, captured, _dir) = captured_candidate(&store);
+    let (mut run, _, reference, captured, _dir) = captured_candidate(&store);
+    use_human_policy(&mut run);
     let (decision, gate, decision_reference) = approved_decision(
         &run,
         &reference,

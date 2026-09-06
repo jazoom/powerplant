@@ -6,7 +6,7 @@ use crate::workflows::artefacts::{
     ArtefactProducer, ArtefactRecord, ArtefactReference, ReviewVerdict, TypedPayload,
     WorkflowArtefactRepository, artefact_hash_for, parse_typed_payload,
 };
-use crate::workflows::definition::ArtefactKind;
+use crate::workflows::definition::{ArtefactKind, CommitPolicy};
 use crate::workflows::run::{AttemptArtefactInput, FailureCategory, WorkflowRun};
 
 mod journal;
@@ -90,6 +90,27 @@ pub(crate) fn require_commit_approval(
     ),
     CommitError,
 > {
+    match run.pinned.definition.commit_policy() {
+        CommitPolicy::NoCommit => return Err(CommitError::Assurance),
+        CommitPolicy::HumanApproval
+            if !inputs
+                .iter()
+                .any(|input| input.artefact.kind == ArtefactKind::HumanDecision) =>
+        {
+            return Err(CommitError::Assurance);
+        }
+        CommitPolicy::AutomaticAfterReview
+            if !inputs
+                .iter()
+                .any(|input| input.artefact.kind == ArtefactKind::ReviewReport)
+                || inputs
+                    .iter()
+                    .any(|input| input.artefact.kind == ArtefactKind::HumanDecision) =>
+        {
+            return Err(CommitError::Assurance);
+        }
+        CommitPolicy::HumanApproval | CommitPolicy::AutomaticAfterReview => {}
+    }
     if inputs.iter().any(|input| {
         !matches!(
             input.artefact.kind,

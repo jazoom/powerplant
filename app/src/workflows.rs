@@ -33,7 +33,7 @@ pub(crate) use execution::{ExecutionGuard, WorkflowExecution};
 pub(crate) use executor::{
     WorkflowContinuationRegistry, WorkflowJob, execute_run, interrupt_provider_continuations,
     interrupt_session_continuations, recover_commit_transactions, settle_cancelled_job,
-    settle_completed_job,
+    settle_terminal_job,
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
 #[cfg(test)]

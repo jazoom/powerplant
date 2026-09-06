@@ -492,7 +492,12 @@ pub(crate) async fn execute_run(
             }
             None
         };
-        let attempt_id = match AttemptId::generate() {
+        let attempt_id = match run
+            .revision_reservation
+            .as_ref()
+            .map(|reservation| Ok(reservation.attempt))
+            .unwrap_or_else(AttemptId::generate)
+        {
             Ok(id) => id,
             Err(_) => {
                 fail_operational(&state, &job);
@@ -757,7 +762,11 @@ pub(crate) async fn execute_run(
     }
 }
 
-fn settle_terminal_job(state: &AppState, job: &WorkflowJob, run: &crate::workflows::WorkflowRun) {
+pub(crate) fn settle_terminal_job(
+    state: &AppState,
+    job: &WorkflowJob,
+    run: &crate::workflows::WorkflowRun,
+) {
     match &run.state {
         crate::workflows::run::RunState::Escalated { reason, .. } => {
             let message = match reason {

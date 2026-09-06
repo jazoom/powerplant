@@ -88,7 +88,15 @@ The browser session remains a command boundary, not a conversation identity. The
 
 Each run pins the workflow definition and prepared environments. Run records track attempts, artefact references and human gates. Artefacts store candidate revisions and typed workflow outputs, such as plans, reviews, tests and human decisions.
 
-A human-gate step pauses the run for a decision about an immutable candidate diff. For Quick task, the user can apply the candidate or discard the changes. For a configured workflow, the user can approve the candidate, request a revision or cancel the run. The run list shows the newest fifty runs.
+A human-gate step pauses the run for a decision about an immutable candidate diff. Writable Quick tasks also support Request changes. Configured gates offer this action only with a declared revision route.
+
+A human revision starts a fresh implementation attempt from the rejected candidate. It retains the original task brief and diff base, plus candidate-bound feedback. Earlier implementation transcripts stay outside the new context. Required reviews and code approval repeat before commit.
+
+Revision limits apply across reopened gates. An exhausted limit blocks the run and retains its evidence. Model verdict routes remain distinct from human revision routes.
+
+The launch sheet offers human approval before commit or automatic commit after an approved exact-candidate review when the definition supports that choice. Automatic commit requires review assurance. Read-only workflows need no commit policy or code approval.
+
+The run list shows the newest fifty runs.
 
 Rig streams model replies on the host. An agent step can use the allowed list, read, write and run tools. Those tools run only in the guest. The transcript shows the reply as HTML. Tool traces appear in the transcript.
 

@@ -48,12 +48,31 @@ pub(crate) fn approval_stops(definition: &WorkflowDefinition) -> String {
     let human_stops: Vec<_> = definition
         .steps()
         .iter()
-        .filter(|step| matches!(step.action, StepAction::HumanGate(_)))
-        .map(|step| step.name.as_str())
+        .filter_map(|step| {
+            let StepAction::HumanGate(action) = &step.action else {
+                return None;
+            };
+            Some(match &action.revision {
+                Some(policy) => format!(
+                    "{} with request changes to {}",
+                    step.name,
+                    definition
+                        .step(&policy.revision_target)
+                        .map(|target| target.name.as_str())
+                        .unwrap_or("the earlier implementation")
+                ),
+                None => step.name.to_owned(),
+            })
+        })
         .collect();
-    if human_stops.is_empty() {
-        "No approval stop".to_owned()
-    } else {
+    if !human_stops.is_empty() {
         format!("Human approval at {}", human_stops.join(", "))
+    } else {
+        match definition.commit_policy() {
+            crate::workflows::definition::CommitPolicy::AutomaticAfterReview => {
+                "Automatic commit after approved review".to_owned()
+            }
+            _ => "No approval stop".to_owned(),
+        }
     }
 }

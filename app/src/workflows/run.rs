@@ -43,6 +43,7 @@ pub(crate) struct WorkflowRun {
     pub(crate) artefacts: Vec<ArtefactRecord>,
     pub(crate) attempts: Vec<AttemptRecord>,
     pub(crate) gates: Vec<HumanGateRecord>,
+    pub(crate) revision_reservation: Option<RevisionReservation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +65,18 @@ pub(crate) struct PinnedPreset {
     pub(crate) id: AgentId,
     pub(crate) revision: u32,
     pub(crate) name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RevisionReservation {
+    pub(crate) attempt: AttemptId,
+    pub(crate) gate: GateId,
+    pub(crate) target: StepKey,
+    pub(crate) decision: ArtefactReference,
+    pub(crate) candidate: ArtefactReference,
+    pub(crate) diff_base: ArtefactReference,
+    pub(crate) feedback: String,
+    pub(crate) started: bool,
 }
 
 impl RunKind {
@@ -270,6 +283,8 @@ pub(super) struct RunFile {
     artefacts: Vec<ArtefactFile>,
     attempts: Vec<AttemptFile>,
     gates: Vec<HumanGateFile>,
+    #[serde(default)]
+    revision_reservation: Option<RevisionReservationFile>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -337,6 +352,19 @@ struct HumanGateFile {
     state: String,
     decision: Option<ArtefactRefFile>,
     output: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RevisionReservationFile {
+    attempt: String,
+    gate: String,
+    target: String,
+    decision: ArtefactRefFile,
+    candidate: ArtefactRefFile,
+    diff_base: ArtefactRefFile,
+    feedback: String,
+    started: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -613,6 +641,7 @@ impl WorkflowRun {
             artefacts: Vec::new(),
             attempts: Vec::new(),
             gates: Vec::new(),
+            revision_reservation: None,
         }
     }
 
@@ -786,12 +815,39 @@ impl WorkflowRun {
         Ok(gate)
     }
 
+    pub(crate) fn human_revision_policy(
+        &self,
+        step: &StepKey,
+    ) -> Option<&crate::workflows::definition::HumanRevisionPolicy> {
+        match &self.pinned.definition.step(step)?.action {
+            StepAction::HumanGate(action) => action.revision.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn human_revision_count(&self, step: &StepKey) -> usize {
+        self.gates
+            .iter()
+            .filter(|gate| gate.step == *step && gate.state == HumanGateState::RevisionRequested)
+            .count()
+    }
+
+    pub(crate) fn revision_feedback(&self, step: &StepKey) -> Option<&str> {
+        self.revision_reservation
+            .as_ref()
+            .filter(|reservation| reservation.target == *step)
+            .map(|reservation| reservation.feedback.as_str())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide_gate(
         &mut self,
         gate_id: GateId,
         revision: GateRevision,
         record: ArtefactRecord,
         kind: super::gates::HumanDecisionKind,
+        feedback: Option<String>,
+        reserved_attempt: Option<AttemptId>,
         at_ms: u64,
     ) -> Result<(), TransitionError> {
         if !self.accepts_time(at_ms)
@@ -806,12 +862,13 @@ impl WorkflowRun {
         if gate != gate_id || record.kind != super::definition::ArtefactKind::HumanDecision {
             return Err(TransitionError::Invalid);
         }
-        let gate = self
+        let gate_record = self
             .gates
-            .iter_mut()
+            .iter()
             .find(|item| item.id == gate_id)
             .ok_or(TransitionError::Invalid)?;
-        if gate.state != HumanGateState::AwaitingDecision || gate.revision != revision {
+        if gate_record.state != HumanGateState::AwaitingDecision || gate_record.revision != revision
+        {
             return Err(TransitionError::Invalid);
         }
         let reference = ArtefactReference {
@@ -819,15 +876,11 @@ impl WorkflowRun {
             kind: record.kind,
             artefact_hash: record.artefact_hash,
         };
-        gate.closed_at_ms = Some(at_ms);
-        gate.decision = Some(reference.clone());
-        gate.state = match kind {
-            super::gates::HumanDecisionKind::Approved => HumanGateState::Approved,
-            super::gates::HumanDecisionKind::RevisionRequested => HumanGateState::RevisionRequested,
-        };
-        self.artefacts.push(record);
-        self.state = match kind {
+        let next_state = match kind {
             super::gates::HumanDecisionKind::Approved => {
+                if feedback.is_some() || reserved_attempt.is_some() {
+                    return Err(TransitionError::Invalid);
+                }
                 let definition = self
                     .pinned
                     .definition
@@ -838,11 +891,57 @@ impl WorkflowRun {
                 }
                 advanced_state(&self.pinned.definition, &step)?
             }
-            super::gates::HumanDecisionKind::RevisionRequested => RunState::RevisionRequested {
-                step,
-                decision: reference,
-            },
+            super::gates::HumanDecisionKind::RevisionRequested => {
+                let (revision_target, attempt_limit) = {
+                    let policy = self
+                        .human_revision_policy(&step)
+                        .ok_or(TransitionError::Invalid)?;
+                    (policy.revision_target.clone(), policy.attempt_limit)
+                };
+                let attempt = reserved_attempt.ok_or(TransitionError::Invalid)?;
+                let feedback = feedback
+                    .filter(|feedback| !feedback.is_empty())
+                    .ok_or(TransitionError::Invalid)?;
+                if self.revision_reservation.is_some() {
+                    return Err(TransitionError::Invalid);
+                }
+                if self.human_revision_count(&step) >= usize::from(attempt_limit.saturating_sub(1))
+                {
+                    RunState::Escalated {
+                        step,
+                        report: reference.clone(),
+                        reason: EscalationReason::AttemptLimit,
+                    }
+                } else {
+                    self.revision_reservation = Some(RevisionReservation {
+                        attempt,
+                        gate: gate_id,
+                        target: revision_target.clone(),
+                        decision: reference.clone(),
+                        candidate: gate_record.candidate.clone(),
+                        diff_base: gate_record.diff_base.clone(),
+                        feedback,
+                        started: false,
+                    });
+                    RunState::Ready {
+                        step: revision_target,
+                    }
+                }
+            }
         };
+        let gate = self
+            .gates
+            .iter_mut()
+            .find(|item| item.id == gate_id)
+            .ok_or(TransitionError::Invalid)?;
+        gate.closed_at_ms = Some(at_ms);
+        gate.decision = Some(reference.clone());
+        gate.state = match kind {
+            super::gates::HumanDecisionKind::Approved => HumanGateState::Approved,
+            super::gates::HumanDecisionKind::RevisionRequested => HumanGateState::RevisionRequested,
+        };
+        self.artefacts.push(record);
+        self.state = next_state;
         Ok(())
     }
 
@@ -902,6 +1001,20 @@ impl WorkflowRun {
         let Some(definition_step) = self.pinned.definition.step(&step) else {
             return Err(TransitionError::Invalid);
         };
+        if let Some(reservation) = &self.revision_reservation
+            && (reservation.started
+                || reservation.attempt != attempt_id
+                || reservation.target != step
+                || inputs
+                    .iter()
+                    .find(|input| {
+                        input.artefact.kind
+                            == crate::workflows::definition::ArtefactKind::CandidateRevision
+                    })
+                    .is_none_or(|input| input.artefact != reservation.candidate))
+        {
+            return Err(TransitionError::Invalid);
+        }
         if !capabilities_match_step(&capabilities, definition_step) {
             return Err(TransitionError::Invalid);
         }
@@ -915,6 +1028,9 @@ impl WorkflowRun {
             || sandbox.kind != AttemptSandboxKind::IsolatedAttempt
         {
             return Err(TransitionError::Invalid);
+        }
+        if let Some(reservation) = &mut self.revision_reservation {
+            reservation.started = true;
         }
         let ordinal = next_ordinal(&self.attempts, &step);
         self.attempts.push(AttemptRecord {
@@ -1161,6 +1277,13 @@ impl WorkflowRun {
             },
             review_route,
         )?;
+        if self
+            .revision_reservation
+            .as_ref()
+            .is_some_and(|reservation| reservation.attempt == attempt_id)
+        {
+            self.revision_reservation = None;
+        }
         self.state = next_state;
         Ok(())
     }
@@ -1206,6 +1329,7 @@ impl WorkflowRun {
             AttemptResult::Failed { category },
             None,
         )?;
+        self.revision_reservation = None;
         self.state = RunState::Failed;
         Ok(())
     }
@@ -1233,6 +1357,7 @@ impl WorkflowRun {
                     AttemptResult::Cancelled,
                     None,
                 )?;
+                self.revision_reservation = None;
                 self.state = RunState::Cancelled;
                 Ok(())
             }
@@ -1262,7 +1387,10 @@ impl WorkflowRun {
         if !self.accepts_time(at_ms) {
             return Err(TransitionError::Invalid);
         }
-        if matches!(self.state, RunState::InitialisingSource) {
+        if matches!(self.state, RunState::InitialisingSource)
+            || matches!(self.state, RunState::Ready { .. }) && self.revision_reservation.is_some()
+        {
+            self.revision_reservation = None;
             self.state = RunState::Interrupted;
             return Ok(());
         }
@@ -1290,6 +1418,7 @@ impl WorkflowRun {
             AttemptResult::Interrupted,
             None,
         )?;
+        self.revision_reservation = None;
         self.state = RunState::Interrupted;
         Ok(())
     }
@@ -1312,7 +1441,7 @@ impl WorkflowRun {
         matches!(
             self.state,
             RunState::Active { .. } | RunState::AwaitingHuman { .. }
-        )
+        ) || matches!(self.state, RunState::Ready { .. }) && self.revision_reservation.is_some()
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
@@ -1413,6 +1542,10 @@ impl WorkflowRun {
             artefacts: self.artefacts.iter().map(artefact_to_file).collect(),
             attempts: self.attempts.iter().map(AttemptRecord::to_file).collect(),
             gates: self.gates.iter().map(gate_to_file).collect(),
+            revision_reservation: self
+                .revision_reservation
+                .as_ref()
+                .map(revision_reservation_to_file),
         }
     }
 
@@ -1456,6 +1589,10 @@ impl WorkflowRun {
             .into_iter()
             .map(gate_from_file)
             .collect::<Result<Vec<_>, _>>()?;
+        let revision_reservation = file
+            .revision_reservation
+            .map(revision_reservation_from_file)
+            .transpose()?;
         let environments = environment_set_from_file(file.environments)?;
         let source = source_from_file(file.source)?;
         let artefacts = file
@@ -1483,6 +1620,7 @@ impl WorkflowRun {
             artefacts,
             attempts,
             gates,
+            revision_reservation,
         };
         run.validate_loaded()?;
         Ok(run)
@@ -1503,6 +1641,7 @@ impl WorkflowRun {
         validate_attempts(self)?;
         validate_gates(self)?;
         validate_review_routes(self)?;
+        validate_revision_reservation(self)?;
         validate_phase_models(self)?;
         validate_state_facts(self)?;
         validate_source(self)?;
@@ -2256,6 +2395,34 @@ fn gate_to_file(gate: &HumanGateRecord) -> HumanGateFile {
         decision: gate.decision.as_ref().map(ref_to_file),
         output: gate.output.as_str().to_owned(),
     }
+}
+
+fn revision_reservation_to_file(reservation: &RevisionReservation) -> RevisionReservationFile {
+    RevisionReservationFile {
+        attempt: reservation.attempt.as_hex(),
+        gate: reservation.gate.as_hex(),
+        target: reservation.target.as_str().to_owned(),
+        decision: ref_to_file(&reservation.decision),
+        candidate: ref_to_file(&reservation.candidate),
+        diff_base: ref_to_file(&reservation.diff_base),
+        feedback: reservation.feedback.clone(),
+        started: reservation.started,
+    }
+}
+
+fn revision_reservation_from_file(
+    file: RevisionReservationFile,
+) -> Result<RevisionReservation, RunRecordError> {
+    Ok(RevisionReservation {
+        attempt: AttemptId::parse(&file.attempt).ok_or(RunRecordError::Corrupt)?,
+        gate: GateId::parse(&file.gate).ok_or(RunRecordError::Corrupt)?,
+        target: StepKey::parse(&file.target).map_err(|_| RunRecordError::Corrupt)?,
+        decision: ref_from_file(file.decision)?,
+        candidate: ref_from_file(file.candidate)?,
+        diff_base: ref_from_file(file.diff_base)?,
+        feedback: file.feedback,
+        started: file.started,
+    })
 }
 
 fn gate_from_file(file: HumanGateFile) -> Result<HumanGateRecord, RunRecordError> {
@@ -3346,6 +3513,41 @@ fn validate_attempts(run: &WorkflowRun) -> Result<(), RunRecordError> {
     Ok(())
 }
 
+fn validate_revision_reservation(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    let Some(reservation) = &run.revision_reservation else {
+        return Ok(());
+    };
+    let gate = run
+        .gates
+        .iter()
+        .find(|gate| gate.id == reservation.gate)
+        .ok_or(RunRecordError::Corrupt)?;
+    let policy = run
+        .human_revision_policy(&gate.step)
+        .ok_or(RunRecordError::Corrupt)?;
+    if gate.state != HumanGateState::RevisionRequested
+        || gate.decision.as_ref() != Some(&reservation.decision)
+        || gate.candidate != reservation.candidate
+        || gate.diff_base != reservation.diff_base
+        || reservation.feedback.is_empty()
+        || reservation.feedback.len() > super::gates::MAXIMUM_REVISION_NOTE_BYTES
+        || reservation.target != policy.revision_target
+        || (!reservation.started
+            && !matches!(
+                run.state,
+                RunState::Ready { ref step } if step == &reservation.target
+            ))
+        || (reservation.started
+            && !matches!(
+                run.state,
+                RunState::Active { ref step, attempt } if step == &reservation.target && attempt == reservation.attempt
+            ))
+    {
+        return Err(RunRecordError::Corrupt);
+    }
+    Ok(())
+}
+
 fn validate_review_routes(run: &WorkflowRun) -> Result<(), RunRecordError> {
     for attempt in &run.attempts {
         let step = run
@@ -3446,7 +3648,24 @@ fn validate_state_facts(run: &WorkflowRun) -> Result<(), RunRecordError> {
 
     if run.state == expected
         || matches!(expected, RunState::Ready { .. })
-            && matches!(run.state, RunState::Failed | RunState::Cancelled)
+            && matches!(
+                run.state,
+                RunState::Failed | RunState::Cancelled | RunState::Interrupted
+            )
+        || matches!(
+            (&expected, &run.state),
+            (
+                RunState::Ready { .. },
+                RunState::Escalated {
+                    reason: EscalationReason::AttemptLimit,
+                    report,
+                    ..
+                }
+            ) if run.gates.last().is_some_and(|gate| {
+                gate.state == HumanGateState::RevisionRequested
+                    && gate.decision.as_ref() == Some(report)
+            })
+        )
     {
         return Ok(());
     }
@@ -3524,10 +3743,23 @@ fn predicted_from_gate(
             }
             advanced_state(&run.pinned.definition, &gate.step).map_err(|_| RunRecordError::Corrupt)
         }
-        HumanGateState::RevisionRequested => Ok(RunState::RevisionRequested {
-            step: gate.step.clone(),
-            decision: gate.decision.clone().ok_or(RunRecordError::Corrupt)?,
-        }),
+        HumanGateState::RevisionRequested => {
+            let step = run
+                .pinned
+                .definition
+                .step(&gate.step)
+                .ok_or(RunRecordError::Corrupt)?;
+            let StepAction::HumanGate(action) = &step.action else {
+                return Err(RunRecordError::Corrupt);
+            };
+            let target = action
+                .revision
+                .as_ref()
+                .ok_or(RunRecordError::Corrupt)?
+                .revision_target
+                .clone();
+            Ok(RunState::Ready { step: target })
+        }
         HumanGateState::Cancelled => Ok(RunState::Cancelled),
         HumanGateState::Interrupted => Ok(RunState::Interrupted),
         HumanGateState::AwaitingDecision => Err(RunRecordError::Corrupt),
