@@ -7,6 +7,7 @@ use crate::environments::{
     EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
 };
 use crate::projects::ProjectId;
+use crate::providers::{ModelSelection, ProviderKind, ThinkingEffort};
 
 use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::capabilities::{
@@ -33,6 +34,7 @@ pub(crate) struct WorkflowRun {
     pub(crate) launch_brief: String,
     pub(crate) kind: RunKind,
     pub(crate) agent_id: AgentId,
+    pub(crate) phase_models: Vec<PhaseModelSelection>,
     pub(crate) pinned: PinnedWorkflowDefinition,
     pub(crate) environments: ResolvedEnvironmentSet,
     pub(crate) state: RunState,
@@ -46,6 +48,21 @@ pub(crate) struct WorkflowRun {
 pub(crate) enum RunKind {
     Configured,
     QuickTask,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PhaseModelSelection {
+    pub(crate) step: StepKey,
+    pub(crate) selection: ModelSelection,
+    pub(crate) instructions: String,
+    pub(crate) preset: Option<PinnedPreset>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PinnedPreset {
+    pub(crate) id: AgentId,
+    pub(crate) revision: u32,
+    pub(crate) name: String,
 }
 
 impl RunKind {
@@ -241,6 +258,7 @@ pub(super) struct RunFile {
     launch_brief: String,
     kind: String,
     agent_id: String,
+    phase_models: Vec<PhaseModelFile>,
     workflow_id: Option<String>,
     version: String,
     definition: DefinitionFile,
@@ -283,7 +301,28 @@ enum RunStateFile {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct PhaseModelFile {
+    step: String,
+    provider: String,
+    model: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    thinking: Option<String>,
+    instructions: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    preset: Option<PinnedPresetFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct PinnedPresetFile {
+    id: String,
+    revision: u32,
+    name: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct HumanGateFile {
     id: String,
     step: String,
@@ -563,6 +602,7 @@ impl WorkflowRun {
             launch_brief: String::new(),
             kind,
             agent_id,
+            phase_models: Vec::new(),
             pinned,
             environments,
             state: RunState::Ready { step },
@@ -580,6 +620,7 @@ impl WorkflowRun {
         conversation_id: ConversationId,
         pinned: PinnedWorkflowDefinition,
         environments: ResolvedEnvironmentSet,
+        phase_models: Vec<PhaseModelSelection>,
     ) -> Self {
         let mut run = Self::create(
             id,
@@ -590,10 +631,12 @@ impl WorkflowRun {
             pinned,
             environments,
         );
+        run.phase_models = phase_models;
         run.conversation_id = Some(conversation_id);
         run
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_configured_for_conversation(
         id: RunId,
         created_at_ms: u64,
@@ -602,6 +645,7 @@ impl WorkflowRun {
         launch_brief: String,
         pinned: PinnedWorkflowDefinition,
         environments: ResolvedEnvironmentSet,
+        phase_models: Vec<PhaseModelSelection>,
     ) -> Self {
         let mut run = Self::create(
             id,
@@ -614,6 +658,7 @@ impl WorkflowRun {
         );
         run.conversation_id = Some(conversation_id);
         run.launch_brief = launch_brief;
+        run.phase_models = phase_models;
         run
     }
 
@@ -646,6 +691,16 @@ impl WorkflowRun {
             },
         };
         Ok(())
+    }
+
+    pub(crate) fn phase_model(&self, step: &StepKey) -> Option<&PhaseModelSelection> {
+        self.phase_models
+            .iter()
+            .find(|selection| selection.step == *step)
+    }
+
+    pub(crate) fn model_phases(&self) -> impl Iterator<Item = &PhaseModelSelection> {
+        self.phase_models.iter()
     }
 
     pub(crate) fn artefact(
@@ -1315,6 +1370,7 @@ impl WorkflowRun {
             launch_brief: self.launch_brief.clone(),
             kind: self.kind.as_str().to_owned(),
             agent_id: self.agent_id.as_hex(),
+            phase_models: self.phase_models.iter().map(phase_model_to_file).collect(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
             version: self.pinned.version.as_hex(),
             definition: self.pinned.definition.to_file(),
@@ -1339,6 +1395,11 @@ impl WorkflowRun {
         };
         let kind = RunKind::parse(&file.kind).ok_or(RunRecordError::Corrupt)?;
         let agent_id = AgentId::parse(&file.agent_id).ok_or(RunRecordError::Corrupt)?;
+        let phase_models = file
+            .phase_models
+            .into_iter()
+            .map(phase_model_from_file)
+            .collect::<Result<Vec<_>, _>>()?;
         let workflow_id = match file.workflow_id {
             Some(value) => Some(WorkflowId::parse(&value).ok_or(RunRecordError::Corrupt)?),
             None => None,
@@ -1377,6 +1438,7 @@ impl WorkflowRun {
             launch_brief: file.launch_brief,
             kind,
             agent_id,
+            phase_models,
             pinned: PinnedWorkflowDefinition {
                 workflow_id,
                 version,
@@ -1408,6 +1470,7 @@ impl WorkflowRun {
         validate_attempts(self)?;
         validate_gates(self)?;
         validate_review_routes(self)?;
+        validate_phase_models(self)?;
         validate_state_facts(self)?;
         validate_source(self)?;
         validate_environments(self)
@@ -1792,6 +1855,38 @@ impl ReviewRoute {
     }
 }
 
+fn validate_phase_models(run: &WorkflowRun) -> Result<(), RunRecordError> {
+    if (run.kind == RunKind::Configured && run.conversation_id.is_some()
+        || !run.phase_models.is_empty())
+        && run.phase_models.len()
+            != run
+                .pinned
+                .definition
+                .steps()
+                .iter()
+                .filter(|step| matches!(step.action, StepAction::Agent(_)))
+                .count()
+    {
+        return Err(RunRecordError::Corrupt);
+    }
+    let mut seen = Vec::new();
+    for selection in &run.phase_models {
+        if !seen.iter().all(|step: &StepKey| step != &selection.step)
+            || !matches!(
+                run.pinned.definition.step(&selection.step),
+                Some(StepDefinition {
+                    action: StepAction::Agent(_),
+                    ..
+                })
+            )
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        seen.push(selection.step.clone());
+    }
+    Ok(())
+}
+
 fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
     let mut open_gates = 0usize;
     for (index, gate) in run.gates.iter().enumerate() {
@@ -1935,6 +2030,59 @@ fn validate_environments(run: &WorkflowRun) -> Result<(), RunRecordError> {
         }
     }
     Ok(())
+}
+
+fn phase_model_to_file(selection: &PhaseModelSelection) -> PhaseModelFile {
+    PhaseModelFile {
+        step: selection.step.as_str().to_owned(),
+        provider: selection.selection.provider.as_str().to_owned(),
+        model: selection.selection.model.clone(),
+        thinking: selection
+            .selection
+            .thinking
+            .as_ref()
+            .map(|effort| effort.as_str().to_owned()),
+        instructions: selection.instructions.clone(),
+        preset: selection.preset.as_ref().map(|preset| PinnedPresetFile {
+            id: preset.id.as_hex(),
+            revision: preset.revision,
+            name: preset.name.clone(),
+        }),
+    }
+}
+
+fn phase_model_from_file(file: PhaseModelFile) -> Result<PhaseModelSelection, RunRecordError> {
+    let provider = ProviderKind::parse(&file.provider).ok_or(RunRecordError::Corrupt)?;
+    let thinking = file
+        .thinking
+        .map(|value| ThinkingEffort::new(value).ok_or(RunRecordError::Corrupt))
+        .transpose()?;
+    let selection =
+        ModelSelection::new(provider, file.model, thinking).ok_or(RunRecordError::Corrupt)?;
+    if file.instructions.len() > crate::agents::MAXIMUM_INSTRUCTION_BYTES
+        || file
+            .instructions
+            .chars()
+            .any(|character| character.is_control() && character != '\n' && character != '\t')
+    {
+        return Err(RunRecordError::Corrupt);
+    }
+    let preset = file
+        .preset
+        .map(|preset| {
+            Ok(PinnedPreset {
+                id: AgentId::parse(&preset.id).ok_or(RunRecordError::Corrupt)?,
+                revision: preset.revision,
+                name: preset.name,
+            })
+        })
+        .transpose()?;
+    Ok(PhaseModelSelection {
+        step: StepKey::parse(&file.step).map_err(|_| RunRecordError::Corrupt)?,
+        selection,
+        instructions: file.instructions,
+        preset,
+    })
 }
 
 fn environment_set_to_file(set: &ResolvedEnvironmentSet) -> ResolvedEnvironmentSetFile {

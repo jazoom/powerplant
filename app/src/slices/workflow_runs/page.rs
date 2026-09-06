@@ -52,6 +52,7 @@ pub(super) struct StepView {
     pub(super) latest_verdict: String,
     pub(super) selected_route: String,
     pub(super) role: String,
+    pub(super) model: String,
 }
 
 pub(super) struct PinnedEnvironmentView {
@@ -287,6 +288,7 @@ impl RunDetailView {
                             crate::workflows::definition::StepAction::Agent(action) => run.pinned.definition.role(&action.role).map(|role| role.name.clone()).unwrap_or_default(),
                             _ => String::new(),
                         },
+                        model: phase_model_label(run, step),
                     }
                 })
                 .collect(),
@@ -354,6 +356,33 @@ impl RunDetailView {
             artefacts: &self.artefacts,
         }
     }
+}
+
+fn phase_model_label(
+    run: &WorkflowRun,
+    step: &crate::workflows::definition::StepDefinition,
+) -> String {
+    let Some(selection) = run.phase_model(&step.key) else {
+        return String::new();
+    };
+    let effort = selection
+        .selection
+        .thinking
+        .as_ref()
+        .map(|effort| format!(" · {}", effort.label()))
+        .unwrap_or_default();
+    let preset = selection
+        .preset
+        .as_ref()
+        .map(|preset| format!(" · Preset: {}", preset.name))
+        .unwrap_or_default();
+    format!(
+        "{} · {}{}{}",
+        selection.selection.provider.label(),
+        selection.selection.model,
+        effort,
+        preset
+    )
 }
 
 fn step_status(

@@ -279,6 +279,7 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
             latest_verdict: String::new(),
             selected_route: String::new(),
             role: String::new(),
+            model: String::new(),
         }],
         environments: Vec::new(),
         attempts: Vec::new(),

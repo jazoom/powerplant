@@ -84,6 +84,48 @@
               </fieldset>
             {% endif %}
           </section>
+          {% if !phase_models.is_empty() %}
+            <section
+              class="file-section space-y-4"
+              aria-labelledby="workflow-models-heading"
+            >
+              <div>
+                <h2 id="workflow-models-heading" class="text-lg font-semibold">
+                  Choose models for each phase
+                </h2>
+                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                  Each model phase keeps its selected provider, model and preset
+                  instructions for this run. A preset narrows access. It never
+                  grants access that this conversation does not already have.
+                </p>
+              </div>
+              <div class="grid gap-4">
+                {% for phase in phase_models %}
+                  <label
+                    class="flex max-w-3xl flex-col gap-1"
+                    for="phase-model-{{ phase.step }}"
+                  >
+                    <span class="text-sm font-semibold">{{ phase.name }}</span>
+                    <select
+                      id="phase-model-{{ phase.step }}"
+                      name="phase"
+                      class="select select-bordered"
+                      required
+                    >
+                      {% for choice in phase.choices %}
+                        <option
+                          value="{{ choice.value }}"
+                          {% if choice.selected %}selected{% endif %}
+                        >
+                          {{ choice.label }} — {{ choice.detail }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                {% endfor %}
+              </div>
+            </section>
+          {% endif %}
           <section
             class="file-section space-y-4"
             aria-labelledby="workflow-brief-heading"

@@ -3,7 +3,11 @@ mod documents;
 mod id;
 mod store;
 
-pub(crate) use access::{intersect_network, resolve_authority, secondary_alias};
+#[cfg(test)]
+pub(crate) use access::resolve_authority;
+pub(crate) use access::{
+    apply_preset_ceiling, intersect_network, resolve_workflow_authority, secondary_alias,
+};
 pub(crate) use documents::{
     DocumentError, DocumentId, PlanDocument, PlanDocumentStore, PlanRevisionReference, PlanSource,
 };

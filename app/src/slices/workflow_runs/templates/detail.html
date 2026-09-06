@@ -103,6 +103,9 @@
                       {{ step.action }}
                       {% if step.role != "" %}· {{ step.role }}{% endif %}
                     </p>
+                    {% if step.model != "" %}
+                      <p class="text-quiet text-sm">Model · {{ step.model }}</p>
+                    {% endif %}
                   </div>
                   <span
                     class="badge state-badge shrink-0"

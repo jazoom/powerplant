@@ -99,7 +99,10 @@ impl WorkflowContinuationRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let ids: Vec<_> = inner
             .iter()
-            .filter(|(_, job)| job.connection.kind == provider)
+            .filter(|(_, job)| {
+                (!job.phase_providers.is_empty() && job.phase_providers.contains(&provider))
+                    || (job.phase_providers.is_empty() && job.connection.kind == provider)
+            })
             .map(|(id, _)| *id)
             .collect();
         ids.into_iter().filter_map(|id| inner.remove(&id)).collect()
@@ -130,6 +133,8 @@ pub(crate) struct WorkflowJob {
     pub(crate) grant_alias: String,
     pub(crate) grant_access: AccessMode,
     pub(crate) connection: ProviderConnection,
+    pub(crate) phase_providers: Vec<crate::providers::ProviderKind>,
+    pub(crate) active_connection: Arc<std::sync::Mutex<Option<ProviderConnection>>>,
     pub(crate) host_policy: DirectoryPolicy,
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Arc<Job>,
@@ -145,6 +150,110 @@ impl WorkflowJob {
                 agent_id: self.agent_id,
             })
     }
+
+    fn active_connection(&self) -> ProviderConnection {
+        self.active_connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .unwrap_or_else(|| self.connection.clone())
+    }
+}
+
+fn set_active_connection(job: &WorkflowJob, connection: Option<ProviderConnection>) {
+    if let Some(connection) = connection {
+        *job.active_connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(connection);
+    }
+}
+
+fn validate_phase_selection(
+    state: &AppState,
+    selection: &crate::providers::ModelSelection,
+) -> Result<ProviderConnection, String> {
+    if state
+        .models_dev
+        .model(selection.provider, &selection.model)
+        .is_none()
+    {
+        return Err("The selected phase model is unavailable.".to_owned());
+    }
+    match selection.thinking.as_ref() {
+        Some(effort)
+            if !state
+                .models_dev
+                .supports(selection.provider, &selection.model, effort) =>
+        {
+            return Err("The selected phase thinking effort is unavailable.".to_owned());
+        }
+        None if !state
+            .models_dev
+            .efforts(selection.provider, &selection.model)
+            .is_empty() =>
+        {
+            return Err("The selected phase needs a thinking effort.".to_owned());
+        }
+        _ => {}
+    }
+    state
+        .vault
+        .connection_for(selection)
+        .ok_or_else(|| "The provider for this phase is no longer stored.".to_owned())
+}
+
+fn phase_connection(
+    state: &AppState,
+    job: &WorkflowJob,
+    run: &crate::workflows::WorkflowRun,
+    step: &StepDefinition,
+) -> Result<Option<ProviderConnection>, String> {
+    if !matches!(&step.action, StepAction::Agent(_)) {
+        return Ok(None);
+    }
+    let Some(selection) = run.phase_model(&step.key) else {
+        return Ok(Some(job.connection.clone()));
+    };
+    validate_phase_selection(state, &selection.selection).map(Some)
+}
+
+fn phase_authority(
+    state: &AppState,
+    job: &WorkflowJob,
+    run: &crate::workflows::WorkflowRun,
+    step: &crate::workflows::definition::StepKey,
+) -> Result<Option<EffectiveAuthority>, String> {
+    let Some(base) = job.authority.clone() else {
+        return Ok(None);
+    };
+    let Some(selection) = run.phase_model(step) else {
+        return Ok(Some(base));
+    };
+    let Some(preset) = selection.preset.as_ref() else {
+        return Ok(Some(base));
+    };
+    let Some(conversation_id) = job.conversation_id else {
+        return Err("The phase preset is not bound to a conversation.".to_owned());
+    };
+    let Some(record) = state.conversations.get(&conversation_id) else {
+        return Err("That conversation is not in the catalogue.".to_owned());
+    };
+    let Some(record_preset) = state.agents.get(&preset.id) else {
+        return Err("The selected phase preset is no longer available.".to_owned());
+    };
+    if record_preset.revision != preset.revision {
+        return Err("The selected phase preset changed after launch.".to_owned());
+    }
+    if record
+        .projects
+        .iter()
+        .all(|project| *project != base.project_id)
+    {
+        return Err("The phase project access changed after launch.".to_owned());
+    }
+    crate::conversations::apply_preset_ceiling(&base, &record_preset)
+        .map(Some)
+        .map_err(|error| error.message().to_owned())
 }
 
 pub(crate) fn interrupt_provider_continuations(
@@ -244,6 +353,21 @@ pub(crate) async fn execute_run(
             return;
         };
         job.job.set_step_label(active_step_label(&run, &step));
+        let connection = match phase_connection(&state, &job, &run, &step) {
+            Ok(connection) => connection,
+            Err(error) => {
+                settle_job(&state, &job, JobStatus::Failed, Some(&error));
+                return;
+            }
+        };
+        set_active_connection(&job, connection);
+        let phase_authority = match phase_authority(&state, &job, &run, &step.key) {
+            Ok(authority) => authority,
+            Err(error) => {
+                settle_job(&state, &job, JobStatus::Failed, Some(&error));
+                return;
+            }
+        };
         let inputs = match resolve_inputs(&run, &step) {
             Ok(inputs) => inputs,
             Err(error) => {
@@ -375,7 +499,7 @@ pub(crate) async fn execute_run(
                 return;
             }
         };
-        let capabilities = if let Some(authority) = job.authority.as_ref() {
+        let capabilities = if let Some(authority) = phase_authority.as_ref() {
             if run.conversation_id != job.conversation_id || authority.project_id != run.project_id
             {
                 settle_job(
@@ -1532,15 +1656,64 @@ async fn run_agent_step(
             error: Some(error),
         };
     }
-    if let Some(authority) = job.authority.as_ref() {
+    let Some(run) = state.workflow_runs.get(&job.run_id) else {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    };
+    let Some(step_key) = run
+        .active_attempt()
+        .and_then(|attempt| run.attempts.iter().find(|item| item.id == attempt))
+        .map(|attempt| attempt.step.clone())
+    else {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    };
+    let Some(step_definition) = run.pinned.definition.step(&step_key) else {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    };
+    let connection = match phase_connection(state, job, &run, step_definition) {
+        Ok(Some(connection)) => connection,
+        Ok(None) => {
+            return StepOutcome::Failed {
+                category: FailureCategory::Provider,
+                error: Some("The model phase has no provider selection.".to_owned()),
+            };
+        }
+        Err(error) => {
+            return StepOutcome::Failed {
+                category: FailureCategory::Provider,
+                error: Some(error),
+            };
+        }
+    };
+    set_active_connection(job, Some(connection));
+    let resolved_authority = match phase_authority(state, job, &run, &step_key) {
+        Ok(authority) => authority,
+        Err(error) => {
+            return StepOutcome::Failed {
+                category: FailureCategory::Authority,
+                error: Some(error),
+            };
+        }
+    };
+    if let Some(authority) = resolved_authority.as_ref() {
         if !action
             .authority
             .allowed_by(&authority.tools, authority.directories())
+            || (action.candidate_authority.access().is_writable()
+                && !authority.grant_access.is_writable())
         {
             return StepOutcome::Failed {
                 category: FailureCategory::Authority,
                 error: Some(
-                    "The pinned step authority exceeds the current conversation ceiling."
+                    "The pinned phase authority exceeds the current conversation ceiling."
                         .to_owned(),
                 ),
             };
@@ -1565,56 +1738,63 @@ async fn run_agent_step(
             };
         }
     }
-    let policy = match intersect_authority(
-        action.candidate_authority,
-        &action.authority,
-        &job.host_policy,
-    ) {
-        Ok(policy) => policy,
-        Err(()) => {
-            return StepOutcome::Failed {
-                category: FailureCategory::Authority,
-                error: Some(
-                    "The pinned step authority exceeds the current directory policy.".to_owned(),
-                ),
-            };
-        }
-    };
-    let Some((run_kind, role)) = state.workflow_runs.get(&job.run_id).and_then(|run| {
-        run.pinned
-            .definition
-            .role(&action.role)
-            .cloned()
-            .map(|role| (run.kind, role))
-    }) else {
+    let phase_policy = resolved_authority
+        .as_ref()
+        .map(|authority| &authority.policy)
+        .unwrap_or(&job.host_policy);
+    let policy =
+        match intersect_authority(action.candidate_authority, &action.authority, phase_policy) {
+            Ok(policy) => policy,
+            Err(()) => {
+                return StepOutcome::Failed {
+                    category: FailureCategory::Authority,
+                    error: Some(
+                        "The pinned step authority exceeds the current directory policy."
+                            .to_owned(),
+                    ),
+                };
+            }
+        };
+    let Some(role) = run.pinned.definition.role(&action.role).cloned() else {
         return StepOutcome::Failed {
             category: FailureCategory::Definition,
             error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
         };
     };
-    // Quick task pins agent instructions in the role. A live record can duplicate or change the pinned prompt.
-    let agent_instructions = if run_kind == crate::workflows::RunKind::QuickTask {
-        String::new()
-    } else if let Some(conversation_id) = job.conversation_id {
-        state
-            .conversations
-            .get(&conversation_id)
-            .and_then(|record| record.model)
-            .map(|model| model.instructions)
-            .or_else(|| {
+    let agent_instructions = run
+        .phase_model(&step_key)
+        .map(|selection| {
+            // Quick task roles already contain the instruction snapshot.
+            if run.kind == crate::workflows::RunKind::QuickTask {
+                String::new()
+            } else {
+                selection.instructions.clone()
+            }
+        })
+        .unwrap_or_else(|| {
+            if run.kind == crate::workflows::RunKind::QuickTask {
+                String::new()
+            } else if let Some(conversation_id) = job.conversation_id {
+                state
+                    .conversations
+                    .get(&conversation_id)
+                    .and_then(|record| record.model)
+                    .map(|model| model.instructions)
+                    .or_else(|| {
+                        state
+                            .agents
+                            .get(&job.agent_id)
+                            .map(|record| record.instructions)
+                    })
+                    .unwrap_or_default()
+            } else {
                 state
                     .agents
                     .get(&job.agent_id)
                     .map(|record| record.instructions)
-            })
-            .unwrap_or_default()
-    } else {
-        state
-            .agents
-            .get(&job.agent_id)
-            .map(|record| record.instructions)
-            .unwrap_or_default()
-    };
+                    .unwrap_or_default()
+            }
+        });
     let instructions = match (
         role.prompt_defaults.trim().is_empty(),
         agent_instructions.trim().is_empty(),
@@ -1630,8 +1810,9 @@ async fn run_agent_step(
             agent_instructions.trim()
         ),
     };
-    let secret = match &job.connection.auth {
-        crate::providers::AuthMethod::ApiKey => Some(job.connection.api_key.expose()),
+    let connection = job.active_connection();
+    let secret = match &connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
     let project_instructions =
@@ -1645,16 +1826,6 @@ async fn run_agent_step(
             }
         };
     let Some(run) = state.workflow_runs.get(&job.run_id) else {
-        return StepOutcome::Failed {
-            category: FailureCategory::Operational,
-            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
-        };
-    };
-    let Some(step_definition) = run
-        .attempts
-        .last()
-        .and_then(|attempt| run.pinned.definition.step(&attempt.step))
-    else {
         return StepOutcome::Failed {
             category: FailureCategory::Operational,
             error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
@@ -1708,12 +1879,12 @@ async fn run_agent_step(
         ),
         tool_ids: action.authority.tools.clone(),
         policy,
-        connection: job.connection.clone(),
+        connection: connection.clone(),
         sandbox: sandbox.clone(),
         output_drafts: Some(drafts),
         required_outputs: action.required_outputs.clone(),
     };
-    let turns = match run_kind {
+    let turns = match run.kind {
         crate::workflows::RunKind::Configured => Vec::new(),
         crate::workflows::RunKind::QuickTask => job.turns.clone(),
     };
@@ -2159,16 +2330,32 @@ fn confirm_run_authority(
         return Err("That project is not in the catalogue.".to_owned());
     };
     if let Some(authority) = job.authority.as_ref() {
+        let run = state
+            .workflow_runs
+            .get(&job.run_id)
+            .ok_or_else(|| OPERATIONAL_STORE_ERROR.to_owned())?;
+        for preset in run.model_phases().filter_map(|phase| phase.preset.as_ref()) {
+            if state
+                .agents
+                .get(&preset.id)
+                .is_none_or(|record| record.revision != preset.revision)
+            {
+                return Err("A phase preset changed or lost authority after launch.".to_owned());
+            }
+        }
         let Some(conversation_id) = job.conversation_id else {
             return Err("The conversation authority is missing its identity.".to_owned());
         };
         let Some(record) = state.conversations.get(&conversation_id) else {
             return Err("That conversation is not in the catalogue.".to_owned());
         };
-        let resolved =
-            crate::conversations::resolve_authority(&record, &state.projects, &state.agents)
-                .map_err(|error| error.message().to_owned())?
-                .ok_or_else(|| "Project access was revoked before dispatch.".to_owned())?;
+        let resolved = crate::conversations::resolve_workflow_authority(
+            &record,
+            &state.projects,
+            &state.agents,
+        )
+        .map_err(|error| error.message().to_owned())?
+        .ok_or_else(|| "Project access was revoked before dispatch.".to_owned())?;
         if resolved.effective != *authority {
             return Err("Project access or the applied preset changed before dispatch.".to_owned());
         }
@@ -2557,8 +2744,9 @@ fn publish_success(
         artefacts.push(record);
     }
     let candidate_hash = captured.candidate_hash;
-    let secret = match &job.connection.auth {
-        crate::providers::AuthMethod::ApiKey => Some(job.connection.api_key.expose().to_owned()),
+    let connection = job.active_connection();
+    let secret = match &connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
         crate::providers::AuthMethod::Plan => None,
     };
     let mut held = drafts
@@ -2924,10 +3112,13 @@ fn recovery_project_path(
         let Some(conversation) = state.conversations.get(&conversation_id) else {
             return Err(error);
         };
-        let authority =
-            crate::conversations::resolve_authority(&conversation, &state.projects, &state.agents)
-                .ok()
-                .flatten();
+        let authority = crate::conversations::resolve_workflow_authority(
+            &conversation,
+            &state.projects,
+            &state.agents,
+        )
+        .ok()
+        .flatten();
         if authority.is_none_or(|authority| {
             authority.effective.project_id != project.id
                 || !authority.effective.grant_access.is_writable()

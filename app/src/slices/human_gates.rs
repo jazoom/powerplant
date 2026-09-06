@@ -442,8 +442,14 @@ async fn decide(
     } else {
         crate::workflows::gates::HumanDecisionKind::RevisionRequested
     };
-    let secret = match continuation.connection.auth {
-        crate::providers::AuthMethod::ApiKey => Some(continuation.connection.api_key.expose()),
+    let connection = continuation
+        .active_connection
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+        .unwrap_or_else(|| continuation.connection.clone());
+    let secret = match connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
     let decided_at = crate::workflows::now_ms();
@@ -681,6 +687,18 @@ fn continuation_authority(
     {
         return ContinuationAuthority::Stale;
     }
+    if run
+        .model_phases()
+        .filter_map(|phase| phase.preset.as_ref())
+        .any(|preset| {
+            state
+                .agents
+                .get(&preset.id)
+                .is_none_or(|record| record.revision != preset.revision)
+        })
+    {
+        return ContinuationAuthority::Stale;
+    }
     let Some(project) = state.projects.get(&run.project_id) else {
         return ContinuationAuthority::Stale;
     };
@@ -695,7 +713,7 @@ fn continuation_authority(
             return ContinuationAuthority::Unavailable;
         }
         let current = match state.conversations.get(&conversation_id) {
-            Some(record) => match crate::conversations::resolve_authority(
+            Some(record) => match crate::conversations::resolve_workflow_authority(
                 &record,
                 &state.projects,
                 &state.agents,

@@ -20,7 +20,6 @@ use crate::{
         CandidateReviewCreation, CandidateReviewLink, ConversationError, ConversationId,
         ConversationModelConfiguration, ConversationRecord, DocumentError, DocumentId,
         PlanDocument, PlanReviewCreation, PlanReviewLink, PlanRevisionReference, PlanSource,
-        resolve_authority,
     },
     error::{AppError, AppResult},
     projects::ProjectId,
@@ -1608,7 +1607,11 @@ async fn start_message(
             "Candidate reviews use immutable evidence only. Remove the execution target before you continue this discussion.",
         ));
     }
-    let authority = match resolve_authority(&record, &state.projects, &state.agents) {
+    let authority = match crate::conversations::resolve_workflow_authority(
+        &record,
+        &state.projects,
+        &state.agents,
+    ) {
         Ok(authority) => authority.map(|authority| authority.effective),
         Err(error) => {
             return Err(StartMessageError::User(
@@ -1618,10 +1621,28 @@ async fn start_message(
         }
     };
     let workflow = if let Some(authority) = authority.as_ref() {
+        let phase_authority = if let Some(applied) = model.preset.as_ref() {
+            let Some(preset) = state.agents.get(&applied.id) else {
+                return Err(StartMessageError::User(
+                    PatchStatus::Conflict,
+                    "The applied preset is no longer available.",
+                ));
+            };
+            if preset.revision != applied.revision {
+                return Err(StartMessageError::User(
+                    PatchStatus::Conflict,
+                    "The applied preset changed. Reload the conversation.",
+                ));
+            }
+            crate::conversations::apply_preset_ceiling(authority, &preset)
+                .map_err(|error| StartMessageError::User(PatchStatus::Conflict, error.message()))?
+        } else {
+            authority.clone()
+        };
         let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
             StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
         })?;
-        let secondary = authority
+        let secondary = phase_authority
             .policy
             .grants()
             .iter()
@@ -1632,8 +1653,8 @@ async fn start_message(
             })
             .collect();
         let pinned = workflows::pin_quick_task_with_context(
-            authority.grant_access,
-            &authority.tools,
+            phase_authority.grant_access,
+            &phase_authority.tools,
             &model.instructions,
             environment,
             secondary,
@@ -1673,10 +1694,11 @@ async fn start_message(
             )
         })?;
     let launch_brief = text.trim().to_owned();
+    let phase_model = model.clone();
     let started = match state.conversations.begin_message_with_model(
         &record.id,
         revision,
-        model,
+        Some(model),
         job.id(),
         text,
     ) {
@@ -1718,7 +1740,28 @@ async fn start_message(
             started.id,
             pinned,
             environments,
+            Vec::new(),
         );
+        run.phase_models = run
+            .pinned
+            .definition
+            .steps()
+            .iter()
+            .filter(|step| matches!(&step.action, workflows::definition::StepAction::Agent(_)))
+            .map(|step| workflows::PhaseModelSelection {
+                step: step.key.clone(),
+                selection: phase_model.selection.clone(),
+                instructions: phase_model.instructions.clone(),
+                preset: phase_model
+                    .preset
+                    .as_ref()
+                    .map(|preset| workflows::PinnedPreset {
+                        id: preset.id,
+                        revision: preset.revision,
+                        name: preset.name.clone(),
+                    }),
+            })
+            .collect();
         run.launch_brief = launch_brief;
         if let Err(error) = state.workflow_runs.create(run.clone()) {
             let _ = state.conversations.settle_message(
@@ -1751,6 +1794,11 @@ async fn start_message(
                 grant_alias: authority.grant_alias.clone(),
                 grant_access: authority.grant_access,
                 connection,
+                phase_providers: run
+                    .model_phases()
+                    .map(|phase| phase.selection.provider)
+                    .collect(),
+                active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 host_policy: authority.policy.clone(),
                 turns,
                 job: job.clone(),

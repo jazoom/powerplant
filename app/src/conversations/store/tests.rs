@@ -26,7 +26,7 @@ impl ConversationStore {
         self.begin_message_with_model(
             id,
             expected_revision,
-            super::ConversationModelConfiguration::direct(selection),
+            Some(super::ConversationModelConfiguration::direct(selection)),
             request,
             text,
         )
@@ -37,6 +37,39 @@ impl ConversationStore {
             path: None,
             inner: std::sync::Mutex::new(std::collections::BTreeMap::new()),
         }
+    }
+}
+
+#[test]
+fn workflow_reservations_leave_the_normal_model_selection_unchanged() {
+    let store = ConversationStore::in_memory();
+    for model in [
+        None,
+        Some(super::ConversationModelConfiguration::direct(
+            ModelSelection::new(
+                crate::providers::ProviderKind::Xai,
+                "grok-4.6".to_owned(),
+                None,
+            )
+            .expect("model"),
+        )),
+    ] {
+        let mut conversation = store.create("Workflow".to_owned()).expect("conversation");
+        if let Some(model) = model.clone() {
+            conversation = store
+                .select_model_configuration(&conversation.id, conversation.revision, model)
+                .expect("selection");
+        }
+        let started = store
+            .begin_message_with_model(
+                &conversation.id,
+                conversation.revision,
+                None,
+                JobId::generate().expect("job"),
+                "Brief".to_owned(),
+            )
+            .expect("reserve");
+        assert_eq!(started.model, model);
     }
 }
 

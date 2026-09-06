@@ -1074,8 +1074,35 @@ fn durable_commit_transactions_record_an_approved_human_decision() {
 }
 
 #[test]
+fn configured_conversation_records_reject_missing_phase_selections() {
+    let mut run = new_run();
+    run.conversation_id =
+        Some(crate::conversations::ConversationId::generate().expect("conversation"));
+    assert_eq!(
+        WorkflowRun::from_file(run.to_file()),
+        Err(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
 fn run_records_round_trip() {
     let mut run = new_run();
+    let phase = run.pinned.definition.first_step().clone();
+    run.phase_models = vec![crate::workflows::PhaseModelSelection {
+        step: phase,
+        selection: crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .expect("selection"),
+        instructions: "Pinned instructions".to_owned(),
+        preset: Some(crate::workflows::PinnedPreset {
+            id: crate::agents::AgentId::generate().expect("preset"),
+            revision: 3,
+            name: "Pinned preset".to_owned(),
+        }),
+    }];
     let attempt = start(&mut run);
     complete(&mut run, attempt, 12);
     let loaded = WorkflowRun::from_file(run.to_file()).expect("round trip");

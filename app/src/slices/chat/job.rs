@@ -90,6 +90,8 @@ pub(crate) async fn run_agent_action(
     let mut thinking_progress = ThinkingProgress::default();
     let mut last_emit = Instant::now();
     let mut output_visible = false;
+    let mut response_redactor = StreamRedactor::new(secret);
+    let mut thinking_redactor = StreamRedactor::new(secret);
 
     for _ in 0..MAXIMUM_TOOL_ROUNDS {
         thinking_progress.begin_phase();
@@ -153,6 +155,7 @@ pub(crate) async fn run_agent_action(
             match chunk {
                 Ok(ModelEvent::Text(piece)) => {
                     thinking_progress.flush(&job, &reply.thinking);
+                    let piece = response_redactor.push(&piece);
                     text.push_str(&piece);
                     let truncated =
                         append_model_piece(&mut reply.text, &piece, &mut model_reply_bytes);
@@ -179,6 +182,7 @@ pub(crate) async fn run_agent_action(
                     }
                 }
                 Ok(ModelEvent::Thinking(piece)) => {
+                    let piece = thinking_redactor.push(&piece);
                     append_thinking_piece(&mut reply, &piece, &mut thinking_bytes);
                     thinking_progress.note_pending(&reply.thinking, Instant::now());
                 }
@@ -218,6 +222,12 @@ pub(crate) async fn run_agent_action(
         }
 
         if calls.is_empty() {
+            let truncated = append_model_piece(
+                &mut reply.text,
+                &response_redactor.finish(),
+                &mut model_reply_bytes,
+            );
+            append_thinking_piece(&mut reply, &thinking_redactor.finish(), &mut thinking_bytes);
             thinking_progress.flush(&job, &reply.thinking);
             publish_reply_remaining(
                 &job,
@@ -225,10 +235,18 @@ pub(crate) async fn run_agent_action(
                 published_response,
                 thinking_progress.published,
             );
-            if reply.text.trim().is_empty() {
+            if truncated || reply.text.trim().is_empty() {
                 return AgentActionEnd {
                     outcome: AgentOutcome::ProviderFailure,
-                    error: Some(ProviderError::EmptyReply.message().to_owned()),
+                    error: Some(
+                        if truncated {
+                            ProviderError::ReplyTooLong
+                        } else {
+                            ProviderError::EmptyReply
+                        }
+                        .message()
+                        .to_owned(),
+                    ),
                     reply: reply.clone(),
                 };
             }
@@ -282,6 +300,42 @@ pub(crate) async fn run_agent_action(
         outcome: AgentOutcome::ToolFailure,
         error: Some(TOOL_LOOP_LIMIT.to_owned()),
         reply,
+    }
+}
+
+// A provider can split a credential across arbitrary stream events.
+struct StreamRedactor<'a> {
+    secret: Option<&'a str>,
+    pending: String,
+}
+
+impl<'a> StreamRedactor<'a> {
+    fn new(secret: Option<&'a str>) -> Self {
+        Self {
+            secret: secret.filter(|secret| !secret.is_empty()),
+            pending: String::new(),
+        }
+    }
+
+    fn push(&mut self, piece: &str) -> String {
+        self.pending.push_str(piece);
+        let Some(secret) = self.secret else {
+            return std::mem::take(&mut self.pending);
+        };
+        let redacted = tools::redact(&self.pending, Some(secret));
+        let retained = (1..secret.len().min(redacted.len() + 1))
+            .rev()
+            .find(|&length| {
+                secret.is_char_boundary(length) && redacted.ends_with(&secret[..length])
+            })
+            .unwrap_or(0);
+        let split = redacted.len() - retained;
+        self.pending = redacted[split..].to_owned();
+        redacted[..split].to_owned()
+    }
+
+    fn finish(&mut self) -> String {
+        std::mem::take(&mut self.pending)
     }
 }
 

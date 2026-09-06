@@ -345,6 +345,8 @@ fn fixing_publication_fixture() -> (
             "key",
             "model",
         ),
+        phase_providers: Vec::new(),
+        active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
         host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
         turns: Vec::new(),
         job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
@@ -359,6 +361,137 @@ fn fixing_publication_fixture() -> (
         captured,
         std::sync::Mutex::new(output_drafts),
     )
+}
+
+#[tokio::test]
+async fn a_configured_phase_uses_its_pinned_provider_model() {
+    let (mut state, mut job, step, attempt, _, _, drafts) = fixing_publication_fixture();
+    state
+        .vault
+        .put(crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "phase-key",
+            "grok-4.6",
+        ))
+        .expect("provider");
+    job.connection = crate::providers::ProviderConnection::with_key(
+        crate::providers::ProviderKind::Deepseek,
+        "normal-key",
+        "deepseek-chat",
+    );
+    let backend = crate::tests::ScriptedBackend::chunks([
+        Ok("The credential is phase-".to_owned()),
+        Ok("key.".to_owned()),
+    ]);
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
+    let selection = crate::providers::ModelSelection::new(
+        crate::providers::ProviderKind::Xai,
+        "grok-4.6".to_owned(),
+        state
+            .models_dev
+            .effective_effort(crate::providers::ProviderKind::Xai, "grok-4.6", None),
+    )
+    .expect("selection");
+    state
+        .workflow_runs
+        .mutate(&job.run_id, |run| {
+            run.launch_brief = "Inspect this candidate.".to_owned();
+            run.phase_models = vec![crate::workflows::PhaseModelSelection {
+                step: step.key.clone(),
+                selection,
+                instructions: "Pinned phase instructions".to_owned(),
+                preset: None,
+            }];
+            Ok(())
+        })
+        .expect("phase model");
+    let directory = tempfile::tempdir().expect("project");
+    job.host_policy = DirectoryPolicy::from_grants(
+        vec![PolicyGrant {
+            alias: "project".to_owned(),
+            guest_path: GUEST_PROJECT.to_owned(),
+            host_path: directory.path().to_path_buf(),
+            access: AccessMode::ReadWrite,
+        }],
+        "project".to_owned(),
+    );
+    let sandbox = state.sandboxes.attempt_handle(job.run_id, attempt);
+    sandbox
+        .start_from_snapshot(
+            std::path::Path::new("snapshot"),
+            "sha256:deadbeef",
+            crate::sandbox::SandboxSpec {
+                mounts: vec![crate::sandbox::MountSpec {
+                    guest: GUEST_PROJECT.to_owned(),
+                    host: directory.path().to_path_buf(),
+                    read_only: true,
+                }],
+                workdir: GUEST_PROJECT.to_owned(),
+                network: crate::agents::NetworkAccess::None,
+            },
+        )
+        .await
+        .expect("sandbox");
+    let crate::workflows::definition::StepAction::Agent(action) = &step.action else {
+        panic!("agent phase")
+    };
+    let drafts = std::sync::Arc::new(drafts);
+    let outcome = super::run_agent_step(&state, &job, action, &sandbox, drafts.clone()).await;
+    if let StepOutcome::Failed { error, .. } = &outcome {
+        panic!("phase failed: {error:?}");
+    }
+    assert!(matches!(outcome, StepOutcome::Completed));
+    assert_eq!(
+        backend.last_connection(),
+        Some((
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            state.models_dev.effective_effort(
+                crate::providers::ProviderKind::Xai,
+                "grok-4.6",
+                None
+            )
+        ))
+    );
+    assert!(
+        backend
+            .last_preamble()
+            .expect("preamble")
+            .contains("Pinned phase instructions")
+    );
+    assert_eq!(
+        job.job.snapshot().output.text,
+        "The credential is [redacted]."
+    );
+    assert_eq!(
+        job.connection.kind,
+        crate::providers::ProviderKind::Deepseek
+    );
+    super::set_active_connection(&job, None);
+    assert_eq!(
+        job.active_connection().kind,
+        crate::providers::ProviderKind::Xai
+    );
+
+    state
+        .vault
+        .forget(crate::providers::ProviderKind::Xai)
+        .expect("forget");
+    let unavailable_backend = crate::tests::ScriptedBackend::accept();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        unavailable_backend.clone(),
+    ));
+    let outcome = super::run_agent_step(&state, &job, action, &sandbox, drafts).await;
+    assert!(matches!(
+        outcome,
+        StepOutcome::Failed {
+            category: super::FailureCategory::Provider,
+            ..
+        }
+    ));
+    assert!(unavailable_backend.last_connection().is_none());
+    sandbox.stop().await.expect("stop");
+    sandbox.remove().await.expect("remove");
 }
 
 #[test]
@@ -403,6 +536,8 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
             grant_alias: "project".to_owned(),
             grant_access: AccessMode::ReadWrite,
             connection: crate::providers::ProviderConnection::with_key(provider, "key", "model"),
+            phase_providers: Vec::new(),
+            active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
             host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
             turns: Vec::new(),
             job: crate::sessions::Job::new(
@@ -453,6 +588,8 @@ fn final_gate_completion_settles_the_session_job_successfully() {
             "key",
             "model",
         ),
+        phase_providers: Vec::new(),
+        active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
         host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
         turns: Vec::new(),
         job: begun.job.clone(),
@@ -1281,6 +1418,8 @@ fn test_job(
             "key",
             "model",
         ),
+        phase_providers: Vec::new(),
+        active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
         host_policy: DirectoryPolicy::from_record_with_primary(agent, &agent.primary_directory),
         turns: Vec::new(),
         job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
@@ -1613,6 +1752,8 @@ fn gate_ready_fixture(
             "key",
             "model",
         ),
+        phase_providers: Vec::new(),
+        active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
         host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
         turns: begun.turns,
         job: begun.job,

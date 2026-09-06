@@ -2,20 +2,24 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, Query, State},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    agents::AccessMode,
-    conversations::{ConversationRecord, resolve_authority},
+    agents::{AccessMode, AgentId},
+    conversations::ConversationRecord,
     error::{AppError, AppResult},
     projects::ProjectId,
+    providers::{ModelSelection, ProviderKind, ThinkingEffort},
     responses,
     sessions::RequiredSession,
     state::AppState,
-    workflows::{self, ResolveWorkflowError, WorkflowJob, WorkflowRun, WorkflowSelection},
+    workflows::{
+        self, PhaseModelSelection, PinnedPreset, ResolveWorkflowError, WorkflowJob, WorkflowRun,
+        WorkflowSelection,
+    },
 };
 
 const TITLE_SUFFIX: &str = " | Power Plant";
@@ -26,6 +30,8 @@ pub(super) struct WorkflowQuery {
     workflow: String,
     target: String,
     brief: String,
+    #[serde(default)]
+    phase: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +44,8 @@ pub(super) struct WorkflowLaunchForm {
     preview_workflow: String,
     #[serde(default)]
     preview_target: String,
+    #[serde(default)]
+    phase: Vec<String>,
 }
 
 struct WorkflowOption {
@@ -55,6 +63,29 @@ struct TargetOption {
     selected: bool,
 }
 
+struct PhaseChoice {
+    value: String,
+    label: String,
+    detail: String,
+    selected: bool,
+}
+
+struct PhaseModelOption {
+    step: String,
+    name: String,
+    choices: Vec<PhaseChoice>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PhaseChoiceToken {
+    step: String,
+    provider: String,
+    model: String,
+    thinking: Option<String>,
+    preset: Option<String>,
+    preset_revision: Option<u32>,
+}
+
 #[derive(Template)]
 #[template(path = "conversations/templates/workflow.html", block = "launch_page")]
 struct WorkflowLaunchView {
@@ -64,6 +95,7 @@ struct WorkflowLaunchView {
     brief: String,
     workflows: Vec<WorkflowOption>,
     targets: Vec<TargetOption>,
+    phase_models: Vec<PhaseModelOption>,
     model_summary: String,
     access_summary: String,
     environment_summary: String,
@@ -78,6 +110,7 @@ struct WorkflowLaunchContents<'a> {
     brief: &'a str,
     workflows: &'a [WorkflowOption],
     targets: &'a [TargetOption],
+    phase_models: &'a [PhaseModelOption],
     model_summary: &'a str,
     access_summary: &'a str,
     environment_summary: &'a str,
@@ -92,6 +125,7 @@ impl WorkflowLaunchView {
             brief: &self.brief,
             workflows: &self.workflows,
             targets: &self.targets,
+            phase_models: &self.phase_models,
             model_summary: &self.model_summary,
             access_summary: &self.access_summary,
             environment_summary: &self.environment_summary,
@@ -100,13 +134,33 @@ impl WorkflowLaunchView {
     }
 }
 
+fn parse_fields<T: serde::de::DeserializeOwned>(
+    fields: Vec<(String, String)>,
+) -> Result<(T, Vec<String>), serde::de::value::Error> {
+    let mut phases = Vec::new();
+    let fields = fields.into_iter().filter(|(key, value)| {
+        if key == "phase" {
+            phases.push(value.clone());
+            false
+        } else {
+            true
+        }
+    });
+    let form = T::deserialize(serde::de::value::MapDeserializer::new(fields))?;
+    Ok((form, phases))
+}
+
 pub(super) async fn show(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: GraftRequest,
     Path(conversation_id): Path<String>,
-    Query(query): Query<WorkflowQuery>,
+    Query(fields): Query<Vec<(String, String)>>,
 ) -> AppResult<Response> {
+    let Ok((mut query, phases)) = parse_fields::<WorkflowQuery>(fields) else {
+        return Ok(axum::http::StatusCode::BAD_REQUEST.into_response());
+    };
+    query.phase = phases;
     let Some(record) = super::load_conversation(&state, &conversation_id) else {
         return Ok(responses::request_navigation(graft, "/conversations"));
     };
@@ -124,6 +178,7 @@ pub(super) async fn show(
             Some(query.target.as_str())
         },
         &query.brief,
+        &query.phase,
         "",
     )
     .await;
@@ -135,8 +190,12 @@ pub(super) async fn launch(
     session: RequiredSession,
     graft: PatchGraft,
     Path(conversation_id): Path<String>,
-    Form(form): Form<WorkflowLaunchForm>,
+    Form(fields): Form<Vec<(String, String)>>,
 ) -> AppResult<Response> {
+    let Ok((mut form, phases)) = parse_fields::<WorkflowLaunchForm>(fields) else {
+        return Ok(axum::http::StatusCode::UNPROCESSABLE_ENTITY.into_response());
+    };
+    form.phase = phases;
     let Some(record) = super::load_conversation(&state, &conversation_id) else {
         return Ok(responses::command_navigation("/conversations"));
     };
@@ -146,6 +205,7 @@ pub(super) async fn launch(
         let workflow = form.workflow.clone();
         let target = form.target.clone();
         let brief = form.brief.clone();
+        let phase = form.phase.clone();
         async move {
             let view = launch_view(
                 &state,
@@ -153,6 +213,7 @@ pub(super) async fn launch(
                 Some(workflow.as_str()),
                 Some(target.as_str()),
                 &brief,
+                &phase,
                 error,
             )
             .await;
@@ -222,7 +283,11 @@ pub(super) async fn launch(
     }
     let mut target_record = record.clone();
     target_record.execution_target = Some(target);
-    let authority = match resolve_authority(&target_record, &state.projects, &state.agents) {
+    let authority = match crate::conversations::resolve_workflow_authority(
+        &target_record,
+        &state.projects,
+        &state.agents,
+    ) {
         Ok(Some(authority)) => authority.effective,
         Ok(None) => {
             return error_view(
@@ -250,20 +315,30 @@ pub(super) async fn launch(
         )
         .await;
     }
-    let Some(model) = super::effective_model(&state, &record) else {
+    let phase_models = match resolve_phase_models(&state, &resolved.pinned.definition, &form.phase)
+    {
+        Ok(models) => models,
+        Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
+    };
+    if let Err(error) = validate_phase_models(
+        &state,
+        &resolved.pinned.definition,
+        &authority,
+        &phase_models,
+    ) {
+        return error_view(PatchStatus::UnprocessableEntity, error).await;
+    }
+    let selection = phase_models
+        .first()
+        .map(|phase| phase.selection.clone())
+        .or_else(|| super::effective_model(&state, &record).map(|model| model.selection));
+    let Some(connection) = selection
+        .as_ref()
+        .and_then(|selection| state.vault.connection_for(selection))
+    else {
         return error_view(
             PatchStatus::UnprocessableEntity,
             "Choose a model before you launch a workflow.",
-        )
-        .await;
-    };
-    if let Err(error) = super::valid_selection(&state, &model.selection) {
-        return error_view(PatchStatus::UnprocessableEntity, error).await;
-    }
-    let Some(connection) = state.vault.connection_for(&model.selection) else {
-        return error_view(
-            PatchStatus::UnprocessableEntity,
-            "Choose a stored provider.",
         )
         .await;
     };
@@ -300,7 +375,11 @@ pub(super) async fn launch(
     } else {
         record.clone()
     };
-    let authority = match resolve_authority(&current, &state.projects, &state.agents) {
+    let authority = match crate::conversations::resolve_workflow_authority(
+        &current,
+        &state.projects,
+        &state.agents,
+    ) {
         Ok(Some(authority)) => authority.effective,
         Ok(None) => {
             return error_view(
@@ -328,7 +407,7 @@ pub(super) async fn launch(
     let started = match state.conversations.begin_message_with_model(
         &current.id,
         current.revision,
-        model,
+        None,
         job.id(),
         brief.clone(),
     ) {
@@ -348,6 +427,7 @@ pub(super) async fn launch(
         brief,
         resolved.pinned,
         environments,
+        phase_models.clone(),
     );
     if let Err(error) = state.workflow_runs.create(run.clone()) {
         let _ = state.conversations.settle_message(
@@ -376,6 +456,11 @@ pub(super) async fn launch(
             grant_alias: authority.grant_alias.clone(),
             grant_access: authority.grant_access,
             connection,
+            phase_providers: phase_models
+                .iter()
+                .map(|phase| phase.selection.provider)
+                .collect(),
+            active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
             host_policy: authority.policy.clone(),
             turns: Vec::new(),
             job: job.clone(),
@@ -396,6 +481,7 @@ async fn launch_view(
     workflow_raw: Option<&str>,
     target_raw: Option<&str>,
     brief: &str,
+    phase_raw: &[String],
     error: &'static str,
 ) -> WorkflowLaunchView {
     let records = state.workflows.list();
@@ -435,6 +521,7 @@ async fn launch_view(
         .collect();
     let (model_summary, access_summary, environment_summary) =
         launch_readiness(state, record, selected_target, &selected_workflow).await;
+    let phase_models = selected_phase_model_options(state, record, &selected_workflow, phase_raw);
     WorkflowLaunchView {
         document_title: format!("Run workflow · {}{}", record.title, TITLE_SUFFIX),
         conversation_id: record.id.as_hex(),
@@ -442,6 +529,7 @@ async fn launch_view(
         brief: brief.to_owned(),
         workflows,
         targets,
+        phase_models,
         model_summary,
         access_summary,
         environment_summary,
@@ -481,7 +569,11 @@ async fn launch_readiness(
     };
     let mut selected = record.clone();
     selected.execution_target = Some(target);
-    let authority = match resolve_authority(&selected, &state.projects, &state.agents) {
+    let authority = match crate::conversations::resolve_workflow_authority(
+        &selected,
+        &state.projects,
+        &state.agents,
+    ) {
         Ok(Some(authority)) => authority.effective,
         Ok(None) => {
             return (
@@ -557,6 +649,258 @@ async fn launch_readiness(
     }
 }
 
+fn phase_choice_token(
+    step: &str,
+    selection: &ModelSelection,
+    preset: Option<&crate::agents::AgentRecord>,
+) -> String {
+    serde_json::to_string(&PhaseChoiceToken {
+        step: step.to_owned(),
+        provider: selection.provider.as_str().to_owned(),
+        model: selection.model.clone(),
+        thinking: selection
+            .thinking
+            .as_ref()
+            .map(|effort| effort.as_str().to_owned()),
+        preset: preset.map(|record| record.id.as_hex()),
+        preset_revision: preset.map(|record| record.revision),
+    })
+    .expect("phase model token")
+}
+
+fn parse_phase_choice(
+    raw: &str,
+    step: &str,
+    agents: &[crate::agents::AgentRecord],
+) -> Result<PhaseModelSelection, &'static str> {
+    let token: PhaseChoiceToken =
+        serde_json::from_str(raw).map_err(|_| "Choose a model for every model phase.")?;
+    if token.step != step {
+        return Err("Choose a model for every model phase.");
+    }
+    let provider = ProviderKind::parse(&token.provider)
+        .ok_or("Choose an available provider for every model phase.")?;
+    let thinking = token
+        .thinking
+        .map(|value| ThinkingEffort::new(value).ok_or("Choose an available thinking effort."))
+        .transpose()?;
+    let selection = ModelSelection::new(provider, token.model, thinking)
+        .ok_or("Choose a valid model for every model phase.")?;
+    let preset = match (token.preset, token.preset_revision) {
+        (None, None) => None,
+        (Some(id), Some(revision)) => {
+            let id = AgentId::parse(&id).ok_or("Choose an available preset.")?;
+            let record = agents
+                .iter()
+                .find(|record| record.id == id && record.revision == revision)
+                .ok_or("That preset changed. Reload the launch sheet.")?;
+            if let Some(preset_selection) = &record.selection
+                && preset_selection != &selection
+            {
+                return Err("Use the model selected by that preset.");
+            }
+            Some(PinnedPreset {
+                id: record.id,
+                revision: record.revision,
+                name: record.name.clone(),
+            })
+        }
+        _ => return Err("Choose an available preset."),
+    };
+    let instructions = preset
+        .as_ref()
+        .and_then(|pinned| agents.iter().find(|record| record.id == pinned.id))
+        .map(|record| record.instructions.clone())
+        .unwrap_or_default();
+    Ok(PhaseModelSelection {
+        step: workflows::definition::StepKey::parse(step)
+            .map_err(|_| "Choose a valid workflow phase.")?,
+        selection,
+        instructions,
+        preset,
+    })
+}
+
+fn phase_steps(
+    definition: &workflows::definition::WorkflowDefinition,
+) -> Vec<&workflows::definition::StepDefinition> {
+    definition
+        .steps()
+        .iter()
+        .filter(|step| matches!(&step.action, workflows::definition::StepAction::Agent(_)))
+        .collect()
+}
+
+fn selected_phase_model_options(
+    state: &AppState,
+    record: &ConversationRecord,
+    workflow_raw: &str,
+    phase_raw: &[String],
+) -> Vec<PhaseModelOption> {
+    let Some(selection) = WorkflowSelection::parse(workflow_raw) else {
+        return Vec::new();
+    };
+    let Ok(resolved) = state.workflows.resolve(&selection) else {
+        return Vec::new();
+    };
+    let agents = state.agents.list();
+    let selected = super::effective_model(state, record).map(|model| model.selection);
+    let direct_models: Vec<ModelSelection> = state
+        .vault
+        .desk_providers()
+        .into_iter()
+        .filter_map(|provider| {
+            let thinking = state.models_dev.effective_effort(
+                provider.kind,
+                &provider.model,
+                provider.thinking.as_ref(),
+            );
+            ModelSelection::new(provider.kind, provider.model, thinking)
+        })
+        .chain(selected.clone())
+        .fold(Vec::new(), |mut models, model| {
+            if !models.contains(&model) {
+                models.push(model);
+            }
+            models
+        });
+    phase_steps(&resolved.pinned.definition)
+        .into_iter()
+        .map(|step| {
+            let mut choices = Vec::new();
+            for selection in &direct_models {
+                choices.push(PhaseChoice {
+                    value: phase_choice_token(step.key.as_str(), selection, None),
+                    label: format!(
+                        "Direct model · {} · {}",
+                        selection.provider.label(),
+                        selection.model
+                    ),
+                    detail: selection
+                        .thinking
+                        .as_ref()
+                        .map(|effort| format!("Thinking: {}", effort.label()))
+                        .unwrap_or_else(|| {
+                            "No preset instructions or extra authority ceiling".to_owned()
+                        }),
+                    selected: selected.as_ref() == Some(selection),
+                });
+            }
+            let default_direct = direct_models.first();
+            for agent in &agents {
+                let Some(selection) = agent.selection.as_ref().or(default_direct) else {
+                    continue;
+                };
+                choices.push(PhaseChoice {
+                    value: phase_choice_token(step.key.as_str(), selection, Some(agent)),
+                    label: format!("Preset · {}", agent.name),
+                    detail: format!(
+                        "{} · {}{}",
+                        selection.provider.label(),
+                        selection.model,
+                        if agent.instructions.is_empty() {
+                            String::new()
+                        } else {
+                            " · Saved instructions".to_owned()
+                        }
+                    ),
+                    selected: false,
+                });
+            }
+            let raw = phase_raw.iter().find(|raw| {
+                serde_json::from_str::<PhaseChoiceToken>(raw)
+                    .is_ok_and(|token| token.step == step.key.as_str())
+            });
+            if let Some(raw) = raw {
+                for choice in &mut choices {
+                    choice.selected = choice.value == *raw;
+                }
+                if !choices.iter().any(|choice| choice.selected) {
+                    choices.push(PhaseChoice {
+                        value: raw.clone(),
+                        label: "Selected model or preset is unavailable".to_owned(),
+                        detail: "Choose an available model or reload the launch sheet".to_owned(),
+                        selected: true,
+                    });
+                }
+            } else if !choices.iter().any(|choice| choice.selected)
+                && let Some(first) = choices.first_mut()
+            {
+                first.selected = true;
+            }
+            PhaseModelOption {
+                step: step.key.as_str().to_owned(),
+                name: step.name.clone(),
+                choices,
+            }
+        })
+        .collect()
+}
+
+fn resolve_phase_models(
+    state: &AppState,
+    definition: &workflows::definition::WorkflowDefinition,
+    phase_raw: &[String],
+) -> Result<Vec<PhaseModelSelection>, &'static str> {
+    let agents = state.agents.list();
+    let mut models = Vec::new();
+    for step in phase_steps(definition) {
+        let mut matches = phase_raw.iter().filter(|raw| {
+            serde_json::from_str::<PhaseChoiceToken>(raw)
+                .is_ok_and(|token| token.step == step.key.as_str())
+        });
+        let Some(raw) = matches.next() else {
+            return Err("Choose a model for every model phase.");
+        };
+        if matches.next().is_some() {
+            return Err("Choose one model for every model phase.");
+        }
+        let model = parse_phase_choice(raw, step.key.as_str(), &agents)?;
+        super::valid_selection(state, &model.selection)?;
+        models.push(model);
+    }
+    if models.len() != phase_raw.len() {
+        return Err("Choose a model only for the selected workflow phases.");
+    }
+    Ok(models)
+}
+
+fn validate_phase_models(
+    state: &AppState,
+    definition: &workflows::definition::WorkflowDefinition,
+    base: &crate::agents::EffectiveAuthority,
+    models: &[PhaseModelSelection],
+) -> Result<(), &'static str> {
+    for model in models {
+        let step = definition
+            .step(&model.step)
+            .ok_or("Choose a valid workflow phase.")?;
+        let authority = if let Some(preset) = &model.preset {
+            let record = state
+                .agents
+                .get(&preset.id)
+                .filter(|record| record.revision == preset.revision)
+                .ok_or("That preset changed. Reload the launch sheet.")?;
+            crate::conversations::apply_preset_ceiling(base, &record)
+                .map_err(|error| error.message())?
+        } else {
+            base.clone()
+        };
+        let workflows::definition::StepAction::Agent(action) = &step.action else {
+            return Err("Choose a model only for model phases.");
+        };
+        if action.candidate_authority.access().is_writable()
+            && !authority.grant_access.is_writable()
+            || !action
+                .authority
+                .allowed_by(&authority.tools, authority.directories())
+        {
+            return Err("That phase needs access outside the selected model ceiling.");
+        }
+    }
+    Ok(())
+}
+
 fn selected_workflow(records: &[workflows::WorkflowRecord], raw: Option<&str>) -> String {
     if let Some(raw) = raw {
         return raw.trim().to_owned();
@@ -614,7 +958,11 @@ fn target_access_summary(
 ) -> String {
     let mut selected = record.clone();
     selected.execution_target = Some(target);
-    match resolve_authority(&selected, &state.projects, &state.agents) {
+    match crate::conversations::resolve_workflow_authority(
+        &selected,
+        &state.projects,
+        &state.agents,
+    ) {
         Ok(Some(authority)) => format!(
             "{} · {} tools",
             access_label(authority.effective.grant_access),

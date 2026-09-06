@@ -405,7 +405,10 @@ mod scripted_fixture {
     use futures_util::Stream;
     use rig_core::completion::{Message, ToolDefinition};
 
-    use super::super::{ChatTurn, ModelEvent, ModelStream, ProviderConnection, ProviderError};
+    use super::super::{
+        ChatTurn, ModelEvent, ModelStream, ProviderConnection, ProviderError, ProviderKind,
+        ThinkingEffort,
+    };
 
     #[derive(Clone)]
     enum Script {
@@ -417,6 +420,8 @@ mod scripted_fixture {
         },
     }
 
+    type CapturedConnection = (ProviderKind, String, Option<ThinkingEffort>);
+
     #[derive(Clone)]
     pub(crate) struct ScriptedBackend {
         pub(crate) verify_result: Result<(), ProviderError>,
@@ -425,6 +430,7 @@ mod scripted_fixture {
         last_preamble: Arc<Mutex<Option<String>>>,
         last_tools: Arc<Mutex<Vec<String>>>,
         last_history: Arc<Mutex<Vec<ChatTurn>>>,
+        last_connection: Arc<Mutex<Option<CapturedConnection>>>,
     }
 
     impl ScriptedBackend {
@@ -441,6 +447,7 @@ mod scripted_fixture {
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
                 last_history: Arc::new(Mutex::new(Vec::new())),
+                last_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -455,6 +462,7 @@ mod scripted_fixture {
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
                 last_history: Arc::new(Mutex::new(Vec::new())),
+                last_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -476,6 +484,7 @@ mod scripted_fixture {
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
                 last_history: Arc::new(Mutex::new(Vec::new())),
+                last_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -490,6 +499,7 @@ mod scripted_fixture {
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
                 last_history: Arc::new(Mutex::new(Vec::new())),
+                last_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -514,18 +524,35 @@ mod scripted_fixture {
                 .clone()
         }
 
+        pub(crate) fn last_connection(
+            &self,
+        ) -> Option<(ProviderKind, String, Option<ThinkingEffort>)> {
+            self.last_connection
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+
         pub(crate) fn verify(&self, _connection: &ProviderConnection) -> Result<(), ProviderError> {
             self.verify_result.clone()
         }
 
         pub(crate) fn stream_turn(
             &self,
-            _connection: &ProviderConnection,
+            connection: &ProviderConnection,
             history: &[ChatTurn],
             _extra: &[Message],
             tools: &[ToolDefinition],
             preamble: &str,
         ) -> Result<ModelStream, ProviderError> {
+            *self
+                .last_connection
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+                connection.kind,
+                connection.model.clone(),
+                connection.thinking.clone(),
+            ));
             *self
                 .last_preamble
                 .lock()

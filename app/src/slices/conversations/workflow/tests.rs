@@ -69,7 +69,7 @@ async fn launch_rejects_stale_definitions_without_reserving_the_conversation() {
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
-                    "revision={}&workflow={selection}&brief=Inspect&target=",
+                    "revision={}&workflow={selection}&brief=Inspect&target=&phase=first&phase=second",
                     conversation.revision
                 )))
                 .expect("request"),
@@ -124,7 +124,7 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
     ] {
         let mut request = Request::builder()
             .uri(format!(
-                "/conversations/{}/workflow?brief=Preserve+this+brief",
+                "/conversations/{}/workflow?brief=Preserve+this+brief&phase=first&phase=second",
                 conversation.id.as_hex()
             ))
             .header(

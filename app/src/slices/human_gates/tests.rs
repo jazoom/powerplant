@@ -3,6 +3,7 @@ use axum::{
     http::{Request, header},
     middleware::from_fn_with_state,
 };
+use std::sync::Arc;
 use tower::ServiceExt;
 
 use super::forms::{DecisionForm, FormError};
@@ -395,6 +396,8 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6"),
+        phase_providers: Vec::new(),
+        active_connection: Arc::new(std::sync::Mutex::new(None)),
         host_policy: DirectoryPolicy::from_record_with_primary(&agent, "project"),
         turns: begun.turns,
         job: begun.job,
@@ -506,6 +509,8 @@ fn conversation_awaiting_gate() -> GateFixture {
                 grant_alias: authority.effective.grant_alias.clone(),
                 grant_access: authority.effective.grant_access,
                 connection: ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6"),
+                phase_providers: Vec::new(),
+                active_connection: Arc::new(std::sync::Mutex::new(None)),
                 host_policy: authority.effective.policy.clone(),
                 turns: vec![crate::providers::ChatTurn::user(
                     "Change the file".to_owned()
@@ -1139,6 +1144,74 @@ async fn a_wrong_candidate_decision_is_rejected() {
         crate::workflows::run::RunState::AwaitingHuman { .. }
     ));
     assert!(!git_has_head(&fixture.host));
+}
+
+#[tokio::test]
+async fn a_revoked_phase_preset_cannot_approve_at_a_non_model_gate() {
+    let fixture = conversation_awaiting_gate();
+    let agent = fixture.state.agents.get(&fixture.agent_id).expect("preset");
+    fixture
+        .state
+        .workflow_runs
+        .mutate(&fixture.run_id, |run| {
+            let step = run
+                .pinned
+                .definition
+                .steps()
+                .iter()
+                .find(|step| matches!(step.action, workflows::definition::StepAction::Agent(_)))
+                .expect("model phase");
+            run.phase_models = vec![workflows::PhaseModelSelection {
+                step: step.key.clone(),
+                selection: crate::providers::ModelSelection::new(
+                    ProviderKind::Xai,
+                    "grok-4.6".to_owned(),
+                    None,
+                )
+                .expect("model"),
+                instructions: agent.instructions.clone(),
+                preset: Some(workflows::PinnedPreset {
+                    id: agent.id,
+                    revision: agent.revision,
+                    name: agent.name.clone(),
+                }),
+            }];
+            Ok(())
+        })
+        .expect("pin phase");
+    fixture
+        .state
+        .agents
+        .update(
+            &agent.id,
+            agent.revision,
+            AgentDraft {
+                name: agent.name,
+                instructions: agent.instructions,
+                selection: agent.selection,
+                tools: Vec::new(),
+                network: agent.network,
+                directories: agent.directories,
+                primary_directory: agent.primary_directory,
+            },
+        )
+        .expect("revoke tools");
+    let response = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let run = fixture
+        .state
+        .workflow_runs
+        .get(&fixture.run_id)
+        .expect("run");
+    assert!(matches!(run.state, workflows::run::RunState::Interrupted));
+    assert!(!git_has_head(&fixture.host));
+    assert!(run.gates.iter().all(|gate| gate.decision.is_none()));
 }
 
 #[tokio::test]

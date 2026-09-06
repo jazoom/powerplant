@@ -865,7 +865,7 @@ impl ConversationStore {
         &self,
         id: &ConversationId,
         expected_revision: u32,
-        model: ConversationModelConfiguration,
+        model: Option<ConversationModelConfiguration>,
         request: JobId,
         text: String,
     ) -> Result<ConversationRecord, ConversationError> {
@@ -877,7 +877,9 @@ impl ConversationStore {
             if current.messages.len() > MAXIMUM_MESSAGES.saturating_sub(2) {
                 return Err(ConversationError::Full);
             }
-            current.model = Some(model);
+            if let Some(model) = model {
+                current.model = Some(model);
+            }
             current.messages.push(ConversationMessage {
                 role: MessageRole::User,
                 text,

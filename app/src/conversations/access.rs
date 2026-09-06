@@ -1,6 +1,6 @@
 use crate::agents::{
-    AccessMode, AgentStore, AuthorityError, EffectiveAuthority, NetworkAccess, PolicyGrant,
-    guest_path_for,
+    AccessMode, AgentStore, AuthorityError, DirectoryPolicy, EffectiveAuthority, NetworkAccess,
+    PolicyGrant, guest_path_for,
 };
 use crate::projects::{ProjectId, ProjectRecord, ProjectStore};
 
@@ -113,10 +113,28 @@ fn narrower_domain(left: &str, right: &str) -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn resolve_authority(
     record: &crate::conversations::ConversationRecord,
     projects: &ProjectStore,
     agents: &AgentStore,
+) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
+    resolve_authority_inner(record, projects, agents, true)
+}
+
+pub(crate) fn resolve_workflow_authority(
+    record: &crate::conversations::ConversationRecord,
+    projects: &ProjectStore,
+    agents: &AgentStore,
+) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
+    resolve_authority_inner(record, projects, agents, false)
+}
+
+fn resolve_authority_inner(
+    record: &crate::conversations::ConversationRecord,
+    projects: &ProjectStore,
+    agents: &AgentStore,
+    apply_conversation_preset: bool,
 ) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
     let Some(project_id) = record.execution_target else {
         return Ok(None);
@@ -138,10 +156,14 @@ pub(crate) fn resolve_authority(
     let project = projects
         .get(&project_id)
         .ok_or(ConversationAccessError::MissingProject)?;
-    let preset = record
-        .model
-        .as_ref()
-        .and_then(|model| model.preset.as_ref())
+    let preset = apply_conversation_preset
+        .then(|| {
+            record
+                .model
+                .as_ref()
+                .and_then(|model| model.preset.as_ref())
+        })
+        .flatten()
         .map(|preset| {
             let agent = agents
                 .get(&preset.id)
@@ -195,6 +217,70 @@ pub(crate) fn resolve_authority(
         preset.as_ref(),
     )?;
     Ok(Some(authority))
+}
+
+pub(crate) fn apply_preset_ceiling(
+    base: &EffectiveAuthority,
+    preset: &crate::agents::AgentRecord,
+) -> Result<EffectiveAuthority, ConversationAccessError> {
+    let tools = base
+        .tools
+        .iter()
+        .copied()
+        .filter(|tool| preset.tools.contains(tool))
+        .collect();
+    let network = intersect_network(&base.network, Some(&preset.network));
+    let grants = if preset.directories.is_empty() {
+        base.policy.grants().to_vec()
+    } else {
+        base.policy
+            .grants()
+            .iter()
+            .filter_map(|grant| {
+                let ceiling = preset
+                    .directories
+                    .iter()
+                    .find(|directory| directory.host_path == grant.host_path)?;
+                Some(PolicyGrant {
+                    alias: grant.alias.clone(),
+                    guest_path: grant.guest_path.clone(),
+                    host_path: grant.host_path.clone(),
+                    access: min_access(grant.access, ceiling.access),
+                })
+            })
+            .collect()
+    };
+    if !grants.iter().any(|grant| grant.alias == base.grant_alias) {
+        return Err(ConversationAccessError::Preset);
+    }
+    let grant_access = grants
+        .iter()
+        .find(|grant| grant.alias == base.grant_alias)
+        .map(|grant| grant.access)
+        .ok_or(ConversationAccessError::Preset)?;
+    let policy = DirectoryPolicy::from_grants(grants, base.grant_alias.clone());
+    policy
+        .confirm_hosts()
+        .map_err(|_| ConversationAccessError::Path)?;
+    Ok(EffectiveAuthority {
+        origin: base.origin.clone(),
+        revision: base.revision,
+        project_id: base.project_id,
+        project_revision: base.project_revision,
+        grant_alias: base.grant_alias.clone(),
+        grant_access,
+        tools,
+        network,
+        policy,
+    })
+}
+
+fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
+    if left.is_writable() && right.is_writable() {
+        AccessMode::ReadWrite
+    } else {
+        AccessMode::ReadOnly
+    }
 }
 
 fn resolve_grant_with_context(

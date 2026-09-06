@@ -54,6 +54,8 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
         grant_alias: "project".to_owned(),
         grant_access: crate::agents::AccessMode::ReadWrite,
         connection: ProviderConnection::with_key(ProviderKind::Xai, "key", "model"),
+        phase_providers: Vec::new(),
+        active_connection: Arc::new(std::sync::Mutex::new(None)),
         host_policy: DirectoryPolicy::from_grants(Vec::new(), "project".to_owned()),
         turns: Vec::new(),
         job: Job::new(JobId::generate().expect("job"), run_id, 0),

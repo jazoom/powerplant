@@ -12,6 +12,27 @@ use crate::{
 };
 
 #[test]
+fn streamed_credentials_remain_redacted_at_every_utf8_split() {
+    let secret = "sk-sécret";
+    let input = format!("Before {secret} after {secret}.");
+    for split in input.char_indices().map(|(index, _)| index) {
+        let mut redactor = super::StreamRedactor::new(Some(secret));
+        let mut output = redactor.push(&input[..split]);
+        assert!(!output.contains(secret));
+        output.push_str(&redactor.push(&input[split..]));
+        output.push_str(&redactor.finish());
+        assert_eq!(output, "Before [redacted] after [redacted].");
+    }
+    let mut redactor = super::StreamRedactor::new(Some(secret));
+    let mut output = String::new();
+    for character in input.chars() {
+        output.push_str(&redactor.push(&character.to_string()));
+    }
+    output.push_str(&redactor.finish());
+    assert_eq!(output, "Before [redacted] after [redacted].");
+}
+
+#[test]
 fn a_large_tool_result_does_not_consume_the_model_reply_limit() {
     let mut visible_tool_bytes = 0;
     let tool = visible_tool_output(
