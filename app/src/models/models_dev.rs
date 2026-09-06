@@ -143,6 +143,12 @@ impl ModelsDevCatalogue {
             .map(model_metadata)
     }
 
+    pub(crate) fn context_limit(&self, kind: ProviderKind, id: &str) -> Option<u64> {
+        self.model(kind, id)
+            .map(|model| model.context_limit)
+            .filter(|limit| *limit > 0)
+    }
+
     pub(crate) fn efforts(&self, kind: ProviderKind, model: &str) -> Vec<ThinkingEffort> {
         let active = self.read();
         active

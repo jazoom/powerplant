@@ -21,6 +21,7 @@ use super::definition::{
 };
 use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
 use super::id::{AttemptId, GateId, RunId, WorkflowId};
+use super::input_context::AttemptContextPacket;
 use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
 pub(crate) const RUN_RECORD_VERSION: u32 = 1;
@@ -180,6 +181,7 @@ pub(crate) struct AttemptRecord {
     pub(crate) outputs: Vec<AttemptArtefactOutput>,
     pub(crate) capabilities: AttemptCapabilities,
     pub(crate) sandbox: AttemptSandboxRecord,
+    pub(crate) initial_context: Option<AttemptContextPacket>,
     pub(crate) cleanup: AttemptCleanupRecord,
     pub(crate) commit_transaction: Option<CommitTransaction>,
     pub(crate) commit_result: Option<CommitResult>,
@@ -354,6 +356,7 @@ struct AttemptFile {
     outputs: Vec<AttemptOutputFile>,
     capabilities: AttemptCapabilitiesFile,
     sandbox: AttemptSandboxFile,
+    initial_context: Option<AttemptContextPacket>,
     cleanup: AttemptCleanupFile,
     commit_transaction: Option<CommitTransactionFile>,
     commit_result: Option<CommitResultFile>,
@@ -928,6 +931,7 @@ impl WorkflowRun {
             outputs: Vec::new(),
             capabilities,
             sandbox,
+            initial_context: None,
             cleanup: AttemptCleanupRecord::Pending,
             commit_transaction: None,
             commit_result: None,
@@ -936,6 +940,35 @@ impl WorkflowRun {
             step,
             attempt: attempt_id,
         };
+        Ok(())
+    }
+
+    pub(crate) fn record_initial_context(
+        &mut self,
+        attempt_id: AttemptId,
+        context: AttemptContextPacket,
+    ) -> Result<(), TransitionError> {
+        if !context.validate() {
+            return Err(TransitionError::Invalid);
+        }
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id && attempt.state == AttemptState::Active)
+        else {
+            return Err(TransitionError::Invalid);
+        };
+        if !context_matches_attempt(&context, attempt) {
+            return Err(TransitionError::Invalid);
+        }
+        if let Some(current) = &attempt.initial_context {
+            return if current == &context {
+                Ok(())
+            } else {
+                Err(TransitionError::Invalid)
+            };
+        }
+        attempt.initial_context = Some(context);
         Ok(())
     }
 
@@ -1603,6 +1636,7 @@ impl AttemptRecord {
                 kind: self.sandbox.kind.as_str().to_owned(),
                 snapshot_digest: self.sandbox.snapshot_digest.as_str().to_owned(),
             },
+            initial_context: self.initial_context.clone(),
             cleanup: cleanup_to_file(&self.cleanup),
             commit_transaction: self
                 .commit_transaction
@@ -1648,6 +1682,7 @@ impl AttemptRecord {
                 snapshot_digest: SnapshotDigest::parse(&file.sandbox.snapshot_digest)
                     .ok_or(RunRecordError::Corrupt)?,
             },
+            initial_context: file.initial_context,
             cleanup: cleanup_from_file(file.cleanup)?,
             commit_transaction: file
                 .commit_transaction
@@ -3245,6 +3280,24 @@ impl AttemptSandboxKind {
     }
 }
 
+fn context_matches_attempt(context: &AttemptContextPacket, attempt: &AttemptRecord) -> bool {
+    if attempt.action_kind != ActionKind::Agent {
+        return false;
+    }
+    let candidate = attempt.inputs.iter().find(|input| {
+        input.artefact.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+    });
+    match (candidate, context.project_instructions.candidate.as_ref()) {
+        (None, None) => true,
+        (Some(input), Some(recorded)) => {
+            input.artefact.id.as_hex() == recorded.id
+                && input.artefact.kind.as_str() == recorded.kind
+                && input.artefact.artefact_hash.as_str() == recorded.artefact_hash
+        }
+        _ => false,
+    }
+}
+
 fn validate_attempts(run: &WorkflowRun) -> Result<(), RunRecordError> {
     let mut active = 0usize;
     for (index, attempt) in run.attempts.iter().enumerate() {
@@ -3278,6 +3331,11 @@ fn validate_attempts(run: &WorkflowRun) -> Result<(), RunRecordError> {
             }
         }
         validate_attempt_references(run, attempt, step)?;
+        if let Some(context) = &attempt.initial_context
+            && (!context.validate() || !context_matches_attempt(context, attempt))
+        {
+            return Err(RunRecordError::Corrupt);
+        }
         validate_attempt_result(attempt, step)?;
         validate_attempt_isolation(attempt, step, run)?;
         validate_report_binding(attempt, step, run)?;

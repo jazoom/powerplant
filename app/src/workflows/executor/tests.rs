@@ -139,6 +139,11 @@ async fn configured_dispatch_excludes_history_but_quick_tasks_keep_it() {
         crate::workflows::RunKind::QuickTask,
     ] {
         let (mut state, mut job, step, attempt, _, _, drafts) = fixing_publication_fixture();
+        job.connection = crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "test-private-context-credential",
+            "model",
+        );
         let backend = crate::tests::ScriptedBackend::accept();
         state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
         state
@@ -191,6 +196,33 @@ async fn configured_dispatch_excludes_history_but_quick_tasks_keep_it() {
             panic!("dispatch failed: {error:?}");
         }
         let preamble = backend.last_preamble().expect("provider request");
+        let snapshot = state
+            .workflow_runs
+            .get(&job.run_id)
+            .and_then(|run| {
+                run.attempts
+                    .last()
+                    .and_then(|attempt| attempt.initial_context.clone())
+            })
+            .expect("initial context snapshot");
+        assert_eq!(snapshot.prompt, preamble);
+        assert_eq!(snapshot.request_messages(), backend.last_history());
+        assert!(
+            !backend.last_history().is_empty(),
+            "Rig requires a request message"
+        );
+        assert_eq!(
+            snapshot
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            backend
+                .last_tools()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
         assert!(preamble.contains("Inspect only the assigned candidate."));
         assert!(preamble.contains("# Project instructions"));
         assert!(!preamble.contains("PRIVATE DISCUSSION"));
@@ -866,6 +898,7 @@ fn completed_output_attempt(
             .expect("digest"),
         },
         cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+        initial_context: None,
         commit_transaction: None,
         commit_result: None,
     }

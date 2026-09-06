@@ -1,6 +1,6 @@
 use super::{
-    InputContextError, ProjectInstructions, build_attempt_packet, format_agent_context,
-    validate_launch_brief, verify_inputs,
+    InputContextError, ProjectInstructions, format_agent_context, validate_launch_brief,
+    verify_inputs,
 };
 use crate::tests::test_environment_id;
 use crate::workflows::artefacts::{
@@ -13,6 +13,27 @@ use crate::workflows::run::{
     AttemptArtefactInput, ObservedCandidate, RunSource, RunSourceState, WorkflowRun,
 };
 use crate::workflows::seeds::sequential_team_definition;
+
+fn build_attempt_packet(
+    run: &WorkflowRun,
+    step: &super::StepDefinition,
+    resolved: &[AttemptArtefactInput],
+    store: &WorkflowArtefactRepository,
+    project_instructions: ProjectInstructions,
+) -> Result<super::AttemptContextPacket, InputContextError> {
+    super::build_attempt_packet_for_request(
+        run,
+        step,
+        resolved,
+        store,
+        project_instructions,
+        &[],
+        "",
+        &[],
+        None,
+        None,
+    )
+}
 
 fn store() -> WorkflowArtefactRepository {
     WorkflowArtefactRepository::in_memory()
@@ -458,7 +479,7 @@ fn attempt_packets_reject_substituted_inputs_and_count_project_instructions() {
         ProjectInstructions::Present("Use the project test command.".to_owned()),
     )
     .expect("packet");
-    let text = packet.text();
+    let text = &packet.prompt;
     assert!(text.contains(&run.launch_brief));
     assert!(text.contains("Use the project test command."));
     assert!(!text.contains("CANDIDATE-BYTES"));
@@ -478,6 +499,252 @@ fn attempt_packets_reject_substituted_inputs_and_count_project_instructions() {
     changed.artefact.id = ArtefactId::generate().expect("foreign artefact");
     assert!(
         build_attempt_packet(&run, step, &[changed], &store, ProjectInstructions::Absent).is_err()
+    );
+}
+
+#[test]
+fn initial_context_snapshot_keeps_request_and_inspector_identity() {
+    let store = store();
+    let mut run = run();
+    run.launch_brief = "Inspect the repository.".to_owned();
+    let candidate = publish_candidate(&mut run, &store);
+    let step = run
+        .pinned
+        .definition
+        .step(&StepKey::parse("planner").expect("step"))
+        .expect("planner");
+    let tool = rig_core::completion::ToolDefinition {
+        name: "read".to_owned(),
+        description: "Read a granted file.".to_owned(),
+        parameters: serde_json::json!({"type": "object"}),
+    };
+    let packet = super::build_attempt_packet_for_request(
+        &run,
+        step,
+        &[input_of("candidate", &candidate)],
+        &store,
+        ProjectInstructions::Present("Use the test command.".to_owned()),
+        &[crate::providers::ChatTurn::user(
+            "Excluded discussion".to_owned(),
+        )],
+        "Role instructions.",
+        std::slice::from_ref(&tool),
+        None,
+        None,
+    )
+    .expect("packet");
+
+    assert!(!packet.request_messages().is_empty());
+    assert!(
+        !packet
+            .request_messages()
+            .iter()
+            .any(|message| message.text.contains("Excluded discussion"))
+    );
+    assert_eq!(packet.request_tools()[0].parameters, tool.parameters);
+    assert!(packet.prompt.contains("Role instructions."));
+    assert!(packet.prompt.contains("The source conversation"));
+    let instructions = &packet.project_instructions;
+    assert!(matches!(
+        &instructions.state,
+        super::ProjectInstructionState::Present { .. }
+    ));
+    assert_eq!(instructions.guest_path, "AGENTS.md");
+    assert_eq!(
+        instructions.text().map(str::len),
+        Some("Use the test command.".len())
+    );
+    assert_eq!(
+        instructions.content_hash(),
+        Some(
+            crate::workflows::artefacts::ObjectHash::of(b"Use the test command.")
+                .as_str()
+                .as_str()
+        )
+    );
+    let reference = instructions
+        .candidate
+        .as_ref()
+        .expect("candidate reference");
+    assert_eq!(reference.id, candidate.id.as_hex());
+    assert_eq!(reference.kind, "candidate-revision");
+    assert!(packet.validate());
+
+    let absent = super::build_attempt_packet_for_request(
+        &run,
+        step,
+        &[input_of("candidate", &candidate)],
+        &store,
+        ProjectInstructions::Absent,
+        &[],
+        "",
+        &[],
+        None,
+        None,
+    )
+    .expect("absent packet");
+    assert!(matches!(
+        absent.project_instructions.state,
+        super::ProjectInstructionState::Absent
+    ));
+    assert!(absent.project_instructions.candidate.is_some());
+}
+
+#[test]
+fn initial_context_reserves_output_and_tool_capacity() {
+    let store = store();
+    let mut run = run();
+    run.launch_brief = "Inspect the repository.".to_owned();
+    let candidate = publish_candidate(&mut run, &store);
+    let step = run
+        .pinned
+        .definition
+        .step(&StepKey::parse("planner").expect("step"))
+        .expect("planner");
+    let packet = super::build_attempt_packet_for_request(
+        &run,
+        step,
+        &[input_of("candidate", &candidate)],
+        &store,
+        ProjectInstructions::Absent,
+        &[],
+        "",
+        &[],
+        None,
+        None,
+    )
+    .expect("packet");
+    assert_eq!(
+        packet.budget.reserved_output_bytes,
+        super::RESERVED_MODEL_OUTPUT_BYTES as u64
+    );
+    assert_eq!(
+        packet.budget.reserved_tool_bytes,
+        super::RESERVED_TOOL_WORK_BYTES as u64
+    );
+    assert_eq!(
+        packet.budget.total_bytes,
+        packet.budget.packet_bytes
+            + packet.budget.reserved_output_bytes
+            + packet.budget.reserved_tool_bytes
+    );
+    assert_eq!(packet.budget.model_context_limit, None);
+    let small_model = super::build_attempt_packet_for_request(
+        &run,
+        step,
+        &[input_of("candidate", &candidate)],
+        &store,
+        ProjectInstructions::Absent,
+        &[],
+        "",
+        &[],
+        Some(32_768),
+        None,
+    )
+    .expect("a short prompt fits a small model with a reserve");
+    assert!(small_model.budget.reserved_output_bytes > 0);
+    assert!(small_model.budget.reserved_tool_bytes > 0);
+    assert!(small_model.budget.estimated_total_tokens <= 32_768);
+
+    assert_eq!(
+        super::build_attempt_packet_for_request(
+            &run,
+            step,
+            &[input_of("candidate", &candidate)],
+            &store,
+            ProjectInstructions::Absent,
+            &[],
+            "",
+            &[],
+            Some(packet.budget.estimated_input_tokens),
+            None,
+        )
+        .err(),
+        Some(InputContextError::Packet)
+    );
+    assert_eq!(
+        super::build_attempt_packet_for_request(
+            &run,
+            step,
+            &[input_of("candidate", &candidate)],
+            &store,
+            ProjectInstructions::Absent,
+            &[],
+            &"x".repeat(super::MAXIMUM_INITIAL_CONTEXT_BYTES),
+            &[],
+            None,
+            None,
+        )
+        .err(),
+        Some(InputContextError::Packet)
+    );
+}
+
+#[test]
+fn initial_context_rejects_credentials_in_briefs_and_ordinary_messages() {
+    let store = store();
+    let mut run = run();
+    run.launch_brief = "Do not persist example-private-key".to_owned();
+    let candidate = publish_candidate(&mut run, &store);
+    let step = run
+        .pinned
+        .definition
+        .step(&StepKey::parse("planner").expect("step"))
+        .expect("planner")
+        .clone();
+    assert_eq!(
+        super::build_attempt_packet_for_request(
+            &run,
+            &step,
+            &[input_of("candidate", &candidate)],
+            &store,
+            ProjectInstructions::Absent,
+            &[],
+            "",
+            &[],
+            None,
+            Some("example-private-key"),
+        )
+        .err(),
+        Some(InputContextError::Credential)
+    );
+    run.launch_brief = "Inspect the project".to_owned();
+    run.kind = crate::workflows::RunKind::QuickTask;
+    assert_eq!(
+        super::build_attempt_packet_for_request(
+            &run,
+            &step,
+            &[input_of("candidate", &candidate)],
+            &store,
+            ProjectInstructions::Absent,
+            &[crate::providers::ChatTurn::user(
+                "example-private-key".to_owned()
+            )],
+            "",
+            &[],
+            None,
+            Some("example-private-key"),
+        )
+        .err(),
+        Some(InputContextError::Credential)
+    );
+    assert_eq!(
+        super::build_attempt_packet_for_request(
+            &run,
+            &step,
+            &[input_of("candidate", &candidate)],
+            &store,
+            ProjectInstructions::Absent,
+            &[crate::providers::ChatTurn::user(
+                "x".repeat(super::MAXIMUM_INITIAL_CONTEXT_BYTES)
+            )],
+            "",
+            &[],
+            None,
+            None,
+        )
+        .err(),
+        Some(InputContextError::Packet)
     );
 }
 

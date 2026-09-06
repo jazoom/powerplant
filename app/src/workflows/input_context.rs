@@ -1,6 +1,12 @@
 use std::time::{Duration, Instant};
 
-use crate::sandbox::{CommandEvent, GUEST_PROJECT, GuestExec, GuestSandbox};
+use rig_core::completion::ToolDefinition;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    agents::ToolId,
+    sandbox::{CommandEvent, GUEST_PROJECT, GuestExec, GuestSandbox},
+};
 
 use super::artefacts::{
     ArtefactHash, ArtefactProducer, ArtefactSummary, CandidateHash, ObjectHash, TypedPayload,
@@ -15,6 +21,10 @@ pub(crate) const MAXIMUM_IMPORTED_TEXT_BYTES: usize = 1024 * 1024;
 pub(crate) const MAXIMUM_PROJECT_INSTRUCTION_BYTES: usize = 32 * 1024;
 pub(crate) const MAXIMUM_LAUNCH_BRIEF_BYTES: usize = 32 * 1024;
 pub(crate) const MAXIMUM_ATTEMPT_PACKET_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const RESERVED_MODEL_OUTPUT_BYTES: usize = 128 * 1024;
+pub(crate) const RESERVED_TOOL_WORK_BYTES: usize = 12 * 64 * 1024;
+pub(crate) const MAXIMUM_INITIAL_CONTEXT_BYTES: usize =
+    MAXIMUM_ATTEMPT_PACKET_BYTES - RESERVED_MODEL_OUTPUT_BYTES - RESERVED_TOOL_WORK_BYTES;
 // Reject links before the read, including dangling links. The candidate has no active writer here.
 const INSTRUCTION_READ_COMMAND: &str = "if [ -L AGENTS.md ]; then exit 4; fi; if [ ! -e AGENTS.md ]; then exit 3; fi; if [ ! -f AGENTS.md ] || [ ! -r AGENTS.md ]; then exit 1; fi; head -c 32769 -- AGENTS.md";
 const INSTRUCTION_READ_DEADLINE: Duration = if cfg!(test) {
@@ -176,41 +186,259 @@ impl InputContextError {
             Self::Provenance => "That input artefact does not belong to this run.",
             Self::Source => "That input does not match its declared source.",
             Self::Bound => "Imported plan or report text is too large.",
-            Self::Credential => "Imported text cannot include a provider credential.",
+            Self::Credential => "The initial context cannot include a provider credential.",
             Self::Brief => "Enter a task brief of at most 32 KiB.",
             Self::Packet => "The workflow context is too large for this launch.",
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct ContextCandidateReference {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    pub(crate) artefact_hash: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub(crate) enum ProjectInstructionState {
+    Absent,
+    Present { text: String, content_hash: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct ProjectInstructionSnapshot {
+    pub(crate) candidate: Option<ContextCandidateReference>,
+    pub(crate) guest_path: String,
+    pub(crate) state: ProjectInstructionState,
+}
+
+impl ProjectInstructionSnapshot {
+    fn from_verified(verified: &[VerifiedInput], instructions: &ProjectInstructions) -> Self {
+        let candidate = verified
+            .iter()
+            .find(|input| input.kind == ArtefactKind::CandidateRevision)
+            .map(|input| ContextCandidateReference {
+                id: input.artefact_id.as_hex(),
+                kind: input.kind.as_str().to_owned(),
+                artefact_hash: input.artefact_hash.as_str(),
+            });
+        let state = match instructions {
+            ProjectInstructions::Absent => ProjectInstructionState::Absent,
+            ProjectInstructions::Present(text) => ProjectInstructionState::Present {
+                text: text.clone(),
+                content_hash: ObjectHash::of(text.as_bytes()).as_str(),
+            },
+        };
+        Self {
+            candidate,
+            guest_path: "AGENTS.md".to_owned(),
+            state,
+        }
+    }
+
+    pub(crate) fn text(&self) -> Option<&str> {
+        match &self.state {
+            ProjectInstructionState::Absent => None,
+            ProjectInstructionState::Present { text, .. } => Some(text),
+        }
+    }
+
+    pub(crate) fn content_hash(&self) -> Option<&str> {
+        match &self.state {
+            ProjectInstructionState::Absent => None,
+            ProjectInstructionState::Present { content_hash, .. } => Some(content_hash),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct ContextTool {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) parameters: serde_json::Value,
+}
+
+impl ContextTool {
+    fn from_definition(tool: &ToolDefinition) -> Self {
+        Self {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        }
+    }
+
+    fn request_definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.parameters.clone(),
+        }
+    }
+
+    fn byte_len(&self) -> usize {
+        json_byte_len(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct ContextBudget {
+    pub(crate) packet_bytes: u64,
+    pub(crate) reserved_output_bytes: u64,
+    pub(crate) reserved_tool_bytes: u64,
+    pub(crate) total_bytes: u64,
+    pub(crate) estimated_input_tokens: u64,
+    pub(crate) estimated_total_tokens: u64,
+    pub(crate) model_context_limit: Option<u64>,
+}
+
+impl ContextBudget {
+    pub(crate) fn capacity_label(&self) -> String {
+        self.model_context_limit
+            .map(|limit| format!("{limit} tokens"))
+            .unwrap_or_else(|| "Unknown".to_owned())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "role",
+    content = "text",
+    rename_all = "kebab-case"
+)]
+pub(crate) enum ContextMessage {
+    User(String),
+    Assistant(String),
+}
+
+impl ContextMessage {
+    fn byte_len(&self) -> usize {
+        json_byte_len(self)
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::User(text) | Self::Assistant(text) => text,
+        }
+    }
+
+    pub(crate) fn role(&self) -> &'static str {
+        match self {
+            Self::User(_) => "User",
+            Self::Assistant(_) => "Assistant",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct AttemptContextPacket {
-    pub(crate) brief: String,
-    pub(crate) artefact_context: String,
-    pub(crate) project_instructions: ProjectInstructions,
+    pub(crate) prompt: String,
+    pub(crate) messages: Vec<ContextMessage>,
+    pub(crate) tools: Vec<ContextTool>,
+    pub(crate) source_available: String,
+    pub(crate) excluded_context: String,
+    pub(crate) project_instructions: ProjectInstructionSnapshot,
+    pub(crate) budget: ContextBudget,
 }
 
 impl AttemptContextPacket {
-    pub(crate) fn text(&self) -> String {
-        let instructions = match &self.project_instructions {
-            ProjectInstructions::Absent => {
-                "# Project instructions\n\nNo root AGENTS.md file was present in this candidate."
-                    .to_owned()
-            }
-            ProjectInstructions::Present(text) => {
-                format!("# Project instructions\n\n{text}")
-            }
-        };
-        format!(
-            "Task brief:\n{}\n\n{}\n\n{}",
-            self.brief.trim(),
-            self.artefact_context,
-            instructions
-        )
+    pub(crate) fn request_messages(&self) -> Vec<crate::providers::ChatTurn> {
+        self.messages
+            .iter()
+            .map(|message| match message {
+                ContextMessage::User(text) => crate::providers::ChatTurn::user(text.clone()),
+                ContextMessage::Assistant(text) => {
+                    crate::providers::ChatTurn::assistant(text.clone().into())
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn byte_len(&self) -> usize {
-        self.text().len()
+        self.prompt
+            .len()
+            .saturating_add(
+                self.messages
+                    .iter()
+                    .map(ContextMessage::byte_len)
+                    .try_fold(0usize, usize::checked_add)
+                    .unwrap_or(usize::MAX),
+            )
+            .saturating_add(
+                self.tools
+                    .iter()
+                    .map(ContextTool::byte_len)
+                    .try_fold(0usize, usize::checked_add)
+                    .unwrap_or(usize::MAX),
+            )
+    }
+
+    pub(crate) fn request_tools(&self) -> Vec<ToolDefinition> {
+        self.tools
+            .iter()
+            .map(ContextTool::request_definition)
+            .collect()
+    }
+
+    pub(crate) fn tool_ids(&self) -> Vec<ToolId> {
+        self.tools
+            .iter()
+            .filter_map(|tool| ToolId::parse(&tool.name))
+            .collect()
+    }
+
+    pub(crate) fn validate(&self) -> bool {
+        let byte_len = self.byte_len();
+        let (output_bytes, tool_bytes) = reserved_bytes(self.budget.model_context_limit);
+        let Some(total_bytes) = byte_len.checked_add(output_bytes.saturating_add(tool_bytes))
+        else {
+            return false;
+        };
+        let Some(input_tokens) = estimate_tokens(byte_len) else {
+            return false;
+        };
+        let Some(total_tokens) = estimate_tokens(total_bytes) else {
+            return false;
+        };
+        !self.messages.is_empty()
+            && self.source_available.len() <= 1024
+            && self.excluded_context.len() <= 1024
+            && self.prompt.len() <= MAXIMUM_INITIAL_CONTEXT_BYTES
+            && byte_len <= MAXIMUM_INITIAL_CONTEXT_BYTES
+            && total_bytes <= MAXIMUM_ATTEMPT_PACKET_BYTES
+            && self.budget.packet_bytes == byte_len as u64
+            && self.budget.reserved_output_bytes == output_bytes as u64
+            && self.budget.reserved_tool_bytes == tool_bytes as u64
+            && self.budget.total_bytes == total_bytes as u64
+            && self.budget.estimated_input_tokens == input_tokens
+            && self.budget.estimated_total_tokens == total_tokens
+            && self
+                .budget
+                .model_context_limit
+                .is_none_or(|limit| total_tokens <= limit)
+            && self.project_instructions.guest_path == "AGENTS.md"
+            && self
+                .project_instructions
+                .text()
+                .is_none_or(|text| text.len() <= MAXIMUM_PROJECT_INSTRUCTION_BYTES)
+            && self
+                .project_instructions
+                .content_hash()
+                .is_none_or(|hash| ObjectHash::parse(hash).is_some())
+            && match &self.project_instructions.state {
+                ProjectInstructionState::Absent => true,
+                ProjectInstructionState::Present { text, content_hash } => {
+                    ObjectHash::parse(content_hash)
+                        .is_some_and(|hash| hash == ObjectHash::of(text.as_bytes()))
+                }
+            }
     }
 }
 
@@ -228,24 +456,163 @@ pub(crate) fn validate_launch_brief(brief: &str) -> Result<String, InputContextE
     Ok(brief.to_owned())
 }
 
-pub(crate) fn build_attempt_packet(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_attempt_packet_for_request(
     run: &WorkflowRun,
     step: &StepDefinition,
     resolved: &[AttemptArtefactInput],
     store: &super::artefacts::WorkflowArtefactRepository,
     project_instructions: ProjectInstructions,
+    conversation_turns: &[crate::providers::ChatTurn],
+    role_preamble: &str,
+    tools: &[ToolDefinition],
+    model_context_limit: Option<u64>,
+    secret: Option<&str>,
 ) -> Result<AttemptContextPacket, InputContextError> {
     let brief = validate_launch_brief(&run.launch_brief)?;
     let verified = verify_inputs(run, step, resolved, store)?;
-    let packet = AttemptContextPacket {
-        brief,
-        artefact_context: format_agent_context(&verified, step.writes_primary_source()),
-        project_instructions,
+    let project_instructions =
+        ProjectInstructionSnapshot::from_verified(&verified, &project_instructions);
+    let source_available = if tools.iter().any(|tool| {
+        matches!(
+            ToolId::parse(&tool.name),
+            Some(ToolId::List | ToolId::Read | ToolId::Run)
+        )
+    }) {
+        "The materialised candidate and authorised secondary directories are available only through the listed tools. Nested AGENTS.md files and secondary-project instructions are available through authorised tools, not automatic context.".to_owned()
+    } else {
+        "No source files are available through tools for this phase. Project instructions above are the only automatic source context.".to_owned()
     };
-    if packet.byte_len() > MAXIMUM_ATTEMPT_PACKET_BYTES {
+    let excluded_context = if run.kind == super::run::RunKind::Configured {
+        "The source conversation, its messages, thoughts and tool output, plus worker transcripts from other attempts, are excluded.".to_owned()
+    } else {
+        "Worker transcripts from other attempts are excluded. The ordinary conversation messages below remain part of this request.".to_owned()
+    };
+    let instructions = match &project_instructions.state {
+        ProjectInstructionState::Absent => {
+            "# Project instructions\n\nNo root AGENTS.md file was present in this candidate."
+                .to_owned()
+        }
+        ProjectInstructionState::Present { text, .. } => {
+            format!("# Project instructions\n\n{text}")
+        }
+    };
+    let context = format!(
+        "Task brief:\n{}\n\n{}\n\n{}\n\n# Context boundary\n\nSource available through tools: {}\n\nExcluded context: {}",
+        brief.trim(),
+        format_agent_context(&verified, step.writes_primary_source()),
+        instructions,
+        source_available,
+        excluded_context,
+    );
+    let prompt = if role_preamble.trim().is_empty() {
+        context
+    } else {
+        format!("{}\n\n{}", role_preamble.trim(), context)
+    };
+    let messages = if run.kind == super::run::RunKind::QuickTask && !conversation_turns.is_empty() {
+        conversation_turns
+            .iter()
+            .map(|turn| match turn.role {
+                crate::providers::Role::User => ContextMessage::User(turn.text.clone()),
+                crate::providers::Role::Assistant => ContextMessage::Assistant(turn.text.clone()),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        // Rig requires a user message even when the complete task is in the preamble.
+        vec![ContextMessage::User(
+            "Execute the assigned task in the initial prompt.".to_owned(),
+        )]
+    };
+    let tools: Vec<_> = tools.iter().map(ContextTool::from_definition).collect();
+    if secret.is_some_and(|secret| {
+        !secret.is_empty()
+            && (prompt.contains(secret)
+                || messages
+                    .iter()
+                    .any(|message| message.text().contains(secret))
+                || tools.iter().any(|tool| {
+                    tool.name.contains(secret)
+                        || tool.description.contains(secret)
+                        || tool.parameters.to_string().contains(secret)
+                }))
+    }) {
+        return Err(InputContextError::Credential);
+    }
+    let packet_bytes = prompt
+        .len()
+        .saturating_add(
+            messages
+                .iter()
+                .map(ContextMessage::byte_len)
+                .try_fold(0usize, usize::checked_add)
+                .unwrap_or(usize::MAX),
+        )
+        .saturating_add(
+            tools
+                .iter()
+                .map(ContextTool::byte_len)
+                .try_fold(0usize, usize::checked_add)
+                .unwrap_or(usize::MAX),
+        );
+    let (output_bytes, tool_bytes) = reserved_bytes(model_context_limit);
+    let total_bytes = packet_bytes
+        .checked_add(output_bytes)
+        .and_then(|bytes| bytes.checked_add(tool_bytes))
+        .ok_or(InputContextError::Packet)?;
+    let estimated_input_tokens = estimate_tokens(packet_bytes).ok_or(InputContextError::Packet)?;
+    let estimated_total_tokens = estimate_tokens(total_bytes).ok_or(InputContextError::Packet)?;
+    if packet_bytes > MAXIMUM_INITIAL_CONTEXT_BYTES
+        || total_bytes > MAXIMUM_ATTEMPT_PACKET_BYTES
+        || model_context_limit.is_some_and(|limit| estimated_total_tokens > limit)
+    {
+        return Err(InputContextError::Packet);
+    }
+    let packet = AttemptContextPacket {
+        prompt,
+        messages,
+        tools,
+        source_available,
+        excluded_context,
+        project_instructions,
+        budget: ContextBudget {
+            packet_bytes: packet_bytes as u64,
+            reserved_output_bytes: output_bytes as u64,
+            reserved_tool_bytes: tool_bytes as u64,
+            total_bytes: total_bytes as u64,
+            estimated_input_tokens,
+            estimated_total_tokens,
+            model_context_limit,
+        },
+    };
+    if !packet.validate() {
         return Err(InputContextError::Packet);
     }
     Ok(packet)
+}
+
+// Reserve half of a known context, up to the application allowance. A fixed maximum
+// reserve alone excludes small-context models even when their initial prompt is short.
+fn reserved_bytes(model_context_limit: Option<u64>) -> (usize, usize) {
+    let maximum = RESERVED_MODEL_OUTPUT_BYTES + RESERVED_TOOL_WORK_BYTES;
+    let reserve = model_context_limit
+        .map(|tokens| tokens.saturating_mul(2).min(maximum as u64) as usize)
+        .unwrap_or(maximum);
+    let output = reserve / 7;
+    (output, reserve - output)
+}
+
+fn json_byte_len(value: &impl Serialize) -> usize {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn estimate_tokens(bytes: usize) -> Option<u64> {
+    u64::try_from(bytes)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(3))
+        .map(|bytes| bytes / 4)
 }
 
 pub(crate) fn verify_inputs(

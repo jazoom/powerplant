@@ -1836,21 +1836,6 @@ async fn run_agent_step(
         .last()
         .map(|attempt| attempt.inputs.clone())
         .unwrap_or_default();
-    let packet = match crate::workflows::input_context::build_attempt_packet(
-        &run,
-        step_definition,
-        &inputs,
-        &state.workflow_artefacts,
-        project_instructions,
-    ) {
-        Ok(packet) => packet,
-        Err(error) => {
-            return StepOutcome::Failed {
-                category: FailureCategory::Definition,
-                error: Some(error.message().to_owned()),
-            };
-        }
-    };
     let instructions = if instructions.trim().is_empty() {
         String::new()
     } else {
@@ -1863,31 +1848,62 @@ async fn run_agent_step(
         &action.authority.tools,
         &policy,
     );
-    let packet_text = packet.text();
-    let preamble = if composed.is_empty() {
-        packet_text
-    } else {
-        format!("{composed}\n\n{packet_text}")
+    let request_tools =
+        crate::tools::definitions_for_step(&action.authority.tools, &action.required_outputs);
+    let model_context_limit = state
+        .models_dev
+        .context_limit(connection.kind, &connection.model);
+    let packet = match crate::workflows::input_context::build_attempt_packet_for_request(
+        &run,
+        step_definition,
+        &inputs,
+        &state.workflow_artefacts,
+        project_instructions,
+        &job.turns,
+        &composed,
+        &request_tools,
+        model_context_limit,
+        secret,
+    ) {
+        Ok(packet) => packet,
+        Err(error) => {
+            return StepOutcome::Failed {
+                category: FailureCategory::Definition,
+                error: Some(error.message().to_owned()),
+            };
+        }
     };
+    let Some(attempt_id) = run.active_attempt() else {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    };
+    if state
+        .workflow_runs
+        .mutate(&job.run_id, |run| {
+            run.record_initial_context(attempt_id, packet.clone())
+        })
+        .is_err()
+    {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    }
     let spec = AgentRunSpec {
         agent_id: job.authority.is_none().then_some(job.agent_id),
         revision: 0,
-        preamble,
-        tools: crate::tools::definitions_for_step(
-            &action.authority.tools,
-            &action.required_outputs,
-        ),
-        tool_ids: action.authority.tools.clone(),
+        preamble: packet.prompt.clone(),
+        tools: packet.request_tools(),
+        tool_ids: packet.tool_ids(),
         policy,
         connection: connection.clone(),
         sandbox: sandbox.clone(),
         output_drafts: Some(drafts),
         required_outputs: action.required_outputs.clone(),
     };
-    let turns = match run.kind {
-        crate::workflows::RunKind::Configured => Vec::new(),
-        crate::workflows::RunKind::QuickTask => job.turns.clone(),
-    };
+    let turns = packet.request_messages();
     let ended = crate::slices::run_agent_action(state, spec, turns, job.job.clone()).await;
     if ended.outcome == AgentOutcome::Completed {
         *job.eligible_reply

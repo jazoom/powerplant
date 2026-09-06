@@ -316,6 +316,14 @@
                         >
                       </p>
                     {% endfor %}
+                    {% if !attempt.context_href.is_empty() %}
+                      <a
+                        class="link mt-3 inline-block"
+                        href="{{ attempt.context_href }}"
+                        data-graft
+                        >Inspect initial context</a
+                      >
+                    {% endif %}
                   </li>
                 {% endfor %}
               </ul>

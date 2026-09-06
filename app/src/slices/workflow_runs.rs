@@ -5,7 +5,7 @@ mod tests;
 
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Response,
     routing::get,
 };
@@ -21,6 +21,10 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/runs", get(index))
         .route("/runs/{run_id}", get(detail))
+        .route(
+            "/runs/{run_id}/attempts/{attempt_id}/context",
+            get(initial_context),
+        )
         .route("/runs/{run_id}/artefacts/{artefact_id}", get(artefact))
 }
 
@@ -73,6 +77,48 @@ async fn detail(
             PatchStatus::Ok,
             "run-detail",
             &view.contents(),
+        )?),
+    }
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ContextQuery {
+    #[serde(default)]
+    part: usize,
+    #[serde(default)]
+    offset: usize,
+}
+
+async fn initial_context(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PageGraft,
+    Path((run_id, attempt_id)): Path<(String, String)>,
+    Query(query): Query<ContextQuery>,
+) -> AppResult<Response> {
+    let Some(run) = RunId::parse(&run_id).and_then(|id| state.workflow_runs.get(&id)) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let run_href = format!("/runs/{}", run.id.as_hex());
+    let Some(attempt) = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id.as_hex() == attempt_id)
+    else {
+        return Ok(responses::request_navigation(graft, &run_href));
+    };
+    let context_href = format!("{run_href}/attempts/{}/context", attempt.id.as_hex());
+    let Some(view) = attempt.initial_context.as_ref().and_then(|packet| {
+        page::initial_context_view(packet, &run_href, &context_href, query.part, query.offset)
+    }) else {
+        return Ok(responses::request_navigation(graft, &run_href));
+    };
+    match graft {
+        PageGraft::Document => responses::chat_page_response("Initial context", &state, &view),
+        PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
+            "Initial context",
+            "chat-main",
+            &view,
         )?),
     }
 }

@@ -293,6 +293,153 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
     assert!(rendered.contains("href=\"/runs/run/artefacts/candidate\" data-graft"));
 }
 
+fn context_packet(prompt: String) -> crate::workflows::input_context::AttemptContextPacket {
+    let mut packet = crate::workflows::input_context::AttemptContextPacket {
+        prompt,
+        messages: vec![crate::workflows::input_context::ContextMessage::User(
+            "Execute the assigned task.".to_owned(),
+        )],
+        tools: vec![crate::workflows::input_context::ContextTool {
+            name: "read".to_owned(),
+            description: "Read a granted file.".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }],
+        source_available: "Candidate files are available through tools.".to_owned(),
+        excluded_context: "Conversation and worker transcripts are excluded.".to_owned(),
+        project_instructions: crate::workflows::input_context::ProjectInstructionSnapshot {
+            candidate: None,
+            guest_path: "AGENTS.md".to_owned(),
+            state: crate::workflows::input_context::ProjectInstructionState::Present {
+                text: "Use the test command.".to_owned(),
+                content_hash: crate::workflows::artefacts::ObjectHash::of(b"Use the test command.")
+                    .as_str(),
+            },
+        },
+        budget: crate::workflows::input_context::ContextBudget {
+            packet_bytes: 42,
+            reserved_output_bytes: 128,
+            reserved_tool_bytes: 256,
+            total_bytes: 426,
+            estimated_input_tokens: 11,
+            estimated_total_tokens: 107,
+            model_context_limit: None,
+        },
+    };
+    packet.budget.packet_bytes = packet.byte_len() as u64;
+    packet.budget.reserved_output_bytes =
+        crate::workflows::input_context::RESERVED_MODEL_OUTPUT_BYTES as u64;
+    packet.budget.reserved_tool_bytes =
+        crate::workflows::input_context::RESERVED_TOOL_WORK_BYTES as u64;
+    packet.budget.total_bytes = packet.budget.packet_bytes
+        + packet.budget.reserved_output_bytes
+        + packet.budget.reserved_tool_bytes;
+    packet.budget.estimated_input_tokens = packet.budget.packet_bytes.div_ceil(4);
+    packet.budget.estimated_total_tokens = packet.budget.total_bytes.div_ceil(4);
+    packet
+}
+
+#[test]
+fn context_inspection_preserves_text_across_bounded_escaped_pages() {
+    let packet = context_packet("<script>é&".repeat(8000));
+    let mut collected = String::new();
+    loop {
+        let context = super::page::initial_context_view(
+            &packet,
+            "/runs/run",
+            "/runs/run/attempts/attempt/context",
+            0,
+            collected.len(),
+        )
+        .expect("context");
+        let rendered = context.render().expect("render");
+        assert!(!rendered.contains("<script>"));
+        hypergraft::outcome::page_patch("Initial context", "chat-main", &context)
+            .expect("bounded navigation envelope");
+        collected.push_str(&context.prompt);
+        if collected.len() == packet.prompt.len() {
+            assert!(context.next_href.contains("part=1"));
+            break;
+        }
+        assert!(
+            context
+                .next_href
+                .ends_with(&format!("offset={}", collected.len()))
+        );
+    }
+    assert_eq!(collected, packet.prompt);
+    let messages =
+        super::page::initial_context_view(&packet, "/runs/run", "/context", 1, 0).expect("message");
+    assert_eq!(messages.prompt, packet.request_messages()[0].text);
+    let tools =
+        super::page::initial_context_view(&packet, "/runs/run", "/context", 2, 0).expect("tools");
+    let tools: serde_json::Value = serde_json::from_str(&tools.prompt).expect("tool JSON");
+    assert_eq!(tools[0]["parameters"], packet.request_tools()[0].parameters);
+    assert!(
+        super::page::initial_context_view(&packet, "/runs/run", "/context", usize::MAX, 0)
+            .is_none()
+    );
+    assert!(
+        super::page::initial_context_view(&packet, "/runs/run", "/context", 0, usize::MAX)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn context_routes_reject_cross_run_attempts_and_unsupported_patches() {
+    let state = test_state();
+    let token = connected(&state);
+    let run_id = stored_run(&state);
+    let other_run = stored_run(&state);
+    let attempt_id = crate::workflows::AttemptId::generate().expect("attempt");
+    state
+        .workflow_runs
+        .mutate(&run_id, |run| {
+            let sandbox = crate::workflows::run::AttemptSandboxRecord {
+                kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+                snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
+            };
+            run.start_attempt(
+                attempt_id,
+                vec![],
+                crate::tests::test_agent_capabilities(),
+                sandbox,
+                2,
+            )?;
+            run.record_initial_context(
+                attempt_id,
+                context_packet("Private attempt direction".to_owned()),
+            )
+        })
+        .expect("attempt");
+    for (owner, representation, status) in [
+        (run_id, None, 200),
+        (run_id, Some("navigation"), 200),
+        (run_id, Some("patch"), 400),
+        (other_run, None, 303),
+    ] {
+        let mut request = Request::builder()
+            .uri(format!(
+                "/runs/{}/attempts/{}/context",
+                owner.as_hex(),
+                attempt_id.as_hex()
+            ))
+            .header(header::COOKIE, cookie(&token));
+        if let Some(representation) = representation {
+            request = request
+                .header(hypergraft::GRAFT_REQUEST, representation)
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+        }
+        let response = app(&state)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .expect("context response");
+        assert_eq!(response.status().as_u16(), status);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert_eq!(text.contains("Private attempt direction"), status == 200);
+    }
+}
+
 #[tokio::test]
 async fn an_unknown_run_redirects_to_the_index() {
     let state = test_state();

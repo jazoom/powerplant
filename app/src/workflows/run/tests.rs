@@ -151,6 +151,56 @@ fn fail(run: &mut WorkflowRun, attempt: AttemptId, category: FailureCategory, at
 }
 
 #[test]
+fn an_attempt_persists_the_exact_initial_context_packet() {
+    let mut run = new_run();
+    let attempt = start(&mut run);
+    let packet_bytes = 4 + br#"{"role":"user","text":"Task"}"#.len() as u64;
+    let total_bytes = packet_bytes
+        + super::super::input_context::RESERVED_MODEL_OUTPUT_BYTES as u64
+        + super::super::input_context::RESERVED_TOOL_WORK_BYTES as u64;
+    let packet = super::super::input_context::AttemptContextPacket {
+        prompt: "Task".to_owned(),
+        messages: vec![super::super::input_context::ContextMessage::User(
+            "Task".to_owned(),
+        )],
+        tools: Vec::new(),
+        source_available: "Files through tools.".to_owned(),
+        excluded_context: "Conversation excluded.".to_owned(),
+        project_instructions: super::super::input_context::ProjectInstructionSnapshot {
+            candidate: None,
+            guest_path: "AGENTS.md".to_owned(),
+            state: super::super::input_context::ProjectInstructionState::Absent,
+        },
+        budget: super::super::input_context::ContextBudget {
+            packet_bytes,
+            reserved_output_bytes: super::super::input_context::RESERVED_MODEL_OUTPUT_BYTES as u64,
+            reserved_tool_bytes: super::super::input_context::RESERVED_TOOL_WORK_BYTES as u64,
+            total_bytes,
+            estimated_input_tokens: packet_bytes.div_ceil(4),
+            estimated_total_tokens: total_bytes.div_ceil(4),
+            model_context_limit: None,
+        },
+    };
+    run.record_initial_context(attempt, packet.clone())
+        .expect("context");
+    let mut changed = packet.clone();
+    changed.source_available = "Different source description".to_owned();
+    assert_eq!(
+        run.record_initial_context(attempt, changed),
+        Err(TransitionError::Invalid)
+    );
+    assert_eq!(
+        run.record_initial_context(
+            AttemptId::generate().expect("stale attempt"),
+            packet.clone()
+        ),
+        Err(TransitionError::Invalid)
+    );
+    let loaded = WorkflowRun::from_file(run.to_file()).expect("round trip");
+    assert_eq!(loaded.attempts[0].initial_context, Some(packet));
+}
+
+#[test]
 fn fixing_review_cross_run_and_cross_attempt_provenance_fails_load() {
     enum Corruption {
         CandidateRun,
@@ -540,6 +590,7 @@ fn attempt_ordinals_count_repeated_step_attempts() {
             .expect("digest"),
         },
         cleanup: AttemptCleanupRecord::Complete,
+        initial_context: None,
         commit_transaction: None,
         commit_result: None,
     };
@@ -565,6 +616,7 @@ fn attempt_ordinals_count_repeated_step_attempts() {
             .expect("digest"),
         },
         cleanup: AttemptCleanupRecord::Pending,
+        initial_context: None,
         commit_transaction: None,
         commit_result: None,
     };
@@ -988,6 +1040,7 @@ fn durable_commit_transactions_preserve_every_review_reference() {
             .expect("digest"),
         },
         cleanup: AttemptCleanupRecord::Pending,
+        initial_context: None,
         commit_transaction: None,
         commit_result: None,
     };
@@ -1048,6 +1101,7 @@ fn durable_commit_transactions_record_an_approved_human_decision() {
             .expect("digest"),
         },
         cleanup: AttemptCleanupRecord::Pending,
+        initial_context: None,
         commit_transaction: None,
         commit_result: None,
     };

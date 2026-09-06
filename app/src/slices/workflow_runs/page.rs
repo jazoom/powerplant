@@ -10,6 +10,31 @@ pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
 pub(super) const DETAIL_TITLE: &str = "Run | Power Plant";
 pub(super) const ARTEFACT_TITLE: &str = "Artefact | Power Plant";
 
+#[derive(Template)]
+#[template(path = "workflow_runs/templates/context.html")]
+pub(super) struct InitialContextView {
+    pub(super) run_href: String,
+    pub(super) section: String,
+    pub(super) position: String,
+    pub(super) previous_href: String,
+    pub(super) next_href: String,
+    pub(super) prompt: String,
+    pub(super) source_available: String,
+    pub(super) excluded_context: String,
+    pub(super) instruction_state: String,
+    pub(super) instruction_candidate: String,
+    pub(super) instruction_path: String,
+    pub(super) instruction_hash: String,
+    pub(super) instruction_text: String,
+    pub(super) packet_bytes: String,
+    pub(super) reserved_output_bytes: String,
+    pub(super) reserved_tool_bytes: String,
+    pub(super) total_bytes: String,
+    pub(super) estimated_input_tokens: String,
+    pub(super) estimated_total_tokens: String,
+    pub(super) model_capacity: String,
+}
+
 pub(super) struct AttemptView {
     pub(super) ordinal: u32,
     pub(super) step: String,
@@ -25,6 +50,7 @@ pub(super) struct AttemptView {
     pub(super) network: String,
     pub(super) reports: Vec<StepArtefactView>,
     pub(super) route: String,
+    pub(super) context_href: String,
 }
 
 pub(super) struct StepArtefactView {
@@ -330,6 +356,11 @@ impl RunDetailView {
                         }
                     }).collect(),
                     route: review_route(Some(attempt)),
+                    context_href: if attempt.initial_context.is_some() {
+                        format!("/runs/{}/attempts/{}/context", run.id.as_hex(), attempt.id.as_hex())
+                    } else {
+                        String::new()
+                    },
                 })
                 .collect(),
             artefacts: artefact_rows(run),
@@ -356,6 +387,99 @@ impl RunDetailView {
             artefacts: &self.artefacts,
         }
     }
+}
+
+pub(super) fn initial_context_view(
+    packet: &crate::workflows::input_context::AttemptContextPacket,
+    run_href: &str,
+    context_href: &str,
+    part: usize,
+    offset: usize,
+) -> Option<InitialContextView> {
+    // One bounded section keeps escaped HTML below the Hypergraft envelope limit.
+    const PAGE_BYTES: usize = 16 * 1024;
+    let (section, text) = if part == 0 {
+        ("Initial prompt".to_owned(), packet.prompt.clone())
+    } else if let Some(message) = packet.messages.get(part - 1) {
+        (
+            format!("Message {part} · {}", message.role()),
+            message.text().to_owned(),
+        )
+    } else if part == packet.messages.len() + 1 {
+        (
+            "Tool definitions".to_owned(),
+            serde_json::to_string_pretty(&packet.tools).ok()?,
+        )
+    } else {
+        return None;
+    };
+    if offset > text.len() || !text.is_char_boundary(offset) {
+        return None;
+    }
+    let end = text.floor_char_boundary(offset.saturating_add(PAGE_BYTES).min(text.len()));
+    let next_href = if end < text.len() {
+        format!("{context_href}?part={part}&offset={end}")
+    } else if part <= packet.messages.len() {
+        format!("{context_href}?part={}&offset=0", part + 1)
+    } else {
+        String::new()
+    };
+    let previous_href = if offset > 0 {
+        format!(
+            "{context_href}?part={part}&offset={}",
+            text.ceil_char_boundary(offset.saturating_sub(PAGE_BYTES))
+        )
+    } else if part > 0 {
+        format!("{context_href}?part={}&offset=0", part - 1)
+    } else {
+        String::new()
+    };
+    let (instruction_state, instruction_text) = match &packet.project_instructions.state {
+        crate::workflows::input_context::ProjectInstructionState::Absent => (
+            "Absent".to_owned(),
+            "No root AGENTS.md file was present in this candidate.".to_owned(),
+        ),
+        crate::workflows::input_context::ProjectInstructionState::Present { text, .. } => {
+            ("Present".to_owned(), text.clone())
+        }
+    };
+    let instruction_candidate = packet
+        .project_instructions
+        .candidate
+        .as_ref()
+        .map(|candidate| {
+            format!(
+                "{} · {} · {}",
+                candidate.id, candidate.kind, candidate.artefact_hash
+            )
+        })
+        .unwrap_or_else(|| "Not available".to_owned());
+    Some(InitialContextView {
+        run_href: run_href.to_owned(),
+        section,
+        position: format!("Bytes {offset}–{end} of {}.", text.len()),
+        previous_href,
+        next_href,
+        prompt: text[offset..end].to_owned(),
+        source_available: packet.source_available.clone(),
+        excluded_context: packet.excluded_context.clone(),
+        instruction_state,
+        instruction_candidate,
+        instruction_path: packet.project_instructions.guest_path.clone(),
+        instruction_hash: packet
+            .project_instructions
+            .content_hash()
+            .unwrap_or("None")
+            .to_owned(),
+        instruction_text,
+        packet_bytes: packet.budget.packet_bytes.to_string(),
+        reserved_output_bytes: packet.budget.reserved_output_bytes.to_string(),
+        reserved_tool_bytes: packet.budget.reserved_tool_bytes.to_string(),
+        total_bytes: packet.budget.total_bytes.to_string(),
+        estimated_input_tokens: packet.budget.estimated_input_tokens.to_string(),
+        estimated_total_tokens: packet.budget.estimated_total_tokens.to_string(),
+        model_capacity: packet.budget.capacity_label(),
+    })
 }
 
 fn phase_model_label(

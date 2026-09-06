@@ -1,0 +1,77 @@
+<div class="mx-auto w-full max-w-5xl space-y-6 p-4 sm:p-6">
+  <a class="link" href="{{ run_href }}" data-graft>Back to run</a>
+  <h1 class="text-xl font-semibold">Initial context</h1>
+  <section class="space-y-2">
+    <h2 class="font-semibold">{{ section }}</h2>
+    <p class="text-quiet text-sm">{{ position }}</p>
+    <pre
+      class="bg-base-200 rounded-box max-h-96 overflow-auto p-3 text-xs break-all whitespace-pre-wrap"
+    >
+{{ prompt }}</pre>
+    <nav class="flex gap-3" aria-label="Context sections">
+      {% if !previous_href.is_empty() %}<a
+        class="btn btn-sm"
+        href="{{ previous_href }}"
+        data-graft
+        >Previous</a
+      >{% endif %}
+      {% if !next_href.is_empty() %}<a
+        class="btn btn-sm"
+        href="{{ next_href }}"
+        data-graft
+        >Next</a
+      >{% endif %}
+    </nav>
+    <p class="text-quiet text-sm">{{ source_available }}</p>
+    <p class="text-quiet text-sm">{{ excluded_context }}</p>
+  </section>
+  <section>
+    <h2 class="font-semibold">Automatic project instructions</h2>
+    <dl
+      class="text-quiet mt-1 grid gap-1 text-xs sm:grid-cols-[auto_1fr] sm:gap-x-3"
+    >
+      <dt>State</dt>
+      <dd>{{ instruction_state }}</dd>
+      <dt>Candidate</dt>
+      <dd class="font-mono break-all">{{ instruction_candidate }}</dd>
+      <dt>Guest path</dt>
+      <dd class="font-mono">{{ instruction_path }}</dd>
+      <dt>Content hash</dt>
+      <dd class="font-mono break-all">{{ instruction_hash }}</dd>
+    </dl>
+    <pre
+      class="bg-base-200 rounded-box mt-2 max-h-64 overflow-auto p-3 text-xs break-all whitespace-pre-wrap"
+    >
+{{ instruction_text }}</pre>
+    <p class="text-quiet mt-2 text-sm">
+      Nested AGENTS.md files and secondary project instructions are not
+      automatic context. Access requires the listed tools and explicit
+      authority.
+    </p>
+  </section>
+  <section>
+    <h2 class="font-semibold">Context budget</h2>
+    <dl
+      class="text-quiet mt-1 grid gap-1 text-xs sm:grid-cols-[auto_1fr] sm:gap-x-3"
+    >
+      <dt>Prompt, message and tool bytes</dt>
+      <dd>{{ packet_bytes }}</dd>
+      <dt>Reserved output bytes</dt>
+      <dd>{{ reserved_output_bytes }}</dd>
+      <dt>Reserved tool-work bytes</dt>
+      <dd>{{ reserved_tool_bytes }}</dd>
+      <dt>Total bounded bytes</dt>
+      <dd>{{ total_bytes }}</dd>
+      <dt>Estimated input tokens</dt>
+      <dd>{{ estimated_input_tokens }} (approximate)</dd>
+      <dt>Estimated bounded tokens</dt>
+      <dd>{{ estimated_total_tokens }} (approximate)</dd>
+      <dt>Model capacity</dt>
+      <dd>{{ model_capacity }}</dd>
+    </dl>
+    <p class="text-quiet mt-2 text-sm">
+      Token estimates use four bytes per token. They do not guarantee provider
+      capacity. Unknown model capacity retains the finite application bounds.
+    </p>
+  </section>
+</div>
