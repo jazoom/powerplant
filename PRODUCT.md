@@ -88,6 +88,10 @@ A completed model response or submitted text can become a task list after valida
 
 Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Pi export use the saved revision.
 
+The Ralph task loop starter runs each remaining task in order. It pins the task list, workflow body and phase selections at launch. Each task receives fresh implementation and review-and-fix contexts. The complete task file remains context, but each worker receives only one assigned task. Human approval precedes each task commit by default.
+
+One parent record shows task progress and links to child evidence. A successful commit or explicit no-change result permits the next task. The next task starts from the completed code, not an earlier worker transcript. A child approval gate retains the parent conversation reservation but releases execution reservations for another conversation. Earlier commits remain if a later task fails.
+
 A workflow can declare a saved plan input. The authoring form offers Implementation from a saved plan without manual input keys or a task list.
 
 The launch sheet selects an immutable plan revision from the conversation. The run retains its own copy and the source reference. Only phases that declare that input receive the plan. Later corrections or association removal cannot change the run copy. The run inspector exposes that copy.

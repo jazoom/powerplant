@@ -34,6 +34,36 @@ pub(crate) enum CommitPolicy {
     AutomaticAfterReview,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExecutionMode {
+    Once,
+    TaskList,
+}
+
+impl ExecutionMode {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "once" => Some(Self::Once),
+            "task-list" => Some(Self::TaskList),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::TaskList => "task-list",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Once => "Run once",
+            Self::TaskList => "For each remaining task",
+        }
+    }
+}
+
 impl CommitPolicy {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
@@ -69,6 +99,7 @@ pub(crate) struct WorkflowDefinition {
     roles: Vec<RoleDefinition>,
     steps: Vec<StepDefinition>,
     commit_policy: CommitPolicy,
+    execution_mode: ExecutionMode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -322,6 +353,7 @@ pub(crate) enum DefinitionError {
     ReviewPolicy,
     AttemptLimit,
     CommitPolicy,
+    ExecutionMode,
     RunBound,
 }
 
@@ -376,6 +408,9 @@ impl DefinitionError {
             Self::ReviewPolicy => "Configure a valid review policy.",
             Self::AttemptLimit => "Set the review attempt limit from one through eight.",
             Self::CommitPolicy => "Choose a commit policy that matches this workflow.",
+            Self::ExecutionMode => {
+                "A task-list workflow needs implementation, optional review, code approval and commit."
+            }
             Self::RunBound => "This workflow can create too many attempts or artefacts.",
         }
     }
@@ -399,6 +434,8 @@ pub(crate) struct DefinitionFile {
     steps: Vec<StepFile>,
     #[serde(default)]
     commit_policy: Option<String>,
+    #[serde(default)]
+    execution_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -517,7 +554,24 @@ impl WorkflowDefinition {
         roles: Vec<RoleDefinition>,
         steps: Vec<StepDefinition>,
     ) -> Result<Self, DefinitionError> {
-        assemble(name, default_environment, roles, steps, None)
+        Self::from_parts_with_mode(name, default_environment, roles, steps, ExecutionMode::Once)
+    }
+
+    pub(crate) fn from_parts_with_mode(
+        name: String,
+        default_environment: EnvironmentId,
+        roles: Vec<RoleDefinition>,
+        steps: Vec<StepDefinition>,
+        execution_mode: ExecutionMode,
+    ) -> Result<Self, DefinitionError> {
+        assemble(
+            name,
+            default_environment,
+            roles,
+            steps,
+            None,
+            execution_mode,
+        )
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -530,6 +584,14 @@ impl WorkflowDefinition {
 
     pub(crate) fn commit_policy(&self) -> CommitPolicy {
         self.commit_policy
+    }
+
+    pub(crate) fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
+    }
+
+    pub(crate) fn supports_task_execution(&self) -> bool {
+        supports_task_execution(&self.steps, self.execution_mode)
     }
 
     pub(crate) fn with_commit_policy(&self, policy: CommitPolicy) -> Result<Self, DefinitionError> {
@@ -551,6 +613,7 @@ impl WorkflowDefinition {
                     self.roles.clone(),
                     steps,
                     Some(policy),
+                    self.execution_mode,
                 );
             }
             steps.retain(|step| {
@@ -574,6 +637,7 @@ impl WorkflowDefinition {
             self.roles.clone(),
             steps,
             Some(policy),
+            self.execution_mode,
         )
     }
 
@@ -697,6 +761,7 @@ impl WorkflowDefinition {
             name: self.name.clone(),
             default_environment: self.default_environment.as_hex(),
             commit_policy: Some(self.commit_policy.as_str().to_owned()),
+            execution_mode: Some(self.execution_mode.as_str().to_owned()),
             roles: self
                 .roles
                 .iter()
@@ -1211,6 +1276,7 @@ fn assemble(
     roles: Vec<RoleDefinition>,
     mut steps: Vec<StepDefinition>,
     requested_policy: Option<CommitPolicy>,
+    execution_mode: ExecutionMode,
 ) -> Result<WorkflowDefinition, DefinitionError> {
     let name = normalise_name(&name)?;
     if roles.len() > MAXIMUM_ROLES {
@@ -1243,6 +1309,10 @@ fn assemble(
     reject_plan_decision_inputs(&steps)?;
     let commit_policy = requested_policy.unwrap_or_else(|| derive_commit_policy(&steps));
     reject_commit_policy(&steps, commit_policy)?;
+    if execution_mode == ExecutionMode::TaskList && !supports_task_execution(&steps, execution_mode)
+    {
+        return Err(DefinitionError::ExecutionMode);
+    }
     Ok(WorkflowDefinition {
         format_version: DEFINITION_FORMAT_VERSION,
         name,
@@ -1250,6 +1320,7 @@ fn assemble(
         roles,
         steps,
         commit_policy,
+        execution_mode,
     })
 }
 
@@ -1258,8 +1329,19 @@ fn from_current_file(file: DefinitionFile) -> Result<WorkflowDefinition, Definit
         None => None,
         Some(value) => Some(CommitPolicy::parse(value).ok_or(DefinitionError::Format)?),
     };
+    let execution_mode = match file.execution_mode.as_deref() {
+        None => ExecutionMode::Once,
+        Some(value) => ExecutionMode::parse(value).ok_or(DefinitionError::Format)?,
+    };
     let (name, default_environment, roles, steps) = parse_file_parts(file)?;
-    assemble(name, default_environment, roles, steps, requested_policy)
+    assemble(
+        name,
+        default_environment,
+        roles,
+        steps,
+        requested_policy,
+        execution_mode,
+    )
 }
 
 type FileParts = (
@@ -1729,6 +1811,30 @@ fn reject_step_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
         }
     }
     Ok(())
+}
+
+fn supports_task_execution(steps: &[StepDefinition], mode: ExecutionMode) -> bool {
+    let [body @ .., commit] = steps else {
+        return false;
+    };
+    let body = match body.last().map(|step| &step.action) {
+        Some(StepAction::HumanGate(gate)) if !gate.is_plan_checkpoint() => &body[..body.len() - 1],
+        _ if mode == ExecutionMode::TaskList => body,
+        _ => return false,
+    };
+    let [implementation, reviews @ ..] = body else {
+        return false;
+    };
+    matches!(&implementation.action, StepAction::Agent(_))
+        && implementation.writes_primary_source()
+        && reviews.iter().all(|review| {
+            matches!(&review.action, StepAction::Agent(_))
+                && review
+                    .required_outputs()
+                    .iter()
+                    .any(|output| output.kind == OutputKind::ReviewReport)
+        })
+        && matches!(&commit.action, StepAction::SystemCommand(action) if action.command == SystemCommandId::CommitCandidate)
 }
 
 fn derive_commit_policy(steps: &[StepDefinition]) -> CommitPolicy {

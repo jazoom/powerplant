@@ -47,21 +47,24 @@
                 <span class="font-mono text-xs">#{{ event.sequence }}</span>
                 <strong>{{ event.kind }}</strong>
                 <span class="text-quiet">Phase {{ event.phase }}</span>
-                {% if event.truncated %}<span
-                  class="badge badge-warning badge-sm"
-                  >Truncated</span
-                >{% endif %}
+                {% if event.truncated %}
+                  <span class="badge badge-warning badge-sm">Truncated</span>
+                {% endif %}
               </div>
-              {% if event.label != "" %}<p class="font-mono text-xs">
-                {{ event.label }}
-              </p>{% endif %}
-              {% if event.text != "" %}<pre
-                class="bg-base-200 overflow-x-auto p-3 text-sm whitespace-pre-wrap"
-              >
-{{ event.text }}</pre>{% endif %}
-              {% if event.provider != "" %}<p class="text-quiet text-xs">
-                {{ event.provider }} · {{ event.input_tokens }} input tokens
-              </p>{% endif %}
+              {% if event.label != "" %}
+                <p class="font-mono text-xs">{{ event.label }}</p>
+              {% endif %}
+              {% if event.text != "" %}
+                <pre
+                  class="bg-base-200 overflow-x-auto p-3 text-sm whitespace-pre-wrap"
+                >
+{{ event.text }}</pre>
+              {% endif %}
+              {% if event.provider != "" %}
+                <p class="text-quiet text-xs">
+                  {{ event.provider }} · {{ event.input_tokens }} input tokens
+                </p>
+              {% endif %}
             </li>
           {% endfor %}
         </ol>

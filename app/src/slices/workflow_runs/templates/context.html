@@ -9,18 +9,12 @@
     >
 {{ prompt }}</pre>
     <nav class="flex gap-3" aria-label="Context sections">
-      {% if !previous_href.is_empty() %}<a
-        class="btn btn-sm"
-        href="{{ previous_href }}"
-        data-graft
-        >Previous</a
-      >{% endif %}
-      {% if !next_href.is_empty() %}<a
-        class="btn btn-sm"
-        href="{{ next_href }}"
-        data-graft
-        >Next</a
-      >{% endif %}
+      {% if !previous_href.is_empty() %}
+        <a class="btn btn-sm" href="{{ previous_href }}" data-graft>Previous</a>
+      {% endif %}
+      {% if !next_href.is_empty() %}
+        <a class="btn btn-sm" href="{{ next_href }}" data-graft>Next</a>
+      {% endif %}
     </nav>
     <p class="text-quiet text-sm">{{ source_available }}</p>
     <p class="text-quiet text-sm">{{ excluded_context }}</p>

@@ -470,7 +470,12 @@ async fn decide(
                 form.conversation_surface,
             );
         }
-        if run.kind == RunKind::QuickTask {
+        if continuation.task_loop.is_some() {
+            if let Some(loop_id) = continuation.task_loop {
+                let _ = state.task_loops.cancel(&loop_id);
+            }
+            settle_cancelled_job(&state, &continuation);
+        } else if run.kind == RunKind::QuickTask {
             settle_cancelled_job(&state, &continuation);
         } else {
             if let Some(key) = continuation.conversation_key() {
@@ -950,6 +955,12 @@ fn command_error_target(
 }
 
 fn decision_destination(run: &crate::workflows::WorkflowRun) -> String {
+    if let Some(loop_id) = run.parent_loop {
+        return match run.conversation_id {
+            Some(conversation) => format!("/conversations/{}", conversation.as_hex()),
+            None => format!("/runs/loops/{}", loop_id.as_hex()),
+        };
+    }
     match (run.kind, run.conversation_id) {
         (RunKind::QuickTask, Some(conversation)) => {
             format!("/conversations/{}", conversation.as_hex())

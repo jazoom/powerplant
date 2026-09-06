@@ -396,6 +396,7 @@ fn fixing_publication_fixture() -> (
         turns: Vec::new(),
         job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
         eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        task_loop: None,
     };
     (
         state,
@@ -591,6 +592,7 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
                 0,
             ),
             eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+            task_loop: None,
         };
         assert!(state.gate_continuations.insert(job));
     }
@@ -639,6 +641,7 @@ fn final_gate_completion_settles_the_session_job_successfully() {
         turns: Vec::new(),
         job: begun.job.clone(),
         eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        task_loop: None,
     };
 
     super::settle_completed_job(&state, &workflow);
@@ -1470,6 +1473,7 @@ fn test_job(
         turns: Vec::new(),
         job: crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), run_id, 0),
         eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        task_loop: None,
     }
 }
 
@@ -1804,6 +1808,7 @@ fn gate_ready_fixture(
         turns: begun.turns,
         job: begun.job,
         eligible_reply: std::sync::Arc::new(std::sync::Mutex::new("No files changed.".to_owned())),
+        task_loop: None,
     };
     (state, job, session_id, key)
 }
@@ -1812,6 +1817,104 @@ async fn execute_gate_run(state: crate::state::AppState, job: crate::workflows::
     let lease = state.agent_leases.acquire(job.agent_id).expect("lease");
     let execution = state.workflow_execution.acquire().expect("execution");
     super::execute_run(state, job, Some(lease), execution).await;
+}
+
+#[test]
+fn child_settlement_retains_parent_ownership_until_the_last_task() {
+    use crate::workflows::task_loop::tests::{completed_child, loop_record, source};
+    let (state, mut workflow, _, _) = gate_ready_fixture(
+        crate::workflows::RunKind::QuickTask,
+        GateCandidate::Unchanged,
+    );
+    let conversation = state
+        .conversations
+        .create("Loop".to_owned())
+        .expect("conversation");
+    let token = crate::sessions::generate_session_token().expect("session");
+    state.sessions.insert(token.id());
+    let job = state
+        .sessions
+        .begin_conversation_job(&token.id(), conversation.id, 1)
+        .expect("job");
+    state
+        .conversations
+        .begin_message_with_model(
+            &conversation.id,
+            conversation.revision,
+            None,
+            job.id(),
+            "Implement".to_owned(),
+        )
+        .expect("message");
+    let mut parent = loop_record();
+    parent.conversation_id = conversation.id;
+    let parent = state.task_loops.create(parent).expect("parent");
+    let (parent, first, _) = state
+        .task_loops
+        .reserve_next_child(&parent.id, 0)
+        .expect("first");
+    state
+        .task_loops
+        .mark_dispatched(&parent.id, first)
+        .expect("dispatch");
+    state
+        .workflow_runs
+        .create(completed_child(&parent, first, source(1)))
+        .expect("child");
+    workflow.run_id = first;
+    workflow.task_loop = Some(parent.id);
+    workflow.conversation_id = Some(conversation.id);
+    workflow.session_id = token.id();
+    workflow.project_id = parent.project_id;
+    workflow.agent_id = parent.agent_id;
+    workflow.job = job;
+    let lease = state.workflow_execution.acquire().expect("execution");
+    assert!(!super::finish_driven_job(
+        &state,
+        &mut workflow,
+        crate::sessions::JobStatus::Completed,
+        None
+    ));
+    assert_ne!(workflow.run_id, first);
+    assert!(state.sessions.busy(&token.id()));
+    assert_eq!(
+        state
+            .conversations
+            .get(&conversation.id)
+            .expect("conversation")
+            .active_job,
+        Some(workflow.job.id())
+    );
+    assert!(state.workflow_execution.acquire().is_err());
+    let parent = state.task_loops.get(&parent.id).expect("parent");
+    let second = completed_child(&parent, workflow.run_id, source(2));
+    state
+        .workflow_runs
+        .mutate(&second.id, |run| {
+            *run = second.clone();
+            Ok(())
+        })
+        .expect("complete second");
+    assert!(super::finish_driven_job(
+        &state,
+        &mut workflow,
+        crate::sessions::JobStatus::Completed,
+        None
+    ));
+    assert_eq!(
+        state.task_loops.get(&parent.id).expect("parent").state,
+        crate::workflows::task_loop::TaskLoopState::Completed
+    );
+    assert!(!state.sessions.busy(&token.id()));
+    assert_eq!(
+        state
+            .conversations
+            .get(&conversation.id)
+            .expect("conversation")
+            .active_job,
+        None
+    );
+    drop(lease);
 }
 
 #[test]

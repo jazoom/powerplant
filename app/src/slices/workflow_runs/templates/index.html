@@ -26,8 +26,9 @@
         <li class="record-row">
           <div>
             <a
-              href="/runs/{{ run.id }}"
+              href="{{ run.href }}"
               data-graft
+              data-run-id="{{ run.id }}"
               class="link link-hover font-medium"
             >
               {% if run.project_name != "" %}

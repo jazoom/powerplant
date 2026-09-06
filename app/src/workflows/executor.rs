@@ -14,7 +14,7 @@ use super::definition::{
     AgentAuthority, AgentStep, CandidateAuthority, StepAction, StepDefinition, SystemCommandId,
 };
 use super::execution::ExecutionGuard;
-use super::id::{AttemptId, RunId};
+use super::id::{AttemptId, RunId, TaskLoopId};
 use super::run::{FailureCategory, now_ms};
 use super::store::StoreError;
 
@@ -139,6 +139,7 @@ pub(crate) struct WorkflowJob {
     pub(crate) turns: Vec<ChatTurn>,
     pub(crate) job: Arc<Job>,
     pub(crate) eligible_reply: Arc<std::sync::Mutex<String>>,
+    pub(crate) task_loop: Option<TaskLoopId>,
 }
 
 impl WorkflowJob {
@@ -297,10 +298,16 @@ fn interrupt_continuations(state: &AppState, jobs: Vec<WorkflowJob>) -> Result<(
 
 pub(crate) async fn execute_run(
     state: AppState,
-    job: WorkflowJob,
+    mut job: WorkflowJob,
     _agent_lease: Option<LeaseGuard>,
     _execution_lease: ExecutionGuard,
 ) {
+    if let Some(loop_id) = job.task_loop
+        && state.task_loops.mark_active(&loop_id, job.run_id).is_err()
+    {
+        fail_operational(&state, &job);
+        return;
+    }
     loop {
         let Some(run) = state.workflow_runs.get(&job.run_id) else {
             fail_operational(&state, &job);
@@ -313,8 +320,10 @@ pub(crate) async fn execute_run(
         if job.job.cancel_requested() {
             if persist_cancel(&state, &job.run_id).is_err() {
                 fail_operational(&state, &job);
+            } else if finish_driven_job(&state, &mut job, JobStatus::Cancelled, None) {
+                return;
             } else {
-                settle_job(&state, &job, JobStatus::Cancelled, None);
+                continue;
             }
             return;
         }
@@ -323,8 +332,10 @@ pub(crate) async fn execute_run(
             if let Err(error) = capture_initial_source(&state, &job).await {
                 if persist_initial_fail(&state, &job.run_id).is_err() {
                     fail_operational(&state, &job);
+                } else if finish_driven_job(&state, &mut job, JobStatus::Failed, Some(&error)) {
+                    return;
                 } else {
-                    settle_job(&state, &job, JobStatus::Failed, Some(&error));
+                    continue;
                 }
                 return;
             }
@@ -384,14 +395,20 @@ pub(crate) async fn execute_run(
             settle_job(&state, &job, JobStatus::Failed, Some(error.message()));
             return;
         }
-        if matches!(step.action, StepAction::HumanGate(_)) {
+        if matches!(step.action, StepAction::HumanGate(_))
+            || (run.task_selection.is_some()
+                && matches!(&step.action, StepAction::SystemCommand(action)
+                if action.command == SystemCommandId::CommitCandidate))
+        {
             match state
                 .workflow_runs
                 .mutate(&job.run_id, |run| run.complete_unchanged_task())
             {
                 Ok(_) => {
-                    settle_completed_job(&state, &job);
-                    return;
+                    if finish_driven_job(&state, &mut job, JobStatus::Completed, None) {
+                        return;
+                    }
+                    continue;
                 }
                 Err(StoreError::Conflict) => {}
                 Err(_) => {
@@ -399,6 +416,8 @@ pub(crate) async fn execute_run(
                     return;
                 }
             }
+        }
+        if matches!(step.action, StepAction::HumanGate(_)) {
             let plan_checkpoint = matches!(
                 &step.action,
                 StepAction::HumanGate(action) if action.is_plan_checkpoint()
@@ -468,6 +487,15 @@ pub(crate) async fn execute_run(
             }
             job.job.set_step_label("Awaiting decision".to_owned());
             let _ = job.job.set_awaiting_decision();
+            if let Some(loop_id) = job.task_loop
+                && state
+                    .task_loops
+                    .mark_awaiting(&loop_id, job.run_id)
+                    .is_err()
+            {
+                fail_operational(&state, &job);
+                return;
+            }
             if job.conversation_id.is_some()
                 && !state.sessions.release_job_reservation(
                     &job.session_id,
@@ -478,7 +506,7 @@ pub(crate) async fn execute_run(
                 let _ = state
                     .workflow_runs
                     .mutate(&run.id, |run| run.interrupt(now_ms()));
-                settle_job(&state, &job, JobStatus::Cancelled, None);
+                let _ = finish_driven_job(&state, &mut job, JobStatus::Cancelled, None);
                 return;
             }
             if !state.gate_continuations.insert(job) {
@@ -570,6 +598,29 @@ pub(crate) async fn execute_run(
             kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
             snapshot_digest,
         };
+        if let Some(loop_id) = job.task_loop {
+            let Some(parent) = state.task_loops.get(&loop_id) else {
+                fail_operational(&state, &job);
+                return;
+            };
+            let Ok(aggregate) = task_loop_attempts(&state, &parent) else {
+                fail_operational(&state, &job);
+                return;
+            };
+            if aggregate >= super::task_loop::MAXIMUM_LOOP_ATTEMPTS {
+                let _ = state.task_loops.mutate(&loop_id, |parent| {
+                    parent.state = super::task_loop::TaskLoopState::Blocked;
+                    Ok(())
+                });
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some("The task loop reached its attempt limit."),
+                );
+                return;
+            }
+        }
         if persist_start(
             &state,
             &job.run_id,
@@ -639,8 +690,10 @@ pub(crate) async fn execute_run(
                 && run.active_attempt() != Some(attempt_id)
             {
                 if run.is_terminal() {
-                    settle_terminal_job(&state, &job, &run);
-                    return;
+                    if finish_terminal_run(&state, &mut job, &run) {
+                        return;
+                    }
+                    continue;
                 }
                 continue;
             }
@@ -740,8 +793,10 @@ pub(crate) async fn execute_run(
             if let Some(run) = state.workflow_runs.get(&job.run_id)
                 && run.is_terminal()
             {
-                settle_terminal_job(&state, &job, &run);
-                return;
+                if finish_terminal_run(&state, &mut job, &run) {
+                    return;
+                }
+                continue;
             }
             continue;
         }
@@ -766,17 +821,23 @@ pub(crate) async fn execute_run(
                 if let Some(run) = state.workflow_runs.get(&job.run_id)
                     && run.is_terminal()
                 {
-                    settle_terminal_job(&state, &job, &run);
-                    return;
+                    if finish_terminal_run(&state, &mut job, &run) {
+                        return;
+                    }
+                    continue;
                 }
             }
             StepOutcome::Failed { error, .. } => {
-                settle_job(&state, &job, JobStatus::Failed, error.as_deref());
-                return;
+                if finish_driven_job(&state, &mut job, JobStatus::Failed, error.as_deref()) {
+                    return;
+                }
+                continue;
             }
             StepOutcome::Cancelled => {
-                settle_job(&state, &job, JobStatus::Cancelled, None);
-                return;
+                if finish_driven_job(&state, &mut job, JobStatus::Cancelled, None) {
+                    return;
+                }
+                continue;
             }
         }
     }
@@ -2555,7 +2616,17 @@ async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(
         .workflow_runs
         .mutate(&job.run_id, |run| run.record_initial_candidate(record))
         .map(|_| ())
-        .map_err(|_| OPERATIONAL_STORE_ERROR.to_owned())
+        .map_err(|_| OPERATIONAL_STORE_ERROR.to_owned())?;
+    if let Some(loop_id) = job.task_loop
+        && let Some(run) = state.workflow_runs.get(&job.run_id)
+        && let crate::workflows::RunSource::Captured { source } = &run.source
+    {
+        state
+            .task_loops
+            .record_original_source(&loop_id, source.initial.clone())
+            .map_err(|_| OPERATIONAL_STORE_ERROR.to_owned())?;
+    }
+    Ok(())
 }
 
 fn persist_initial_fail(state: &AppState, run_id: &RunId) -> Result<(), StoreError> {
@@ -3159,12 +3230,149 @@ fn persist_cancel(state: &AppState, run_id: &RunId) -> Result<(), StoreError> {
 }
 
 fn fail_operational(state: &AppState, workflow: &WorkflowJob) {
+    if let Some(loop_id) = workflow.task_loop {
+        let _ = state.task_loops.fail(&loop_id);
+    }
     settle_job(
         state,
         workflow,
         JobStatus::Failed,
         Some(OPERATIONAL_STORE_ERROR),
     );
+}
+
+fn finish_terminal_run(
+    state: &AppState,
+    job: &mut WorkflowJob,
+    run: &crate::workflows::WorkflowRun,
+) -> bool {
+    let (status, error) = match &run.state {
+        crate::workflows::run::RunState::Escalated {
+            reason: crate::workflows::run::EscalationReason::Blocked,
+            ..
+        } => (
+            JobStatus::Failed,
+            Some("The review blocked this workflow run."),
+        ),
+        crate::workflows::run::RunState::Escalated {
+            reason: crate::workflows::run::EscalationReason::AttemptLimit,
+            ..
+        } => (
+            JobStatus::Failed,
+            Some("The review attempt limit escalated this workflow run."),
+        ),
+        crate::workflows::run::RunState::Cancelled => (JobStatus::Cancelled, None),
+        crate::workflows::run::RunState::Failed | crate::workflows::run::RunState::Interrupted => {
+            (JobStatus::Failed, None)
+        }
+        _ => (JobStatus::Completed, None),
+    };
+    finish_driven_job(state, job, status, error)
+}
+
+fn finish_driven_job(
+    state: &AppState,
+    job: &mut WorkflowJob,
+    status: JobStatus,
+    error: Option<&str>,
+) -> bool {
+    if job.task_loop.is_none() {
+        match status {
+            JobStatus::Completed if error.is_none() => settle_completed_job(state, job),
+            _ => settle_job(state, job, status, error),
+        }
+        return true;
+    }
+    match status {
+        JobStatus::Completed => match continue_task_loop(state, job) {
+            Ok(true) => false,
+            Ok(false) => {
+                settle_completed_job(state, job);
+                true
+            }
+            Err(error) => {
+                settle_job(state, job, JobStatus::Failed, Some(error));
+                true
+            }
+        },
+        JobStatus::Cancelled => {
+            if let Some(loop_id) = job.task_loop {
+                let _ = state.task_loops.cancel(&loop_id);
+            }
+            settle_job(state, job, status, error);
+            true
+        }
+        _ => {
+            if let Some(loop_id) = job.task_loop {
+                let _ = state.task_loops.fail(&loop_id);
+            }
+            settle_job(state, job, status, error);
+            true
+        }
+    }
+}
+
+fn task_loop_attempts(
+    state: &AppState,
+    parent: &super::task_loop::TaskLoop,
+) -> Result<usize, &'static str> {
+    parent
+        .tasks
+        .iter()
+        .filter_map(|task| task.child_id)
+        .try_fold(0usize, |total, id| {
+            let child = state
+                .workflow_runs
+                .get(&id)
+                .ok_or(OPERATIONAL_STORE_ERROR)?;
+            if child.parent_loop != Some(parent.id) {
+                return Err(OPERATIONAL_STORE_ERROR);
+            }
+            total
+                .checked_add(child.attempts.len())
+                .ok_or(OPERATIONAL_STORE_ERROR)
+        })
+}
+
+fn continue_task_loop(state: &AppState, job: &mut WorkflowJob) -> Result<bool, &'static str> {
+    let loop_id = job.task_loop.ok_or(OPERATIONAL_STORE_ERROR)?;
+    let child = state
+        .workflow_runs
+        .get(&job.run_id)
+        .ok_or(OPERATIONAL_STORE_ERROR)?;
+    let (record, advance) = state
+        .task_loops
+        .complete_child(&loop_id, &child)
+        .map_err(|error| error.message())?;
+    match advance {
+        super::task_loop::LoopAdvance::Complete => return Ok(false),
+        super::task_loop::LoopAdvance::Stopped => {
+            return Err("The task loop stopped before completion.");
+        }
+        super::task_loop::LoopAdvance::Next => {}
+    }
+    let aggregate = task_loop_attempts(state, &record)?;
+    let (record, child_id, task) = state
+        .task_loops
+        .reserve_next_child(&loop_id, aggregate)
+        .map_err(|error| error.message())?;
+    let run = record
+        .child_run(child_id, now_ms(), task.index, task.markdown)
+        .map_err(|error| error.message())?;
+    state
+        .workflow_runs
+        .create(run)
+        .map_err(|_| OPERATIONAL_STORE_ERROR)?;
+    state
+        .task_loops
+        .mark_dispatched(&loop_id, child_id)
+        .map_err(|error| error.message())?;
+    job.run_id = child_id;
+    if let Ok(mut reply) = job.eligible_reply.lock() {
+        reply.clear();
+    }
+    job.job.set_step_label("Source capture".to_owned());
+    Ok(true)
 }
 
 pub(crate) fn settle_completed_job(state: &AppState, workflow: &WorkflowJob) {
@@ -3195,19 +3403,52 @@ fn settle_with_reply(
     error: Option<&str>,
     reply: &crate::providers::AssistantReply,
 ) {
+    // A failed coordinator write must not release the unfinished conversation.
+    if let Some(loop_id) = workflow.task_loop {
+        if status != JobStatus::Completed
+            && state
+                .workflow_runs
+                .get(&workflow.run_id)
+                .is_some_and(|run| !run.is_terminal())
+            && state
+                .workflow_runs
+                .mutate(&workflow.run_id, |run| {
+                    run.interrupt(now_ms())
+                        .or_else(|_| run.fail_before_attempt(now_ms()))
+                })
+                .is_err()
+        {
+            return;
+        }
+        let terminal = match status {
+            JobStatus::Completed => state
+                .task_loops
+                .get(&loop_id)
+                .filter(|parent| parent.state == super::task_loop::TaskLoopState::Completed),
+            JobStatus::Cancelled => state.task_loops.cancel(&loop_id).ok(),
+            _ => state.task_loops.fail(&loop_id).ok(),
+        };
+        if !terminal.is_some_and(|parent| parent.state.is_terminal()) {
+            return;
+        }
+    }
     let reply = crate::slices::bound_reply(reply);
-    let conversation_reply = state
-        .workflow_runs
-        .get(&workflow.run_id)
-        .filter(|run| run.kind == super::run::RunKind::Configured)
-        .map(|run| {
-            let result = if run.completed_without_changes() {
-                "The task completed without changes. No commit was created."
-            } else {
-                &reply.text
-            };
-            conversation_run_result(workflow.run_id, status, result)
-        });
+    let conversation_reply = if let Some(loop_id) = workflow.task_loop {
+        Some(conversation_loop_result(loop_id, status, &reply.text))
+    } else {
+        state
+            .workflow_runs
+            .get(&workflow.run_id)
+            .filter(|run| run.kind == super::run::RunKind::Configured)
+            .map(|run| {
+                let result = if run.completed_without_changes() {
+                    "The task completed without changes. No commit was created."
+                } else {
+                    &reply.text
+                };
+                conversation_run_result(workflow.run_id, status, result)
+            })
+    };
     if let Some(conversation_id) = workflow.conversation_id {
         let message_status = match status {
             JobStatus::Completed => crate::conversations::MessageStatus::Complete,
@@ -3248,7 +3489,19 @@ fn settle_with_reply(
     let _ = workflow.job.finish(status, error);
 }
 
+fn conversation_loop_result(loop_id: TaskLoopId, status: JobStatus, response: &str) -> String {
+    conversation_result(
+        status,
+        response,
+        &format!("/runs/loops/{}", loop_id.as_hex()),
+    )
+}
+
 fn conversation_run_result(run_id: RunId, status: JobStatus, response: &str) -> String {
+    conversation_result(status, response, &format!("/runs/{}", run_id.as_hex()))
+}
+
+fn conversation_result(status: JobStatus, response: &str, href: &str) -> String {
     const MAXIMUM_CONCISE_RESULT_BYTES: usize = 2 * 1024;
     let outcome = match status {
         JobStatus::Completed => "completed",
@@ -3271,8 +3524,7 @@ fn conversation_run_result(run_id: RunId, status: JobStatus, response: &str) -> 
         format!("\n\nTerminal response:\n\n{response}")
     };
     format!(
-        "Workflow {outcome}.{result}\n\n[Open the run record](/runs/{}) for detailed activity, changes and result.",
-        run_id.as_hex()
+        "Workflow {outcome}.{result}\n\n[Open the run record]({href}) for detailed activity, changes and result."
     )
 }
 

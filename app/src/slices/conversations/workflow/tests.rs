@@ -18,6 +18,104 @@ fn connected_state() -> AppState {
     state
 }
 
+#[tokio::test]
+async fn task_loop_launch_accepts_a_whole_list_without_a_task_index() {
+    let state = connected_state();
+    let conversation = state
+        .conversations
+        .create("Loop".to_owned())
+        .expect("conversation");
+    let document = state
+        .documents
+        .create_task_list_from_text(
+            conversation.id,
+            "Tasks".to_owned(),
+            "# Tasks\n\n- [x] Done\n- [ ] Remaining\n".to_owned(),
+            None,
+        )
+        .expect("tasks");
+    let document_token = format!(
+        "{}/1/{}",
+        document.id.as_hex(),
+        document.current().content_hash.as_str()
+    );
+    let workflow = state
+        .workflows
+        .create(workflows::seeds::ralph_task_loop_definition(
+            crate::tests::test_environment_id(),
+        ))
+        .expect("workflow");
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let view = launch_view(
+        &state,
+        &conversation,
+        Some(&selection),
+        None,
+        "Implement",
+        "",
+        "",
+        &document_token,
+        "",
+        "",
+        "",
+        &[],
+        "",
+    )
+    .await;
+    assert!(view.error.is_empty(), "{}", view.error);
+    assert!(view.task_preview.contains("[x] Done"));
+    assert!(
+        resolve_launch_task(
+            ExecutionMode::TaskList,
+            &state,
+            &conversation,
+            &document_token,
+            "",
+            "",
+            "1"
+        )
+        .is_err()
+    );
+    let token = crate::sessions::generate_session_token().expect("session");
+    state.sessions.insert(token.id());
+    let app = crate::slices::router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone());
+    let response = app.oneshot(Request::builder().method("POST")
+        .uri(format!("/conversations/{}/workflow", conversation.id.as_hex()))
+        .header(header::COOKIE, format!("powerplant_session={}", token.raw().as_str()))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch").header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::from(format!("revision={}&workflow={selection}&preview_workflow={selection}&brief=Implement&target=&task_document={document_token}&preview_task_document={document_token}", conversation.revision))).expect("request"))
+        .await.expect("response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body")
+            .to_vec(),
+    )
+    .expect("text");
+    assert!(
+        body.contains("Choose an available target project."),
+        "{body}"
+    );
+    assert!(
+        state
+            .task_loops
+            .for_conversation(&conversation.id)
+            .is_empty()
+    );
+}
+
 #[test]
 fn task_selection_rejects_foreign_checked_and_removed_items() {
     let state = connected_state();

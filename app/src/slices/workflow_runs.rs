@@ -12,17 +12,22 @@ use axum::{
 use hypergraft::{GraftRequest, PageGraft, PatchStatus};
 
 use crate::{
-    error::AppResult, responses, sessions::RequiredSession, state::AppState, workflows::RunId,
+    error::AppResult,
+    responses,
+    sessions::RequiredSession,
+    state::AppState,
+    workflows::{RunId, TaskLoopId},
 };
 
 use self::page::{
-    ArtefactView, RunDetailView, RunIndexView, attempt_activity_view, attempt_changes_view,
-    attempt_result_view,
+    ArtefactView, LoopDetailView, RunDetailView, RunIndexView, attempt_activity_view,
+    attempt_changes_view, attempt_result_view,
 };
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/runs", get(index))
+        .route("/runs/loops/{loop_id}", get(loop_detail))
         .route("/runs/{run_id}", get(detail))
         .route(
             "/runs/{run_id}/attempts/{attempt_id}/context",
@@ -48,7 +53,7 @@ async fn index(
     _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    let view = RunIndexView::from_summaries(&state.workflow_runs.summaries(), &state.projects);
+    let view = RunIndexView::combined(&state);
     match graft {
         PageGraft::Document => {
             let mut response = responses::chat_page_response(page::INDEX_TITLE, &state, &view)?;
@@ -60,6 +65,37 @@ async fn index(
             "chat-main",
             &view,
         )?),
+    }
+}
+
+async fn loop_detail(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: GraftRequest,
+    Path(loop_id): Path<String>,
+) -> AppResult<Response> {
+    let Some(id) = TaskLoopId::parse(&loop_id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let Some(record) = state.task_loops.get(&id) else {
+        return Ok(responses::request_navigation(graft, "/runs"));
+    };
+    let view = LoopDetailView::from_loop(&record);
+    match graft {
+        GraftRequest::Document => {
+            let mut response = responses::chat_page_response(page::DETAIL_TITLE, &state, &view)?;
+            responses::apply_patch_status(&mut response, PatchStatus::Ok);
+            Ok(response)
+        }
+        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(
+            page::DETAIL_TITLE,
+            "chat-main",
+            &view,
+        )?),
+        GraftRequest::Patch => Ok(responses::request_navigation(
+            graft,
+            &format!("/runs/loops/{}", id.as_hex()),
+        )),
     }
 }
 

@@ -247,6 +247,10 @@
               <dd>{{ run.state }}</dd>
               <dt class="text-quiet">Current phase</dt>
               <dd>{{ run.current_step }}</dd>
+              {% if run.task_progress != "" %}
+                <dt class="text-quiet">Tasks</dt>
+                <dd>{{ run.task_progress }}</dd>
+              {% endif %}
               <dt class="text-quiet">Result</dt>
               <dd>{{ run.result }}</dd>
             </dl>

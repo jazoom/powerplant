@@ -1,8 +1,10 @@
 use super::commands::SystemCommandId;
-use super::definition::{CandidateAuthority, StepAction, WorkflowDefinition};
+use super::definition::{CandidateAuthority, ExecutionMode, StepAction, WorkflowDefinition};
 
 pub(crate) fn required_inputs(definition: &WorkflowDefinition) -> &'static str {
-    if definition.launch_input_sources().is_empty() {
+    if definition.execution_mode() == ExecutionMode::TaskList {
+        "Task brief · Target project · Task list"
+    } else if definition.launch_input_sources().is_empty() {
         "Task brief · Target project"
     } else {
         "Task brief · Target project · Saved plan"
@@ -190,7 +192,7 @@ fn format_revision(
 }
 
 pub(crate) fn process_summary(definition: &WorkflowDefinition) -> String {
-    definition
+    let phases = definition
         .steps()
         .iter()
         .map(|step| {
@@ -203,7 +205,12 @@ pub(crate) fn process_summary(definition: &WorkflowDefinition) -> String {
             format!("{} ({action})", step.name)
         })
         .collect::<Vec<_>>()
-        .join(" · ")
+        .join(" · ");
+    if definition.execution_mode() == ExecutionMode::TaskList {
+        format!("{phases} · {}", definition.execution_mode().label())
+    } else {
+        phases
+    }
 }
 
 pub(crate) fn code_effects(definition: &WorkflowDefinition) -> String {

@@ -4,16 +4,17 @@ use crate::environments::EnvironmentId;
 use super::commands::SystemCommandId;
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    HumanGateStep, HumanRevisionPolicy, InputKey, OutputKey, OutputKind, RequiredInput,
-    RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction, StepDefinition,
-    StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition, candidate_revision_output,
-    initial_candidate_input,
+    ExecutionMode, HumanGateStep, HumanRevisionPolicy, InputKey, OutputKey, OutputKind,
+    RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction,
+    StepDefinition, StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition,
+    candidate_revision_output, initial_candidate_input,
 };
 pub(crate) const PLAN_A_CHANGE_V1: &str = "plan-a-change-v1";
 pub(crate) const REVIEW_CURRENT_CODE_V1: &str = "review-current-code-v1";
 pub(crate) const IMPLEMENT_WITH_APPROVAL_V1: &str = "implement-with-approval-v1";
 pub(crate) const IMPLEMENT_AND_REVIEW_V1: &str = "implement-and-review-v1";
 pub(crate) const PLAN_THEN_IMPLEMENT_V1: &str = "plan-then-implement-v1";
+pub(crate) const RALPH_TASK_LOOP_V1: &str = "ralph-task-loop-v1";
 
 #[cfg(test)]
 pub(crate) const ONE_AGENT_V1: &str = "one-agent-v1";
@@ -76,6 +77,10 @@ pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<Workfl
         (
             PLAN_THEN_IMPLEMENT_V1,
             plan_then_implement_definition(default_environment),
+        ),
+        (
+            RALPH_TASK_LOOP_V1,
+            ralph_task_loop_definition(default_environment),
         ),
     ]
     .into_iter()
@@ -263,6 +268,61 @@ pub(crate) fn plan_then_implement_definition(
             approval,
             commit,
         ],
+    )
+}
+
+pub(crate) fn ralph_task_loop_definition(default_environment: EnvironmentId) -> WorkflowDefinition {
+    let roles = vec![
+        role(
+            "implementer",
+            "Implementer",
+            "Applies the assigned task to an isolated candidate.",
+            "Implement only the assigned task from the complete task file. Submit the complete candidate.",
+        ),
+        role(
+            "reviewer",
+            "Reviewer",
+            "Reviews the candidate and fixes safe issues.",
+            "Review only the assigned task. Fix safe issues directly. Submit a structured verdict for your output candidate.",
+        ),
+    ];
+    let implementer = agent_step(
+        "implementer",
+        "Implement the assigned task",
+        "implementer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), candidate_revision_output()],
+        None,
+    );
+    let reviewer = agent_step(
+        "reviewer",
+        "Review and fix the change",
+        "reviewer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![current_candidate_input()],
+        vec![
+            assistant_output(),
+            candidate_revision_output(),
+            review_output(),
+        ],
+        None,
+    );
+    let mut approval = human_approval_step("reviewer", Some("reviewer"));
+    if let StepAction::HumanGate(gate) = &mut approval.action {
+        gate.revision = Some(HumanRevisionPolicy {
+            revision_target: StepKey::parse("implementer").expect("step"),
+            attempt_limit: 3,
+        });
+    }
+    let commit = commit_with_approval("reviewer", Some("reviewer"), "approval");
+    repeating_definition(
+        "Ralph task loop",
+        default_environment,
+        roles,
+        vec![implementer, reviewer, approval, commit],
     )
 }
 
@@ -664,6 +724,22 @@ fn definition(
 ) -> WorkflowDefinition {
     WorkflowDefinition::from_parts(name.to_owned(), environment, roles, steps)
         .expect("seed definition")
+}
+
+fn repeating_definition(
+    name: &str,
+    environment: EnvironmentId,
+    roles: Vec<RoleDefinition>,
+    steps: Vec<StepDefinition>,
+) -> WorkflowDefinition {
+    WorkflowDefinition::from_parts_with_mode(
+        name.to_owned(),
+        environment,
+        roles,
+        steps,
+        ExecutionMode::TaskList,
+    )
+    .expect("seed definition")
 }
 
 fn role(key: &str, name: &str, expertise: &str, prompt: &str) -> RoleDefinition {

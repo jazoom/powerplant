@@ -20,7 +20,7 @@ use super::definition::{
     PinnedWorkflowDefinition, StepAction, StepDefinition, StepKey, WorkflowDefinition,
 };
 use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
-use super::id::{AttemptId, GateId, RunId, WorkflowId};
+use super::id::{AttemptId, GateId, RunId, TaskLoopId, WorkflowId};
 use super::input_context::AttemptContextPacket;
 use super::resolve::{ResolvedEnvironment, ResolvedEnvironmentSet, ResolvedStepEnvironment};
 
@@ -45,6 +45,7 @@ pub(crate) struct WorkflowRun {
     pub(crate) attempts: Vec<AttemptRecord>,
     pub(crate) gates: Vec<HumanGateRecord>,
     pub(crate) revision_reservation: Option<RevisionReservation>,
+    pub(crate) parent_loop: Option<TaskLoopId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -298,6 +299,8 @@ pub(super) struct RunFile {
     gates: Vec<HumanGateFile>,
     #[serde(default)]
     revision_reservation: Option<RevisionReservationFile>,
+    #[serde(default)]
+    parent_loop: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -607,7 +610,7 @@ enum AttemptResultFile {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-struct ResolvedEnvironmentSetFile {
+pub(crate) struct ResolvedEnvironmentSetFile {
     environments: Vec<ResolvedEnvironmentFile>,
     steps: Vec<ResolvedStepEnvironmentFile>,
 }
@@ -678,6 +681,7 @@ impl WorkflowRun {
             attempts: Vec::new(),
             gates: Vec::new(),
             revision_reservation: None,
+            parent_loop: None,
         }
     }
 
@@ -737,12 +741,23 @@ impl WorkflowRun {
         if self.kind != RunKind::Configured
             || !self.attempts.is_empty()
             || self.task_selection.is_some()
-            || !supports_task_execution(&self.pinned.definition)
+            || !self.pinned.definition.supports_task_execution()
             || task_selection_from_file(task_selection_to_file(&selection)).is_err()
         {
             return Err(TransitionError::Invalid);
         }
         self.task_selection = Some(selection);
+        Ok(())
+    }
+
+    pub(crate) fn set_parent_loop(
+        &mut self,
+        parent_loop: TaskLoopId,
+    ) -> Result<(), TransitionError> {
+        if self.parent_loop.is_some() || !self.attempts.is_empty() {
+            return Err(TransitionError::Invalid);
+        }
+        self.parent_loop = Some(parent_loop);
         Ok(())
     }
 
@@ -1852,6 +1867,7 @@ impl WorkflowRun {
                 .revision_reservation
                 .as_ref()
                 .map(revision_reservation_to_file),
+            parent_loop: self.parent_loop.map(|id| id.as_hex()),
         }
     }
 
@@ -1932,6 +1948,10 @@ impl WorkflowRun {
             attempts,
             gates,
             revision_reservation,
+            parent_loop: match file.parent_loop.as_deref() {
+                Some(value) => Some(TaskLoopId::parse(value).ok_or(RunRecordError::Corrupt)?),
+                None => None,
+            },
         };
         run.validate_loaded()?;
         Ok(run)
@@ -1950,7 +1970,7 @@ impl WorkflowRun {
         }
         if self.task_selection.is_some()
             && (self.kind != RunKind::Configured
-                || !supports_task_execution(&self.pinned.definition))
+                || !self.pinned.definition.supports_task_execution())
         {
             return Err(RunRecordError::Corrupt);
         }
@@ -2580,22 +2600,7 @@ fn phase_model_to_file(selection: &PhaseModelSelection) -> PhaseModelFile {
 }
 
 pub(crate) fn supports_task_execution(definition: &super::definition::WorkflowDefinition) -> bool {
-    use super::definition::{OutputKind, SystemCommandId};
-    let steps = definition.steps();
-    let [implementation, reviews @ .., gate, commit] = steps else {
-        return false;
-    };
-    matches!(&implementation.action, StepAction::Agent(_))
-        && implementation.writes_primary_source()
-        && reviews.iter().all(|review| {
-            matches!(&review.action, StepAction::Agent(_))
-                && review
-                    .required_outputs()
-                    .iter()
-                    .any(|output| output.kind == OutputKind::ReviewReport)
-        })
-        && matches!(&gate.action, StepAction::HumanGate(action) if !action.is_plan_checkpoint())
-        && matches!(&commit.action, StepAction::SystemCommand(action) if action.command == SystemCommandId::CommitCandidate)
+    definition.supports_task_execution()
 }
 
 fn task_selection_to_file(selection: &TaskSelection) -> TaskSelectionFile {
@@ -2670,7 +2675,7 @@ fn phase_model_from_file(file: PhaseModelFile) -> Result<PhaseModelSelection, Ru
     })
 }
 
-fn environment_set_to_file(set: &ResolvedEnvironmentSet) -> ResolvedEnvironmentSetFile {
+pub(crate) fn environment_set_to_file(set: &ResolvedEnvironmentSet) -> ResolvedEnvironmentSetFile {
     ResolvedEnvironmentSetFile {
         environments: set
             .environments
@@ -2710,7 +2715,7 @@ fn environment_set_to_file(set: &ResolvedEnvironmentSet) -> ResolvedEnvironmentS
     }
 }
 
-fn environment_set_from_file(
+pub(crate) fn environment_set_from_file(
     file: ResolvedEnvironmentSetFile,
 ) -> Result<ResolvedEnvironmentSet, RunRecordError> {
     Ok(ResolvedEnvironmentSet {
@@ -3180,7 +3185,9 @@ fn unchanged_task_gate(run: &WorkflowRun, step: &StepKey) -> bool {
         && run.pinned.workflow_id.is_none()
         && super::quick::is_expected_gate_step(definition);
     let selected_task = run.task_selection.is_some()
-        && matches!(definition.action, StepAction::HumanGate(ref action) if !action.is_plan_checkpoint());
+        && (matches!(definition.action, StepAction::HumanGate(ref action) if !action.is_plan_checkpoint())
+            || matches!(definition.action, StepAction::SystemCommand(ref action)
+                if action.command == super::definition::SystemCommandId::CommitCandidate));
     if !quick_task && !selected_task {
         return false;
     }

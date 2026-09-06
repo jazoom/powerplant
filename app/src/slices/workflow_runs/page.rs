@@ -4,7 +4,8 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::environments::EnvironmentCatalogue;
 use crate::projects::ProjectStore;
-use crate::workflows::{RunSummary, WorkflowCatalogue, WorkflowRun};
+use crate::state::AppState;
+use crate::workflows::{LoopSummary, RunSummary, WorkflowCatalogue, WorkflowRun};
 
 pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
 pub(super) const DETAIL_TITLE: &str = "Run | Power Plant";
@@ -180,6 +181,7 @@ pub(super) struct RunIndexView {
 
 pub(super) struct IndexRow {
     pub(super) id: String,
+    pub(super) href: String,
     pub(super) project_name: String,
     pub(super) name: String,
     pub(super) state: String,
@@ -188,27 +190,112 @@ pub(super) struct IndexRow {
 }
 
 impl RunIndexView {
-    pub(super) fn from_summaries(summaries: &[RunSummary], projects: &ProjectStore) -> Self {
+    pub(super) fn combined(state: &AppState) -> Self {
+        let mut rows: Vec<(u64, String, IndexRow)> = state
+            .workflow_runs
+            .summaries()
+            .into_iter()
+            .map(|summary| {
+                let row = index_row_from_run(&summary, &state.projects);
+                (summary.created_at_ms, summary.id.as_hex(), row)
+            })
+            .collect();
+        rows.extend(state.task_loops.summaries().into_iter().map(|summary| {
+            let row = index_row_from_loop(&summary, &state.projects);
+            (summary.created_at_ms, summary.id.as_hex(), row)
+        }));
+        rows.sort_by(|left, right| right.0.cmp(&left.0).then(right.1.cmp(&left.1)));
+        rows.truncate(50);
         Self {
-            runs: summaries
+            runs: rows.into_iter().map(|(_, _, row)| row).collect(),
+        }
+    }
+}
+
+fn index_row_from_run(summary: &RunSummary, projects: &ProjectStore) -> IndexRow {
+    let (_, project_name) = project_presentation(summary.project_id, projects);
+    IndexRow {
+        id: summary.id.as_hex(),
+        href: format!("/runs/{}", summary.id.as_hex()),
+        project_name,
+        name: summary.name.clone(),
+        state: summary.state.clone(),
+        created: format_time(summary.created_at_ms),
+        current_step: active_step(&summary.state, &summary.current_step),
+    }
+}
+
+fn index_row_from_loop(summary: &LoopSummary, projects: &ProjectStore) -> IndexRow {
+    let (_, project_name) = project_presentation(summary.project_id, projects);
+    IndexRow {
+        id: summary.id.as_hex(),
+        href: format!("/runs/loops/{}", summary.id.as_hex()),
+        project_name,
+        name: summary.name.clone(),
+        state: summary.state.clone(),
+        created: format_time(summary.created_at_ms),
+        current_step: active_step(&summary.state, &summary.current_step),
+    }
+}
+
+fn active_step(state: &str, current_step: &str) -> String {
+    if matches!(
+        state,
+        "Initialising source" | "Ready" | "Active" | "Awaiting decision"
+    ) {
+        current_step.to_owned()
+    } else {
+        String::new()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "workflow_runs/templates/loop.html")]
+pub(super) struct LoopDetailView {
+    pub(super) name: String,
+    pub(super) state: &'static str,
+    pub(super) created: String,
+    pub(super) progress: String,
+    pub(super) conversation_href: String,
+    pub(super) current_child_href: String,
+    pub(super) tasks: Vec<LoopTaskView>,
+}
+
+pub(super) struct LoopTaskView {
+    pub(super) number: String,
+    pub(super) markdown: String,
+    pub(super) state: &'static str,
+    pub(super) href: String,
+}
+
+impl LoopDetailView {
+    pub(super) fn from_loop(record: &crate::workflows::TaskLoop) -> Self {
+        Self {
+            name: record.pinned.definition.name().to_owned(),
+            state: record.state.as_label(),
+            created: format_time(record.created_at_ms),
+            progress: record.progress_label(),
+            conversation_href: format!("/conversations/{}", record.conversation_id.as_hex()),
+            current_child_href: record.child_href(),
+            tasks: record
+                .tasks
                 .iter()
-                .map(|summary| {
-                    let (_, project_name) = project_presentation(summary.project_id, projects);
-                    IndexRow {
-                        id: summary.id.as_hex(),
-                        project_name,
-                        name: summary.name.clone(),
-                        state: summary.state.clone(),
-                        created: format_time(summary.created_at_ms),
-                        current_step: if matches!(
-                            summary.state.as_str(),
-                            "Initialising source" | "Ready" | "Active" | "Awaiting decision"
-                        ) {
-                            summary.current_step.clone()
-                        } else {
-                            String::new()
-                        },
-                    }
+                .map(|task| LoopTaskView {
+                    number: (task.index + 1).to_string(),
+                    markdown: task.markdown.clone(),
+                    state: match task.outcome {
+                        crate::workflows::TaskOutcome::Pending => "Pending",
+                        crate::workflows::TaskOutcome::Reserved
+                        | crate::workflows::TaskOutcome::Dispatched => "Active",
+                        crate::workflows::TaskOutcome::CompletedCommit => "Committed",
+                        crate::workflows::TaskOutcome::CompletedUnchanged => "Unchanged",
+                        crate::workflows::TaskOutcome::Failed => "Failed",
+                        crate::workflows::TaskOutcome::Cancelled => "Cancelled",
+                    },
+                    href: task
+                        .child_id
+                        .map(|id| format!("/runs/{}", id.as_hex()))
+                        .unwrap_or_default(),
                 })
                 .collect(),
         }

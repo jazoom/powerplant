@@ -18,7 +18,7 @@ use crate::{
     sessions::SessionStore,
     vault::ProviderVault,
     workflows::{
-        CommitJournals, WorkflowArtefactRepository, WorkflowCatalogue,
+        CommitJournals, TaskLoopStore, WorkflowArtefactRepository, WorkflowCatalogue,
         WorkflowContinuationRegistry, WorkflowEvidenceStore, WorkflowExecution, WorkflowRunStore,
         workspace::WorkflowWorkspaces,
     },
@@ -44,6 +44,7 @@ pub(crate) struct AppState {
     pub(crate) agent_leases: Arc<AgentLeaseCoordinator>,
     pub(crate) workflows: Arc<WorkflowCatalogue>,
     pub(crate) workflow_runs: Arc<WorkflowRunStore>,
+    pub(crate) task_loops: Arc<TaskLoopStore>,
     pub(crate) workflow_evidence: Arc<WorkflowEvidenceStore>,
     pub(crate) workflow_artefacts: Arc<WorkflowArtefactRepository>,
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
@@ -90,6 +91,8 @@ pub(crate) async fn build(
     )
     .map_err(|error| error.message().to_owned())?;
     let workflow_runs = WorkflowRunStore::open(data_dir.join("workflow-runs"))
+        .map_err(|error| error.message().to_owned())?;
+    let task_loops = TaskLoopStore::open(data_dir.join("workflow-task-loops"))
         .map_err(|error| error.message().to_owned())?;
     let workflow_evidence = WorkflowEvidenceStore::open(data_dir.join("workflow-evidence"))
         .map_err(|error| error.message().to_owned())?;
@@ -142,6 +145,7 @@ pub(crate) async fn build(
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(workflows),
         workflow_runs: Arc::new(workflow_runs),
+        task_loops: Arc::new(task_loops),
         workflow_evidence: Arc::new(workflow_evidence),
         workflow_artefacts,
         workflow_execution: Arc::new(WorkflowExecution::new()),

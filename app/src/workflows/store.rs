@@ -92,7 +92,7 @@ impl WorkflowRunStore {
         let mut runs: Vec<_> = self
             .lock()
             .values()
-            .filter(|run| run.conversation_id == Some(*conversation))
+            .filter(|run| run.conversation_id == Some(*conversation) && run.parent_loop.is_none())
             .cloned()
             .collect();
         runs.sort_by(|left, right| {
@@ -125,7 +125,12 @@ impl WorkflowRunStore {
     }
 
     pub(crate) fn summaries(&self) -> Vec<RunSummary> {
-        let mut summaries: Vec<RunSummary> = self.lock().values().map(summary_of).collect();
+        let mut summaries: Vec<RunSummary> = self
+            .lock()
+            .values()
+            .filter(|run| run.parent_loop.is_none())
+            .map(summary_of)
+            .collect();
         summaries.sort_by(|left, right| {
             right
                 .created_at_ms

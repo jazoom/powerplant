@@ -46,14 +46,15 @@ fn first_open_seeds_ordinary_workflows_once() {
             "Implement with approval".to_owned(),
             "Plan a change".to_owned(),
             "Plan then implement".to_owned(),
+            "Ralph task loop".to_owned(),
             "Review current code".to_owned(),
         ]
     );
-    assert_eq!(first.applied_seed_count(), 5);
+    assert_eq!(first.applied_seed_count(), 6);
     let ids: Vec<_> = first.list().into_iter().map(|record| record.id).collect();
     let second = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
-    assert_eq!(second.list().len(), 5);
-    assert_eq!(second.applied_seed_count(), 5);
+    assert_eq!(second.list().len(), 6);
+    assert_eq!(second.applied_seed_count(), 6);
     let reopened: Vec<_> = second.list().into_iter().map(|record| record.id).collect();
     assert_eq!(reopened, ids);
 }
@@ -74,7 +75,7 @@ fn restart_preserves_an_edited_seeded_workflow() {
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     let loaded = reopened.get(&seeded.id).expect("loaded");
     assert_eq!(loaded.definition.name(), "Edited plan");
-    assert_eq!(reopened.applied_seed_count(), 5);
+    assert_eq!(reopened.applied_seed_count(), 6);
 }
 
 #[test]
@@ -94,15 +95,16 @@ fn restart_does_not_restore_a_deleted_seeded_workflow() {
         "Implement and review".to_owned(),
         "Implement with approval".to_owned(),
         "Plan then implement".to_owned(),
+        "Ralph task loop".to_owned(),
         "Review current code".to_owned(),
     ];
     assert_eq!(names(&catalogue), remaining);
     assert!(catalogue.retired_ids().contains(&seeded.id));
-    assert_eq!(catalogue.applied_seed_count(), 5);
+    assert_eq!(catalogue.applied_seed_count(), 6);
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     assert_eq!(names(&reopened), remaining);
     assert!(reopened.retired_ids().contains(&seeded.id));
-    assert_eq!(reopened.applied_seed_count(), 5);
+    assert_eq!(reopened.applied_seed_count(), 6);
 }
 
 #[test]
@@ -126,6 +128,7 @@ fn a_present_seed_key_is_not_reapplied_from_code() {
             "Implement and review".to_owned(),
             "Implement with approval".to_owned(),
             "Plan then implement".to_owned(),
+            "Ralph task loop".to_owned(),
             "Review current code".to_owned(),
         ]
     );
@@ -172,6 +175,7 @@ fn production_seed_keys_are_stable() {
             "implement-with-approval-v1",
             "implement-and-review-v1",
             "plan-then-implement-v1",
+            "ralph-task-loop-v1",
         ]
     );
 }

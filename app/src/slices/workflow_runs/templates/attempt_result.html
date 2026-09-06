@@ -61,9 +61,11 @@
                   class="bg-base-200 overflow-x-auto p-3 text-sm whitespace-pre-wrap"
                 >
 {{ tool.output }}</pre>
-                {% if tool.truncated %}<p class="text-quiet text-xs">
-                  This tool output is truncated.
-                </p>{% endif %}
+                {% if tool.truncated %}
+                  <p class="text-quiet text-xs">
+                    This tool output is truncated.
+                  </p>
+                {% endif %}
               </li>
             {% endfor %}
           </ul>

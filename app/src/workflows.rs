@@ -21,6 +21,7 @@ pub(crate) mod seeds;
 mod store;
 pub(crate) mod summary;
 pub(crate) mod task_list;
+pub(crate) mod task_loop;
 pub(crate) mod workspace;
 
 pub(crate) use artefacts::WorkflowArtefactRepository;
@@ -36,12 +37,15 @@ pub(crate) use executor::{
     interrupt_session_continuations, recover_commit_transactions, settle_cancelled_job,
     settle_terminal_job,
 };
-pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, WorkflowId};
+pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, TaskLoopId, WorkflowId};
 #[cfg(test)]
 pub(crate) use quick::tests::pin_quick_task;
 pub(crate) use quick::{HOST_UNCHANGED, alpine_git_id, pin_quick_task_with_context};
-pub(crate) use resolve::{preview_environments, resolve_environments};
+pub(crate) use resolve::{ResolvedEnvironmentSet, preview_environments, resolve_environments};
 pub(crate) use run::{
     PhaseModelSelection, PinnedPreset, RunKind, RunSource, TaskSelection, WorkflowRun, now_ms,
 };
 pub(crate) use store::{RunSummary, WorkflowRunStore};
+pub(crate) use task_loop::{
+    LoopSummary, TaskListSnapshot, TaskLoop, TaskLoopItem, TaskLoopStore, TaskOutcome,
+};

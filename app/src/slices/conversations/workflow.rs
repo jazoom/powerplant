@@ -19,7 +19,7 @@ use crate::{
     workflows::{
         self, PhaseModelSelection, PinnedPreset, ResolveWorkflowError, WorkflowJob, WorkflowRun,
         WorkflowSelection,
-        definition::{CommitPolicy, LaunchInputSource},
+        definition::{CommitPolicy, ExecutionMode, LaunchInputSource},
     },
 };
 
@@ -171,6 +171,8 @@ struct WorkflowLaunchView {
     targets: Vec<TargetOption>,
     plans: Vec<PlanOption>,
     requires_plan: bool,
+    requires_task_list: bool,
+    task_lists: Vec<PlanOption>,
     task_document: String,
     task_revision: String,
     task_hash: String,
@@ -194,6 +196,8 @@ struct WorkflowLaunchContents<'a> {
     targets: &'a [TargetOption],
     plans: &'a [PlanOption],
     requires_plan: bool,
+    requires_task_list: bool,
+    task_lists: &'a [PlanOption],
     task_document: &'a str,
     task_revision: &'a str,
     task_hash: &'a str,
@@ -217,6 +221,8 @@ impl WorkflowLaunchView {
             targets: &self.targets,
             plans: &self.plans,
             requires_plan: self.requires_plan,
+            requires_task_list: self.requires_task_list,
+            task_lists: &self.task_lists,
             task_document: &self.task_document,
             task_revision: &self.task_revision,
             task_hash: &self.task_hash,
@@ -412,7 +418,8 @@ pub(super) async fn launch(
         )
         .await;
     }
-    let selected_task = match resolve_selected_task(
+    let selected_task = match resolve_launch_task(
+        pinned.definition.execution_mode(),
         &state,
         &record,
         &form.task_document,
@@ -566,7 +573,8 @@ pub(super) async fn launch(
             Ok(plan) => plan,
             Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
         };
-    let selected_task = match resolve_selected_task(
+    let selected_task = match resolve_launch_task(
+        pinned.definition.execution_mode(),
         &state,
         &current,
         &form.task_document,
@@ -577,6 +585,73 @@ pub(super) async fn launch(
         Ok(task) => task,
         Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
     };
+    if pinned.definition.execution_mode() == ExecutionMode::TaskList {
+        if selected_plan.is_some() {
+            return error_view(
+                PatchStatus::UnprocessableEntity,
+                "A task-list workflow does not take a saved plan input.",
+            )
+            .await;
+        }
+        let snapshot = match resolve_task_list_snapshot(
+            &state,
+            &current,
+            &form.task_document,
+            &form.task_revision,
+            &form.task_hash,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
+        };
+        let parsed = match workflows::task_list::parse(&snapshot.markdown) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return error_view(
+                    PatchStatus::UnprocessableEntity,
+                    "That task list is invalid.",
+                )
+                .await;
+            }
+        };
+        let tasks: Vec<_> = parsed
+            .eligible_tasks()
+            .map(|task| workflows::TaskLoopItem {
+                index: task.index,
+                markdown: task.markdown.clone(),
+                child_id: None,
+                outcome: workflows::TaskOutcome::Pending,
+            })
+            .collect();
+        if tasks.len() > workflows::task_loop::MAXIMUM_LOOP_TASKS {
+            return error_view(
+                PatchStatus::UnprocessableEntity,
+                workflows::task_loop::TaskLoopError::TaskLimit.message(),
+            )
+            .await;
+        }
+        if tasks.is_empty() {
+            return error_view(
+                PatchStatus::UnprocessableEntity,
+                "The task list has no remaining tasks.",
+            )
+            .await;
+        }
+        return launch_task_loop(
+            state,
+            session.0,
+            current,
+            authority,
+            connection,
+            execution,
+            brief,
+            pinned,
+            environments,
+            phase_models,
+            snapshot,
+            tasks,
+        )
+        .await;
+    }
     let run_id = workflows::RunId::generate()
         .map_err(|error| AppError::new("create workflow run identifier", error))?;
     let mut run = WorkflowRun::create_configured_for_conversation(
@@ -693,6 +768,150 @@ pub(super) async fn launch(
             turns: Vec::new(),
             job: job.clone(),
             eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+            task_loop: None,
+        },
+        None,
+        execution,
+    ));
+    Ok(responses::command_navigation(&format!(
+        "/conversations/{}",
+        started.id.as_hex()
+    )))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn launch_task_loop(
+    state: AppState,
+    session: crate::sessions::SessionId,
+    current: ConversationRecord,
+    authority: crate::agents::EffectiveAuthority,
+    connection: crate::providers::ProviderConnection,
+    execution: crate::workflows::ExecutionGuard,
+    brief: String,
+    pinned: crate::workflows::definition::PinnedWorkflowDefinition,
+    environments: workflows::ResolvedEnvironmentSet,
+    phase_models: Vec<PhaseModelSelection>,
+    snapshot: workflows::TaskListSnapshot,
+    tasks: Vec<workflows::TaskLoopItem>,
+) -> AppResult<Response> {
+    let loop_id = workflows::TaskLoopId::generate()
+        .map_err(|error| AppError::new("create task loop identifier", error))?;
+    let record = workflows::TaskLoop::create(
+        loop_id,
+        workflows::now_ms(),
+        current.id,
+        authority.project_id,
+        crate::agents::AgentId::generate().expect("conversation authority identity"),
+        brief.clone(),
+        pinned,
+        phase_models.clone(),
+        environments,
+        snapshot,
+        tasks,
+    )
+    .map_err(|error| AppError::new("create task loop", error))?;
+    let job = match state.sessions.begin_conversation_job(
+        &session,
+        current.id,
+        current.messages.len() + 1,
+    ) {
+        Ok(job) => job,
+        Err(_) => {
+            return Ok(responses::command_navigation(&format!(
+                "/conversations/{}",
+                current.id.as_hex()
+            )));
+        }
+    };
+    let started = match state.conversations.begin_message_with_model(
+        &current.id,
+        current.revision,
+        None,
+        job.id(),
+        brief.clone(),
+    ) {
+        Ok(started) => started,
+        Err(error) => {
+            state
+                .sessions
+                .finish_conversation_job(&session, current.id, job.id());
+            return Err(AppError::new("begin task loop", error));
+        }
+    };
+    if let Err(error) = state.task_loops.create(record) {
+        let _ = state.conversations.settle_message(
+            &started.id,
+            job.id(),
+            String::new(),
+            crate::conversations::MessageStatus::Failed,
+        );
+        let _ = state
+            .sessions
+            .finish_conversation_job(&session, started.id, job.id());
+        return Err(AppError::new("store task loop", error));
+    }
+    let fail_launch = |message: &str| {
+        // Keep conversation ownership if the parent cannot reach a durable terminal state.
+        if state.task_loops.fail(&loop_id).is_ok() {
+            let _ = state.conversations.settle_message(
+                &started.id,
+                job.id(),
+                message.to_owned(),
+                crate::conversations::MessageStatus::Failed,
+            );
+            state
+                .sessions
+                .finish_conversation_job(&session, started.id, job.id());
+        }
+    };
+    let (loop_record, child_id, task) = match state.task_loops.reserve_next_child(&loop_id, 0) {
+        Ok(reserved) => reserved,
+        Err(error) => {
+            fail_launch(error.message());
+            return Err(AppError::new("reserve task child", error));
+        }
+    };
+    let child =
+        match loop_record.child_run(child_id, workflows::now_ms(), task.index, task.markdown) {
+            Ok(child) => child,
+            Err(error) => {
+                fail_launch(error.message());
+                return Err(AppError::new("create task child", error));
+            }
+        };
+    if let Err(error) = state.workflow_runs.create(child) {
+        fail_launch("Power Plant could not store the task run.");
+        return Err(AppError::new("store task child", error));
+    }
+    if let Err(error) = state.task_loops.mark_dispatched(&loop_id, child_id) {
+        fail_launch(error.message());
+        return Err(AppError::new("dispatch task child", error));
+    }
+    job.set_workflow_name(loop_record.pinned.definition.name().to_owned());
+    job.set_step_label("Source capture".to_owned());
+    tokio::spawn(workflows::execute_run(
+        state.clone(),
+        WorkflowJob {
+            run_id: child_id,
+            session_id: session,
+            project_id: authority.project_id,
+            agent_id: loop_record.agent_id,
+            agent_revision: authority.revision,
+            conversation_id: Some(started.id),
+            authority: Some(authority.clone()),
+            grant_alias: authority.grant_alias.clone(),
+            grant_access: authority.grant_access,
+            connection,
+            phase_providers: phase_models
+                .iter()
+                .map(|phase| phase.selection.provider)
+                .collect(),
+            active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            host_policy: authority.policy.clone(),
+            turns: Vec::new(),
+            job: job.clone(),
+            eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+            task_loop: Some(loop_id),
         },
         None,
         execution,
@@ -719,30 +938,50 @@ async fn launch_view(
     phase_raw: &[String],
     error: &'static str,
 ) -> WorkflowLaunchView {
-    let selected_task = resolve_selected_task(
-        state,
-        record,
-        task_document,
-        task_revision,
-        task_hash,
-        task_index,
-    );
-    let task_preview = selected_task
-        .as_ref()
-        .ok()
-        .and_then(|task| task.as_ref())
-        .map(|task| format!("Task {}\n\n{}", task.index + 1, task.markdown))
-        .unwrap_or_default();
-    let error = selected_task.as_ref().err().copied().unwrap_or(error);
     let records: Vec<_> = state
         .workflows
         .list()
         .into_iter()
         .filter(|record| {
-            task_document.is_empty() || workflows::run::supports_task_execution(&record.definition)
+            task_index.is_empty()
+                || (record.definition.execution_mode() == ExecutionMode::Once
+                    && workflows::run::supports_task_execution(&record.definition))
         })
         .collect();
     let selected_workflow = selected_workflow(&records, workflow_raw);
+    let mode = WorkflowSelection::parse(&selected_workflow)
+        .and_then(|selection| state.workflows.resolve(&selection).ok())
+        .map(|resolved| resolved.pinned.definition.execution_mode())
+        .unwrap_or(ExecutionMode::Once);
+    let task_document =
+        if mode == ExecutionMode::Once && task_index.is_empty() && task_document.contains('/') {
+            ""
+        } else {
+            task_document
+        };
+    let preview = if mode == ExecutionMode::TaskList && !task_document.is_empty() {
+        resolve_task_list_snapshot(state, record, task_document, task_revision, task_hash)
+            .map(|snapshot| snapshot.markdown)
+    } else {
+        resolve_selected_task(
+            state,
+            record,
+            task_document,
+            task_revision,
+            task_hash,
+            task_index,
+        )
+        .map(|task| {
+            task.map(|task| format!("Task {}\n\n{}", task.index + 1, task.markdown))
+                .unwrap_or_default()
+        })
+    };
+    let error = if error.is_empty() {
+        preview.as_ref().err().copied().unwrap_or(error)
+    } else {
+        error
+    };
+    let task_preview = preview.unwrap_or_default();
     let workflows = records
         .iter()
         .map(|record| {
@@ -786,7 +1025,7 @@ async fn launch_view(
             definition
                 .commit_policy_choices()
                 .into_iter()
-                .filter(|policy| task_document.is_empty() || *policy == CommitPolicy::HumanApproval)
+                .filter(|policy| task_index.is_empty() || *policy == CommitPolicy::HumanApproval)
                 .map(|policy| CommitPolicyOption {
                     value: policy.as_str().to_owned(),
                     label: policy.label().to_owned(),
@@ -805,6 +1044,8 @@ async fn launch_view(
         .or(record.execution_target)
         .or_else(|| record.grants.first().map(|grant| grant.project_id));
     let (plans, requires_plan) = selected_plan_options(state, record, &selected_workflow, plan_raw);
+    let (task_lists, requires_task_list) =
+        selected_task_list_options(state, record, &selected_workflow, task_document);
     let targets = record
         .grants
         .iter()
@@ -834,6 +1075,8 @@ async fn launch_view(
         targets,
         plans,
         requires_plan,
+        requires_task_list,
+        task_lists,
         task_document: task_document.to_owned(),
         task_revision: task_revision.to_owned(),
         task_hash: task_hash.to_owned(),
@@ -1267,6 +1510,57 @@ fn selected_plan_options(
     (plans, true)
 }
 
+fn selected_task_list_options(
+    state: &AppState,
+    record: &ConversationRecord,
+    workflow_raw: &str,
+    selected_document: &str,
+) -> (Vec<PlanOption>, bool) {
+    let requires = WorkflowSelection::parse(workflow_raw)
+        .and_then(|selection| state.workflows.resolve(&selection).ok())
+        .is_some_and(|resolved| {
+            resolved.pinned.definition.execution_mode() == ExecutionMode::TaskList
+        });
+    if !requires {
+        return (Vec::new(), false);
+    }
+    let mut lists: Vec<_> = state
+        .documents
+        .list_for_conversation(record.id)
+        .into_iter()
+        .filter(|document| document.kind == crate::conversations::DocumentKind::TaskList)
+        .map(|document| {
+            let revision = document.current();
+            let value = format!(
+                "{}/{}/{}",
+                document.id.as_hex(),
+                revision.revision,
+                revision.content_hash.as_str()
+            );
+            PlanOption {
+                value: value.clone(),
+                title: document.title.clone(),
+                revision: revision.revision.to_string(),
+                content_hash: revision.content_hash.as_str(),
+                content_bytes: revision.content_bytes.to_string(),
+                selected: value == selected_document.trim()
+                    || document.id.as_hex() == selected_document.trim(),
+            }
+        })
+        .collect();
+    if !selected_document.trim().is_empty() && !lists.iter().any(|list| list.selected) {
+        lists.push(PlanOption {
+            value: selected_document.to_owned(),
+            title: "Selected task list is unavailable".to_owned(),
+            revision: String::new(),
+            content_hash: String::new(),
+            content_bytes: String::new(),
+            selected: true,
+        });
+    }
+    (lists, true)
+}
+
 fn plan_choice_token(
     document_id: &DocumentId,
     revision: &crate::conversations::PlanRevision,
@@ -1350,6 +1644,27 @@ fn resolve_selected_plan(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn resolve_launch_task(
+    mode: ExecutionMode,
+    state: &AppState,
+    record: &ConversationRecord,
+    document: &str,
+    revision: &str,
+    hash: &str,
+    index: &str,
+) -> Result<Option<SelectedTask>, &'static str> {
+    if mode == ExecutionMode::TaskList {
+        if !index.trim().is_empty() {
+            return Err("A task loop runs all remaining tasks, not one selected task.");
+        }
+        resolve_task_list_snapshot(state, record, document, revision, hash)?;
+        Ok(None)
+    } else {
+        resolve_selected_task(state, record, document, revision, hash, index)
+    }
+}
+
 fn resolve_selected_task(
     state: &AppState,
     record: &ConversationRecord,
@@ -1415,6 +1730,70 @@ fn resolve_selected_task(
         markdown: task.markdown.clone(),
         task_list,
     }))
+}
+
+fn resolve_task_list_snapshot(
+    state: &AppState,
+    record: &ConversationRecord,
+    document_raw: &str,
+    revision_raw: &str,
+    hash_raw: &str,
+) -> Result<workflows::TaskListSnapshot, &'static str> {
+    let packed = if revision_raw.trim().is_empty()
+        && hash_raw.trim().is_empty()
+        && document_raw.contains('/')
+    {
+        let mut parts = document_raw.trim().splitn(3, '/');
+        (
+            parts.next().unwrap_or_default().to_owned(),
+            parts.next().unwrap_or_default().to_owned(),
+            parts.next().unwrap_or_default().to_owned(),
+        )
+    } else {
+        (
+            document_raw.trim().to_owned(),
+            revision_raw.trim().to_owned(),
+            hash_raw.trim().to_owned(),
+        )
+    };
+    let document_id =
+        DocumentId::parse(&packed.0).ok_or("Choose a task list for this workflow.")?;
+    let revision = packed
+        .1
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or("Choose a task list for this workflow.")?;
+    let expected_hash = crate::workflows::artefacts::ObjectHash::parse(&packed.2)
+        .ok_or("Choose a task list for this workflow.")?;
+    let document = state
+        .documents
+        .get(&document_id)
+        .ok_or("That task list is no longer available.")?;
+    if document.associated_conversation != Some(record.id)
+        || document.kind != crate::conversations::DocumentKind::TaskList
+    {
+        return Err("That task list is not associated with this conversation.");
+    }
+    let stored = document
+        .revision(revision)
+        .ok_or("That task-list revision is no longer available.")?;
+    if stored.content_hash != expected_hash {
+        return Err("That task list changed. Reload the launch sheet.");
+    }
+    let markdown = state
+        .documents
+        .content(&document, revision)
+        .map_err(|_| "Power Plant could not read the selected task list.")?;
+    if crate::workflows::artefacts::ObjectHash::of(markdown.as_bytes()) != expected_hash {
+        return Err("That task list changed. Reload the launch sheet.");
+    }
+    Ok(workflows::TaskListSnapshot {
+        document_id,
+        revision,
+        content_hash: expected_hash.as_str(),
+        markdown,
+    })
 }
 
 fn selected_workflow(records: &[workflows::WorkflowRecord], raw: Option<&str>) -> String {

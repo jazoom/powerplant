@@ -328,6 +328,7 @@ pub(super) struct WorkflowProgressView {
     pub(super) state: &'static str,
     pub(super) current_step: String,
     pub(super) result: &'static str,
+    pub(super) task_progress: String,
 }
 
 pub(super) struct ModelSources<'a> {
@@ -744,6 +745,40 @@ pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
             .map(str::to_owned)
             .unwrap_or_else(|| "Finished".to_owned()),
         result: workflow_result_label(&run.state),
+        task_progress: String::new(),
+    }
+}
+
+pub(super) fn loop_progress(record: &crate::workflows::TaskLoop) -> WorkflowProgressView {
+    WorkflowProgressView {
+        run_href: format!("/runs/loops/{}", record.id.as_hex()),
+        name: record.pinned.definition.name().to_owned(),
+        state: record.state.as_label(),
+        current_step: record.progress_label(),
+        result: loop_result_label(&record.state),
+        task_progress: record.progress_label(),
+    }
+}
+
+fn loop_result_label(state: &crate::workflows::task_loop::TaskLoopState) -> &'static str {
+    match state {
+        crate::workflows::task_loop::TaskLoopState::Completed => {
+            "Each completed task kept its commit. Open the parent run for task progress."
+        }
+        crate::workflows::task_loop::TaskLoopState::Failed
+        | crate::workflows::task_loop::TaskLoopState::Blocked => {
+            "The task loop stopped. Earlier commits remain. Open the parent run for evidence."
+        }
+        crate::workflows::task_loop::TaskLoopState::Cancelled => {
+            "The task loop was cancelled. Earlier commits remain."
+        }
+        crate::workflows::task_loop::TaskLoopState::Interrupted => {
+            "The task loop was interrupted. Earlier commits remain."
+        }
+        crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. } => {
+            "A task waits for a human decision. The conversation stays reserved."
+        }
+        _ => "Each task uses a fresh worker context. Earlier worker transcripts stay excluded.",
     }
 }
 

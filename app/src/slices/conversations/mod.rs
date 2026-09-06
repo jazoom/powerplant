@@ -2035,6 +2035,7 @@ async fn start_message(
                 turns,
                 job: job.clone(),
                 eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+                task_loop: None,
             },
             None,
             execution,
@@ -2988,16 +2989,33 @@ fn detail_view(
         .active_runs()
         .into_iter()
         .find(|run| {
-            run.conversation_id == Some(record.id) && run.kind == workflows::RunKind::QuickTask
+            run.conversation_id == Some(record.id)
+                && (run.kind == workflows::RunKind::QuickTask || run.parent_loop.is_some())
         })
         .and_then(|run| page::pending_code_gate(&run, &state.workflow_artefacts));
     let (source_review, linked_reviews, source_candidate_review, linked_candidate_reviews) =
         conversation_links(state, record);
-    let workflow_progress = state
+    let latest_loop = state
+        .task_loops
+        .for_conversation(&record.id)
+        .into_iter()
+        .next();
+    let latest_run = state
         .workflow_runs
         .for_conversation(&record.id)
-        .first()
-        .map(page::workflow_progress);
+        .into_iter()
+        .next();
+    let workflow_progress = match (latest_loop, latest_run) {
+        (Some(parent), run)
+            if run
+                .as_ref()
+                .is_none_or(|run| parent.created_at_ms >= run.created_at_ms) =>
+        {
+            Some(page::loop_progress(&parent))
+        }
+        (_, Some(run)) => Some(page::workflow_progress(&run)),
+        _ => None,
+    };
     ConversationDetailView::from_record_with_gate(
         record,
         ModelSources {

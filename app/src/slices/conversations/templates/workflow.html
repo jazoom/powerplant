@@ -33,7 +33,7 @@
           class="flex flex-col gap-6"
         >
           <input type="hidden" name="revision" value="{{ revision }}" />
-          {% if !task_document.is_empty() %}
+          {% if !task_document.is_empty() && !requires_task_list %}
             <input
               type="hidden"
               name="task_document"
@@ -75,6 +75,68 @@
               class="overflow-x-auto text-sm break-words whitespace-pre-wrap"
             >
 {{ task_preview }}</pre>
+          {% endif %}
+          {% if requires_task_list %}
+            <input
+              type="hidden"
+              name="preview_task_document"
+              value="{{ task_document }}"
+            />
+            <section
+              class="file-section space-y-4"
+              aria-labelledby="workflow-task-list-heading"
+            >
+              <div>
+                <h2
+                  id="workflow-task-list-heading"
+                  class="text-lg font-semibold"
+                >
+                  Task list
+                </h2>
+                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                  This process runs each remaining task as a child run. Each
+                  task starts from the code left by the previous task. Worker
+                  transcripts stay out of later task context.
+                </p>
+              </div>
+              {% if !task_preview.is_empty() %}
+                <details class="collapse-arrow bg-base-200 collapse">
+                  <summary class="collapse-title">Pinned task list</summary>
+                  <pre
+                    class="collapse-content overflow-x-auto text-sm whitespace-pre-wrap"
+                  >
+{{ task_preview }}</pre>
+                </details>
+              {% endif %}
+              {% if task_lists.is_empty() %}
+                <p class="text-error text-sm">
+                  Save a task list in this conversation before you launch.
+                </p>
+              {% else %}
+                <fieldset class="flex flex-col gap-2">
+                  <legend class="text-sm font-semibold">Task list</legend>
+                  {% for list in task_lists %}
+                    <label class="flex gap-3">
+                      <input
+                        class="radio radio-sm mt-1"
+                        type="radio"
+                        name="task_document"
+                        value="{{ list.value }}"
+                        {% if list.selected %}checked{% endif %}
+                        required
+                      />
+                      <span>
+                        <span class="block font-medium">{{ list.title }}</span>
+                        <span class="text-quiet text-sm"
+                          >Revision {{ list.revision }} ·
+                          {{ list.content_bytes }} bytes</span
+                        >
+                      </span>
+                    </label>
+                  {% endfor %}
+                </fieldset>
+              {% endif %}
+            </section>
           {% endif %}
           <section
             class="file-section space-y-4"
