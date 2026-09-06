@@ -13,6 +13,7 @@ import { initObserve } from "./observe";
 import { initThemeSelector } from "./theme";
 import { initThinkingVisibility } from "./thinking-visibility";
 import { initTranscript } from "./transcript";
+import { initWorkflowEditor } from "./workflow-editor";
 
 export function startApp(): void {
     const bound = bindTransportFeedback(document);
@@ -37,6 +38,7 @@ export function startApp(): void {
             "theme-selector": initThemeSelector,
             "thinking-visibility": initThinkingVisibility,
             transcript: initTranscript,
+            "workflow-editor": initWorkflowEditor,
         },
     });
 }

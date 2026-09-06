@@ -1,7 +1,148 @@
 use super::commands::SystemCommandId;
-use super::definition::{StepAction, WorkflowDefinition};
+use super::definition::{CandidateAuthority, StepAction, WorkflowDefinition};
 
 pub(crate) const REQUIRED_INPUTS: &str = "Task brief · Target project";
+
+pub(crate) struct ProcessPhase {
+    pub(crate) position: usize,
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) purpose: String,
+    pub(crate) effects: String,
+    pub(crate) context: String,
+    pub(crate) approval: String,
+}
+
+pub(crate) enum ProcessAction {
+    Model(CandidateAuthority),
+    Command(SystemCommandId),
+    Approval,
+    Invalid,
+}
+
+impl ProcessPhase {
+    pub(crate) fn new(position: usize, name: String, action: ProcessAction) -> Self {
+        let (kind, purpose, effects, context) = match action {
+            ProcessAction::Model(access) => (
+                "Model phase",
+                match access {
+                    CandidateAuthority::ReadOnly => {
+                        "A model inspects the candidate and produces the declared outputs."
+                            .to_owned()
+                    }
+                    CandidateAuthority::Edit => {
+                        "A model works on the candidate and proposes changes.".to_owned()
+                    }
+                },
+                match access {
+                    CandidateAuthority::ReadOnly => {
+                        "Reads the candidate. Does not change project files."
+                    }
+                    CandidateAuthority::Edit => {
+                        "Can edit an isolated candidate. Does not change the project yet."
+                    }
+                },
+                "Each attempt starts with fresh model context: the brief, declared artefacts and authorised root project instructions. Conversation and earlier worker transcripts stay excluded.",
+            ),
+            ProcessAction::Command(command) => (
+                "System action",
+                format!("Power Plant runs {}.", command.label()),
+                match command {
+                    SystemCommandId::RepositoryStatus => {
+                        "Reads repository status. Does not change project files."
+                    }
+                    SystemCommandId::CommitCandidate => command.consequence(),
+                },
+                "The current candidate and validated artefacts continue to the next phase. No model request occurs.",
+            ),
+            ProcessAction::Approval => (
+                "Approval stop",
+                "A person reviews the exact candidate and records a decision.".to_owned(),
+                "Changes no project files by itself.",
+                "A safe pause. The candidate remains available for inspection.",
+            ),
+            ProcessAction::Invalid => (
+                "Incomplete phase",
+                "This phase needs a valid action.".to_owned(),
+                "Unknown until the action is valid.",
+                "Unknown until the action is valid.",
+            ),
+        };
+        Self {
+            position,
+            name,
+            kind: kind.to_owned(),
+            purpose,
+            effects: effects.to_owned(),
+            context: context.to_owned(),
+            approval: if matches!(action, ProcessAction::Approval) {
+                "Approval stop. The exact candidate needs a human decision."
+            } else {
+                "No approval stop."
+            }
+            .to_owned(),
+        }
+    }
+}
+
+pub(crate) fn revision_summary(human: bool, target: &str, attempt_limit: &str) -> String {
+    let prefix = if human {
+        "Approval stop. Request changes returns to"
+    } else {
+        "Review route. A changes-requested verdict returns to"
+    };
+    format!("{prefix} {target}. Maximum {attempt_limit} attempts, including the first attempt.")
+}
+
+pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPhase> {
+    definition
+        .steps()
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let action = match &step.action {
+                StepAction::Agent(agent) => ProcessAction::Model(agent.candidate_authority),
+                StepAction::SystemCommand(command) => ProcessAction::Command(command.command),
+                StepAction::HumanGate(_) => ProcessAction::Approval,
+            };
+            let mut phase = ProcessPhase::new(index + 1, step.name.clone(), action);
+            phase.approval = match &step.action {
+                StepAction::HumanGate(action) => match &action.revision {
+                    Some(policy) => format_revision(
+                        true,
+                        definition,
+                        &policy.revision_target,
+                        policy.attempt_limit,
+                    ),
+                    None => "Approval stop. The exact candidate needs a human decision.".to_owned(),
+                },
+                _ => match &step.review {
+                    Some(policy) => format_revision(
+                        false,
+                        definition,
+                        &policy.revision_target,
+                        policy.attempt_limit,
+                    ),
+                    None => "No approval stop.".to_owned(),
+                },
+            };
+            phase
+        })
+        .collect()
+}
+
+fn format_revision(
+    human: bool,
+    definition: &WorkflowDefinition,
+    target: &super::definition::StepKey,
+    attempt_limit: u8,
+) -> String {
+    let target = definition
+        .step(target)
+        .map(|step| step.name.as_str())
+        .unwrap_or("the earlier implementation");
+    revision_summary(human, target, &attempt_limit.to_string())
+}
 
 pub(crate) fn process_summary(definition: &WorkflowDefinition) -> String {
     definition

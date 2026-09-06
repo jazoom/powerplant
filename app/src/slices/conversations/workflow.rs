@@ -60,6 +60,7 @@ struct WorkflowOption {
     effects: String,
     inputs: String,
     approvals: String,
+    process_phases: Vec<crate::workflows::summary::ProcessPhase>,
     selected: bool,
 }
 
@@ -545,6 +546,7 @@ async fn launch_view(
                 effects: workflows::summary::code_effects(definition),
                 inputs: workflows::summary::REQUIRED_INPUTS.to_owned(),
                 approvals: workflows::summary::approval_stops(definition),
+                process_phases: workflows::summary::process_overview(definition),
                 selected,
             }
         })

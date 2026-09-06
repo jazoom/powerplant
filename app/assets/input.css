@@ -843,6 +843,110 @@
         margin-bottom: 0.5rem;
     }
 
+    .workflow-process {
+        display: grid;
+        gap: 0;
+        margin: 0;
+        padding: 0;
+        border-top: 1px solid var(--powerplant-strong-rule);
+        list-style: none;
+    }
+
+    .workflow-process-item {
+        display: grid;
+        grid-template-columns: 2rem minmax(0, 1fr);
+        gap: 0.75rem;
+        padding: 0.85rem 0;
+        border-bottom: 1px solid var(--powerplant-rule);
+    }
+
+    .workflow-process-marker {
+        display: grid;
+        width: 1.6rem;
+        height: 1.6rem;
+        place-items: center;
+        color: var(--powerplant-action-ink);
+        border: 1px solid var(--powerplant-action-deep);
+        border-radius: 50%;
+        background: var(--powerplant-action);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 500;
+    }
+
+    .workflow-phase-selector {
+        display: flex;
+        gap: 0.5rem;
+        overflow-x: auto;
+        padding: 0.25rem 0 0.5rem;
+        border-bottom: 1px solid var(--powerplant-strong-rule);
+        scrollbar-width: thin;
+    }
+
+    .workflow-phase-tab {
+        display: flex;
+        min-width: 10rem;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.55rem 0.7rem;
+        color: var(--powerplant-quiet-ink);
+        border: 1px solid var(--powerplant-rule);
+        border-radius: 2px;
+        background: var(--powerplant-control);
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-align: left;
+        cursor: pointer;
+    }
+
+    .workflow-phase-tab:hover,
+    .workflow-phase-tab[aria-selected="true"] {
+        color: var(--powerplant-ink);
+        border-color: var(--powerplant-action-deep);
+        background: var(--powerplant-warning-wash);
+    }
+
+    .workflow-phase-tab:focus-visible {
+        outline: 2px solid var(--powerplant-focus);
+        outline-offset: 2px;
+    }
+
+    .workflow-phase-tab-index {
+        display: grid;
+        width: 1.5rem;
+        height: 1.5rem;
+        flex: none;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+    }
+
+    .workflow-advanced {
+        border-top: 1px solid var(--powerplant-rule);
+    }
+
+    .workflow-advanced > summary {
+        width: fit-content;
+        padding: 0.65rem 0;
+        color: var(--powerplant-link);
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+
+    .workflow-advanced-body {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        padding-bottom: 0.25rem;
+    }
+
+    .workflow-phase-panel[hidden] {
+        display: none;
+    }
+
     .settings-list {
         margin: 0;
         padding: 0;

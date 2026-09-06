@@ -59,33 +59,38 @@
                       value="{{ workflow.token }}"
                     />
                   {% endif %}
-                  <label class="border-base-300 flex gap-3 border p-3">
-                    <input
-                      class="radio radio-sm mt-1"
-                      type="radio"
-                      name="workflow"
-                      value="{{ workflow.token }}"
-                      {% if workflow.selected %}checked{% endif %}
-                      required
-                    />
-                    <span class="min-w-0">
-                      <span class="block font-semibold"
-                        >{{ workflow.name }}</span
-                      >
-                      <span class="text-quiet mt-1 block text-sm"
-                        >{{ workflow.summary }}</span
-                      >
-                      <span class="text-quiet mt-1 block text-xs"
-                        >{{ workflow.effects }}</span
-                      >
-                      <span class="text-quiet mt-1 block text-xs"
-                        >Required inputs: {{ workflow.inputs }}</span
-                      >
-                      <span class="text-quiet mt-1 block text-xs"
-                        >Approval stops: {{ workflow.approvals }}</span
-                      >
-                    </span>
-                  </label>
+                  <div class="border-base-300 border p-3">
+                    <label class="flex gap-3">
+                      <input
+                        class="radio radio-sm mt-1"
+                        type="radio"
+                        aria-label="{{ workflow.name }}"
+                        name="workflow"
+                        value="{{ workflow.token }}"
+                        {% if workflow.selected %}checked{% endif %}
+                        required
+                      />
+                      <span class="min-w-0">
+                        <span class="block font-semibold"
+                          >{{ workflow.name }}</span
+                        >
+                        <span class="text-quiet mt-1 block text-sm"
+                          >{{ workflow.summary }}</span
+                        >
+                        <span class="text-quiet mt-1 block text-xs"
+                          >{{ workflow.effects }}</span
+                        >
+                        <span class="text-quiet mt-1 block text-xs"
+                          >Required inputs: {{ workflow.inputs }}</span
+                        >
+                        <span class="text-quiet mt-1 block text-xs"
+                          >Approval stops: {{ workflow.approvals }}</span
+                        >
+                      </span>
+                    </label>
+                    {% let process_phases = workflow.process_phases %}
+                    {% include "workflows/templates/process.html" %}
+                  </div>
                 {% endfor %}
               </fieldset>
             {% endif %}

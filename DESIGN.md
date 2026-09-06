@@ -148,6 +148,11 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - More contains Agents, Workflows, Environments, Providers and Settings.
 - The mobile row stays a generic product index. The Conversations page is the main work switcher. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
+- Workflow catalogue entries and configuration pages show the ordered process before edit fields.
+- Workflow phase settings use a keyboard-accessible selector. Unselected panels stay in the form so unsaved values remain.
+- Invalid controls reveal their phase before browser validation moves focus. Server errors reveal the first affected phase and its advanced settings.
+- Workflow overviews show each phase purpose, candidate effect, fresh model context and approval route. Environment overrides and technical mappings stay under Advanced settings.
+- Conversation workflow launch uses the same ordered process presentation as workflow configuration.
 - Conversation pages put the discussion and composer before project access and workflow controls.
 - The conversation detail includes model selection, project access and workflow launch controls. The empty transcript contains no task suggestions.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
@@ -169,6 +174,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 
 - Conversations come first in the product index.
 - The page title and next action form the first visual level.
+- Workflow process order and effects appear before configuration fields.
 - On project detail, the project name is the title. The host path is quiet monospace metadata.
 - Readiness states appear before task input.
 - Send is the primary composer action.
@@ -196,6 +202,10 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Keep mobile navigation labels generic. Use the Conversations page as the main work switcher and the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
 - Keep model selection visible in the conversation detail. Keep project access and workflow launch explicit.
+- Show workflow process structure before model, environment and technical settings.
+- Keep phase selection transient. Do not submit a phase switch or discard fields from unselected phases.
+- Keep environment overrides and technical mappings inside Advanced settings.
+- Reuse the workflow process presentation in the conversation launch sheet.
 - Do not duplicate the Providers route beside conversation model controls.
 - Keep Send as the primary conversation action.
 - Keep Run workflow beside the conversation title.

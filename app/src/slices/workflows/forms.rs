@@ -227,33 +227,38 @@ impl FormErrors {
                     || !role.expertise.is_empty()
                     || !role.prompt.is_empty()
             })
-            || self.steps.iter().any(|step| {
-                !step.key.is_empty()
-                    || !step.name.is_empty()
-                    || !step.action.is_empty()
-                    || !step.environment.is_empty()
-                    || !step.role.is_empty()
-                    || !step.candidate_access.is_empty()
-                    || !step.command.is_empty()
-                    || !step.review_policy.is_empty()
-                    || !step.report_output.is_empty()
-                    || !step.revision_target.is_empty()
-                    || !step.attempt_limit.is_empty()
-                    || !step.human_revision_policy.is_empty()
-                    || !step.human_revision_target.is_empty()
-                    || !step.human_attempt_limit.is_empty()
-                    || step
-                        .directories
-                        .iter()
-                        .any(|directory| !directory.alias.is_empty())
-                    || step.inputs.iter().any(|input| {
-                        !input.key.is_empty() || !input.kind.is_empty() || !input.source.is_empty()
-                    })
-                    || step
-                        .outputs
-                        .iter()
-                        .any(|output| !output.key.is_empty() || !output.kind.is_empty())
+            || self.steps.iter().any(StepErrors::has_error)
+    }
+}
+
+impl StepErrors {
+    pub(super) fn has_error(&self) -> bool {
+        let step = self;
+        !step.key.is_empty()
+            || !step.name.is_empty()
+            || !step.action.is_empty()
+            || !step.environment.is_empty()
+            || !step.role.is_empty()
+            || !step.candidate_access.is_empty()
+            || !step.command.is_empty()
+            || !step.review_policy.is_empty()
+            || !step.report_output.is_empty()
+            || !step.revision_target.is_empty()
+            || !step.attempt_limit.is_empty()
+            || !step.human_revision_policy.is_empty()
+            || !step.human_revision_target.is_empty()
+            || !step.human_attempt_limit.is_empty()
+            || step
+                .directories
+                .iter()
+                .any(|directory| !directory.alias.is_empty())
+            || step.inputs.iter().any(|input| {
+                !input.key.is_empty() || !input.kind.is_empty() || !input.source.is_empty()
             })
+            || step
+                .outputs
+                .iter()
+                .any(|output| !output.key.is_empty() || !output.kind.is_empty())
     }
 }
 

@@ -6,6 +6,7 @@ use crate::agents::ToolId;
 use crate::workflows::definition::{
     MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS,
 };
+use crate::workflows::summary::ProcessPhase;
 use crate::workflows::{WorkflowRecord, summary};
 
 use super::forms::{
@@ -33,6 +34,7 @@ pub(super) struct CatalogueItem {
     pub(super) roles: usize,
     pub(super) steps: usize,
     pub(super) updated: String,
+    pub(super) process_phases: Vec<ProcessPhase>,
 }
 
 #[derive(Template)]
@@ -60,6 +62,7 @@ impl CatalogueView {
                     roles: record.definition.roles().len(),
                     steps: record.definition.steps().len(),
                     updated: format_time(record.updated_at_ms),
+                    process_phases: summary::process_overview(&record.definition),
                 })
                 .collect(),
             unavailable_starters,
@@ -146,6 +149,7 @@ pub(super) struct CommandChoice {
 }
 
 pub(super) struct StepRow {
+    pub(super) has_error: bool,
     pub(super) index: usize,
     pub(super) position: usize,
     pub(super) key: String,
@@ -206,6 +210,7 @@ pub(super) struct WorkflowFormView {
     pub(super) workflow_id: String,
     pub(super) show_delete: bool,
     pub(super) delete_error: &'static str,
+    pub(super) process_phases: Vec<ProcessPhase>,
 }
 
 #[derive(Template)]
@@ -228,10 +233,12 @@ pub(super) struct WorkflowFormContents<'a> {
     pub(super) workflow_id: &'a str,
     pub(super) show_delete: bool,
     pub(super) delete_error: &'static str,
+    pub(super) process_phases: &'a [ProcessPhase],
 }
 
 impl WorkflowFormView {
     pub(super) fn create(state: WorkflowFormState, errors: FormErrors) -> Self {
+        let process_phases = draft_process_overview(&state.steps);
         Self::from_state(
             "New workflow",
             "/workflows",
@@ -241,6 +248,7 @@ impl WorkflowFormView {
             "",
             false,
             "",
+            process_phases,
         )
     }
 
@@ -250,6 +258,7 @@ impl WorkflowFormView {
         errors: FormErrors,
         delete_error: &'static str,
     ) -> Self {
+        let process_phases = draft_process_overview(&state.steps);
         Self::from_state(
             "Configure workflow",
             &format!("/workflows/{}/configuration", record.id.as_hex()),
@@ -259,6 +268,7 @@ impl WorkflowFormView {
             &record.revision.to_string(),
             true,
             delete_error,
+            process_phases,
         )
     }
 
@@ -285,6 +295,7 @@ impl WorkflowFormView {
         revision: &str,
         show_delete: bool,
         delete_error: &'static str,
+        process_phases: Vec<ProcessPhase>,
     ) -> Self {
         let role_count = state.roles.len();
         let step_count = state.steps.len();
@@ -328,6 +339,7 @@ impl WorkflowFormView {
             },
             show_delete,
             delete_error,
+            process_phases,
         }
     }
 
@@ -377,6 +389,7 @@ impl WorkflowFormView {
             workflow_id: &self.workflow_id,
             show_delete: self.show_delete,
             delete_error: self.delete_error,
+            process_phases: &self.process_phases,
         }
     }
 }
@@ -423,6 +436,7 @@ fn step_row(
         || command_id.is_some_and(|command| !command.contract().required_outputs.is_empty());
     let lock_outputs = !is_agent;
     StepRow {
+        has_error: errors.has_error(),
         index,
         position: index + 1,
         key: step.key.clone(),
@@ -571,6 +585,53 @@ fn step_row(
         can_move_down: can_move_step(steps, index, false),
         can_remove: can_remove_step(steps, index),
     }
+}
+
+fn draft_process_overview(steps: &[StepDraft]) -> Vec<ProcessPhase> {
+    steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let name = if step.name.trim().is_empty() {
+                format!("Phase {}", index + 1)
+            } else {
+                step.name.clone()
+            };
+            use crate::workflows::definition::{CandidateAuthority, SystemCommandId};
+            use summary::ProcessAction;
+            let action = match step.action.as_str() {
+                "agent" => match step.candidate_access.as_str() {
+                    "edit-candidate" => ProcessAction::Model(CandidateAuthority::Edit),
+                    "read-only" => ProcessAction::Model(CandidateAuthority::ReadOnly),
+                    _ => ProcessAction::Invalid,
+                },
+                "human-gate" => ProcessAction::Approval,
+                "system-command" => SystemCommandId::parse(&step.command)
+                    .map(ProcessAction::Command)
+                    .unwrap_or(ProcessAction::Invalid),
+                _ => ProcessAction::Invalid,
+            };
+            let mut phase = ProcessPhase::new(index + 1, name, action);
+            let route = if step.action == "human-gate" {
+                step.human_revision
+                    .as_ref()
+                    .map(|policy| (true, &policy.revision_target, &policy.attempt_limit))
+            } else {
+                step.review_policy
+                    .as_ref()
+                    .map(|policy| (false, &policy.revision_target, &policy.attempt_limit))
+            };
+            if let Some((human, target, limit)) = route {
+                let destination = steps
+                    .iter()
+                    .position(|step| step.key == *target)
+                    .map(|index| format!("phase {} ({})", index + 1, steps[index].name))
+                    .unwrap_or_else(|| "an unavailable phase".to_owned());
+                phase.approval = summary::revision_summary(human, &destination, limit);
+            }
+            phase
+        })
+        .collect()
 }
 
 fn source_options(earlier: &[StepDraft], kind: &str, current: &str) -> Vec<SourceOption> {

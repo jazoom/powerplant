@@ -14,6 +14,7 @@
         data-graft
         method="post"
         action="{{ action }}"
+        data-island="workflow-editor"
         class="flex flex-col gap-6"
       >
         <button
@@ -32,6 +33,21 @@
         {% if revision != "" %}
           <input type="hidden" name="revision" value="{{ revision }}" />
         {% endif %}
+        <section
+          class="workflow-overview file-section"
+          aria-labelledby="workflow-overview-heading"
+        >
+          <div>
+            <h2 id="workflow-overview-heading" class="text-lg font-semibold">
+              Process overview
+            </h2>
+            <p class="text-quiet mt-1 max-w-[70ch] text-sm">
+              Read the order, model context boundaries and decision points
+              before you edit the workflow. Select a phase to edit its settings.
+            </p>
+          </div>
+          {% include "workflows/templates/process.html" %}
+        </section>
         <label class="flex flex-col gap-1">
           <span class="text-sm">Name</span>
           <input
@@ -45,36 +61,43 @@
             <p class="text-error text-sm">{{ name_error }}</p>
           {% endif %}
         </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-sm">Default environment</span>
-          {% if no_ready_environment %}
-            <p class="text-error text-sm">
-              Prepare an environment before you save this workflow.
-              <a href="/environments/new" data-graft class="link"
-                >New environment</a
-              >
-            </p>
-          {% else %}
-            <select
-              class="select select-bordered"
-              name="default-environment"
-              required
-            >
-              <option value="">Choose an environment</option>
-              {% for option in environment_options %}
-                <option
-                  value="{{ option.id }}"
-                  {% if option.selected || option.id == default_environment %}selected{% endif %}
+        <details class="workflow-advanced" open>
+          <summary>Workflow defaults</summary>
+          <div class="workflow-advanced-body">
+            <label class="flex flex-col gap-1">
+              <span class="text-sm">Default environment</span>
+              {% if no_ready_environment %}
+                <p class="text-error text-sm">
+                  Prepare an environment before you save this workflow.
+                  <a href="/environments/new" data-graft class="link"
+                    >New environment</a
+                  >
+                </p>
+              {% else %}
+                <select
+                  class="select select-bordered"
+                  name="default-environment"
+                  required
                 >
-                  {{ option.name }} ({{ option.context }})
-                </option>
-              {% endfor %}
-            </select>
-          {% endif %}
-          {% if default_environment_error != "" %}
-            <p class="text-error text-sm">{{ default_environment_error }}</p>
-          {% endif %}
-        </label>
+                  <option value="">Choose an environment</option>
+                  {% for option in environment_options %}
+                    <option
+                      value="{{ option.id }}"
+                      {% if option.selected || option.id == default_environment %}selected{% endif %}
+                    >
+                      {{ option.name }} ({{ option.context }})
+                    </option>
+                  {% endfor %}
+                </select>
+              {% endif %}
+              {% if default_environment_error != "" %}
+                <p class="text-error text-sm">
+                  {{ default_environment_error }}
+                </p>
+              {% endif %}
+            </label>
+          </div>
+        </details>
 
         <section class="space-y-3">
           <div>
@@ -86,56 +109,62 @@
           {% for role in roles %}
             <article class="border-base-300 space-y-3 border p-4">
               <h3 class="font-semibold">Role {{ role.position }}</h3>
-              <div class="flex flex-wrap items-start justify-between gap-2">
-                <label class="flex min-w-0 flex-1 flex-col gap-1">
-                  <span class="text-quiet text-xs">Role identifier</span>
-                  <input
-                    class="input input-bordered input-sm font-mono"
-                    name="role_{{ role.index }}_key"
-                    required
-                    maxlength="32"
-                    value="{{ role.key }}"
-                  />
-                  {% if role.key_error != "" %}
-                    <p class="text-error text-sm">{{ role.key_error }}</p>
-                  {% endif %}
-                </label>
-                <div class="flex flex-wrap gap-2">
-                  {% if role.can_move_up %}
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="move-role-up:{{ role.index }}"
-                    >
-                      Move up
-                    </button>
-                  {% endif %}
-                  {% if role.can_move_down %}
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="move-role-down:{{ role.index }}"
-                    >
-                      Move down
-                    </button>
-                  {% endif %}
-                  {% if role.can_remove %}
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="remove-role:{{ role.index }}"
-                    >
-                      Remove role
-                    </button>
-                  {% endif %}
+              <details
+                class="workflow-advanced"
+                {% if role.key_error != "" %}open{% endif %}
+              >
+                <summary>Advanced settings: role identity</summary>
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <label class="flex min-w-0 flex-1 flex-col gap-1">
+                    <span class="text-quiet text-xs">Role identifier</span>
+                    <input
+                      class="input input-bordered input-sm font-mono"
+                      name="role_{{ role.index }}_key"
+                      required
+                      maxlength="32"
+                      value="{{ role.key }}"
+                    />
+                    {% if role.key_error != "" %}
+                      <p class="text-error text-sm">{{ role.key_error }}</p>
+                    {% endif %}
+                  </label>
+                  <div class="flex flex-wrap gap-2">
+                    {% if role.can_move_up %}
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        type="submit"
+                        formnovalidate
+                        name="intent"
+                        value="move-role-up:{{ role.index }}"
+                      >
+                        Move up
+                      </button>
+                    {% endif %}
+                    {% if role.can_move_down %}
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        type="submit"
+                        formnovalidate
+                        name="intent"
+                        value="move-role-down:{{ role.index }}"
+                      >
+                        Move down
+                      </button>
+                    {% endif %}
+                    {% if role.can_remove %}
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        type="submit"
+                        formnovalidate
+                        name="intent"
+                        value="remove-role:{{ role.index }}"
+                      >
+                        Remove role
+                      </button>
+                    {% endif %}
+                  </div>
                 </div>
-              </div>
+              </details>
               <label class="flex flex-col gap-1">
                 <span class="text-sm">Display name</span>
                 <input
@@ -188,66 +217,115 @@
           {% endif %}
         </section>
 
-        <section class="space-y-3">
+        <section class="space-y-3" aria-labelledby="workflow-phases-heading">
           <div>
-            <h2 class="text-lg font-semibold">Steps</h2>
+            <h2 id="workflow-phases-heading" class="text-lg font-semibold">
+              Phases
+            </h2>
             <p class="text-quiet mt-1 text-sm">
-              Steps run in order and pass their saved outputs forward.
+              Select a phase to edit its settings. Unselected fields remain in
+              the form, so switching phases keeps unsaved values.
             </p>
           </div>
+          <div
+            class="workflow-phase-selector"
+            role="tablist"
+            aria-label="Workflow phases"
+          >
+            {% for step in steps %}
+              <button
+                id="workflow-phase-tab-{{ step.index }}"
+                class="btn btn-ghost workflow-phase-tab h-auto min-h-11 shrink-0"
+                type="button"
+                role="tab"
+                aria-selected="{% if step.index == 0 %}true{% else %}false{% endif %}"
+                aria-controls="workflow-phase-{{ step.index }}"
+                data-workflow-phase-tab="{{ step.index }}"
+              >
+                <span class="workflow-phase-tab-index"
+                  >{{ step.position }}</span
+                >
+                <span class="min-w-0 text-left">
+                  <span class="block truncate"
+                    >{% if step.name.trim() != "" %}
+                      {{ step.name }}
+                    {% else %}
+                      Untitled phase
+                    {% endif %}</span
+                  >
+                  <span class="text-quiet block text-xs"
+                    >{% if step.is_agent %}Model{% else if step.is_gate %}Approval{% else %}System{% endif %}</span
+                  >
+                </span>
+              </button>
+            {% endfor %}
+          </div>
           {% for step in steps %}
-            <article class="border-base-300 space-y-3 border p-4">
-              <h3 class="font-semibold">Step {{ step.position }}</h3>
-              <div class="flex flex-wrap items-start justify-between gap-2">
-                <label class="flex min-w-0 flex-1 flex-col gap-1">
-                  <span class="text-quiet text-xs">Step identifier</span>
-                  <input
-                    class="input input-bordered input-sm font-mono"
-                    name="step_{{ step.index }}_key"
-                    required
-                    maxlength="32"
-                    value="{{ step.key }}"
-                  />
-                  {% if step.key_error != "" %}
-                    <p class="text-error text-sm">{{ step.key_error }}</p>
-                  {% endif %}
-                </label>
-                <div class="flex flex-wrap gap-2">
-                  {% if step.can_move_up %}
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="move-step-up:{{ step.index }}"
-                    >
-                      Move up
-                    </button>
-                  {% endif %}
-                  {% if step.can_move_down %}
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="move-step-down:{{ step.index }}"
-                    >
-                      Move down
-                    </button>
-                  {% endif %}
-                  {% if step.can_remove %}
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="remove-step:{{ step.index }}"
-                    >
-                      Remove step
-                    </button>
-                  {% endif %}
+            <div
+              id="workflow-phase-{{ step.index }}"
+              class="workflow-phase-panel border-base-300 space-y-3 border p-4"
+              data-workflow-phase-panel="{{ step.index }}"
+              data-workflow-phase-error="{{ step.has_error }}"
+              tabindex="-1"
+              role="tabpanel"
+              aria-labelledby="workflow-phase-tab-{{ step.index }}"
+            >
+              <h3 class="font-semibold">Phase {{ step.position }} settings</h3>
+              <details class="workflow-advanced">
+                <summary>Advanced settings: phase identity</summary>
+                <div class="workflow-advanced-body">
+                  <div class="flex flex-wrap items-start justify-between gap-2">
+                    <label class="flex min-w-0 flex-1 flex-col gap-1">
+                      <span class="text-quiet text-xs">Step identifier</span>
+                      <input
+                        class="input input-bordered input-sm font-mono"
+                        name="step_{{ step.index }}_key"
+                        required
+                        maxlength="32"
+                        value="{{ step.key }}"
+                      />
+                      {% if step.key_error != "" %}
+                        <p class="text-error text-sm">{{ step.key_error }}</p>
+                      {% endif %}
+                    </label>
+                    <div class="flex flex-wrap gap-2">
+                      {% if step.can_move_up %}
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="move-step-up:{{ step.index }}"
+                        >
+                          Move up
+                        </button>
+                      {% endif %}
+                      {% if step.can_move_down %}
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="move-step-down:{{ step.index }}"
+                        >
+                          Move down
+                        </button>
+                      {% endif %}
+                      {% if step.can_remove %}
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="remove-step:{{ step.index }}"
+                        >
+                          Remove step
+                        </button>
+                      {% endif %}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </details>
               <label class="flex flex-col gap-1">
                 <span class="text-sm">Display name</span>
                 <input
@@ -421,53 +499,59 @@
                 />
               {% endif %}
               {% if !step.is_gate %}
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm">Environment</span>
-                  <select
-                    class="select select-bordered"
-                    name="step_{{ step.index }}_environment"
-                  >
-                    <option
-                      value=""
-                      {% if step.environment == "" %}selected{% endif %}
+                <details class="workflow-advanced">
+                  <summary>Advanced settings: environment override</summary>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-sm">Environment</span>
+                    <select
+                      class="select select-bordered"
+                      name="step_{{ step.index }}_environment"
                     >
-                      Use workflow default
-                    </option>
-                    {% for option in environment_options %}
                       <option
-                        value="{{ option.id }}"
-                        {% if option.id == step.environment %}selected{% endif %}
+                        value=""
+                        {% if step.environment == "" %}selected{% endif %}
                       >
-                        {{ option.name }} ({{ option.context }})
+                        Use workflow default
                       </option>
-                    {% endfor %}
-                  </select>
-                  {% if step.environment_hint != "" %}
-                    <p class="text-quiet text-xs">
-                      {{ step.environment_hint }}
-                    </p>
-                  {% endif %}
-                  {% if step.environment_error != "" %}
-                    <p class="text-error text-sm">
-                      {{ step.environment_error }}
-                    </p>
-                  {% endif %}
-                </label>
+                      {% for option in environment_options %}
+                        <option
+                          value="{{ option.id }}"
+                          {% if option.id == step.environment %}selected{% endif %}
+                        >
+                          {{ option.name }} ({{ option.context }})
+                        </option>
+                      {% endfor %}
+                    </select>
+                    {% if step.environment_hint != "" %}
+                      <p class="text-quiet text-xs">
+                        {{ step.environment_hint }}
+                      </p>
+                    {% endif %}
+                    {% if step.environment_error != "" %}
+                      <p class="text-error text-sm">
+                        {{ step.environment_error }}
+                      </p>
+                    {% endif %}
+                  </label>
+                </details>
               {% endif %}
               {% if step.is_agent %}
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm">Role identifier</span>
-                  <input
-                    class="input input-bordered font-mono"
-                    name="step_{{ step.index }}_role"
-                    required
-                    maxlength="32"
-                    value="{{ step.role }}"
-                  />
-                  {% if step.role_error != "" %}
-                    <p class="text-error text-sm">{{ step.role_error }}</p>
-                  {% endif %}
-                </label>
+                <details class="workflow-advanced">
+                  <summary>Advanced settings: role mapping</summary>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-sm">Role identifier</span>
+                    <input
+                      class="input input-bordered font-mono"
+                      name="step_{{ step.index }}_role"
+                      required
+                      maxlength="32"
+                      value="{{ step.role }}"
+                    />
+                    {% if step.role_error != "" %}
+                      <p class="text-error text-sm">{{ step.role_error }}</p>
+                    {% endif %}
+                  </label>
+                </details>
                 <label class="flex flex-col gap-1">
                   <span class="text-sm">Project access</span>
                   <select
@@ -511,176 +595,183 @@
                     </label>
                   {% endfor %}
                 </fieldset>
-                <fieldset class="space-y-3">
-                  <legend class="text-sm">Extra folder access</legend>
-                  <p class="text-quiet text-xs">
-                    Add an agent folder alias when this step needs extra
-                    read-only context.
-                  </p>
-                  {% if step.directories.is_empty() %}
-                    <p class="text-quiet text-sm">No extra folders.</p>
-                  {% endif %}
-                  {% for directory in step.directories %}
-                    <div
-                      class="border-base-300 grid gap-2 border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
-                    >
-                      <label class="flex flex-col gap-1">
-                        <span class="text-quiet text-xs"
-                          >Agent folder alias</span
+                <details class="workflow-advanced">
+                  <summary>
+                    Advanced settings: folders and output mappings
+                  </summary>
+                  <div class="workflow-advanced-body">
+                    <fieldset class="space-y-3">
+                      <legend class="text-sm">Extra folder access</legend>
+                      <p class="text-quiet text-xs">
+                        Add an agent folder alias when this step needs extra
+                        read-only context.
+                      </p>
+                      {% if step.directories.is_empty() %}
+                        <p class="text-quiet text-sm">No extra folders.</p>
+                      {% endif %}
+                      {% for directory in step.directories %}
+                        <div
+                          class="border-base-300 grid gap-2 border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
                         >
-                        <input
-                          class="input input-bordered input-sm font-mono"
-                          name="step_{{ step.index }}_dir_{{ directory.index }}_alias"
-                          maxlength="32"
-                          value="{{ directory.alias }}"
-                        />
-                        {% if directory.alias_error != "" %}
-                          <p class="text-error text-sm">
-                            {{ directory.alias_error }}
-                          </p>
-                        {% endif %}
-                      </label>
-                      <input
-                        type="hidden"
-                        name="step_{{ step.index }}_dir_{{ directory.index }}_access"
-                        value="read-only"
-                      />
-                      <button
-                        class="btn btn-ghost btn-sm"
-                        type="submit"
-                        formnovalidate
-                        name="intent"
-                        value="remove-directory:{{ step.index }}:{{ directory.index }}"
-                      >
-                        Remove folder
-                      </button>
-                    </div>
-                  {% endfor %}
-                  {% if step.can_add_directory %}
-                    <button
-                      class="btn btn-outline btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="add-directory:{{ step.index }}"
-                    >
-                      Add folder
-                    </button>
-                  {% endif %}
-                </fieldset>
-                <fieldset class="space-y-3">
-                  <legend class="text-sm">Required outputs</legend>
-                  {% for output in step.outputs %}
-                    <div
-                      class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-2"
-                    >
-                      <label class="flex flex-col gap-1">
-                        <span class="text-quiet text-xs">Key</span>
-                        <input
-                          class="input input-bordered input-sm font-mono"
-                          name="step_{{ step.index }}_output_{{ output.index }}_key"
-                          required
-                          maxlength="32"
-                          value="{{ output.key }}"
-                        />
-                        {% if output.key_error != "" %}
-                          <p class="text-error text-sm">
-                            {{ output.key_error }}
-                          </p>
-                        {% endif %}
-                      </label>
-                      <label class="flex flex-col gap-1">
-                        <span class="text-quiet text-xs">Kind</span>
-                        <select
-                          class="select select-bordered select-sm"
-                          name="step_{{ step.index }}_output_{{ output.index }}_kind"
+                          <label class="flex flex-col gap-1">
+                            <span class="text-quiet text-xs"
+                              >Agent folder alias</span
+                            >
+                            <input
+                              class="input input-bordered input-sm font-mono"
+                              name="step_{{ step.index }}_dir_{{ directory.index }}_alias"
+                              maxlength="32"
+                              value="{{ directory.alias }}"
+                            />
+                            {% if directory.alias_error != "" %}
+                              <p class="text-error text-sm">
+                                {{ directory.alias_error }}
+                              </p>
+                            {% endif %}
+                          </label>
+                          <input
+                            type="hidden"
+                            name="step_{{ step.index }}_dir_{{ directory.index }}_access"
+                            value="read-only"
+                          />
+                          <button
+                            class="btn btn-ghost btn-sm"
+                            type="submit"
+                            formnovalidate
+                            name="intent"
+                            value="remove-directory:{{ step.index }}:{{ directory.index }}"
+                          >
+                            Remove folder
+                          </button>
+                        </div>
+                      {% endfor %}
+                      {% if step.can_add_directory %}
+                        <button
+                          class="btn btn-outline btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="add-directory:{{ step.index }}"
                         >
-                          <option
-                            value="assistant-reply"
-                            {% if output.kind == "assistant-reply" %}selected{% endif %}
-                          >
-                            Assistant reply
-                          </option>
-                          <option
-                            value="plan"
-                            {% if output.kind == "plan" %}selected{% endif %}
-                          >
-                            Plan
-                          </option>
-                          <option
-                            value="candidate-revision"
-                            {% if output.kind == "candidate-revision" %}selected{% endif %}
-                          >
-                            Candidate revision
-                          </option>
-                          <option
-                            value="review-report"
-                            {% if output.kind == "review-report" %}selected{% endif %}
-                          >
-                            Review report
-                          </option>
-                          <option
-                            value="test-report"
-                            {% if output.kind == "test-report" %}selected{% endif %}
-                          >
-                            Test report
-                          </option>
-                        </select>
-                        {% if output.kind_error != "" %}
-                          <p class="text-error text-sm">
-                            {{ output.kind_error }}
-                          </p>
-                        {% endif %}
-                      </label>
-                      <div class="flex flex-wrap gap-2 sm:col-span-2">
-                        {% if output.can_move_up %}
-                          <button
-                            class="btn btn-ghost btn-sm"
-                            type="submit"
-                            formnovalidate
-                            name="intent"
-                            value="move-output-up:{{ step.index }}:{{ output.index }}"
-                          >
-                            Move up
-                          </button>
-                        {% endif %}
-                        {% if output.can_move_down %}
-                          <button
-                            class="btn btn-ghost btn-sm"
-                            type="submit"
-                            formnovalidate
-                            name="intent"
-                            value="move-output-down:{{ step.index }}:{{ output.index }}"
-                          >
-                            Move down
-                          </button>
-                        {% endif %}
-                        {% if output.can_remove %}
-                          <button
-                            class="btn btn-ghost btn-sm"
-                            type="submit"
-                            formnovalidate
-                            name="intent"
-                            value="remove-output:{{ step.index }}:{{ output.index }}"
-                          >
-                            Remove output
-                          </button>
-                        {% endif %}
-                      </div>
-                    </div>
-                  {% endfor %}
-                  {% if step.can_add_output %}
-                    <button
-                      class="btn btn-outline btn-sm"
-                      type="submit"
-                      formnovalidate
-                      name="intent"
-                      value="add-output:{{ step.index }}"
-                    >
-                      Add output
-                    </button>
-                  {% endif %}
-                </fieldset>
+                          Add folder
+                        </button>
+                      {% endif %}
+                    </fieldset>
+                    <fieldset class="space-y-3">
+                      <legend class="text-sm">Required outputs</legend>
+                      {% for output in step.outputs %}
+                        <div
+                          class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-2"
+                        >
+                          <label class="flex flex-col gap-1">
+                            <span class="text-quiet text-xs">Key</span>
+                            <input
+                              class="input input-bordered input-sm font-mono"
+                              name="step_{{ step.index }}_output_{{ output.index }}_key"
+                              required
+                              maxlength="32"
+                              value="{{ output.key }}"
+                            />
+                            {% if output.key_error != "" %}
+                              <p class="text-error text-sm">
+                                {{ output.key_error }}
+                              </p>
+                            {% endif %}
+                          </label>
+                          <label class="flex flex-col gap-1">
+                            <span class="text-quiet text-xs">Kind</span>
+                            <select
+                              class="select select-bordered select-sm"
+                              name="step_{{ step.index }}_output_{{ output.index }}_kind"
+                            >
+                              <option
+                                value="assistant-reply"
+                                {% if output.kind == "assistant-reply" %}selected{% endif %}
+                              >
+                                Assistant reply
+                              </option>
+                              <option
+                                value="plan"
+                                {% if output.kind == "plan" %}selected{% endif %}
+                              >
+                                Plan
+                              </option>
+                              <option
+                                value="candidate-revision"
+                                {% if output.kind == "candidate-revision" %}selected{% endif %}
+                              >
+                                Candidate revision
+                              </option>
+                              <option
+                                value="review-report"
+                                {% if output.kind == "review-report" %}selected{% endif %}
+                              >
+                                Review report
+                              </option>
+                              <option
+                                value="test-report"
+                                {% if output.kind == "test-report" %}selected{% endif %}
+                              >
+                                Test report
+                              </option>
+                            </select>
+                            {% if output.kind_error != "" %}
+                              <p class="text-error text-sm">
+                                {{ output.kind_error }}
+                              </p>
+                            {% endif %}
+                          </label>
+                          <div class="flex flex-wrap gap-2 sm:col-span-2">
+                            {% if output.can_move_up %}
+                              <button
+                                class="btn btn-ghost btn-sm"
+                                type="submit"
+                                formnovalidate
+                                name="intent"
+                                value="move-output-up:{{ step.index }}:{{ output.index }}"
+                              >
+                                Move up
+                              </button>
+                            {% endif %}
+                            {% if output.can_move_down %}
+                              <button
+                                class="btn btn-ghost btn-sm"
+                                type="submit"
+                                formnovalidate
+                                name="intent"
+                                value="move-output-down:{{ step.index }}:{{ output.index }}"
+                              >
+                                Move down
+                              </button>
+                            {% endif %}
+                            {% if output.can_remove %}
+                              <button
+                                class="btn btn-ghost btn-sm"
+                                type="submit"
+                                formnovalidate
+                                name="intent"
+                                value="remove-output:{{ step.index }}:{{ output.index }}"
+                              >
+                                Remove output
+                              </button>
+                            {% endif %}
+                          </div>
+                        </div>
+                      {% endfor %}
+                      {% if step.can_add_output %}
+                        <button
+                          class="btn btn-outline btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="add-output:{{ step.index }}"
+                        >
+                          Add output
+                        </button>
+                      {% endif %}
+                    </fieldset>
+                  </div>
+                </details>
               {% else if step.is_gate %}
                 <fieldset
                   class="border-base-300 space-y-3 rounded-sm border p-3"
@@ -851,115 +942,124 @@
                   </fieldset>
                 {% endif %}
               {% endif %}
-              <fieldset class="space-y-3">
-                <legend class="text-sm">Inputs</legend>
-                {% for input in step.inputs %}
-                  <div
-                    class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-3"
-                  >
-                    <label class="flex flex-col gap-1">
-                      <span class="text-quiet text-xs">Key</span>
-                      <input
-                        class="input input-bordered input-sm font-mono"
-                        name="step_{{ step.index }}_input_{{ input.index }}_key"
-                        required
-                        maxlength="32"
-                        value="{{ input.key }}"
-                      />
-                      {% if input.key_error != "" %}
-                        <p class="text-error text-sm">{{ input.key_error }}</p>
-                      {% endif %}
-                    </label>
-                    <label class="flex flex-col gap-1">
-                      <span class="text-quiet text-xs">Kind</span>
-                      <select
-                        class="select select-bordered select-sm"
-                        name="step_{{ step.index }}_input_{{ input.index }}_kind"
+              <details class="workflow-advanced">
+                <summary>Advanced settings: input mappings</summary>
+                <div class="workflow-advanced-body">
+                  <fieldset class="space-y-3">
+                    <legend class="text-sm">Inputs</legend>
+                    {% for input in step.inputs %}
+                      <div
+                        class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-3"
                       >
-                        <option
-                          value="candidate-revision"
-                          {% if input.kind == "candidate-revision" %}selected{% endif %}
-                        >
-                          Candidate revision
-                        </option>
-                        <option
-                          value="plan"
-                          {% if input.kind == "plan" %}selected{% endif %}
-                        >
-                          Plan
-                        </option>
-                        <option
-                          value="review-report"
-                          {% if input.kind == "review-report" %}selected{% endif %}
-                        >
-                          Review report
-                        </option>
-                        <option
-                          value="test-report"
-                          {% if input.kind == "test-report" %}selected{% endif %}
-                        >
-                          Test report
-                        </option>
-                        <option
-                          value="human-decision"
-                          {% if input.kind == "human-decision" %}selected{% endif %}
-                        >
-                          Human decision
-                        </option>
-                      </select>
-                      {% if input.kind_error != "" %}
-                        <p class="text-error text-sm">{{ input.kind_error }}</p>
-                      {% endif %}
-                    </label>
-                    <label class="flex flex-col gap-1">
-                      <span class="text-quiet text-xs">Source</span>
-                      <select
-                        class="select select-bordered select-sm"
-                        name="step_{{ step.index }}_input_{{ input.index }}_source"
-                      >
-                        {% for option in input.sources %}
-                          <option
-                            value="{{ option.value }}"
-                            {% if option.selected %}selected{% endif %}
+                        <label class="flex flex-col gap-1">
+                          <span class="text-quiet text-xs">Key</span>
+                          <input
+                            class="input input-bordered input-sm font-mono"
+                            name="step_{{ step.index }}_input_{{ input.index }}_key"
+                            required
+                            maxlength="32"
+                            value="{{ input.key }}"
+                          />
+                          {% if input.key_error != "" %}
+                            <p class="text-error text-sm">
+                              {{ input.key_error }}
+                            </p>
+                          {% endif %}
+                        </label>
+                        <label class="flex flex-col gap-1">
+                          <span class="text-quiet text-xs">Kind</span>
+                          <select
+                            class="select select-bordered select-sm"
+                            name="step_{{ step.index }}_input_{{ input.index }}_kind"
                           >
-                            {{ option.label }}
-                          </option>
-                        {% endfor %}
-                      </select>
-                      {% if input.source_error != "" %}
-                        <p class="text-error text-sm">
-                          {{ input.source_error }}
-                        </p>
-                      {% endif %}
-                    </label>
-                    {% if input.can_remove %}
-                      <div class="sm:col-span-3">
-                        <button
-                          class="btn btn-ghost btn-sm"
-                          type="submit"
-                          formnovalidate
-                          name="intent"
-                          value="remove-input:{{ step.index }}:{{ input.index }}"
-                        >
-                          Remove input
-                        </button>
+                            <option
+                              value="candidate-revision"
+                              {% if input.kind == "candidate-revision" %}selected{% endif %}
+                            >
+                              Candidate revision
+                            </option>
+                            <option
+                              value="plan"
+                              {% if input.kind == "plan" %}selected{% endif %}
+                            >
+                              Plan
+                            </option>
+                            <option
+                              value="review-report"
+                              {% if input.kind == "review-report" %}selected{% endif %}
+                            >
+                              Review report
+                            </option>
+                            <option
+                              value="test-report"
+                              {% if input.kind == "test-report" %}selected{% endif %}
+                            >
+                              Test report
+                            </option>
+                            <option
+                              value="human-decision"
+                              {% if input.kind == "human-decision" %}selected{% endif %}
+                            >
+                              Human decision
+                            </option>
+                          </select>
+                          {% if input.kind_error != "" %}
+                            <p class="text-error text-sm">
+                              {{ input.kind_error }}
+                            </p>
+                          {% endif %}
+                        </label>
+                        <label class="flex flex-col gap-1">
+                          <span class="text-quiet text-xs">Source</span>
+                          <select
+                            class="select select-bordered select-sm"
+                            name="step_{{ step.index }}_input_{{ input.index }}_source"
+                          >
+                            {% for option in input.sources %}
+                              <option
+                                value="{{ option.value }}"
+                                {% if option.selected %}selected{% endif %}
+                              >
+                                {{ option.label }}
+                              </option>
+                            {% endfor %}
+                          </select>
+                          {% if input.source_error != "" %}
+                            <p class="text-error text-sm">
+                              {{ input.source_error }}
+                            </p>
+                          {% endif %}
+                        </label>
+                        {% if input.can_remove %}
+                          <div class="sm:col-span-3">
+                            <button
+                              class="btn btn-ghost btn-sm"
+                              type="submit"
+                              formnovalidate
+                              name="intent"
+                              value="remove-input:{{ step.index }}:{{ input.index }}"
+                            >
+                              Remove input
+                            </button>
+                          </div>
+                        {% endif %}
                       </div>
+                    {% endfor %}
+                    {% if step.can_add_input %}
+                      <button
+                        class="btn btn-outline btn-sm"
+                        type="submit"
+                        formnovalidate
+                        name="intent"
+                        value="add-input:{{ step.index }}"
+                      >
+                        Add input
+                      </button>
                     {% endif %}
-                  </div>
-                {% endfor %}
-                {% if step.can_add_input %}
-                  <button
-                    class="btn btn-outline btn-sm"
-                    type="submit"
-                    formnovalidate
-                    name="intent"
-                    value="add-input:{{ step.index }}"
-                  >
-                    Add input
-                  </button>
-                {% endif %}
-              </fieldset>
-            </article>
+                  </fieldset>
+                </div>
+              </details>
+            </div>
           {% endfor %}
           {% if can_add_step %}
             <button

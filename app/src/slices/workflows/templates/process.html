@@ -1,0 +1,24 @@
+<ol class="workflow-process mt-4" aria-label="Ordered workflow phases">
+  {% for phase in process_phases %}
+    <li class="workflow-process-item">
+      <div class="workflow-process-marker" aria-hidden="true">
+        {{ phase.position }}
+      </div>
+      <div class="min-w-0 wrap-anywhere">
+        <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h3 class="font-semibold">{{ phase.name }}</h3>
+          <span class="text-quiet text-xs">{{ phase.kind }}</span>
+        </div>
+        <p class="mt-1 text-sm">{{ phase.purpose }}</p>
+        <dl class="mt-2 grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
+          <dt class="text-quiet">Code effect</dt>
+          <dd>{{ phase.effects }}</dd>
+          <dt class="text-quiet">Model context</dt>
+          <dd>{{ phase.context }}</dd>
+          <dt class="text-quiet">Approval or route</dt>
+          <dd>{{ phase.approval }}</dd>
+        </dl>
+      </div>
+    </li>
+  {% endfor %}
+</ol>
