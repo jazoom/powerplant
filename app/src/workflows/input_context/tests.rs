@@ -1,4 +1,7 @@
-use super::{InputContextError, format_agent_context, verify_inputs};
+use super::{
+    InputContextError, ProjectInstructions, build_attempt_packet, format_agent_context,
+    validate_launch_brief, verify_inputs,
+};
 use crate::tests::test_environment_id;
 use crate::workflows::artefacts::{
     ArtefactProducer, ArtefactProvenance, ArtefactRecord, ArtefactReference, ArtefactSummary,
@@ -432,6 +435,65 @@ fn root_instruction_paths_stay_inside_the_target_candidate() {
     assert_eq!(
         read().stdout.len(),
         super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 1
+    );
+}
+
+#[test]
+fn attempt_packets_reject_substituted_inputs_and_count_project_instructions() {
+    let store = store();
+    let mut run = run();
+    run.launch_brief = "Inspect the repository and report risks.".to_owned();
+    let candidate = publish_candidate(&mut run, &store);
+    let step = run
+        .pinned
+        .definition
+        .step(&StepKey::parse("planner").expect("step"))
+        .expect("planner");
+    let input = input_of("candidate", &candidate);
+    let packet = build_attempt_packet(
+        &run,
+        step,
+        std::slice::from_ref(&input),
+        &store,
+        ProjectInstructions::Present("Use the project test command.".to_owned()),
+    )
+    .expect("packet");
+    let text = packet.text();
+    assert!(text.contains(&run.launch_brief));
+    assert!(text.contains("Use the project test command."));
+    assert!(!text.contains("CANDIDATE-BYTES"));
+    let instruction_bytes = super::MAXIMUM_ATTEMPT_PACKET_BYTES - packet.byte_len();
+    assert_eq!(
+        build_attempt_packet(
+            &run,
+            step,
+            std::slice::from_ref(&input),
+            &store,
+            ProjectInstructions::Present("x".repeat(instruction_bytes + 100))
+        )
+        .err(),
+        Some(InputContextError::Packet)
+    );
+    let mut changed = input;
+    changed.artefact.id = ArtefactId::generate().expect("foreign artefact");
+    assert!(
+        build_attempt_packet(&run, step, &[changed], &store, ProjectInstructions::Absent).is_err()
+    );
+}
+
+#[test]
+fn launch_briefs_reject_controls_and_oversized_input() {
+    assert_eq!(
+        validate_launch_brief("  Inspect the project.  ").expect("brief"),
+        "Inspect the project."
+    );
+    assert_eq!(
+        validate_launch_brief("bad\u{0000}brief").err(),
+        Some(InputContextError::Brief)
+    );
+    assert_eq!(
+        validate_launch_brief(&"x".repeat(super::MAXIMUM_LAUNCH_BRIEF_BYTES + 1)).err(),
+        Some(InputContextError::Brief)
     );
 }
 

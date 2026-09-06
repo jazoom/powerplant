@@ -365,6 +365,7 @@ pub(super) async fn send(
     };
 
     let message = form.message.trim().to_owned();
+    let launch_brief = message.clone();
     let run_id = workflows::RunId::generate()
         .map_err(|error| crate::error::AppError::new("create workflow run identifier", error))?;
     let workflow_name = pinned.definition.name().to_owned();
@@ -403,7 +404,7 @@ pub(super) async fn send(
             ));
         }
     };
-    let run = WorkflowRun::create(
+    let mut run = WorkflowRun::create(
         run_id,
         workflows::now_ms(),
         project.id,
@@ -412,6 +413,7 @@ pub(super) async fn send(
         pinned,
         environments,
     );
+    run.launch_brief = launch_brief;
     if let Err(error) = state.workflow_runs.create(run) {
         let _ = state
             .sessions

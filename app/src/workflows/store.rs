@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use super::id::RunId;
 use super::run::{RunRecordError, WorkflowRun, now_ms};
-use crate::projects::ProjectId;
+use crate::{conversations::ConversationId, projects::ProjectId};
 
 pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
 
@@ -86,6 +86,22 @@ impl WorkflowRunStore {
             .filter(|run| run.is_active())
             .cloned()
             .collect()
+    }
+
+    pub(crate) fn for_conversation(&self, conversation: &ConversationId) -> Vec<WorkflowRun> {
+        let mut runs: Vec<_> = self
+            .lock()
+            .values()
+            .filter(|run| run.conversation_id == Some(*conversation))
+            .cloned()
+            .collect();
+        runs.sort_by(|left, right| {
+            right
+                .created_at_ms
+                .cmp(&left.created_at_ms)
+                .then(right.id.cmp(&left.id))
+        });
+        runs
     }
 
     pub(crate) fn interrupt_active(&self) -> Result<(), StoreError> {

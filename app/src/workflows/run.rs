@@ -30,6 +30,7 @@ pub(crate) struct WorkflowRun {
     pub(crate) created_at_ms: u64,
     pub(crate) project_id: ProjectId,
     pub(crate) conversation_id: Option<ConversationId>,
+    pub(crate) launch_brief: String,
     pub(crate) kind: RunKind,
     pub(crate) agent_id: AgentId,
     pub(crate) pinned: PinnedWorkflowDefinition,
@@ -237,6 +238,7 @@ pub(super) struct RunFile {
     project_id: String,
     #[serde(deserialize_with = "crate::storage::required_option")]
     conversation_id: Option<String>,
+    launch_brief: String,
     kind: String,
     agent_id: String,
     workflow_id: Option<String>,
@@ -558,6 +560,7 @@ impl WorkflowRun {
             created_at_ms,
             project_id,
             conversation_id: None,
+            launch_brief: String::new(),
             kind,
             agent_id,
             pinned,
@@ -588,6 +591,29 @@ impl WorkflowRun {
             environments,
         );
         run.conversation_id = Some(conversation_id);
+        run
+    }
+
+    pub(crate) fn create_configured_for_conversation(
+        id: RunId,
+        created_at_ms: u64,
+        project_id: ProjectId,
+        conversation_id: ConversationId,
+        launch_brief: String,
+        pinned: PinnedWorkflowDefinition,
+        environments: ResolvedEnvironmentSet,
+    ) -> Self {
+        let mut run = Self::create(
+            id,
+            created_at_ms,
+            project_id,
+            AgentId::generate().expect("conversation authority identity"),
+            RunKind::Configured,
+            pinned,
+            environments,
+        );
+        run.conversation_id = Some(conversation_id);
+        run.launch_brief = launch_brief;
         run
     }
 
@@ -1286,6 +1312,7 @@ impl WorkflowRun {
             conversation_id: self
                 .conversation_id
                 .map(|conversation| conversation.as_hex()),
+            launch_brief: self.launch_brief.clone(),
             kind: self.kind.as_str().to_owned(),
             agent_id: self.agent_id.as_hex(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
@@ -1347,6 +1374,7 @@ impl WorkflowRun {
             created_at_ms: file.created_at_ms,
             project_id,
             conversation_id,
+            launch_brief: file.launch_brief,
             kind,
             agent_id,
             pinned: PinnedWorkflowDefinition {

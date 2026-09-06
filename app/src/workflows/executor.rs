@@ -1595,6 +1595,19 @@ async fn run_agent_step(
     // Quick task pins agent instructions in the role. A live record can duplicate or change the pinned prompt.
     let agent_instructions = if run_kind == crate::workflows::RunKind::QuickTask {
         String::new()
+    } else if let Some(conversation_id) = job.conversation_id {
+        state
+            .conversations
+            .get(&conversation_id)
+            .and_then(|record| record.model)
+            .map(|model| model.instructions)
+            .or_else(|| {
+                state
+                    .agents
+                    .get(&job.agent_id)
+                    .map(|record| record.instructions)
+            })
+            .unwrap_or_default()
     } else {
         state
             .agents
@@ -1617,31 +1630,13 @@ async fn run_agent_step(
             agent_instructions.trim()
         ),
     };
-    let context = state.workflow_runs.get(&job.run_id).and_then(|run| {
-        let step = run.pinned.definition.step(&run.attempts.last()?.step)?;
-        let inputs = run.attempts.last()?.inputs.clone();
-        let verified = crate::workflows::input_context::verify_inputs(
-            &run,
-            step,
-            &inputs,
-            &state.workflow_artefacts,
-        )
-        .ok()?;
-        Some(crate::workflows::input_context::format_agent_context(
-            &verified,
-            step.writes_primary_source(),
-        ))
-    });
     let secret = match &job.connection.auth {
         crate::providers::AuthMethod::ApiKey => Some(job.connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
     let project_instructions =
         match crate::workflows::input_context::read_project_instructions(sandbox, secret).await {
-            Ok(crate::workflows::input_context::ProjectInstructions::Absent) => String::new(),
-            Ok(crate::workflows::input_context::ProjectInstructions::Present(text)) => {
-                format!("# Project instructions\n\n{text}")
-            }
+            Ok(instructions) => instructions,
             Err(error) => {
                 return StepOutcome::Failed {
                     category: FailureCategory::Authority,
@@ -1649,14 +1644,46 @@ async fn run_agent_step(
                 };
             }
         };
-    let instructions = match (
-        instructions.trim().is_empty(),
-        project_instructions.is_empty(),
+    let Some(run) = state.workflow_runs.get(&job.run_id) else {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    };
+    let Some(step_definition) = run
+        .attempts
+        .last()
+        .and_then(|attempt| run.pinned.definition.step(&attempt.step))
+    else {
+        return StepOutcome::Failed {
+            category: FailureCategory::Operational,
+            error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
+        };
+    };
+    let inputs = run
+        .attempts
+        .last()
+        .map(|attempt| attempt.inputs.clone())
+        .unwrap_or_default();
+    let packet = match crate::workflows::input_context::build_attempt_packet(
+        &run,
+        step_definition,
+        &inputs,
+        &state.workflow_artefacts,
+        project_instructions,
     ) {
-        (true, true) => String::new(),
-        (false, true) => instructions,
-        (true, false) => project_instructions,
-        (false, false) => format!("{}\n\n{}", instructions.trim(), project_instructions),
+        Ok(packet) => packet,
+        Err(error) => {
+            return StepOutcome::Failed {
+                category: FailureCategory::Definition,
+                error: Some(error.message().to_owned()),
+            };
+        }
+    };
+    let instructions = if instructions.trim().is_empty() {
+        String::new()
+    } else {
+        instructions.trim().to_owned()
     };
     let composed = crate::agents::compose_role(
         &role.name,
@@ -1665,9 +1692,11 @@ async fn run_agent_step(
         &action.authority.tools,
         &policy,
     );
-    let preamble = match context {
-        Some(context) if !context.is_empty() => format!("{composed}\n\n{context}"),
-        _ => composed,
+    let packet_text = packet.text();
+    let preamble = if composed.is_empty() {
+        packet_text
+    } else {
+        format!("{composed}\n\n{packet_text}")
     };
     let spec = AgentRunSpec {
         agent_id: job.authority.is_none().then_some(job.agent_id),
@@ -1684,14 +1713,12 @@ async fn run_agent_step(
         output_drafts: Some(drafts),
         required_outputs: action.required_outputs.clone(),
     };
-    let ended = crate::slices::run_agent_action(
-        state,
-        job.session_id,
-        spec,
-        job.turns.clone(),
-        job.job.clone(),
-    )
-    .await;
+    let turns = match run_kind {
+        crate::workflows::RunKind::Configured => Vec::new(),
+        crate::workflows::RunKind::QuickTask => job.turns.clone(),
+    };
+    let ended =
+        crate::slices::run_agent_action(state, job.session_id, spec, turns, job.job.clone()).await;
     if ended.outcome == AgentOutcome::Completed {
         *job.eligible_reply
             .lock()

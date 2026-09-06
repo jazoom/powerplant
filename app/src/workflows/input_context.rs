@@ -13,6 +13,8 @@ use super::run::{AttemptArtefactInput, WorkflowRun};
 
 pub(crate) const MAXIMUM_IMPORTED_TEXT_BYTES: usize = 1024 * 1024;
 pub(crate) const MAXIMUM_PROJECT_INSTRUCTION_BYTES: usize = 32 * 1024;
+pub(crate) const MAXIMUM_LAUNCH_BRIEF_BYTES: usize = 32 * 1024;
+pub(crate) const MAXIMUM_ATTEMPT_PACKET_BYTES: usize = 2 * 1024 * 1024;
 // Reject links before the read, including dangling links. The candidate has no active writer here.
 const INSTRUCTION_READ_COMMAND: &str = "if [ -L AGENTS.md ]; then exit 4; fi; if [ ! -e AGENTS.md ]; then exit 3; fi; if [ ! -f AGENTS.md ] || [ ! -r AGENTS.md ]; then exit 1; fi; head -c 32769 -- AGENTS.md";
 const INSTRUCTION_READ_DEADLINE: Duration = if cfg!(test) {
@@ -161,6 +163,8 @@ pub(crate) enum InputContextError {
     Source,
     Bound,
     Credential,
+    Brief,
+    Packet,
 }
 
 impl InputContextError {
@@ -173,8 +177,75 @@ impl InputContextError {
             Self::Source => "That input does not match its declared source.",
             Self::Bound => "Imported plan or report text is too large.",
             Self::Credential => "Imported text cannot include a provider credential.",
+            Self::Brief => "Enter a task brief of at most 32 KiB.",
+            Self::Packet => "The workflow context is too large for this launch.",
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttemptContextPacket {
+    pub(crate) brief: String,
+    pub(crate) artefact_context: String,
+    pub(crate) project_instructions: ProjectInstructions,
+}
+
+impl AttemptContextPacket {
+    pub(crate) fn text(&self) -> String {
+        let instructions = match &self.project_instructions {
+            ProjectInstructions::Absent => {
+                "# Project instructions\n\nNo root AGENTS.md file was present in this candidate."
+                    .to_owned()
+            }
+            ProjectInstructions::Present(text) => {
+                format!("# Project instructions\n\n{text}")
+            }
+        };
+        format!(
+            "Task brief:\n{}\n\n{}\n\n{}",
+            self.brief.trim(),
+            self.artefact_context,
+            instructions
+        )
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        self.text().len()
+    }
+}
+
+pub(crate) fn validate_launch_brief(brief: &str) -> Result<String, InputContextError> {
+    let brief = brief.trim();
+    if brief.is_empty()
+        || brief.len() > MAXIMUM_LAUNCH_BRIEF_BYTES
+        || brief.contains('\0')
+        || brief
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(InputContextError::Brief);
+    }
+    Ok(brief.to_owned())
+}
+
+pub(crate) fn build_attempt_packet(
+    run: &WorkflowRun,
+    step: &StepDefinition,
+    resolved: &[AttemptArtefactInput],
+    store: &super::artefacts::WorkflowArtefactRepository,
+    project_instructions: ProjectInstructions,
+) -> Result<AttemptContextPacket, InputContextError> {
+    let brief = validate_launch_brief(&run.launch_brief)?;
+    let verified = verify_inputs(run, step, resolved, store)?;
+    let packet = AttemptContextPacket {
+        brief,
+        artefact_context: format_agent_context(&verified, step.writes_primary_source()),
+        project_instructions,
+    };
+    if packet.byte_len() > MAXIMUM_ATTEMPT_PACKET_BYTES {
+        return Err(InputContextError::Packet);
+    }
+    Ok(packet)
 }
 
 pub(crate) fn verify_inputs(

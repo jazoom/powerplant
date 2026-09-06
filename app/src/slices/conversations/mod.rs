@@ -1,5 +1,6 @@
 mod job;
 mod page;
+mod workflow;
 
 #[cfg(test)]
 mod tests;
@@ -43,6 +44,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/conversations", get(catalogue).post(create))
         .route("/conversations/new", get(new_conversation))
         .route("/conversations/{conversation_id}", get(detail))
+        .route(
+            "/conversations/{conversation_id}/workflow",
+            get(workflow::show).post(workflow::launch),
+        )
         .route(
             "/conversations/{conversation_id}/plans",
             post(save_plan_message),
@@ -1628,6 +1633,7 @@ async fn start_message(
                 "Another command is active in this browser session.",
             )
         })?;
+    let launch_brief = text.trim().to_owned();
     let started = match state.conversations.begin_message_with_model(
         &record.id,
         revision,
@@ -1643,30 +1649,30 @@ async fn start_message(
             return Err(StartMessageError::User(status_for(error), error.message()));
         }
     };
-    let secret = match connection.auth {
-        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
-        crate::providers::AuthMethod::Plan => None,
-    };
-    let turns = match job::history_with_review(state, &started, secret) {
-        Ok(turns) => turns,
-        Err(error) => {
-            let _ = state.conversations.settle_message(
-                &started.id,
-                job.id(),
-                String::new(),
-                crate::conversations::MessageStatus::Failed,
-            );
-            let _ = state
-                .sessions
-                .finish_conversation_job(&session, started.id, job.id());
-            return Err(StartMessageError::User(
-                PatchStatus::UnprocessableEntity,
-                error,
-            ));
-        }
-    };
     if let Some((run_id, authority, pinned, environments, execution)) = workflow {
-        let run = WorkflowRun::create_for_conversation(
+        let secret = match connection.auth {
+            crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
+            crate::providers::AuthMethod::Plan => None,
+        };
+        let turns = match job::history_with_review(state, &started, secret) {
+            Ok(turns) => turns,
+            Err(error) => {
+                let _ = state.conversations.settle_message(
+                    &started.id,
+                    job.id(),
+                    String::new(),
+                    crate::conversations::MessageStatus::Failed,
+                );
+                let _ = state
+                    .sessions
+                    .finish_conversation_job(&session, started.id, job.id());
+                return Err(StartMessageError::User(
+                    PatchStatus::UnprocessableEntity,
+                    error,
+                ));
+            }
+        };
+        let mut run = WorkflowRun::create_for_conversation(
             run_id,
             workflows::now_ms(),
             authority.project_id,
@@ -1674,6 +1680,7 @@ async fn start_message(
             pinned,
             environments,
         );
+        run.launch_brief = launch_brief;
         if let Err(error) = state.workflow_runs.create(run.clone()) {
             let _ = state.conversations.settle_message(
                 &started.id,
@@ -2658,6 +2665,11 @@ fn detail_view(
         .and_then(|run| page::pending_code_gate(&run, &state.workflow_artefacts));
     let (source_review, linked_reviews, source_candidate_review, linked_candidate_reviews) =
         conversation_links(state, record);
+    let workflow_progress = state
+        .workflow_runs
+        .for_conversation(&record.id)
+        .first()
+        .map(page::workflow_progress);
     ConversationDetailView::from_record_with_gate(
         record,
         ModelSources {
@@ -2677,6 +2689,7 @@ fn detail_view(
         source_candidate_review,
         linked_candidate_reviews,
     )
+    .with_workflow_progress(workflow_progress)
 }
 
 fn conversation_links(

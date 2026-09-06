@@ -309,6 +309,13 @@ pub(super) struct CandidateReviewLinkView {
     pub(super) diff_base_hash: String,
 }
 
+pub(super) struct WorkflowProgressView {
+    pub(super) run_href: String,
+    pub(super) name: String,
+    pub(super) state: &'static str,
+    pub(super) current_step: String,
+}
+
 pub(super) struct ModelSources<'a> {
     pub(super) vault: &'a ProviderVault,
     pub(super) models: &'a ModelsDevCatalogue,
@@ -370,6 +377,7 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) linked_reviews: &'a [ConversationLinkView],
     pub(super) source_candidate_review: Option<&'a CandidateReviewLinkView>,
     pub(super) linked_candidate_reviews: &'a [CandidateReviewLinkView],
+    pub(super) workflow_progress: Option<&'a WorkflowProgressView>,
 }
 
 #[derive(Template)]
@@ -403,6 +411,7 @@ pub(super) struct ConversationDetailView {
     pub(super) linked_reviews: Vec<ConversationLinkView>,
     pub(super) source_candidate_review: Option<CandidateReviewLinkView>,
     pub(super) linked_candidate_reviews: Vec<CandidateReviewLinkView>,
+    pub(super) workflow_progress: Option<WorkflowProgressView>,
 }
 impl ConversationDetailView {
     #[cfg(test)]
@@ -657,7 +666,16 @@ impl ConversationDetailView {
             linked_reviews,
             source_candidate_review,
             linked_candidate_reviews,
+            workflow_progress: None,
         }
+    }
+
+    pub(super) fn with_workflow_progress(
+        mut self,
+        workflow_progress: Option<WorkflowProgressView>,
+    ) -> Self {
+        self.workflow_progress = workflow_progress;
+        self
     }
 
     pub(super) fn contents(&self) -> ConversationDetailContents<'_> {
@@ -689,7 +707,20 @@ impl ConversationDetailView {
             linked_reviews: &self.linked_reviews,
             source_candidate_review: self.source_candidate_review.as_ref(),
             linked_candidate_reviews: &self.linked_candidate_reviews,
+            workflow_progress: self.workflow_progress.as_ref(),
         }
+    }
+}
+
+pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
+    WorkflowProgressView {
+        run_href: format!("/runs/{}", run.id.as_hex()),
+        name: run.pinned.definition.name().to_owned(),
+        state: run.state.as_label(),
+        current_step: run
+            .current_step_name()
+            .map(str::to_owned)
+            .unwrap_or_else(|| "Finished".to_owned()),
     }
 }
 

@@ -1,0 +1,210 @@
+{% block launch_page %}
+  <main
+    data-section="conversations"
+    data-context-detail
+    class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
+  >
+    <section id="workflow-launch" class="flex min-h-0 flex-1 flex-col gap-6">
+      {% block launch_form %}
+        <div class="page-intro">
+          <div>
+            <h1>Run workflow</h1>
+            <p>
+              Start a configured process from an explicit brief. Each model
+              phase receives a fresh context, not this conversation history.
+            </p>
+          </div>
+          <a
+            href="/conversations/{{ conversation_id }}"
+            data-graft
+            class="link link-hover whitespace-nowrap"
+            >Back to conversation</a
+          >
+        </div>
+        {% if error != "" %}
+          <div class="alert alert-error" role="alert" tabindex="-1">
+            <p>{{ error }}</p>
+          </div>
+        {% endif %}
+        <form
+          data-graft
+          method="post"
+          action="/conversations/{{ conversation_id }}/workflow"
+          class="flex flex-col gap-6"
+        >
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="workflow-process-heading"
+          >
+            <div>
+              <h2 id="workflow-process-heading" class="text-lg font-semibold">
+                Choose a process
+              </h2>
+              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                The server checks the selected definition again at launch. A
+                changed or removed definition cannot start from an old form.
+              </p>
+            </div>
+            {% if workflows.is_empty() %}
+              <p class="text-quiet text-sm">No workflows are available.</p>
+            {% else %}
+              <fieldset class="flex flex-col gap-3">
+                <legend class="sr-only">Available workflows</legend>
+                {% for workflow in workflows %}
+                  {% if workflow.selected %}
+                    <input
+                      type="hidden"
+                      name="preview_workflow"
+                      value="{{ workflow.token }}"
+                    />
+                  {% endif %}
+                  <label class="border-base-300 flex gap-3 border p-3">
+                    <input
+                      class="radio radio-sm mt-1"
+                      type="radio"
+                      name="workflow"
+                      value="{{ workflow.token }}"
+                      {% if workflow.selected %}checked{% endif %}
+                      required
+                    />
+                    <span class="min-w-0">
+                      <span class="block font-semibold"
+                        >{{ workflow.name }}</span
+                      >
+                      <span class="text-quiet mt-1 block text-sm"
+                        >{{ workflow.summary }}</span
+                      >
+                      <span class="text-quiet mt-1 block text-xs"
+                        >{{ workflow.effects }}</span
+                      >
+                    </span>
+                  </label>
+                {% endfor %}
+              </fieldset>
+            {% endif %}
+          </section>
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="workflow-brief-heading"
+          >
+            <div>
+              <h2 id="workflow-brief-heading" class="text-lg font-semibold">
+                Task brief
+              </h2>
+              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                This brief is pinned to the run. Worker phases receive it with
+                their declared artefacts and the selected candidate
+                instructions.
+              </p>
+            </div>
+            <label class="flex max-w-3xl flex-col gap-1" for="workflow-brief">
+              <span class="text-sm font-semibold"
+                >What must this workflow do?</span
+              >
+              <textarea
+                id="workflow-brief"
+                name="brief"
+                class="textarea textarea-bordered min-h-36"
+                maxlength="32768"
+                placeholder="Describe the change, review or project inspection."
+                required
+              >
+{{ brief }}</textarea>
+              <span class="text-quiet text-xs"
+                >The brief cannot exceed 32 KiB.</span
+              >
+            </label>
+          </section>
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="workflow-target-heading"
+          >
+            <div>
+              <h2 id="workflow-target-heading" class="text-lg font-semibold">
+                Target project
+              </h2>
+              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                Select one granted project as the execution target. Other grants
+                remain read-only context. Project attachments alone grant no
+                access.
+              </p>
+            </div>
+            {% if targets.is_empty() %}
+              <p class="text-quiet text-sm">
+                Attach and grant a project before you launch.
+              </p>
+            {% else %}
+              {% for target in targets %}
+                {% if target.selected %}
+                  <input
+                    type="hidden"
+                    name="preview_target"
+                    value="{{ target.id }}"
+                  />
+                {% endif %}
+              {% endfor %}
+              <label class="flex max-w-xl flex-col gap-1" for="workflow-target">
+                <span class="text-sm font-semibold">Execution target</span>
+                <select
+                  id="workflow-target"
+                  name="target"
+                  class="select select-bordered"
+                  required
+                >
+                  {% for target in targets %}
+                    <option
+                      value="{{ target.id }}"
+                      {% if target.selected %}selected{% endif %}
+                    >
+                      {{ target.name }} — {{ target.access }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </label>
+            {% endif %}
+            <button
+              class="btn btn-outline"
+              type="submit"
+              formmethod="get"
+              formnovalidate
+            >
+              Preview selected access and environments
+            </button>
+            <p class="text-quiet text-sm">
+              If you change the process or target, preview the selection before
+              launch.
+            </p>
+            <dl
+              class="grid gap-2 border-t pt-4 text-sm sm:grid-cols-[10rem_1fr]"
+            >
+              <dt class="text-quiet">Effective model</dt>
+              <dd>{{ model_summary }}</dd>
+              <dt class="text-quiet">Effective access</dt>
+              <dd>{{ access_summary }}</dd>
+              <dt class="text-quiet">Environment readiness</dt>
+              <dd>{{ environment_summary }}</dd>
+            </dl>
+          </section>
+          <div
+            class="border-base-300 flex flex-wrap items-center gap-3 border-t pt-5"
+          >
+            <button
+              class="btn btn-primary"
+              type="submit"
+              {% if workflows.is_empty() || targets.is_empty() %}disabled{% endif %}
+            >
+              Run workflow
+            </button>
+            <a
+              href="/conversations/{{ conversation_id }}"
+              data-graft
+              class="link link-hover"
+              >Cancel</a
+            >
+          </div>
+        </form>
+      {% endblock launch_form %}
+    </section>
+  </main>
+{% endblock launch_page %}
