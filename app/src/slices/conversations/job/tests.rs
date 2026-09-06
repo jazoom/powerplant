@@ -205,6 +205,8 @@ fn pending_assistant_output_stays_out_of_the_next_request_history() {
         revision: 1,
         title: "Discussion".to_owned(),
         projects: Vec::new(),
+        grants: Vec::new(),
+        execution_target: None,
         model: None,
         messages: vec![
             ConversationMessage {

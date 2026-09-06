@@ -1,4 +1,6 @@
-use crate::agents::{AccessMode, AgentRecord, NetworkAccess, ToolId, guest_path_for};
+use crate::agents::{
+    AccessMode, AgentRecord, EffectiveAuthority, NetworkAccess, ToolId, guest_path_for,
+};
 use crate::workflows::commands::{CommandSourceEffect, SystemCommandId};
 #[cfg(test)]
 use crate::workflows::definition::PRIMARY_SOURCE_ALIAS;
@@ -55,70 +57,21 @@ impl AttemptCapabilities {
         agent: &AgentRecord,
         primary_alias: &str,
     ) -> Result<Self, CapabilityError> {
-        let primary = agent
-            .directories
-            .iter()
-            .find(|grant| grant.alias == primary_alias)
-            .ok_or(CapabilityError::Authority)?;
-        match &step.action {
-            StepAction::Agent(action) => {
-                let ceiling_dirs: Vec<(&str, AccessMode)> = agent
-                    .directories
-                    .iter()
-                    .map(|grant| (grant.alias.as_str(), grant.access))
-                    .collect();
-                let primary_access = action.candidate_authority.access();
-                if (primary_access.is_writable() && !primary.access.is_writable())
-                    || !action
-                        .authority
-                        .allowed_by(&agent.tools, ceiling_dirs.iter().copied())
-                {
-                    return Err(CapabilityError::Authority);
-                }
-                let mut directories = vec![CapabilityDirectory {
-                    alias: primary_alias.to_owned(),
-                    guest_path: guest_path_for(primary_alias, primary_alias),
-                    access: primary_access,
-                    role: DirectoryRole::PrimarySource,
-                }];
-                for directory in &action.authority.directories {
-                    if directory.alias == primary_alias {
-                        return Err(CapabilityError::Authority);
-                    }
-                    let Some(grant) = agent
-                        .directories
-                        .iter()
-                        .find(|grant| grant.alias == directory.alias)
-                    else {
-                        return Err(CapabilityError::Authority);
-                    };
-                    directories.push(CapabilityDirectory {
-                        alias: directory.alias.clone(),
-                        guest_path: guest_path_for(&directory.alias, primary_alias),
-                        access: min_access(AccessMode::ReadOnly, grant.access),
-                        role: DirectoryRole::SecondaryContext,
-                    });
-                }
-                Ok(Self {
-                    schema: CAPABILITY_SCHEMA,
-                    agent_revision: agent.revision,
-                    tools: action.authority.tools.clone(),
-                    directories,
-                    source_location: PrimarySourceLocation::AttemptWorkspace,
-                    git_admin: AccessMode::ReadOnly,
-                    network: NetworkCapability::from_agent(&agent.network),
-                })
-            }
-            StepAction::SystemCommand(action) => {
-                if action.command.contract().source_effect == CommandSourceEffect::Commit
-                    && !primary.access.is_writable()
-                {
-                    return Err(CapabilityError::Authority);
-                }
-                Ok(commit_or_read_only(action.command, agent, primary_alias))
-            }
-            StepAction::HumanGate(_) => Err(CapabilityError::Authority),
-        }
+        let policy = crate::agents::DirectoryPolicy::from_record_with_primary(agent, primary_alias);
+        derive_with_ceiling(step, agent.revision, &agent.tools, &agent.network, &policy)
+    }
+
+    pub(crate) fn derive_for_authority(
+        step: &StepDefinition,
+        authority: &EffectiveAuthority,
+    ) -> Result<Self, CapabilityError> {
+        derive_with_ceiling(
+            step,
+            authority.revision,
+            &authority.tools,
+            &authority.network,
+            &authority.policy,
+        )
     }
 
     pub(crate) fn sandbox_network(&self) -> NetworkAccess {
@@ -245,15 +198,91 @@ impl NetworkCapability {
     }
 }
 
+fn derive_with_ceiling(
+    step: &StepDefinition,
+    revision: u32,
+    tools: &[ToolId],
+    network: &NetworkAccess,
+    policy: &crate::agents::DirectoryPolicy,
+) -> Result<AttemptCapabilities, CapabilityError> {
+    let primary = policy
+        .grants()
+        .iter()
+        .find(|grant| grant.alias == policy.primary_alias())
+        .ok_or(CapabilityError::Authority)?;
+    match &step.action {
+        StepAction::Agent(action) => {
+            let primary_access = action.candidate_authority.access();
+            if (primary_access.is_writable() && !primary.access.is_writable())
+                || !action.authority.allowed_by(
+                    tools,
+                    policy
+                        .grants()
+                        .iter()
+                        .map(|grant| (grant.alias.as_str(), grant.access)),
+                )
+            {
+                return Err(CapabilityError::Authority);
+            }
+            let mut directories = vec![CapabilityDirectory {
+                alias: policy.primary_alias().to_owned(),
+                guest_path: guest_path_for(policy.primary_alias(), policy.primary_alias()),
+                access: primary_access,
+                role: DirectoryRole::PrimarySource,
+            }];
+            for directory in &action.authority.directories {
+                if directory.alias == policy.primary_alias() {
+                    return Err(CapabilityError::Authority);
+                }
+                let Some(grant) = policy
+                    .grants()
+                    .iter()
+                    .find(|grant| grant.alias == directory.alias)
+                else {
+                    return Err(CapabilityError::Authority);
+                };
+                directories.push(CapabilityDirectory {
+                    alias: directory.alias.clone(),
+                    guest_path: guest_path_for(&directory.alias, policy.primary_alias()),
+                    access: min_access(AccessMode::ReadOnly, grant.access),
+                    role: DirectoryRole::SecondaryContext,
+                });
+            }
+            Ok(AttemptCapabilities {
+                schema: CAPABILITY_SCHEMA,
+                agent_revision: revision,
+                tools: action.authority.tools.clone(),
+                directories,
+                source_location: PrimarySourceLocation::AttemptWorkspace,
+                git_admin: AccessMode::ReadOnly,
+                network: NetworkCapability::from_agent(network),
+            })
+        }
+        StepAction::SystemCommand(action) => {
+            if action.command.contract().source_effect == CommandSourceEffect::Commit
+                && !primary.access.is_writable()
+            {
+                return Err(CapabilityError::Authority);
+            }
+            Ok(commit_or_read_only(
+                action.command,
+                revision,
+                policy.primary_alias(),
+            ))
+        }
+        StepAction::HumanGate(_) => Err(CapabilityError::Authority),
+    }
+}
+
 fn commit_or_read_only(
     command: SystemCommandId,
-    agent: &AgentRecord,
+    revision: u32,
     primary_alias: &str,
 ) -> AttemptCapabilities {
     if command.contract().source_effect == CommandSourceEffect::Commit {
         AttemptCapabilities {
             schema: CAPABILITY_SCHEMA,
-            agent_revision: agent.revision,
+            agent_revision: revision,
             tools: Vec::new(),
             directories: vec![CapabilityDirectory {
                 alias: primary_alias.to_owned(),
@@ -268,7 +297,7 @@ fn commit_or_read_only(
     } else {
         AttemptCapabilities {
             schema: CAPABILITY_SCHEMA,
-            agent_revision: agent.revision,
+            agent_revision: revision,
             tools: Vec::new(),
             directories: vec![primary_read_only(primary_alias)],
             source_location: PrimarySourceLocation::AttemptWorkspace,

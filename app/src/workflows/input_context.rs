@@ -1,3 +1,7 @@
+use std::time::{Duration, Instant};
+
+use crate::sandbox::{CommandEvent, GUEST_PROJECT, GuestExec, GuestSandbox};
+
 use super::artefacts::{
     ArtefactHash, ArtefactProducer, ArtefactSummary, CandidateHash, ObjectHash, TypedPayload,
     parse_typed_payload,
@@ -8,6 +12,135 @@ use super::definition::{
 use super::run::{AttemptArtefactInput, WorkflowRun};
 
 pub(crate) const MAXIMUM_IMPORTED_TEXT_BYTES: usize = 1024 * 1024;
+pub(crate) const MAXIMUM_PROJECT_INSTRUCTION_BYTES: usize = 32 * 1024;
+// Reject links before the read, including dangling links. The candidate has no active writer here.
+const INSTRUCTION_READ_COMMAND: &str = "if [ -L AGENTS.md ]; then exit 4; fi; if [ ! -e AGENTS.md ]; then exit 3; fi; if [ ! -f AGENTS.md ] || [ ! -r AGENTS.md ]; then exit 1; fi; head -c 32769 -- AGENTS.md";
+const INSTRUCTION_READ_DEADLINE: Duration = if cfg!(test) {
+    Duration::from_millis(50)
+} else {
+    Duration::from_secs(5)
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectInstructions {
+    Absent,
+    Present(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InstructionError {
+    Path,
+    Read,
+    Invalid,
+    Bound,
+    Credential,
+}
+
+impl InstructionError {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Path => "The project instruction path is not inside the target candidate.",
+            Self::Read => "Power Plant could not read the target project's AGENTS.md file.",
+            Self::Invalid => "The target project's AGENTS.md file is not valid text.",
+            Self::Bound => "The target project's AGENTS.md file is too large.",
+            Self::Credential => {
+                "The target project's AGENTS.md file contains a provider credential."
+            }
+        }
+    }
+}
+
+pub(crate) fn validate_instruction_text(
+    text: &str,
+    secret: Option<&str>,
+) -> Result<(), InstructionError> {
+    if text.len() > MAXIMUM_PROJECT_INSTRUCTION_BYTES {
+        return Err(InstructionError::Bound);
+    }
+    if text.contains('\u{fffd}')
+        || text
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(InstructionError::Invalid);
+    }
+    if secret.is_some_and(|secret| !secret.is_empty() && text.contains(secret)) {
+        return Err(InstructionError::Credential);
+    }
+    Ok(())
+}
+
+pub(crate) fn classify_instruction_exit(
+    exited: Option<i32>,
+    text_is_empty: bool,
+) -> Result<Option<ProjectInstructions>, InstructionError> {
+    if exited == Some(3) && text_is_empty {
+        return Ok(Some(ProjectInstructions::Absent));
+    }
+    if exited == Some(4) {
+        return Err(InstructionError::Path);
+    }
+    if exited != Some(0) {
+        return Err(InstructionError::Read);
+    }
+    Ok(None)
+}
+
+pub(crate) async fn read_project_instructions(
+    sandbox: &GuestSandbox,
+    secret: Option<&str>,
+) -> Result<ProjectInstructions, InstructionError> {
+    let mut command = sandbox
+        .exec_cmd(
+            GuestExec::shell(INSTRUCTION_READ_COMMAND)
+                .in_dir(GUEST_PROJECT),
+        )
+        .await
+        .map_err(|_| InstructionError::Read)?;
+    let deadline = Instant::now() + INSTRUCTION_READ_DEADLINE;
+    let mut text = String::new();
+    let mut exited = None;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            command.kill().await;
+            command.close().await;
+            return Err(InstructionError::Read);
+        }
+        let event = match tokio::time::timeout(remaining, command.recv()).await {
+            Ok(event) => event,
+            Err(_) => {
+                command.kill().await;
+                command.close().await;
+                return Err(InstructionError::Read);
+            }
+        };
+        let Some(event) = event else {
+            break;
+        };
+        match event {
+            CommandEvent::Output(piece) => {
+                if text.len().saturating_add(piece.len()) > MAXIMUM_PROJECT_INSTRUCTION_BYTES {
+                    command.kill().await;
+                    command.close().await;
+                    return Err(InstructionError::Bound);
+                }
+                text.push_str(&piece);
+            }
+            CommandEvent::Exited(code) => exited = Some(code),
+            CommandEvent::Failed => {
+                command.close().await;
+                return Err(InstructionError::Read);
+            }
+        }
+    }
+    command.close().await;
+    if let Some(instructions) = classify_instruction_exit(exited, text.is_empty())? {
+        return Ok(instructions);
+    }
+    validate_instruction_text(&text, secret)?;
+    Ok(ProjectInstructions::Present(text))
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct VerifiedInput {

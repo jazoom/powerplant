@@ -30,7 +30,7 @@ use super::page::{
 mod tests;
 
 pub(crate) struct AgentRunSpec {
-    pub(crate) agent_id: AgentId,
+    pub(crate) agent_id: Option<AgentId>,
     pub(crate) revision: u32,
     pub(crate) preamble: String,
     pub(crate) tools: Vec<rig_core::completion::ToolDefinition>,
@@ -121,7 +121,7 @@ pub(crate) async fn run_agent_action(
 ) -> AgentActionEnd {
     let agent_id = spec.agent_id;
     tracing::debug!(
-        agent_id = %agent_id,
+        agent_id = ?agent_id,
         agent_revision = spec.revision,
         "agent job started"
     );
@@ -569,7 +569,7 @@ fn truncate_utf8(text: &mut String, maximum: usize) {
 fn persist_success(
     _state: &AppState,
     _id: &SessionId,
-    _agent: &AgentId,
+    _agent: &Option<AgentId>,
     _job: &Job,
     _reply: &AssistantReply,
 ) {
@@ -579,7 +579,7 @@ fn persist_success(
 fn persist_failure(
     _state: &AppState,
     _id: &SessionId,
-    _agent: &AgentId,
+    _agent: &Option<AgentId>,
     _job: &Job,
     _reply: &AssistantReply,
 ) {
@@ -589,7 +589,7 @@ fn persist_failure(
 fn cancel_action(
     state: &AppState,
     id: &SessionId,
-    agent: &AgentId,
+    agent: &Option<AgentId>,
     job: &Job,
     reply: &AssistantReply,
 ) -> AgentActionEnd {

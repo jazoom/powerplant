@@ -338,13 +338,15 @@ async fn decide(
         if run.kind == RunKind::QuickTask {
             settle_cancelled_job(&state, &continuation);
         } else {
-            let _ = state.sessions.fail_turn(
-                &session,
-                &continuation.conversation_key(),
-                &continuation.job.id(),
-                String::new(),
-            );
-            continuation.job.finish(JobStatus::Cancelled, None);
+            if let Some(key) = continuation.conversation_key() {
+                let _ =
+                    state
+                        .sessions
+                        .fail_turn(&session, &key, &continuation.job.id(), String::new());
+                continuation.job.finish(JobStatus::Cancelled, None);
+            } else {
+                settle_cancelled_job(&state, &continuation);
+            }
         }
         return Ok(responses::command_navigation(&destination));
     }
@@ -415,21 +417,22 @@ async fn decide(
             tokio::spawn(crate::workflows::execute_run(
                 state.clone(),
                 continuation,
-                agent,
+                Some(agent),
                 execution,
             ));
         }
     } else {
         let note = form.note.unwrap_or_default();
-        let _ = state.sessions.fail_turn(
-            &session,
-            &continuation.conversation_key(),
-            &continuation.job.id(),
-            note,
-        );
-        continuation
-            .job
-            .finish(JobStatus::Failed, Some("Revision requested"));
+        if let Some(key) = continuation.conversation_key() {
+            let _ = state
+                .sessions
+                .fail_turn(&session, &key, &continuation.job.id(), note);
+            continuation
+                .job
+                .finish(JobStatus::Failed, Some("Revision requested"));
+        } else {
+            settle_cancelled_job(&state, &continuation);
+        }
     }
     Ok(responses::command_navigation(&destination))
 }
@@ -603,13 +606,17 @@ fn interrupt_and_redirect(
             "That gate page is stale. Reload it.",
         );
     }
-    let _ = state.sessions.fail_turn(
-        &continuation.session_id,
-        &continuation.conversation_key(),
-        &continuation.job.id(),
-        String::new(),
-    );
-    continuation.job.finish(JobStatus::Cancelled, None);
+    if let Some(key) = continuation.conversation_key() {
+        let _ = state.sessions.fail_turn(
+            &continuation.session_id,
+            &key,
+            &continuation.job.id(),
+            String::new(),
+        );
+        continuation.job.finish(JobStatus::Cancelled, None);
+    } else {
+        settle_cancelled_job(&state, &continuation);
+    }
     Ok(responses::command_navigation(destination))
 }
 

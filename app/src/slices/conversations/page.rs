@@ -34,6 +34,8 @@ pub(super) struct ProjectContextView {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) status: &'static str,
+    pub(super) access_granted: bool,
+    pub(super) execution_target: bool,
 }
 
 #[derive(Template)]
@@ -257,22 +259,36 @@ impl ConversationDetailView {
         let attached_projects = record
             .projects
             .iter()
-            .map(|id| match sources.projects.iter().find(|project| project.id == *id) {
-                Some(project) if project.host_path_is_available() => ProjectContextView {
-                    id: id.as_hex(),
-                    name: project.name.clone(),
-                    status: "Context reference only. File access is not granted.",
-                },
-                Some(project) => ProjectContextView {
-                    id: id.as_hex(),
-                    name: project.name.clone(),
-                    status: "Project unavailable. It remains a context reference without file access.",
-                },
-                None => ProjectContextView {
-                    id: id.as_hex(),
-                    name: "Project record unavailable".to_owned(),
-                    status: "This context reference has no file access.",
-                },
+            .map(|id| {
+                let access_granted = record.grants.iter().any(|grant| grant.project_id == *id);
+                let execution_target = record.execution_target == Some(*id);
+                match sources.projects.iter().find(|project| project.id == *id) {
+                    Some(project) if project.host_path_is_available() => ProjectContextView {
+                        id: id.as_hex(),
+                        name: project.name.clone(),
+                        status: if access_granted {
+                            "Read-only access granted. Tools: List, Read and Run. Network: None."
+                        } else {
+                            "Context reference only. File access is not granted."
+                        },
+                        access_granted,
+                        execution_target,
+                    },
+                    Some(project) => ProjectContextView {
+                        id: id.as_hex(),
+                        name: project.name.clone(),
+                        status: "Project unavailable. It remains a context reference without file access.",
+                        access_granted: false,
+                        execution_target: false,
+                    },
+                    None => ProjectContextView {
+                        id: id.as_hex(),
+                        name: "Project record unavailable".to_owned(),
+                        status: "This context reference has no file access.",
+                        access_granted: false,
+                        execution_target: false,
+                    },
+                }
             })
             .collect();
         let mut attachable_projects: Vec<_> = sources

@@ -434,6 +434,8 @@ pub(super) async fn send(
             project_id: project.id,
             agent_id: record.id,
             agent_revision: record.revision,
+            conversation_id: None,
+            authority: None,
             grant_alias: grant.alias,
             grant_access: grant.access,
             connection,
@@ -442,7 +444,7 @@ pub(super) async fn send(
             job: started.job.clone(),
             eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
         },
-        lease,
+        Some(lease),
         execution,
     ));
 

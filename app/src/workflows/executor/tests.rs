@@ -261,6 +261,8 @@ fn fixing_publication_fixture() -> (
         project_id: crate::projects::ProjectId::generate().expect("project"),
         agent_id: AgentId::generate().expect("agent"),
         agent_revision: 1,
+        conversation_id: None,
+        authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
@@ -321,6 +323,8 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
             project_id: crate::projects::ProjectId::generate().expect("project"),
             agent_id: AgentId::generate().expect("agent"),
             agent_revision: 1,
+            conversation_id: None,
+            authority: None,
             grant_alias: "project".to_owned(),
             grant_access: AccessMode::ReadWrite,
             connection: crate::providers::ProviderConnection::with_key(provider, "key", "model"),
@@ -365,6 +369,8 @@ fn final_gate_completion_settles_the_session_job_successfully() {
         project_id,
         agent_id,
         agent_revision: 1,
+        conversation_id: None,
+        authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
@@ -1178,6 +1184,8 @@ fn test_job(
         project_id,
         agent_id: agent.id,
         agent_revision: agent.revision,
+        conversation_id: None,
+        authority: None,
         grant_alias: agent.directories[0].alias.clone(),
         grant_access: agent.directories[0].access,
         connection: crate::providers::ProviderConnection::with_key(
@@ -1508,6 +1516,8 @@ fn gate_ready_fixture(
         project_id,
         agent_id,
         agent_revision: 1,
+        conversation_id: None,
+        authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
@@ -1526,7 +1536,7 @@ fn gate_ready_fixture(
 async fn execute_gate_run(state: crate::state::AppState, job: crate::workflows::WorkflowJob) {
     let lease = state.agent_leases.acquire(job.agent_id).expect("lease");
     let execution = state.workflow_execution.acquire().expect("execution");
-    super::execute_run(state, job, lease, execution).await;
+    super::execute_run(state, job, Some(lease), execution).await;
 }
 
 #[tokio::test]

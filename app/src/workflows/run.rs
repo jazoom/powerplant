@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AccessMode, AgentId, ToolId};
+use crate::conversations::ConversationId;
 use crate::environments::snapshot::{OciManifestDigest, RecordedIntegrity, SnapshotArtifactKey};
 use crate::environments::{
     EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
@@ -28,6 +29,7 @@ pub(crate) struct WorkflowRun {
     pub(crate) id: RunId,
     pub(crate) created_at_ms: u64,
     pub(crate) project_id: ProjectId,
+    pub(crate) conversation_id: Option<ConversationId>,
     pub(crate) kind: RunKind,
     pub(crate) agent_id: AgentId,
     pub(crate) pinned: PinnedWorkflowDefinition,
@@ -233,6 +235,8 @@ pub(super) struct RunFile {
     id: String,
     created_at_ms: u64,
     project_id: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    conversation_id: Option<String>,
     kind: String,
     agent_id: String,
     workflow_id: Option<String>,
@@ -553,6 +557,7 @@ impl WorkflowRun {
             id,
             created_at_ms,
             project_id,
+            conversation_id: None,
             kind,
             agent_id,
             pinned,
@@ -563,6 +568,27 @@ impl WorkflowRun {
             attempts: Vec::new(),
             gates: Vec::new(),
         }
+    }
+
+    pub(crate) fn create_for_conversation(
+        id: RunId,
+        created_at_ms: u64,
+        project_id: ProjectId,
+        conversation_id: ConversationId,
+        pinned: PinnedWorkflowDefinition,
+        environments: ResolvedEnvironmentSet,
+    ) -> Self {
+        let mut run = Self::create(
+            id,
+            created_at_ms,
+            project_id,
+            AgentId::generate().expect("conversation authority identity"),
+            RunKind::QuickTask,
+            pinned,
+            environments,
+        );
+        run.conversation_id = Some(conversation_id);
+        run
     }
 
     pub(crate) fn record_initial_candidate(
@@ -1257,6 +1283,9 @@ impl WorkflowRun {
             id: self.id.as_hex(),
             created_at_ms: self.created_at_ms,
             project_id: self.project_id.as_hex(),
+            conversation_id: self
+                .conversation_id
+                .map(|conversation| conversation.as_hex()),
             kind: self.kind.as_str().to_owned(),
             agent_id: self.agent_id.as_hex(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
@@ -1277,6 +1306,10 @@ impl WorkflowRun {
         }
         let id = RunId::parse(&file.id).ok_or(RunRecordError::Corrupt)?;
         let project_id = ProjectId::parse(&file.project_id).ok_or(RunRecordError::Corrupt)?;
+        let conversation_id = match file.conversation_id.as_deref() {
+            Some(value) => Some(ConversationId::parse(value).ok_or(RunRecordError::Corrupt)?),
+            None => None,
+        };
         let kind = RunKind::parse(&file.kind).ok_or(RunRecordError::Corrupt)?;
         let agent_id = AgentId::parse(&file.agent_id).ok_or(RunRecordError::Corrupt)?;
         let workflow_id = match file.workflow_id {
@@ -1313,6 +1346,7 @@ impl WorkflowRun {
             id,
             created_at_ms: file.created_at_ms,
             project_id,
+            conversation_id,
             kind,
             agent_id,
             pinned: PinnedWorkflowDefinition {

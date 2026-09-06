@@ -17,6 +17,7 @@ use crate::{
     agents::AgentId,
     conversations::{
         ConversationError, ConversationId, ConversationModelConfiguration, ConversationRecord,
+        resolve_authority,
     },
     error::{AppError, AppResult},
     projects::ProjectId,
@@ -24,6 +25,7 @@ use crate::{
     responses,
     sessions::{JobId, RequiredSession},
     state::AppState,
+    workflows::{self, WorkflowJob, WorkflowRun},
 };
 
 use self::page::{CatalogueView, ConversationDetailView, ConversationFormView, ModelSources};
@@ -55,6 +57,14 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/projects/{project_id}",
             post(detach_project),
+        )
+        .route(
+            "/conversations/{conversation_id}/access",
+            post(grant_access),
+        )
+        .route(
+            "/conversations/{conversation_id}/target",
+            post(select_target),
         )
         .route(
             "/conversations/{conversation_id}/rename",
@@ -104,6 +114,12 @@ struct PresetForm {
 
 #[derive(Deserialize)]
 struct ProjectForm {
+    revision: String,
+    project: String,
+}
+
+#[derive(Deserialize)]
+struct AccessForm {
     revision: String,
     project: String,
 }
@@ -259,6 +275,78 @@ async fn send_message(
             ),
         );
     };
+    let authority = match resolve_authority(&record, &state.projects, &state.agents) {
+        Ok(authority) => authority.map(|authority| authority.effective),
+        Err(error) => {
+            return render_detail_command(
+                graft,
+                PatchStatus::Conflict,
+                detail_view(&state, session.0, &record, &record.title, error.message()),
+            );
+        }
+    };
+    let workflow = if let Some(authority) = authority.as_ref() {
+        let environment = match workflows::alpine_git_id(&state.environments) {
+            Ok(environment) => environment,
+            Err(error) => {
+                return render_detail_command(
+                    graft,
+                    PatchStatus::UnprocessableEntity,
+                    detail_view(&state, session.0, &record, &record.title, error.message()),
+                );
+            }
+        };
+        let pinned = match workflows::pin_quick_task(
+            authority.grant_access,
+            &authority.tools,
+            &model.instructions,
+            environment,
+        ) {
+            Ok(pinned) => pinned,
+            Err(error) => {
+                return render_detail_command(
+                    graft,
+                    PatchStatus::UnprocessableEntity,
+                    detail_view(&state, session.0, &record, &record.title, error.message()),
+                );
+            }
+        };
+        let environments = match workflows::resolve_environments(
+            &pinned.definition,
+            &state.environments,
+            &state.environment_snapshots,
+        )
+        .await
+        {
+            Ok(environments) => environments,
+            Err(error) => {
+                return render_detail_command(
+                    graft,
+                    PatchStatus::UnprocessableEntity,
+                    detail_view(&state, session.0, &record, &record.title, error.message()),
+                );
+            }
+        };
+        let execution = match state.workflow_execution.acquire() {
+            Ok(execution) => execution,
+            Err(_) => {
+                return render_detail_command(
+                    graft,
+                    PatchStatus::Conflict,
+                    detail_view(
+                        &state,
+                        session.0,
+                        &record,
+                        &record.title,
+                        "Wait until the current workflow finishes.",
+                    ),
+                );
+            }
+        };
+        Some((authority.clone(), pinned, environments, execution))
+    } else {
+        None
+    };
     let job = match state.sessions.begin_conversation_job(
         &session.0,
         record.id,
@@ -301,10 +389,59 @@ async fn send_message(
         }
     };
     let view = detail_view(&state, session.0, &started, &started.title, "");
-    let run_state = state.clone();
-    tokio::spawn(job::run(
-        run_state, session.0, started.id, started, connection, job,
-    ));
+    if let Some((authority, pinned, environments, execution)) = workflow {
+        let run_id = workflows::RunId::generate()
+            .map_err(|error| AppError::new("create workflow run identifier", error))?;
+        let run = WorkflowRun::create_for_conversation(
+            run_id,
+            workflows::now_ms(),
+            authority.project_id,
+            started.id,
+            pinned,
+            environments,
+        );
+        if let Err(error) = state.workflow_runs.create(run.clone()) {
+            let _ = state.conversations.settle_message(
+                &started.id,
+                job.id(),
+                String::new(),
+                crate::conversations::MessageStatus::Failed,
+            );
+            let _ = state
+                .sessions
+                .finish_conversation_job(&session.0, started.id, job.id());
+            return Err(AppError::new("store workflow run", error));
+        }
+        job.set_workflow_name(run.pinned.definition.name().to_owned());
+        job.set_step_label("Source capture".to_owned());
+        let agent_id = run.agent_id;
+        tokio::spawn(workflows::execute_run(
+            state.clone(),
+            WorkflowJob {
+                run_id,
+                session_id: session.0,
+                project_id: authority.project_id,
+                agent_id,
+                agent_revision: authority.revision,
+                conversation_id: Some(started.id),
+                authority: Some(authority.clone()),
+                grant_alias: authority.grant_alias.clone(),
+                grant_access: authority.grant_access,
+                connection,
+                host_policy: authority.policy.clone(),
+                turns: job::history(&started),
+                job: job.clone(),
+                eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+            },
+            None,
+            execution,
+        ));
+    } else {
+        let run_state = state.clone();
+        tokio::spawn(job::run(
+            run_state, session.0, started.id, started, connection, job,
+        ));
+    }
     render_detail_command(graft, PatchStatus::Ok, view)
 }
 
@@ -606,6 +743,133 @@ async fn attach_project(
                     ConversationError::Conflict.message(),
                 ),
             )
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
+}
+
+async fn grant_access(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<AccessForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    if state.sessions.busy(&session.0) {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Another command is active in this browser session.",
+            ),
+        );
+    }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(project) = ProjectId::parse(&form.project).and_then(|id| state.projects.get(&id))
+    else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose an attached project.",
+            ),
+        );
+    };
+    if !record.projects.contains(&project.id) {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Attach this project before you grant access.",
+            ),
+        );
+    }
+    match state
+        .conversations
+        .grant_read_only(&record.id, revision, project.id, project.revision)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("store conversation access", error))
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
+}
+
+async fn select_target(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<AccessForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(project) = ProjectId::parse(&form.project) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose a granted project.",
+            ),
+        );
+    };
+    match state
+        .conversations
+        .select_execution_target(&record.id, revision, project)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("select conversation target", error))
         }
         Err(error) => render_detail_command(
             graft,

@@ -6,8 +6,10 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentId, AgentRecord};
+use crate::agents::{AccessMode, AgentId, AgentRecord};
 use crate::projects::ProjectId;
+
+use super::access::ConversationGrant;
 use crate::providers::ModelSelection;
 use crate::sessions::JobId;
 
@@ -29,6 +31,8 @@ pub(crate) struct ConversationRecord {
     pub(crate) revision: u32,
     pub(crate) title: String,
     pub(crate) projects: Vec<ProjectId>,
+    pub(crate) grants: Vec<ConversationGrant>,
+    pub(crate) execution_target: Option<ProjectId>,
     pub(crate) model: Option<ConversationModelConfiguration>,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) active_job: Option<JobId>,
@@ -111,6 +115,8 @@ pub(crate) enum ConversationError {
     Selection,
     Projects,
     DuplicateProject,
+    Access,
+    Target,
 }
 
 impl ConversationError {
@@ -131,6 +137,8 @@ impl ConversationError {
             Self::Selection => "Choose an available model before you send a message.",
             Self::Projects => "This conversation can reference at most eight projects.",
             Self::DuplicateProject => "That project is already a context reference.",
+            Self::Access => "Grant read-only access to an attached project before inspection.",
+            Self::Target => "Choose a granted project as the execution target.",
         }
     }
 }
@@ -162,6 +170,9 @@ struct ConversationFile {
     revision: u32,
     title: String,
     projects: Vec<String>,
+    grants: Vec<ConversationGrantFile>,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    execution_target: Option<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     model: Option<ConversationModelFile>,
     messages: Vec<MessageFile>,
@@ -169,6 +180,15 @@ struct ConversationFile {
     active_job: Option<String>,
     created_at_ms: u64,
     updated_at_ms: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ConversationGrantFile {
+    project: String,
+    project_revision: u32,
+    authority_revision: u32,
+    access: AccessMode,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -234,6 +254,8 @@ impl ConversationStore {
             revision: 1,
             title,
             projects: Vec::new(),
+            grants: Vec::new(),
+            execution_target: None,
             model: None,
             messages: Vec::new(),
             active_job: None,
@@ -296,6 +318,67 @@ impl ConversationStore {
                 return Err(ConversationError::Missing);
             };
             current.projects.remove(index);
+            current.grants.retain(|grant| grant.project_id != project);
+            if current.execution_target == Some(project) {
+                current.execution_target = None;
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn grant_read_only(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        project: ProjectId,
+        project_revision: u32,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            if !current.projects.contains(&project) {
+                return Err(ConversationError::Access);
+            }
+            if let Some(grant) = current
+                .grants
+                .iter_mut()
+                .find(|grant| grant.project_id == project)
+            {
+                grant.project_revision = project_revision;
+                grant.authority_revision = current.revision;
+                grant.access = AccessMode::ReadOnly;
+            } else {
+                current.grants.push(ConversationGrant {
+                    project_id: project,
+                    project_revision,
+                    authority_revision: current.revision,
+                    access: AccessMode::ReadOnly,
+                });
+            }
+            current.execution_target = Some(project);
+            Ok(())
+        })
+    }
+
+    pub(crate) fn select_execution_target(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        project: ProjectId,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            if !current
+                .grants
+                .iter()
+                .any(|grant| grant.project_id == project)
+            {
+                return Err(ConversationError::Target);
+            }
+            current.execution_target = Some(project);
             Ok(())
         })
     }
@@ -566,6 +649,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         || file.updated_at_ms < file.created_at_ms
         || file.messages.len() > MAXIMUM_MESSAGES
         || file.projects.len() > MAXIMUM_PROJECT_ASSOCIATIONS
+        || file.grants.len() > MAXIMUM_PROJECT_ASSOCIATIONS
     {
         return Err(ConversationError::Corrupt);
     }
@@ -581,6 +665,38 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
             return Err(ConversationError::Corrupt);
         }
         projects.push(project);
+    }
+    let mut grants = Vec::with_capacity(file.grants.len());
+    for grant in file.grants {
+        let project_id = ProjectId::parse(&grant.project).ok_or(ConversationError::Corrupt)?;
+        if grant.project_revision == 0
+            || grant.authority_revision == 0
+            || grant.access != AccessMode::ReadOnly
+            || !projects.contains(&project_id)
+            || grants
+                .iter()
+                .any(|item: &ConversationGrant| item.project_id == project_id)
+        {
+            return Err(ConversationError::Corrupt);
+        }
+        grants.push(ConversationGrant {
+            project_id,
+            project_revision: grant.project_revision,
+            authority_revision: grant.authority_revision,
+            access: grant.access,
+        });
+    }
+    if file
+        .execution_target
+        .as_ref()
+        .is_some_and(|target| ProjectId::parse(target).is_none())
+    {
+        return Err(ConversationError::Corrupt);
+    }
+    let execution_target = file.execution_target.as_deref().and_then(ProjectId::parse);
+    if execution_target.is_some_and(|target| !grants.iter().any(|grant| grant.project_id == target))
+    {
+        return Err(ConversationError::Corrupt);
     }
     let messages: Result<Vec<_>, _> = file.messages.into_iter().map(message_from_file).collect();
     let messages = messages?;
@@ -607,6 +723,8 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         revision: file.revision,
         title,
         projects,
+        grants,
+        execution_target,
         model,
         messages,
         active_job,
@@ -732,6 +850,17 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         revision: record.revision,
         title: record.title.clone(),
         projects: record.projects.iter().map(ProjectId::as_hex).collect(),
+        grants: record
+            .grants
+            .iter()
+            .map(|grant| ConversationGrantFile {
+                project: grant.project_id.as_hex(),
+                project_revision: grant.project_revision,
+                authority_revision: grant.authority_revision,
+                access: grant.access,
+            })
+            .collect(),
+        execution_target: record.execution_target.map(|project| project.as_hex()),
         model: record.model.as_ref().map(model_to_file),
         messages: record
             .messages

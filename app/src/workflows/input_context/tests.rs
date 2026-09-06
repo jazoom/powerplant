@@ -380,3 +380,72 @@ fn handoff_rejects_missing_changed_cross_run_wrong_kind_excess_and_assistant() {
         Some(InputContextError::Source)
     );
 }
+
+#[test]
+fn root_instruction_source_distinguishes_absence_from_a_failed_read() {
+    assert_eq!(
+        super::classify_instruction_exit(Some(3), true).expect("absent"),
+        Some(super::ProjectInstructions::Absent)
+    );
+    assert_eq!(
+        super::classify_instruction_exit(Some(1), true).err(),
+        Some(super::InstructionError::Read)
+    );
+    assert_eq!(
+        super::classify_instruction_exit(Some(0), false).expect("present"),
+        None
+    );
+}
+
+#[test]
+fn root_instruction_paths_stay_inside_the_target_candidate() {
+    let candidate = tempfile::tempdir().expect("candidate");
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("instructions");
+    std::fs::write(&secret, "outside instructions").expect("write");
+    let path = candidate.path().join("AGENTS.md");
+    let read = || {
+        std::process::Command::new("sh")
+            .args(["-c", super::INSTRUCTION_READ_COMMAND])
+            .current_dir(candidate.path())
+            .output()
+            .expect("read instructions")
+    };
+    assert_eq!(read().status.code(), Some(3));
+    std::os::unix::fs::symlink(&secret, &path).expect("link");
+    let escaped = read();
+    assert_eq!(escaped.status.code(), Some(4));
+    assert!(escaped.stdout.is_empty());
+    std::fs::remove_file(&secret).expect("remove target");
+    assert_eq!(read().status.code(), Some(4));
+    std::fs::remove_file(&path).expect("remove link");
+    std::fs::create_dir(&path).expect("directory");
+    assert_eq!(read().status.code(), Some(1));
+    std::fs::remove_dir(&path).expect("remove directory");
+    std::fs::write(&path, "candidate instructions").expect("write candidate");
+    assert_eq!(read().stdout, b"candidate instructions");
+    std::fs::write(&path, "x".repeat(super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 100))
+        .expect("oversized instructions");
+    assert_eq!(read().stdout.len(), super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 1);
+}
+
+#[test]
+fn root_instruction_text_rejects_invalid_oversized_and_secret_content() {
+    assert!(super::validate_instruction_text("Use Australian English.\n", None).is_ok());
+    assert_eq!(
+        super::validate_instruction_text("bad\u{0000}text", None).err(),
+        Some(super::InstructionError::Invalid)
+    );
+    assert_eq!(
+        super::validate_instruction_text(
+            &"x".repeat(super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 1),
+            None,
+        )
+        .err(),
+        Some(super::InstructionError::Bound)
+    );
+    assert_eq!(
+        super::validate_instruction_text("use sk-secret", Some("sk-secret")).err(),
+        Some(super::InstructionError::Credential)
+    );
+}

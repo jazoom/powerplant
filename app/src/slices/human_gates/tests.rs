@@ -380,6 +380,8 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         project_id: project.id,
         agent_id: agent.id,
         agent_revision: agent.revision,
+        conversation_id: None,
+        authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6"),

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::agents::{AccessMode, DirectoryPolicy, LeaseGuard, PolicyGrant};
+use crate::agents::{AccessMode, DirectoryPolicy, EffectiveAuthority, LeaseGuard, PolicyGrant};
+use crate::conversations::ConversationId;
 use crate::projects::ProjectId;
 use crate::providers::{ChatTurn, ProviderConnection};
 use crate::sandbox::{CommandEvent, GUEST_PROJECT, GuestExec, GuestSandbox};
@@ -105,6 +106,8 @@ pub(crate) struct WorkflowJob {
     pub(crate) project_id: ProjectId,
     pub(crate) agent_id: crate::agents::AgentId,
     pub(crate) agent_revision: u32,
+    pub(crate) conversation_id: Option<ConversationId>,
+    pub(crate) authority: Option<EffectiveAuthority>,
     pub(crate) grant_alias: String,
     pub(crate) grant_access: AccessMode,
     pub(crate) connection: ProviderConnection,
@@ -115,11 +118,13 @@ pub(crate) struct WorkflowJob {
 }
 
 impl WorkflowJob {
-    pub(crate) fn conversation_key(&self) -> crate::sessions::ConversationKey {
-        crate::sessions::ConversationKey {
-            project_id: self.project_id,
-            agent_id: self.agent_id,
-        }
+    pub(crate) fn conversation_key(&self) -> Option<crate::sessions::ConversationKey> {
+        self.conversation_id
+            .is_none()
+            .then_some(crate::sessions::ConversationKey {
+                project_id: self.project_id,
+                agent_id: self.agent_id,
+            })
     }
 }
 
@@ -151,13 +156,13 @@ fn interrupt_continuations(state: &AppState, jobs: Vec<WorkflowJob>) -> Result<(
             }
             return Err(StoreError::Persist);
         }
-        let _ = state.sessions.fail_turn(
-            &job.session_id,
-            &job.conversation_key(),
-            &job.job.id(),
-            String::new(),
+        settle_with_reply(
+            state,
+            &job,
+            JobStatus::Cancelled,
+            None,
+            &crate::providers::AssistantReply::default(),
         );
-        job.job.finish(JobStatus::Cancelled, None);
     }
     Ok(())
 }
@@ -165,7 +170,7 @@ fn interrupt_continuations(state: &AppState, jobs: Vec<WorkflowJob>) -> Result<(
 pub(crate) async fn execute_run(
     state: AppState,
     job: WorkflowJob,
-    _agent_lease: LeaseGuard,
+    _agent_lease: Option<LeaseGuard>,
     _execution_lease: ExecutionGuard,
 ) {
     loop {
@@ -324,15 +329,32 @@ pub(crate) async fn execute_run(
                 return;
             }
         };
-        let Some(agent) = state.agents.get(&job.agent_id) else {
-            fail_operational(&state, &job);
-            return;
+        let capabilities = if let Some(authority) = job.authority.as_ref() {
+            if run.conversation_id != job.conversation_id || authority.project_id != run.project_id
+            {
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some("The conversation authority does not match this run."),
+                );
+                return;
+            }
+            crate::workflows::capabilities::AttemptCapabilities::derive_for_authority(
+                &step, authority,
+            )
+        } else {
+            let Some(agent) = state.agents.get(&job.agent_id) else {
+                fail_operational(&state, &job);
+                return;
+            };
+            crate::workflows::capabilities::AttemptCapabilities::derive(
+                &step,
+                &agent,
+                &job.grant_alias,
+            )
         };
-        let capabilities = match crate::workflows::capabilities::AttemptCapabilities::derive(
-            &step,
-            &agent,
-            &job.grant_alias,
-        ) {
+        let capabilities = match capabilities {
             Ok(capabilities) => capabilities,
             Err(error) => {
                 settle_job(&state, &job, JobStatus::Failed, Some(error.message()));
@@ -1449,7 +1471,20 @@ async fn run_agent_step(
     sandbox: &std::sync::Arc<GuestSandbox>,
     drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
 ) -> StepOutcome {
-    if let Some(record) = state.agents.get(&job.agent_id) {
+    if let Some(authority) = job.authority.as_ref() {
+        if !action
+            .authority
+            .allowed_by(&authority.tools, authority.directories())
+        {
+            return StepOutcome::Failed {
+                category: FailureCategory::Authority,
+                error: Some(
+                    "The pinned step authority exceeds the current conversation ceiling."
+                        .to_owned(),
+                ),
+            };
+        }
+    } else if let Some(record) = state.agents.get(&job.agent_id) {
         let directories: Vec<(String, AccessMode)> = record
             .directories
             .iter()
@@ -1536,6 +1571,32 @@ async fn run_agent_step(
             step.writes_primary_source(),
         ))
     });
+    let secret = match &job.connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(job.connection.api_key.expose()),
+        crate::providers::AuthMethod::Plan => None,
+    };
+    let project_instructions =
+        match crate::workflows::input_context::read_project_instructions(sandbox, secret).await {
+            Ok(crate::workflows::input_context::ProjectInstructions::Absent) => String::new(),
+            Ok(crate::workflows::input_context::ProjectInstructions::Present(text)) => {
+                format!("# Project instructions\n\n{text}")
+            }
+            Err(error) => {
+                return StepOutcome::Failed {
+                    category: FailureCategory::Authority,
+                    error: Some(error.message().to_owned()),
+                };
+            }
+        };
+    let instructions = match (
+        instructions.trim().is_empty(),
+        project_instructions.is_empty(),
+    ) {
+        (true, true) => String::new(),
+        (false, true) => instructions,
+        (true, false) => project_instructions,
+        (false, false) => format!("{}\n\n{}", instructions.trim(), project_instructions),
+    };
     let composed = crate::agents::compose_role(
         &role.name,
         &role.expertise,
@@ -1548,7 +1609,7 @@ async fn run_agent_step(
         _ => composed,
     };
     let spec = AgentRunSpec {
-        agent_id: job.agent_id,
+        agent_id: job.authority.is_none().then_some(job.agent_id),
         revision: 0,
         preamble,
         tools: crate::tools::definitions_for_step(
@@ -2018,20 +2079,44 @@ fn confirm_run_authority(
     let Some(project) = state.projects.get(&job.project_id) else {
         return Err("That project is not in the catalogue.".to_owned());
     };
+    if let Some(authority) = job.authority.as_ref() {
+        let Some(conversation_id) = job.conversation_id else {
+            return Err("The conversation authority is missing its identity.".to_owned());
+        };
+        let Some(record) = state.conversations.get(&conversation_id) else {
+            return Err("That conversation is not in the catalogue.".to_owned());
+        };
+        let resolved =
+            crate::conversations::resolve_authority(&record, &state.projects, &state.agents)
+                .map_err(|error| error.message().to_owned())?
+                .ok_or_else(|| "Project access was revoked before dispatch.".to_owned())?;
+        if resolved.effective != *authority {
+            return Err("Project access or the applied preset changed before dispatch.".to_owned());
+        }
+        authority
+            .revalidate_project(&project)
+            .map_err(|_| "A granted directory is no longer at the saved path.".to_owned())?;
+        return Ok(project.host_path);
+    }
     let Some(agent) = state.agents.get(&job.agent_id) else {
         return Err("That agent is not in the catalogue.".to_owned());
     };
     if agent.revision != job.agent_revision {
         return Err("The agent configuration changed. Try again.".to_owned());
     }
-    let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
+    let authority = EffectiveAuthority::from_saved_agent(&agent, &project, &job.grant_alias)
+        .map_err(|error| match error {
+            crate::agents::AuthorityError::MissingGrant => {
+                "This agent no longer has access to that project.".to_owned()
+            }
+            crate::agents::AuthorityError::Unavailable
+            | crate::agents::AuthorityError::Path
+            | crate::agents::AuthorityError::Stale => {
+                "A granted directory is no longer at the saved path.".to_owned()
+            }
+        })?;
+    if authority.grant_access != job.grant_access || authority.project_id != job.project_id {
         return Err("This agent no longer has access to that project.".to_owned());
-    };
-    if grant.alias != job.grant_alias || grant.access != job.grant_access {
-        return Err("This agent no longer has access to that project.".to_owned());
-    }
-    if !project.host_path_is_available() || grant.host_path != project.host_path {
-        return Err("A granted directory is no longer at the saved path.".to_owned());
     }
     Ok(project.host_path)
 }
@@ -2694,38 +2779,55 @@ fn settle_job(state: &AppState, workflow: &WorkflowJob, status: JobStatus, error
     if !eligible.is_empty() {
         reply.text = eligible;
     }
-    settle_with_reply(
-        state,
-        &workflow.session_id,
-        &workflow.conversation_key(),
-        &workflow.job,
-        status,
-        error,
-        &reply,
-    );
+    settle_with_reply(state, workflow, status, error, &reply);
 }
 
 fn settle_with_reply(
     state: &AppState,
-    session_id: &SessionId,
-    key: &crate::sessions::ConversationKey,
-    job: &Job,
+    workflow: &WorkflowJob,
     status: JobStatus,
     error: Option<&str>,
     reply: &crate::providers::AssistantReply,
 ) {
     let reply = crate::slices::bound_reply(reply);
-    match status {
-        JobStatus::Completed => {
-            let _ = state
-                .sessions
-                .finish_turn(session_id, key, &job.id(), reply);
-        }
-        _ => {
-            let _ = state.sessions.fail_turn(session_id, key, &job.id(), reply);
+    if let Some(conversation_id) = workflow.conversation_id {
+        let message_status = match status {
+            JobStatus::Completed => crate::conversations::MessageStatus::Complete,
+            JobStatus::Cancelled => crate::conversations::MessageStatus::Interrupted,
+            JobStatus::Failed | JobStatus::AwaitingDecision | JobStatus::Running => {
+                crate::conversations::MessageStatus::Failed
+            }
+        };
+        let _ = state.conversations.settle_message(
+            &conversation_id,
+            workflow.job.id(),
+            reply.text,
+            message_status,
+        );
+        let _ = state.sessions.finish_conversation_job(
+            &workflow.session_id,
+            conversation_id,
+            workflow.job.id(),
+        );
+    } else if let Some(key) = workflow.conversation_key() {
+        match status {
+            JobStatus::Completed => {
+                let _ = state.sessions.finish_turn(
+                    &workflow.session_id,
+                    &key,
+                    &workflow.job.id(),
+                    reply,
+                );
+            }
+            _ => {
+                let _ =
+                    state
+                        .sessions
+                        .fail_turn(&workflow.session_id, &key, &workflow.job.id(), reply);
+            }
         }
     }
-    let _ = job.finish(status, error);
+    let _ = workflow.job.finish(status, error);
 }
 
 fn recovery_project_path(

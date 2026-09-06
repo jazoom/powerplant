@@ -312,3 +312,77 @@ fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
         Err(CapabilityError::Authority)
     );
 }
+
+#[test]
+fn conversation_authority_intersects_the_preset_ceiling_before_step_dispatch() {
+    let directory = tempfile::tempdir().expect("project");
+    let project = crate::projects::ProjectRecord {
+        id: crate::projects::ProjectId::generate().expect("project"),
+        revision: 1,
+        name: "Project".to_owned(),
+        host_path: directory.path().to_path_buf(),
+        created_at_ms: 1,
+    };
+    let conversation = crate::conversations::ConversationId::generate().expect("conversation");
+    let preset = AgentRecord {
+        id: AgentId::generate().expect("preset"),
+        revision: 1,
+        name: "No tools".to_owned(),
+        instructions: String::new(),
+        selection: None,
+        tools: Vec::new(),
+        network: NetworkAccess::Public,
+        directories: Vec::new(),
+        primary_directory: String::new(),
+    };
+    let authority = crate::agents::EffectiveAuthority::from_conversation(
+        conversation,
+        1,
+        &project,
+        project.revision,
+        AccessMode::ReadOnly,
+        Some(&preset),
+    )
+    .expect("authority");
+
+    assert_eq!(
+        AttemptCapabilities::derive_for_authority(
+            &agent_step(vec![ToolId::List], false),
+            &authority,
+        ),
+        Err(CapabilityError::Authority)
+    );
+}
+
+#[test]
+fn conversation_authority_rejects_a_write_candidate_and_guest_network() {
+    let directory = tempfile::tempdir().expect("project");
+    let project = crate::projects::ProjectRecord {
+        id: crate::projects::ProjectId::generate().expect("project"),
+        revision: 1,
+        name: "Project".to_owned(),
+        host_path: directory.path().to_path_buf(),
+        created_at_ms: 1,
+    };
+    let authority = crate::agents::EffectiveAuthority::from_conversation(
+        crate::conversations::ConversationId::generate().expect("conversation"),
+        1,
+        &project,
+        project.revision,
+        AccessMode::ReadOnly,
+        None,
+    )
+    .expect("authority");
+    let write = agent_step(vec![ToolId::List], true);
+
+    assert_eq!(
+        AttemptCapabilities::derive_for_authority(&write, &authority),
+        Err(CapabilityError::Authority)
+    );
+    let read = AttemptCapabilities::derive_for_authority(
+        &agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false),
+        &authority,
+    )
+    .expect("read authority");
+    assert_eq!(read.network, NetworkCapability::None);
+}

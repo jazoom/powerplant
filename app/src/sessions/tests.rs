@@ -49,6 +49,8 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
         project_id: crate::projects::ProjectId::generate().expect("project"),
         agent_id: AgentId::generate().expect("agent"),
         agent_revision: 1,
+        conversation_id: None,
+        authority: None,
         grant_alias: "project".to_owned(),
         grant_access: crate::agents::AccessMode::ReadWrite,
         connection: ProviderConnection::with_key(ProviderKind::Xai, "key", "model"),

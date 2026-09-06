@@ -146,7 +146,7 @@ fn instructions(state: &AppState, record: &ConversationRecord) -> String {
     text
 }
 
-fn history(record: &ConversationRecord) -> Vec<ChatTurn> {
+pub(super) fn history(record: &ConversationRecord) -> Vec<ChatTurn> {
     record
         .messages
         .iter()

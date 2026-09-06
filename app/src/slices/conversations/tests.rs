@@ -778,3 +778,60 @@ async fn stale_rename_returns_a_conflict_without_replacing_the_current_title() {
         "Current title"
     );
 }
+
+#[tokio::test]
+async fn read_only_access_is_explicit_revisioned_and_selects_one_target() {
+    let state = test_state();
+    let token = connected(&state);
+    let project = register_project(&state, "Inspectable project");
+    let conversation = state
+        .conversations
+        .create("Inspection".to_owned())
+        .expect("conversation");
+    let attached = state
+        .conversations
+        .attach_project(&conversation.id, conversation.revision, project.id)
+        .expect("attach");
+    let detail = app(&state)
+        .oneshot(document(
+            &format!("/conversations/{}", conversation.id),
+            &token,
+        ))
+        .await
+        .expect("detail");
+    let detail_body = text(detail).await;
+    assert!(detail_body.contains("Grant effect: List, Read and Run"));
+    assert!(detail_body.contains("Network: None"));
+    let path = format!("/conversations/{}/access", conversation.id);
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&project={}", attached.revision, project.id),
+        ))
+        .await
+        .expect("grant");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Read-only access granted."));
+    let granted = state.conversations.get(&conversation.id).expect("granted");
+    assert_eq!(granted.execution_target, Some(project.id));
+    assert_eq!(granted.grants.len(), 1);
+    assert_eq!(granted.grants[0].project_revision, project.revision);
+    assert_eq!(
+        granted.grants[0].access,
+        crate::agents::AccessMode::ReadOnly
+    );
+
+    let stale = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&project={}", attached.revision, project.id),
+        ))
+        .await
+        .expect("stale grant");
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(state.conversations.get(&conversation.id), Some(granted));
+}

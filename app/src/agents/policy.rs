@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
 use super::record::{
-    AccessMode, AgentError, AgentRecord, GUEST_PROJECT, canonical_directory, guest_path_for,
+    AccessMode, AgentError, AgentRecord, GUEST_PROJECT, NetworkAccess, canonical_directory,
+    guest_path_for,
 };
+use super::tool_id::ToolId;
+use crate::projects::{ProjectId, ProjectRecord};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PolicyGrant {
@@ -16,6 +19,155 @@ pub(crate) struct PolicyGrant {
 pub(crate) struct DirectoryPolicy {
     grants: Vec<PolicyGrant>,
     primary_alias: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuthorityOrigin {
+    SavedAgent {
+        agent_id: super::AgentId,
+    },
+    Conversation {
+        conversation_id: crate::conversations::ConversationId,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EffectiveAuthority {
+    pub(crate) origin: AuthorityOrigin,
+    pub(crate) revision: u32,
+    pub(crate) project_id: ProjectId,
+    pub(crate) project_revision: u32,
+    pub(crate) grant_alias: String,
+    pub(crate) grant_access: AccessMode,
+    pub(crate) tools: Vec<ToolId>,
+    pub(crate) network: NetworkAccess,
+    pub(crate) policy: DirectoryPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuthorityError {
+    MissingGrant,
+    Stale,
+    Unavailable,
+    Path,
+}
+
+impl EffectiveAuthority {
+    pub(crate) fn from_saved_agent(
+        agent: &AgentRecord,
+        project: &ProjectRecord,
+        grant_alias: &str,
+    ) -> Result<Self, AuthorityError> {
+        let Some(grant) = agent
+            .directories
+            .iter()
+            .find(|grant| grant.alias == grant_alias && grant.host_path == project.host_path)
+        else {
+            return Err(AuthorityError::MissingGrant);
+        };
+        if !project.host_path_is_available() {
+            return Err(AuthorityError::Unavailable);
+        }
+        let policy = DirectoryPolicy::from_record_with_primary(agent, grant_alias);
+        policy.confirm_hosts().map_err(|_| AuthorityError::Path)?;
+        Ok(Self {
+            origin: AuthorityOrigin::SavedAgent { agent_id: agent.id },
+            revision: agent.revision,
+            project_id: project.id,
+            project_revision: project.revision,
+            grant_alias: grant.alias.clone(),
+            grant_access: grant.access,
+            tools: agent.tools.clone(),
+            network: agent.network.clone(),
+            policy,
+        })
+    }
+
+    pub(crate) fn from_conversation(
+        conversation_id: crate::conversations::ConversationId,
+        conversation_revision: u32,
+        project: &ProjectRecord,
+        project_revision: u32,
+        access: AccessMode,
+        preset: Option<&AgentRecord>,
+    ) -> Result<Self, AuthorityError> {
+        if project.revision != project_revision || !project.host_path_is_available() {
+            return Err(AuthorityError::Unavailable);
+        }
+        if access != AccessMode::ReadOnly {
+            return Err(AuthorityError::MissingGrant);
+        }
+        let mut tools = vec![ToolId::List, ToolId::Read, ToolId::Run];
+        let mut grant_access = access;
+        if let Some(preset) = preset {
+            tools.retain(|tool| preset.tools.contains(tool));
+            if !preset.directories.is_empty() {
+                let Some(directory) = preset
+                    .directories
+                    .iter()
+                    .find(|directory| directory.host_path == project.host_path)
+                else {
+                    return Err(AuthorityError::MissingGrant);
+                };
+                grant_access = min_access(grant_access, directory.access);
+            }
+        }
+        let policy = DirectoryPolicy::from_grants(
+            vec![PolicyGrant {
+                alias: "project".to_owned(),
+                guest_path: GUEST_PROJECT.to_owned(),
+                host_path: project.host_path.clone(),
+                access: grant_access,
+            }],
+            "project".to_owned(),
+        );
+        policy.confirm_hosts().map_err(|_| AuthorityError::Path)?;
+        Ok(Self {
+            origin: AuthorityOrigin::Conversation { conversation_id },
+            revision: conversation_revision,
+            project_id: project.id,
+            project_revision,
+            grant_alias: "project".to_owned(),
+            grant_access,
+            tools,
+            // Conversation network controls do not exist yet. Keep this ceiling closed.
+            network: NetworkAccess::None,
+            policy,
+        })
+    }
+
+    pub(crate) fn revalidate_project(&self, project: &ProjectRecord) -> Result<(), AuthorityError> {
+        if self.project_id != project.id
+            || self.project_revision != project.revision
+            || !project.host_path_is_available()
+            || self
+                .policy
+                .grants()
+                .iter()
+                .find(|grant| grant.alias == self.grant_alias)
+                .is_none_or(|grant| grant.host_path != project.host_path)
+        {
+            return Err(AuthorityError::Stale);
+        }
+        self.policy
+            .confirm_hosts()
+            .map_err(|_| AuthorityError::Path)
+    }
+
+    pub(crate) fn directories(&self) -> impl Iterator<Item = (&str, AccessMode)> {
+        self.policy
+            .grants()
+            .iter()
+            .map(|grant| (grant.alias.as_str(), grant.access))
+    }
+}
+
+fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
+    if left.is_writable() && right.is_writable() {
+        AccessMode::ReadWrite
+    } else {
+        AccessMode::ReadOnly
+    }
 }
 
 impl DirectoryPolicy {

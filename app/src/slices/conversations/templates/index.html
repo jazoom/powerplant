@@ -181,8 +181,10 @@
           <h2 class="text-lg font-semibold">Discussion</h2>
           <p class="text-quiet max-w-[60ch] text-sm">
             This conversation belongs to this local Power Plant installation. It
-            is visible to every local browser session. Model replies use this
-            discussion history. Project files and tools are not available here.
+            is visible to every local browser session. Ordinary model replies
+            use this discussion history. Project inspection starts a fresh
+            worker context with the current task and excludes earlier worker
+            context.
           </p>
           <p class="text-sm">
             <span class="font-medium">Effective model:</span>
@@ -198,13 +200,16 @@
               Project context
             </h2>
             <p class="text-quiet mt-1 max-w-[60ch] text-sm">
-              Project attachments identify related work. They do not grant file
-              access, tools or network access.
+              Project attachments identify related work. They grant no access
+              until you select read-only access below. Read-only access permits
+              List, Read and Run in the candidate. Guest network access stays
+              None.
             </p>
           </div>
           {% if attached_projects.is_empty() %}
             <p class="text-quiet text-sm">
-              No projects are attached to this conversation.
+              No projects are attached to this conversation. Attach one before
+              you grant access.
             </p>
           {% else %}
             <ul class="record-list" aria-label="Project context">
@@ -213,6 +218,65 @@
                   <div class="min-w-0 flex-1">
                     <p class="font-medium break-words">{{ project.name }}</p>
                     <p class="text-quiet mt-1 text-xs">{{ project.status }}</p>
+                    {% if project.access_granted %}
+                      {% if project.execution_target %}
+                        <p class="mt-1 text-xs font-medium">Execution target</p>
+                      {% else %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ id }}/target"
+                          class="mt-2"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="project"
+                            value="{{ project.id }}"
+                          />
+                          <button
+                            class="btn btn-secondary btn-xs"
+                            type="submit"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Use as execution target
+                          </button>
+                        </form>
+                      {% endif %}
+                    {% else %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="/conversations/{{ id }}/access"
+                        class="mt-2"
+                      >
+                        <input
+                          type="hidden"
+                          name="revision"
+                          value="{{ revision }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="project"
+                          value="{{ project.id }}"
+                        />
+                        <p class="text-quiet mb-2 text-xs">
+                          Grant effect: List, Read and Run in the read-only
+                          candidate. Network: None.
+                        </p>
+                        <button
+                          class="btn btn-secondary btn-xs"
+                          type="submit"
+                          {% if job_active || session_busy %}disabled{% endif %}
+                        >
+                          Grant read-only access
+                        </button>
+                      </form>
+                    {% endif %}
                   </div>
                   <form
                     data-graft
