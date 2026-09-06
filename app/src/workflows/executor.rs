@@ -387,7 +387,7 @@ pub(crate) async fn execute_run(
         if matches!(step.action, StepAction::HumanGate(_)) {
             match state
                 .workflow_runs
-                .mutate(&job.run_id, |run| run.complete_unchanged_quick_task())
+                .mutate(&job.run_id, |run| run.complete_unchanged_task())
             {
                 Ok(_) => {
                     settle_completed_job(&state, &job);
@@ -3200,7 +3200,14 @@ fn settle_with_reply(
         .workflow_runs
         .get(&workflow.run_id)
         .filter(|run| run.kind == super::run::RunKind::Configured)
-        .map(|_| conversation_run_result(workflow.run_id, status, &reply.text));
+        .map(|run| {
+            let result = if run.completed_without_changes() {
+                "The task completed without changes. No commit was created."
+            } else {
+                &reply.text
+            };
+            conversation_run_result(workflow.run_id, status, result)
+        });
     if let Some(conversation_id) = workflow.conversation_id {
         let message_status = match status {
             JobStatus::Completed => crate::conversations::MessageStatus::Complete,

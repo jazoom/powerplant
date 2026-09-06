@@ -33,6 +33,49 @@
           class="flex flex-col gap-6"
         >
           <input type="hidden" name="revision" value="{{ revision }}" />
+          {% if !task_document.is_empty() %}
+            <input
+              type="hidden"
+              name="task_document"
+              value="{{ task_document }}"
+            />
+            <input
+              type="hidden"
+              name="task_revision"
+              value="{{ task_revision }}"
+            />
+            <input type="hidden" name="task_hash" value="{{ task_hash }}" />
+            <input type="hidden" name="task_index" value="{{ task_index }}" />
+            <input
+              type="hidden"
+              name="preview_task_document"
+              value="{{ task_document }}"
+            />
+            <input
+              type="hidden"
+              name="preview_task_revision"
+              value="{{ task_revision }}"
+            />
+            <input
+              type="hidden"
+              name="preview_task_hash"
+              value="{{ task_hash }}"
+            />
+            <input
+              type="hidden"
+              name="preview_task_index"
+              value="{{ task_index }}"
+            />
+            <p class="alert alert-info text-sm">
+              This run receives the complete pinned task list and works only on
+              the assigned task. Code changes require human approval before
+              commit.
+            </p>
+            <pre
+              class="overflow-x-auto text-sm break-words whitespace-pre-wrap"
+            >
+{{ task_preview }}</pre>
+          {% endif %}
           <section
             class="file-section space-y-4"
             aria-labelledby="workflow-process-heading"

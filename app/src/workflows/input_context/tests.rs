@@ -787,6 +787,79 @@ fn attempt_packets_reject_substituted_inputs_and_count_project_instructions() {
 }
 
 #[test]
+fn selected_task_packets_keep_the_full_file_and_exclude_other_worker_messages() {
+    let store = store();
+    let definition =
+        crate::workflows::seeds::implement_and_review_definition(test_environment_id());
+    let mut run = WorkflowRun::configured(
+        RunId::generate().expect("run"),
+        1,
+        crate::agents::AgentId::generate().expect("agent"),
+        PinnedWorkflowDefinition::pin(None, definition.clone()),
+        crate::tests::test_environment_set(&definition),
+    );
+    let task_list = "# Tasks\n\nShared requirements.\n\n- [x] Earlier work.\n- [ ] First pending task.\n- [ ] Selected task.\n  Preserve this detail.\n";
+    let task = crate::workflows::task_list::parse(task_list)
+        .expect("tasks")
+        .tasks[2]
+        .clone();
+    run.set_task_selection(crate::workflows::run::TaskSelection {
+        document_id: crate::conversations::DocumentId::generate().expect("document"),
+        revision: 2,
+        content_hash: ObjectHash::of(task_list.as_bytes()).as_str(),
+        index: task.index,
+        task_markdown: task.markdown.clone(),
+        task_list: task_list.to_owned(),
+    })
+    .expect("selection");
+    run.launch_brief = "Retain the public API.".to_owned();
+    let candidate = publish_candidate(&mut run, &store);
+    let reference = input_of("candidate", &candidate).artefact;
+    run.source = RunSource::Captured {
+        source: RunSourceState {
+            initial: reference.clone(),
+            accepted: reference.clone(),
+            observed: ObservedCandidate::Exact {
+                artefact: reference,
+            },
+        },
+    };
+    for step in definition.steps().iter().take(2) {
+        let packet = super::build_attempt_packet_for_request(
+            &run,
+            step,
+            &[input_of("candidate", &candidate)],
+            &store,
+            ProjectInstructions::Present("Candidate instructions.".to_owned()),
+            &[crate::providers::ChatTurn::user(
+                "PRIVATE EARLIER TRANSCRIPT".to_owned(),
+            )],
+            "Phase instructions.",
+            &[],
+            None,
+            None,
+        )
+        .expect("packet");
+        let messages = packet.request_messages();
+        let text = format!(
+            "{}\n{}",
+            packet.prompt,
+            messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        assert!(text.contains(task_list));
+        assert!(text.contains(&format!("# Assigned task 3\n\n{}", task.markdown)));
+        assert!(text.contains(&run.launch_brief));
+        assert!(text.contains("Candidate instructions."));
+        assert!(!text.contains("PRIVATE EARLIER TRANSCRIPT"));
+        assert!(!text.contains("CANDIDATE-BYTES"));
+    }
+}
+
+#[test]
 fn initial_context_snapshot_keeps_request_and_inspector_identity() {
     let store = store();
     let mut run = run();

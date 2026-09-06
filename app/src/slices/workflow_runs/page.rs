@@ -146,6 +146,13 @@ pub(super) struct StepView {
     pub(super) model: String,
 }
 
+pub(super) struct TaskSelectionView {
+    pub(super) document_id: String,
+    pub(super) revision: String,
+    pub(super) content_hash: String,
+    pub(super) index: String,
+}
+
 pub(super) struct LaunchInputView {
     pub(super) href: String,
     pub(super) source: String,
@@ -225,6 +232,7 @@ pub(super) struct RunDetailView {
     pub(super) current_step: String,
     pub(super) steps: Vec<StepView>,
     pub(super) environments: Vec<PinnedEnvironmentView>,
+    pub(super) task_selection: Option<TaskSelectionView>,
     pub(super) launch_inputs: Vec<LaunchInputView>,
     pub(super) attempts: Vec<AttemptView>,
     pub(super) artefacts: Vec<ArtefactRow>,
@@ -256,6 +264,7 @@ pub(super) struct RunDetailContents<'a> {
     pub(super) current_step: &'a str,
     pub(super) steps: &'a [StepView],
     pub(super) environments: &'a [PinnedEnvironmentView],
+    pub(super) task_selection: &'a Option<TaskSelectionView>,
     pub(super) launch_inputs: &'a [LaunchInputView],
     pub(super) attempts: &'a [AttemptView],
     pub(super) artefacts: &'a [ArtefactRow],
@@ -280,7 +289,11 @@ impl RunDetailView {
             catalogue_note,
             version: run.pinned.version.as_hex(),
             state: run.state.as_label(),
-            state_note: state_note(&run.state),
+            state_note: if run.completed_without_changes() {
+                "The task completed without changes. No commit was created."
+            } else {
+                state_note(&run.state)
+            },
             review_href: match &run.state {
                 crate::workflows::run::RunState::AwaitingHuman { gate, .. } => {
                     format!("/runs/{}/gates/{}", run.id.as_hex(), gate.as_hex())
@@ -289,6 +302,12 @@ impl RunDetailView {
             },
             created: format_time(run.created_at_ms),
             current_step: run.current_step_name().unwrap_or("").to_owned(),
+            task_selection: run.task_selection.as_ref().map(|task| TaskSelectionView {
+                document_id: task.document_id.as_hex(),
+                revision: task.revision.to_string(),
+                content_hash: task.content_hash.clone(),
+                index: (task.index + 1).to_string(),
+            }),
             steps: run
                 .pinned
                 .definition
@@ -482,6 +501,7 @@ impl RunDetailView {
             current_step: &self.current_step,
             steps: &self.steps,
             environments: &self.environments,
+            task_selection: &self.task_selection,
             launch_inputs: &self.launch_inputs,
             attempts: &self.attempts,
             artefacts: &self.artefacts,

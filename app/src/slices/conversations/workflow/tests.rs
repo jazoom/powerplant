@@ -19,6 +19,67 @@ fn connected_state() -> AppState {
 }
 
 #[test]
+fn task_selection_rejects_foreign_checked_and_removed_items() {
+    let state = connected_state();
+    let conversation = state
+        .conversations
+        .create("Tasks".to_owned())
+        .expect("conversation");
+    let other = state
+        .conversations
+        .create("Other".to_owned())
+        .expect("conversation");
+    let markdown =
+        "# Tasks\n\nShared context.\n\n- [x] Done.\n- [ ] First pending.\n- [ ] Selected.\n";
+    let document = state
+        .documents
+        .create_task_list_from_text(
+            conversation.id,
+            "Tasks".to_owned(),
+            markdown.to_owned(),
+            None,
+        )
+        .expect("tasks");
+    let id = document.id.as_hex();
+    let hash = document.current().content_hash.as_str();
+    let resolve = |record: &ConversationRecord, index: &str, hash: &str| {
+        super::resolve_selected_task(&state, record, &id, "1", hash, index)
+    };
+    assert!(resolve(&other, "2", &hash).is_err());
+    for index in ["0", "3", "-1", "4294967296"] {
+        assert!(resolve(&conversation, index, &hash).is_err());
+    }
+    assert!(
+        resolve(
+            &conversation,
+            "2",
+            &workflows::artefacts::ObjectHash::of(b"other").as_str()
+        )
+        .is_err()
+    );
+    let revised = state
+        .documents
+        .revise(
+            &document.id,
+            1,
+            "Tasks".to_owned(),
+            "# Tasks\n\n- [ ] Different task.\n".to_owned(),
+            None,
+        )
+        .expect("revision");
+    let selected = resolve(&conversation, "2", &hash)
+        .expect("selection")
+        .expect("task");
+    assert_eq!(selected.task_list, markdown);
+    assert_eq!(selected.markdown, "- [ ] Selected.\n");
+    state
+        .documents
+        .disassociate(&document.id, revised.current().revision, conversation.id)
+        .expect("remove");
+    assert!(resolve(&conversation, "2", &hash).is_err());
+}
+
+#[test]
 fn saved_plan_selection_rejects_substitution_and_removal_but_pins_old_revisions() {
     let state = connected_state();
     let conversation = state

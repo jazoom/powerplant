@@ -492,6 +492,7 @@ pub(crate) fn build_attempt_packet_for_request(
         })
         .unwrap_or_default();
     let excluded_context = if run.kind == super::run::RunKind::Configured
+        || run.task_selection.is_some()
         || run.revision_feedback(&step.key).is_some()
     {
         "The source conversation, its messages, thoughts and tool output, plus worker transcripts from other attempts, are excluded.".to_owned()
@@ -507,9 +508,21 @@ pub(crate) fn build_attempt_packet_for_request(
             format!("# Project instructions\n\n{text}")
         }
     };
+    let task_direction = run.task_selection.as_ref().map_or_else(
+        || format!("Task brief:\n{}", brief.trim()),
+        |task| {
+            format!(
+                "# Task list\n\n{}\n\n# Assigned task {}\n\n{}\n\nWork only on the assigned task. The complete task list supplies its shared context.\n\nTask brief:\n{}",
+                task.task_list,
+                task.index + 1,
+                task.task_markdown,
+                brief.trim(),
+            )
+        },
+    );
     let context = format!(
-        "Task brief:\n{}\n\n{}\n\n{}{}\n\n# Context boundary\n\nSource available through tools: {}\n\nExcluded context: {}",
-        brief.trim(),
+        "{}\n\n{}\n\n{}{}\n\n# Context boundary\n\nSource available through tools: {}\n\nExcluded context: {}",
+        task_direction,
         format_agent_context(&verified, step.writes_primary_source()),
         instructions,
         revision_feedback,

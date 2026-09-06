@@ -903,6 +903,13 @@ fn source_label(source: &PlanSource) -> String {
     }
 }
 
+pub(super) struct TaskListItemView {
+    pub(super) index: u32,
+    pub(super) checked: bool,
+    pub(super) markdown: String,
+    pub(super) run_href: String,
+}
+
 pub(super) struct PlanPageRevision {
     pub(super) revision: u32,
     pub(super) provenance: String,
@@ -928,7 +935,7 @@ pub(super) struct PlanDocumentPage {
     pub(super) associated: bool,
     pub(super) task_count: usize,
     pub(super) eligible_task_count: usize,
-    pub(super) tasks: Vec<crate::workflows::task_list::TaskItem>,
+    pub(super) tasks: Vec<TaskListItemView>,
     pub(super) error: &'static str,
 }
 
@@ -948,7 +955,7 @@ pub(super) struct PlanDocumentContents<'a> {
     pub(super) associated: bool,
     pub(super) task_count: usize,
     pub(super) eligible_task_count: usize,
-    pub(super) tasks: &'a [crate::workflows::task_list::TaskItem],
+    pub(super) tasks: &'a [TaskListItemView],
     pub(super) error: &'static str,
 }
 
@@ -1019,7 +1026,20 @@ impl PlanDocumentPage {
             associated,
             task_count,
             eligible_task_count,
-            tasks: task_list.map_or_else(Vec::new, |list| list.tasks),
+            tasks: task_list.map_or_else(Vec::new, |list| {
+                list.tasks
+                    .into_iter()
+                    .map(|task| TaskListItemView {
+                        index: task.index,
+                        checked: task.checked,
+                        markdown: task.markdown,
+                        run_href: document.associated_conversation.map_or_else(String::new, |conversation| format!(
+                            "/conversations/{conversation}/workflow?task_document={}&task_revision={}&task_hash={}&task_index={}",
+                            document.id.as_hex(), selected.revision, selected.content_hash.as_str(), task.index
+                        )),
+                    })
+                    .collect()
+            }),
             error,
         }
     }

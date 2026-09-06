@@ -73,13 +73,24 @@
                 <li class="space-y-2 border-t py-4">
                   <p class="text-sm font-semibold">
                     Task {{ task.index + 1 }} ·
-                    {% if task.checked %}Checked · Context only{% else %}Unchecked
-                    · Eligible{% endif %}
+                    {% if task.checked %}
+                      Checked · Context only
+                    {% else %}
+                      Unchecked · Eligible
+                    {% endif %}
                   </p>
                   <pre
                     class="overflow-x-auto text-sm break-words whitespace-pre-wrap"
                   >
 {{ task.markdown }}</pre>
+                  {% if !task.checked && !task.run_href.is_empty() %}
+                    <a
+                      href="{{ task.run_href }}"
+                      data-graft
+                      class="btn btn-primary btn-sm"
+                      >Run this task</a
+                    >
+                  {% endif %}
                 </li>
               {% endfor %}
             </ol>

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AccessMode, AgentId, ToolId};
-use crate::conversations::ConversationId;
+use crate::conversations::{ConversationId, DocumentId};
 use crate::environments::snapshot::{OciManifestDigest, RecordedIntegrity, SnapshotArtifactKey};
 use crate::environments::{
     EnvironmentId, EnvironmentRecipeVersion, PreparationId, PreparedSnapshot, SnapshotDigest,
@@ -33,6 +33,7 @@ pub(crate) struct WorkflowRun {
     pub(crate) project_id: ProjectId,
     pub(crate) conversation_id: Option<ConversationId>,
     pub(crate) launch_brief: String,
+    pub(crate) task_selection: Option<TaskSelection>,
     pub(crate) kind: RunKind,
     pub(crate) agent_id: AgentId,
     pub(crate) phase_models: Vec<PhaseModelSelection>,
@@ -65,6 +66,16 @@ pub(crate) struct PinnedPreset {
     pub(crate) id: AgentId,
     pub(crate) revision: u32,
     pub(crate) name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TaskSelection {
+    pub(crate) document_id: DocumentId,
+    pub(crate) revision: u32,
+    pub(crate) content_hash: String,
+    pub(crate) index: u32,
+    pub(crate) task_markdown: String,
+    pub(crate) task_list: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -271,6 +282,8 @@ pub(super) struct RunFile {
     #[serde(deserialize_with = "crate::storage::required_option")]
     conversation_id: Option<String>,
     launch_brief: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    task_selection: Option<TaskSelectionFile>,
     kind: String,
     agent_id: String,
     phase_models: Vec<PhaseModelFile>,
@@ -336,6 +349,17 @@ struct PinnedPresetFile {
     id: String,
     revision: u32,
     name: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct TaskSelectionFile {
+    document_id: String,
+    revision: u32,
+    content_hash: String,
+    index: u32,
+    task_markdown: String,
+    task_list: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -642,6 +666,7 @@ impl WorkflowRun {
             project_id,
             conversation_id: None,
             launch_brief: String::new(),
+            task_selection: None,
             kind,
             agent_id,
             phase_models: Vec::new(),
@@ -703,6 +728,22 @@ impl WorkflowRun {
         run.launch_brief = launch_brief;
         run.phase_models = phase_models;
         run
+    }
+
+    pub(crate) fn set_task_selection(
+        &mut self,
+        selection: TaskSelection,
+    ) -> Result<(), TransitionError> {
+        if self.kind != RunKind::Configured
+            || !self.attempts.is_empty()
+            || self.task_selection.is_some()
+            || !supports_task_execution(&self.pinned.definition)
+            || task_selection_from_file(task_selection_to_file(&selection)).is_err()
+        {
+            return Err(TransitionError::Invalid);
+        }
+        self.task_selection = Some(selection);
+        Ok(())
     }
 
     pub(crate) fn record_launch_input(
@@ -800,11 +841,21 @@ impl WorkflowRun {
             .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
     }
 
-    pub(crate) fn complete_unchanged_quick_task(&mut self) -> Result<(), TransitionError> {
+    pub(crate) fn completed_without_changes(&self) -> bool {
+        self.state == RunState::Completed
+            && self
+                .pinned
+                .definition
+                .steps()
+                .iter()
+                .any(|step| unchanged_task_gate(self, &step.key))
+    }
+
+    pub(crate) fn complete_unchanged_task(&mut self) -> Result<(), TransitionError> {
         let RunState::Ready { step } = &self.state else {
             return Err(TransitionError::Invalid);
         };
-        if !unchanged_quick_task_gate(self, step) {
+        if !unchanged_task_gate(self, step) {
             return Err(TransitionError::Invalid);
         }
         self.state = RunState::Completed;
@@ -1784,6 +1835,7 @@ impl WorkflowRun {
                 .conversation_id
                 .map(|conversation| conversation.as_hex()),
             launch_brief: self.launch_brief.clone(),
+            task_selection: self.task_selection.as_ref().map(task_selection_to_file),
             kind: self.kind.as_str().to_owned(),
             agent_id: self.agent_id.as_hex(),
             phase_models: self.phase_models.iter().map(phase_model_to_file).collect(),
@@ -1814,6 +1866,10 @@ impl WorkflowRun {
             None => None,
         };
         let kind = RunKind::parse(&file.kind).ok_or(RunRecordError::Corrupt)?;
+        let task_selection = file
+            .task_selection
+            .map(task_selection_from_file)
+            .transpose()?;
         let agent_id = AgentId::parse(&file.agent_id).ok_or(RunRecordError::Corrupt)?;
         let phase_models = file
             .phase_models
@@ -1860,6 +1916,7 @@ impl WorkflowRun {
             project_id,
             conversation_id,
             launch_brief: file.launch_brief,
+            task_selection,
             kind,
             agent_id,
             phase_models,
@@ -1888,6 +1945,12 @@ impl WorkflowRun {
             .ok_or(RunRecordError::Corrupt)?;
         if fact_count > self.pinned.definition.attempt_bound()
             || self.artefacts.len() > crate::workflows::artefacts::MAXIMUM_ARTEFACTS
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        if self.task_selection.is_some()
+            && (self.kind != RunKind::Configured
+                || !supports_task_execution(&self.pinned.definition))
         {
             return Err(RunRecordError::Corrupt);
         }
@@ -2516,6 +2579,63 @@ fn phase_model_to_file(selection: &PhaseModelSelection) -> PhaseModelFile {
     }
 }
 
+pub(crate) fn supports_task_execution(definition: &super::definition::WorkflowDefinition) -> bool {
+    use super::definition::{OutputKind, SystemCommandId};
+    let steps = definition.steps();
+    let [implementation, reviews @ .., gate, commit] = steps else {
+        return false;
+    };
+    matches!(&implementation.action, StepAction::Agent(_))
+        && implementation.writes_primary_source()
+        && reviews.iter().all(|review| {
+            matches!(&review.action, StepAction::Agent(_))
+                && review
+                    .required_outputs()
+                    .iter()
+                    .any(|output| output.kind == OutputKind::ReviewReport)
+        })
+        && matches!(&gate.action, StepAction::HumanGate(action) if !action.is_plan_checkpoint())
+        && matches!(&commit.action, StepAction::SystemCommand(action) if action.command == SystemCommandId::CommitCandidate)
+}
+
+fn task_selection_to_file(selection: &TaskSelection) -> TaskSelectionFile {
+    TaskSelectionFile {
+        document_id: selection.document_id.as_hex(),
+        revision: selection.revision,
+        content_hash: selection.content_hash.clone(),
+        index: selection.index,
+        task_markdown: selection.task_markdown.clone(),
+        task_list: selection.task_list.clone(),
+    }
+}
+
+fn task_selection_from_file(file: TaskSelectionFile) -> Result<TaskSelection, RunRecordError> {
+    let document_id = DocumentId::parse(&file.document_id).ok_or(RunRecordError::Corrupt)?;
+    if file.revision == 0
+        || crate::workflows::artefacts::ObjectHash::of(file.task_list.as_bytes()).as_str()
+            != file.content_hash
+        || file.task_list.len() > crate::workflows::task_list::MAXIMUM_TASK_LIST_BYTES
+    {
+        return Err(RunRecordError::Corrupt);
+    }
+    let list =
+        crate::workflows::task_list::parse(&file.task_list).map_err(|_| RunRecordError::Corrupt)?;
+    let Some(task) = list.tasks.get(file.index as usize) else {
+        return Err(RunRecordError::Corrupt);
+    };
+    if task.checked || task.markdown != file.task_markdown {
+        return Err(RunRecordError::Corrupt);
+    }
+    Ok(TaskSelection {
+        document_id,
+        revision: file.revision,
+        content_hash: file.content_hash,
+        index: file.index,
+        task_markdown: file.task_markdown,
+        task_list: file.task_list,
+    })
+}
+
 fn phase_model_from_file(file: PhaseModelFile) -> Result<PhaseModelSelection, RunRecordError> {
     let provider = ProviderKind::parse(&file.provider).ok_or(RunRecordError::Corrupt)?;
     let thinking = file
@@ -3052,14 +3172,16 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn unchanged_quick_task_gate(run: &WorkflowRun, step: &StepKey) -> bool {
-    if run.kind != RunKind::QuickTask || run.pinned.workflow_id.is_some() {
-        return false;
-    }
+fn unchanged_task_gate(run: &WorkflowRun, step: &StepKey) -> bool {
     let Some(definition) = run.pinned.definition.step(step) else {
         return false;
     };
-    if !super::quick::is_expected_gate_step(definition) {
+    let quick_task = run.kind == RunKind::QuickTask
+        && run.pinned.workflow_id.is_none()
+        && super::quick::is_expected_gate_step(definition);
+    let selected_task = run.task_selection.is_some()
+        && matches!(definition.action, StepAction::HumanGate(ref action) if !action.is_plan_checkpoint());
+    if !quick_task && !selected_task {
         return false;
     }
     let RunSource::Captured { source } = &run.source else {
@@ -4023,7 +4145,7 @@ fn validate_state_facts(run: &WorkflowRun) -> Result<(), RunRecordError> {
     }
     if let RunState::Ready { step } = &expected
         && run.state == RunState::Completed
-        && unchanged_quick_task_gate(run, step)
+        && unchanged_task_gate(run, step)
     {
         return Ok(());
     }

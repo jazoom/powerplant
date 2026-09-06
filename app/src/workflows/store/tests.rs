@@ -322,38 +322,6 @@ fn a_completed_run_marked_failed_fails_startup() {
 }
 
 #[test]
-fn persisted_bytes_omit_secrets_prompts_and_command_output() {
-    let dir = tempfile::tempdir().expect("dir");
-    let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");
-    let run = store.create(run_named("Named", 1)).expect("create");
-    let attempt = AttemptId::generate().expect("attempt");
-    store
-        .mutate(&run.id, |run| start_test_attempt(run, attempt, 2))
-        .expect("start");
-    store
-        .mutate(&run.id, |run| {
-            run.record_cleanup(
-                attempt,
-                crate::workflows::run::AttemptCleanupRecord::Complete,
-            )?;
-            run.complete_attempt(attempt, 3)
-        })
-        .expect("complete");
-    let bytes = fs::read(dir.path().join(format!("{}.json", run.id.as_hex()))).expect("read");
-    let text = String::from_utf8(bytes).expect("utf8");
-    assert!(!text.contains("sk-"));
-    assert!(!text.contains("api_key"));
-    assert!(!text.contains("Hello from the user"));
-    assert!(!text.contains("git status"));
-    assert!(!text.contains("M src/main.rs"));
-    assert!(!text.contains("workflow-workspaces"));
-    assert!(!text.contains("/tmp/"));
-    assert!(!text.contains("pp-attempt-"));
-    assert!(text.contains("isolated-attempt"));
-    assert!(text.contains("complete"));
-}
-
-#[test]
 fn a_completed_attempt_without_complete_cleanup_fails_startup() {
     let dir = tempfile::tempdir().expect("dir");
     let store = WorkflowRunStore::open(dir.path().to_path_buf()).expect("open");

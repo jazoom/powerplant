@@ -33,6 +33,10 @@ pub(super) struct WorkflowQuery {
     brief: String,
     commit_policy: String,
     plan: String,
+    task_document: String,
+    task_revision: String,
+    task_hash: String,
+    task_index: String,
     #[serde(default)]
     phase: Vec<String>,
 }
@@ -55,6 +59,22 @@ pub(super) struct WorkflowLaunchForm {
     preview_commit_policy: String,
     #[serde(default)]
     preview_plan: String,
+    #[serde(default)]
+    task_document: String,
+    #[serde(default)]
+    task_revision: String,
+    #[serde(default)]
+    task_hash: String,
+    #[serde(default)]
+    task_index: String,
+    #[serde(default)]
+    preview_task_document: String,
+    #[serde(default)]
+    preview_task_revision: String,
+    #[serde(default)]
+    preview_task_hash: String,
+    #[serde(default)]
+    preview_task_index: String,
     #[serde(default)]
     phase: Vec<String>,
 }
@@ -101,6 +121,15 @@ struct SelectedPlan {
     content: String,
 }
 
+struct SelectedTask {
+    document_id: DocumentId,
+    revision: u32,
+    content_hash: String,
+    index: u32,
+    markdown: String,
+    task_list: String,
+}
+
 struct PhaseChoice {
     value: String,
     label: String,
@@ -142,6 +171,11 @@ struct WorkflowLaunchView {
     targets: Vec<TargetOption>,
     plans: Vec<PlanOption>,
     requires_plan: bool,
+    task_document: String,
+    task_revision: String,
+    task_hash: String,
+    task_index: String,
+    task_preview: String,
     commit_policies: Vec<CommitPolicyOption>,
     phase_models: Vec<PhaseModelOption>,
     model_summary: String,
@@ -160,6 +194,11 @@ struct WorkflowLaunchContents<'a> {
     targets: &'a [TargetOption],
     plans: &'a [PlanOption],
     requires_plan: bool,
+    task_document: &'a str,
+    task_revision: &'a str,
+    task_hash: &'a str,
+    task_index: &'a str,
+    task_preview: &'a str,
     commit_policies: &'a [CommitPolicyOption],
     phase_models: &'a [PhaseModelOption],
     model_summary: &'a str,
@@ -178,6 +217,11 @@ impl WorkflowLaunchView {
             targets: &self.targets,
             plans: &self.plans,
             requires_plan: self.requires_plan,
+            task_document: &self.task_document,
+            task_revision: &self.task_revision,
+            task_hash: &self.task_hash,
+            task_index: &self.task_index,
+            task_preview: &self.task_preview,
             commit_policies: &self.commit_policies,
             phase_models: &self.phase_models,
             model_summary: &self.model_summary,
@@ -234,6 +278,10 @@ pub(super) async fn show(
         &query.brief,
         &query.commit_policy,
         &query.plan,
+        &query.task_document,
+        &query.task_revision,
+        &query.task_hash,
+        &query.task_index,
         &query.phase,
         "",
     )
@@ -263,6 +311,10 @@ pub(super) async fn launch(
         let brief = form.brief.clone();
         let commit_policy = form.commit_policy.clone();
         let plan = form.plan.clone();
+        let task_document = form.task_document.clone();
+        let task_revision = form.task_revision.clone();
+        let task_hash = form.task_hash.clone();
+        let task_index = form.task_index.clone();
         let phase = form.phase.clone();
         async move {
             let view = launch_view(
@@ -273,6 +325,10 @@ pub(super) async fn launch(
                 &brief,
                 &commit_policy,
                 &plan,
+                &task_document,
+                &task_revision,
+                &task_hash,
+                &task_index,
                 &phase,
                 error,
             )
@@ -345,6 +401,35 @@ pub(super) async fn launch(
         ),
         Err(error) => return error_view(PatchStatus::UnprocessableEntity, error.message()).await,
     };
+    if form.task_document != form.preview_task_document
+        || form.task_revision != form.preview_task_revision
+        || form.task_hash != form.preview_task_hash
+        || form.task_index != form.preview_task_index
+    {
+        return error_view(
+            PatchStatus::Conflict,
+            "The selected task changed. Review it before launch.",
+        )
+        .await;
+    }
+    let selected_task = match resolve_selected_task(
+        &state,
+        &record,
+        &form.task_document,
+        &form.task_revision,
+        &form.task_hash,
+        &form.task_index,
+    ) {
+        Ok(task) => task,
+        Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
+    };
+    if selected_task.is_some() && !workflows::run::supports_task_execution(&pinned.definition) {
+        return error_view(
+            PatchStatus::UnprocessableEntity,
+            "Choose implementation with optional review, code approval and commit for a selected task.",
+        )
+        .await;
+    }
     if form.plan != form.preview_plan {
         return error_view(
             PatchStatus::Conflict,
@@ -481,6 +566,17 @@ pub(super) async fn launch(
             Ok(plan) => plan,
             Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
         };
+    let selected_task = match resolve_selected_task(
+        &state,
+        &current,
+        &form.task_document,
+        &form.task_revision,
+        &form.task_hash,
+        &form.task_index,
+    ) {
+        Ok(task) => task,
+        Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
+    };
     let run_id = workflows::RunId::generate()
         .map_err(|error| AppError::new("create workflow run identifier", error))?;
     let mut run = WorkflowRun::create_configured_for_conversation(
@@ -493,6 +589,24 @@ pub(super) async fn launch(
         environments,
         phase_models.clone(),
     );
+    if let Some(task) = selected_task
+        && run
+            .set_task_selection(crate::workflows::TaskSelection {
+                document_id: task.document_id,
+                revision: task.revision,
+                content_hash: task.content_hash,
+                index: task.index,
+                task_markdown: task.markdown,
+                task_list: task.task_list,
+            })
+            .is_err()
+    {
+        return error_view(
+            PatchStatus::UnprocessableEntity,
+            "The selected task is invalid.",
+        )
+        .await;
+    }
     if let Some(plan) = selected_plan {
         let imported = crate::workflows::artefacts::import_saved_plan(
             run_id,
@@ -598,10 +712,36 @@ async fn launch_view(
     brief: &str,
     commit_policy_raw: &str,
     plan_raw: &str,
+    task_document: &str,
+    task_revision: &str,
+    task_hash: &str,
+    task_index: &str,
     phase_raw: &[String],
     error: &'static str,
 ) -> WorkflowLaunchView {
-    let records = state.workflows.list();
+    let selected_task = resolve_selected_task(
+        state,
+        record,
+        task_document,
+        task_revision,
+        task_hash,
+        task_index,
+    );
+    let task_preview = selected_task
+        .as_ref()
+        .ok()
+        .and_then(|task| task.as_ref())
+        .map(|task| format!("Task {}\n\n{}", task.index + 1, task.markdown))
+        .unwrap_or_default();
+    let error = selected_task.as_ref().err().copied().unwrap_or(error);
+    let records: Vec<_> = state
+        .workflows
+        .list()
+        .into_iter()
+        .filter(|record| {
+            task_document.is_empty() || workflows::run::supports_task_execution(&record.definition)
+        })
+        .collect();
     let selected_workflow = selected_workflow(&records, workflow_raw);
     let workflows = records
         .iter()
@@ -646,6 +786,7 @@ async fn launch_view(
             definition
                 .commit_policy_choices()
                 .into_iter()
+                .filter(|policy| task_document.is_empty() || *policy == CommitPolicy::HumanApproval)
                 .map(|policy| CommitPolicyOption {
                     value: policy.as_str().to_owned(),
                     label: policy.label().to_owned(),
@@ -684,11 +825,20 @@ async fn launch_view(
         document_title: format!("Run workflow · {}{}", record.title, TITLE_SUFFIX),
         conversation_id: record.id.as_hex(),
         revision: record.revision.to_string(),
-        brief: brief.to_owned(),
+        brief: if brief.is_empty() && !task_document.is_empty() {
+            "Implement only the assigned task from the selected task list.".to_owned()
+        } else {
+            brief.to_owned()
+        },
         workflows,
         targets,
         plans,
         requires_plan,
+        task_document: task_document.to_owned(),
+        task_revision: task_revision.to_owned(),
+        task_hash: task_hash.to_owned(),
+        task_index: task_index.to_owned(),
+        task_preview,
         commit_policies,
         phase_models,
         model_summary,
@@ -1197,6 +1347,73 @@ fn resolve_selected_plan(
             artefact_hash: revision.artefact_hash,
         },
         content,
+    }))
+}
+
+fn resolve_selected_task(
+    state: &AppState,
+    record: &ConversationRecord,
+    document_raw: &str,
+    revision_raw: &str,
+    hash_raw: &str,
+    index_raw: &str,
+) -> Result<Option<SelectedTask>, &'static str> {
+    if document_raw.trim().is_empty()
+        && revision_raw.trim().is_empty()
+        && hash_raw.trim().is_empty()
+        && index_raw.trim().is_empty()
+    {
+        return Ok(None);
+    }
+    let document_id = DocumentId::parse(document_raw.trim()).ok_or("Choose an available task.")?;
+    let revision = revision_raw
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or("Choose an available task.")?;
+    let index = index_raw
+        .parse::<u32>()
+        .ok()
+        .ok_or("Choose an available task.")?;
+    let expected_hash = crate::workflows::artefacts::ObjectHash::parse(hash_raw.trim())
+        .ok_or("Choose an available task.")?;
+    let document = state
+        .documents
+        .get(&document_id)
+        .ok_or("That task list is no longer available.")?;
+    if document.associated_conversation != Some(record.id)
+        || document.kind != crate::conversations::DocumentKind::TaskList
+    {
+        return Err("That task list is not associated with this conversation.");
+    }
+    let stored = document
+        .revision(revision)
+        .ok_or("That task-list revision is no longer available.")?;
+    if stored.content_hash != expected_hash {
+        return Err("That task list changed. Reload the task preview.");
+    }
+    let task_list = state
+        .documents
+        .content(&document, revision)
+        .map_err(|_| "Power Plant could not read the selected task list.")?;
+    if crate::workflows::artefacts::ObjectHash::of(task_list.as_bytes()) != expected_hash {
+        return Err("That task list changed. Reload the task preview.");
+    }
+    let list = workflows::task_list::parse(&task_list).map_err(|_| "That task list is invalid.")?;
+    let task = list
+        .tasks
+        .get(index as usize)
+        .ok_or("That task is no longer available.")?;
+    if task.checked {
+        return Err("Only an unchecked task can run.");
+    }
+    Ok(Some(SelectedTask {
+        document_id,
+        revision,
+        content_hash: expected_hash.as_str(),
+        index,
+        markdown: task.markdown.clone(),
+        task_list,
     }))
 }
 

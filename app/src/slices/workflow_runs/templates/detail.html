@@ -85,6 +85,27 @@
         {% endif %}
       </section>
 
+      {% if let Some(task) = task_selection %}
+        <section
+          class="file-section mt-7 space-y-2"
+          aria-labelledby="task-selection-title"
+        >
+          <h2 id="task-selection-title" class="text-lg font-semibold">
+            Selected task
+          </h2>
+          <p class="text-sm">
+            Task {{ task.index }} from immutable task-list revision
+            {{ task.revision }}.
+          </p>
+          <p class="text-quiet text-xs break-all">
+            {{ task.document_id }} · {{ task.content_hash }}
+          </p>
+          <p class="text-quiet text-sm">
+            The diff and approval apply only to this task run.
+          </p>
+        </section>
+      {% endif %}
+
       <section class="mt-7" aria-labelledby="run-steps-title">
         <div class="mb-2 flex items-end justify-between gap-6 max-sm:block">
           <h2 id="run-steps-title" class="text-lg font-semibold">Steps</h2>
