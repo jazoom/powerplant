@@ -10,7 +10,8 @@ use crate::workflows::summary::ProcessPhase;
 use crate::workflows::{WorkflowRecord, summary};
 
 use super::forms::{
-    FormErrors, RoleDraft, StepDraft, WorkflowFormState, can_move_step, can_remove_step,
+    FormErrors, PhasePurpose, RoleDraft, StepDraft, WorkflowFormState, can_move_step,
+    can_remove_step,
 };
 
 pub(super) struct EnvironmentOption {
@@ -148,6 +149,12 @@ pub(super) struct CommandChoice {
     pub(super) selected: bool,
 }
 
+pub(super) struct PurposeChoice {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+    pub(super) selected: bool,
+}
+
 pub(super) struct StepRow {
     pub(super) has_error: bool,
     pub(super) index: usize,
@@ -156,6 +163,14 @@ pub(super) struct StepRow {
     pub(super) key_error: &'static str,
     pub(super) name: String,
     pub(super) name_error: &'static str,
+    pub(super) shared_role: bool,
+    pub(super) purpose_label: &'static str,
+    pub(super) purpose_error: &'static str,
+    pub(super) purpose_choices: Vec<PurposeChoice>,
+    pub(super) expertise: String,
+    pub(super) expertise_error: &'static str,
+    pub(super) instructions: String,
+    pub(super) instructions_error: &'static str,
     pub(super) is_agent: bool,
     pub(super) is_gate: bool,
     pub(super) environment: String,
@@ -317,7 +332,8 @@ impl WorkflowFormView {
             summary_error: errors.summary,
             roles: state
                 .roles
-                .into_iter()
+                .iter()
+                .cloned()
                 .enumerate()
                 .map(|(index, role)| role_row(index, role_count, role, errors.roles.get(index)))
                 .collect(),
@@ -325,7 +341,15 @@ impl WorkflowFormView {
                 .steps
                 .iter()
                 .enumerate()
-                .map(|(index, step)| step_row(index, step, &state.steps, errors.steps.get(index)))
+                .map(|(index, step)| {
+                    step_row(
+                        index,
+                        step,
+                        &state.steps,
+                        state.roles.iter().any(|role| role.key == step.role),
+                        errors.steps.get(index),
+                    )
+                })
                 .collect(),
             can_add_role: role_count < MAXIMUM_ROLES,
             can_add_step: step_count < MAXIMUM_STEPS,
@@ -414,7 +438,7 @@ fn role_row(
         prompt_error: errors.prompt,
         can_move_up: index > 0,
         can_move_down: index + 1 < count,
-        can_remove: count > 1,
+        can_remove: true,
     }
 }
 
@@ -422,6 +446,7 @@ fn step_row(
     index: usize,
     step: &StepDraft,
     steps: &[StepDraft],
+    shared_role: bool,
     errors: Option<&super::forms::StepErrors>,
 ) -> StepRow {
     let errors = errors.cloned().unwrap_or_default();
@@ -436,6 +461,7 @@ fn step_row(
         || command_id.is_some_and(|command| !command.contract().required_outputs.is_empty());
     let lock_outputs = !is_agent;
     StepRow {
+        shared_role,
         has_error: errors.has_error(),
         index,
         position: index + 1,
@@ -443,6 +469,30 @@ fn step_row(
         key_error: errors.key,
         name: step.name.clone(),
         name_error: errors.name,
+        purpose_label: PhasePurpose::parse(&step.purpose)
+            .unwrap_or(PhasePurpose::Custom)
+            .label(),
+        purpose_error: errors.purpose,
+        purpose_choices: [
+            PhasePurpose::Planning,
+            PhasePurpose::Implementation,
+            PhasePurpose::ReadOnlyReview,
+            PhasePurpose::ReviewAndFix,
+            PhasePurpose::CodeApproval,
+            PhasePurpose::Commit,
+            PhasePurpose::Custom,
+        ]
+        .into_iter()
+        .map(|purpose| PurposeChoice {
+            value: purpose.as_str(),
+            label: purpose.label(),
+            selected: purpose.as_str() == step.purpose,
+        })
+        .collect(),
+        expertise: step.expertise.clone(),
+        expertise_error: errors.expertise,
+        instructions: step.instructions.clone(),
+        instructions_error: errors.instructions,
         is_agent,
         is_gate,
         environment: step.environment.clone(),
@@ -513,7 +563,8 @@ fn step_row(
                     .map(|item| item.source)
                     .unwrap_or(""),
                 sources: source_options(earlier, &input.kind, &input.source),
-                can_remove: input_count > 0,
+                can_remove: input_count > 0
+                    && !super::forms::input_removal_breaks_contract(step, input_index),
             })
             .collect(),
         can_add_input: input_count < MAXIMUM_INPUTS,
@@ -537,7 +588,9 @@ fn step_row(
                     .unwrap_or(""),
                 can_move_up: !lock_outputs && output_index > 0,
                 can_move_down: !lock_outputs && output_index + 1 < output_count,
-                can_remove: !lock_outputs && output_count > 1,
+                can_remove: !lock_outputs
+                    && output_count > 1
+                    && !super::forms::output_is_required(step, output_index),
             })
             .collect(),
         can_add_output: !lock_outputs && output_count < MAXIMUM_OUTPUTS,
@@ -662,6 +715,10 @@ fn source_options(earlier: &[StepDraft], kind: &str, current: &str) -> Vec<Sourc
             });
         }
     }
+    options.retain(|option| {
+        crate::workflows::definition::ArtefactKind::parse(kind)
+            .is_some_and(|kind| super::forms::source_is_valid(&option.value, kind, earlier))
+    });
     if !current.is_empty() && !options.iter().any(|option| option.selected) {
         options.push(SourceOption {
             value: current.to_owned(),

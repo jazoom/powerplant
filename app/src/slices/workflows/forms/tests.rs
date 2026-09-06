@@ -1,4 +1,6 @@
-use super::{FormError, FormIntent, WorkflowFormState, can_move_step, can_remove_step};
+use super::{
+    FormError, FormIntent, PhasePurpose, WorkflowFormState, can_move_step, can_remove_step,
+};
 use crate::workflows::definition::MAXIMUM_DIRECTORIES;
 
 fn pair(key: &str, value: &str) -> (String, String) {
@@ -34,6 +36,23 @@ fn valid_pairs() -> Vec<(String, String)> {
     ]
 }
 
+fn purpose_only_pairs() -> Vec<(String, String)> {
+    vec![
+        pair("intent", "save"),
+        pair("name", "Implementation and review"),
+        pair(
+            "default-environment",
+            &crate::tests::test_environment_id().as_hex(),
+        ),
+        pair("step_0_name", "Implement the change"),
+        pair("step_0_purpose", "implementation"),
+        pair("step_0_review-policy", "none"),
+        pair("step_1_name", "Review the change"),
+        pair("step_1_purpose", "read-only-review"),
+        pair("step_1_review-policy", "none"),
+    ]
+}
+
 fn review_pairs() -> Vec<(String, String)> {
     let mut pairs = valid_pairs();
     pairs
@@ -65,6 +84,187 @@ fn review_pairs() -> Vec<(String, String)> {
         pair("step_1_output_1_kind", "review-report"),
     ]);
     pairs
+}
+
+#[test]
+fn purpose_phases_build_without_manual_identifiers_or_roles() {
+    let (form, intent) = WorkflowFormState::parse(purpose_only_pairs()).expect("purpose form");
+    assert_eq!(intent, FormIntent::Save);
+    let definition = form.to_definition().expect("definition");
+    assert_eq!(definition.steps().len(), 2);
+    assert_eq!(definition.steps()[0].key.as_str(), "phase-1");
+    assert_eq!(definition.steps()[1].key.as_str(), "phase-2");
+    assert!(matches!(
+        definition.steps()[0].action,
+        crate::workflows::definition::StepAction::Agent(_)
+    ));
+    assert!(matches!(
+        definition.steps()[1].action,
+        crate::workflows::definition::StepAction::Agent(_)
+    ));
+    assert_eq!(definition.roles().len(), 2);
+}
+
+#[test]
+fn generated_keys_survive_a_display_name_change() {
+    let (mut form, _) = WorkflowFormState::parse(purpose_only_pairs()).expect("purpose form");
+    let before = (
+        form.steps[0].key.clone(),
+        form.steps[0].role.clone(),
+        form.steps[0].outputs.clone(),
+    );
+    form.steps[0].name = "A different display name".to_owned();
+    super::normalise_phase_contracts(&mut form.steps);
+    let definition = form.to_definition().expect("renamed definition");
+    assert_eq!(definition.steps()[0].name, "A different display name");
+    assert_eq!(form.steps[0].key, before.0);
+    assert_eq!(form.steps[0].role, before.1);
+    assert_eq!(
+        form.steps[0]
+            .outputs
+            .iter()
+            .map(|output| (output.key.as_str(), output.kind.as_str()))
+            .collect::<Vec<_>>(),
+        before
+            .2
+            .iter()
+            .map(|output| (output.key.as_str(), output.kind.as_str()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn malformed_connections_get_field_errors() {
+    let mut pairs = review_pairs();
+    pairs.push(pair("step_1_purpose", "read-only-review"));
+    pairs
+        .iter_mut()
+        .find(|(key, _)| key == "step_1_input_0_source")
+        .expect("candidate source")
+        .1 = "step-output:missing:candidate".to_owned();
+    let (form, _) = WorkflowFormState::parse(pairs).expect("parse");
+    assert_eq!(
+        form.steps[1].inputs[0].source,
+        "step-output:missing:candidate"
+    );
+    let errors = form.to_definition().expect_err("connection");
+    assert!(!errors.steps[1].inputs[0].source.is_empty());
+    assert!(!errors.steps[0].has_error());
+}
+
+#[test]
+fn removing_a_contract_output_is_rejected() {
+    let (mut form, _) = WorkflowFormState::parse(review_pairs()).expect("parse");
+    assert_eq!(
+        form.apply(FormIntent::RemoveOutput { step: 0, output: 1 }),
+        Err(FormError::Connection)
+    );
+}
+
+#[test]
+fn purpose_intents_create_supported_phases() {
+    let (mut form, _) = WorkflowFormState::parse(valid_pairs()).expect("parse");
+    let (_, intent) = WorkflowFormState::parse(
+        valid_pairs()
+            .into_iter()
+            .map(|(key, value)| {
+                if key == "intent" {
+                    (key, "add-phase:code-approval".to_owned())
+                } else {
+                    (key, value)
+                }
+            })
+            .collect(),
+    )
+    .expect("intent");
+    assert_eq!(intent, FormIntent::AddPhase(PhasePurpose::CodeApproval));
+    form.apply(intent).expect("add phase");
+    form.apply(FormIntent::AddPhase(PhasePurpose::Commit))
+        .expect("commit");
+    let definition = form
+        .to_definition()
+        .expect("derived approval and commit connections");
+    assert_eq!(
+        definition.commit_policy(),
+        crate::workflows::definition::CommitPolicy::HumanApproval
+    );
+}
+
+#[test]
+fn purpose_edits_preserve_optional_connections_and_empty_tool_ceiling() {
+    let mut pairs = purpose_only_pairs();
+    pairs.extend([
+        pair("step_0_output_0_key", "notes"),
+        pair("step_0_output_0_kind", "plan"),
+        pair("step_0_output_1_key", "candidate"),
+        pair("step_0_output_1_kind", "candidate-revision"),
+        pair("step_1_input_0_key", "requirements"),
+        pair("step_1_input_0_kind", "plan"),
+        pair("step_1_input_0_source", "step-output:phase-1:notes"),
+    ]);
+    let (mut form, _) = WorkflowFormState::parse(pairs).expect("parse");
+    form.steps[0].tools.clear();
+    super::normalise_phase_contracts(&mut form.steps);
+    let definition = form.to_definition().expect("optional input survives");
+    assert!(
+        definition.steps()[1]
+            .inputs
+            .iter()
+            .any(|input| input.key.as_str() == "requirements")
+    );
+    let crate::workflows::definition::StepAction::Agent(action) = &definition.steps()[0].action
+    else {
+        panic!("agent");
+    };
+    assert!(action.authority.tools.is_empty());
+    assert!(!can_remove_step(&form.steps, 0));
+}
+
+#[test]
+fn purpose_change_allocates_a_distinct_role_and_preserves_invalid_values() {
+    let (mut form, _) = WorkflowFormState::parse(purpose_only_pairs()).expect("parse");
+    form.apply(FormIntent::AddPhase(PhasePurpose::CodeApproval))
+        .expect("gate");
+    form.apply(FormIntent::SetPhasePurpose {
+        step: 2,
+        purpose: PhasePurpose::Planning,
+    })
+    .expect("model phase");
+    form.to_definition().expect("distinct roles");
+    assert_ne!(form.steps[0].role, form.steps[2].role);
+    form.steps[0].name.clear();
+    form.steps[1].purpose = "unsupported-purpose".to_owned();
+    super::normalise_phase_contracts(&mut form.steps);
+    let errors = form.to_definition().expect_err("invalid fields");
+    assert!(!errors.steps[0].name.is_empty());
+    assert!(!errors.steps[1].purpose.is_empty());
+    assert!(form.steps[0].name.is_empty());
+    assert_eq!(form.steps[1].purpose, "unsupported-purpose");
+}
+
+#[test]
+fn commit_contract_excludes_reviews_before_the_final_candidate_producer() {
+    let (mut form, _) = WorkflowFormState::parse(purpose_only_pairs()).expect("parse");
+    form.apply(FormIntent::AddPhase(PhasePurpose::ReviewAndFix))
+        .expect("fixing review");
+    form.apply(FormIntent::AddPhase(PhasePurpose::CodeApproval))
+        .expect("approval");
+    form.apply(FormIntent::AddPhase(PhasePurpose::Commit))
+        .expect("commit");
+    let definition = form.to_definition().expect("definition");
+    let reviews: Vec<_> = definition
+        .steps()
+        .last()
+        .expect("commit")
+        .inputs
+        .iter()
+        .filter(|input| input.kind == crate::workflows::definition::ArtefactKind::ReviewReport)
+        .collect();
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(
+        super::source_token(&reviews[0].source),
+        "step-output:phase-3:review"
+    );
 }
 
 #[test]
@@ -143,7 +343,7 @@ fn malformed_indices_are_rejected() {
 }
 
 #[test]
-fn unknown_role_is_related_to_the_step_control() {
+fn detached_shared_role_is_rejected() {
     let mut pairs = valid_pairs();
     pairs
         .iter_mut()
@@ -152,7 +352,7 @@ fn unknown_role_is_related_to_the_step_control() {
         .1 = "missing".to_owned();
     let (form, _) = WorkflowFormState::parse(pairs).expect("parse");
     let errors = form.to_definition().expect_err("invalid");
-    assert_eq!(errors.steps[0].role, "An agent step names an unknown role.");
+    assert_eq!(errors.summary, "Every role must be used by an agent step.");
 }
 
 #[test]

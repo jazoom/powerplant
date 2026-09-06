@@ -99,123 +99,126 @@
           </div>
         </details>
 
-        <section class="space-y-3">
-          <div>
-            <h2 class="text-lg font-semibold">Roles</h2>
-            <p class="text-quiet mt-1 text-sm">
-              Roles describe the expertise and instructions that steps use.
-            </p>
-          </div>
-          {% for role in roles %}
-            <article class="border-base-300 space-y-3 border p-4">
-              <h3 class="font-semibold">Role {{ role.position }}</h3>
-              <details
-                class="workflow-advanced"
-                {% if role.key_error != "" %}open{% endif %}
-              >
-                <summary>Advanced settings: role identity</summary>
-                <div class="flex flex-wrap items-start justify-between gap-2">
-                  <label class="flex min-w-0 flex-1 flex-col gap-1">
-                    <span class="text-quiet text-xs">Role identifier</span>
-                    <input
-                      class="input input-bordered input-sm font-mono"
-                      name="role_{{ role.index }}_key"
-                      required
-                      maxlength="32"
-                      value="{{ role.key }}"
-                    />
-                    {% if role.key_error != "" %}
-                      <p class="text-error text-sm">{{ role.key_error }}</p>
-                    {% endif %}
-                  </label>
-                  <div class="flex flex-wrap gap-2">
-                    {% if role.can_move_up %}
-                      <button
-                        class="btn btn-ghost btn-sm"
-                        type="submit"
-                        formnovalidate
-                        name="intent"
-                        value="move-role-up:{{ role.index }}"
-                      >
-                        Move up
-                      </button>
-                    {% endif %}
-                    {% if role.can_move_down %}
-                      <button
-                        class="btn btn-ghost btn-sm"
-                        type="submit"
-                        formnovalidate
-                        name="intent"
-                        value="move-role-down:{{ role.index }}"
-                      >
-                        Move down
-                      </button>
-                    {% endif %}
-                    {% if role.can_remove %}
-                      <button
-                        class="btn btn-ghost btn-sm"
-                        type="submit"
-                        formnovalidate
-                        name="intent"
-                        value="remove-role:{{ role.index }}"
-                      >
-                        Remove role
-                      </button>
-                    {% endif %}
+        <details class="workflow-advanced">
+          <summary>Advanced settings: shared roles</summary>
+          <section class="space-y-3">
+            <div>
+              <h2 class="text-lg font-semibold">Roles</h2>
+              <p class="text-quiet mt-1 text-sm">
+                Roles describe the expertise and instructions that steps use.
+              </p>
+            </div>
+            {% for role in roles %}
+              <article class="border-base-300 space-y-3 border p-4">
+                <h3 class="font-semibold">Role {{ role.position }}</h3>
+                <details
+                  class="workflow-advanced"
+                  {% if role.key_error != "" %}open{% endif %}
+                >
+                  <summary>Advanced settings: role identity</summary>
+                  <div class="flex flex-wrap items-start justify-between gap-2">
+                    <label class="flex min-w-0 flex-1 flex-col gap-1">
+                      <span class="text-quiet text-xs">Role identifier</span>
+                      <input
+                        class="input input-bordered input-sm font-mono"
+                        name="role_{{ role.index }}_key"
+                        required
+                        maxlength="32"
+                        value="{{ role.key }}"
+                      />
+                      {% if role.key_error != "" %}
+                        <p class="text-error text-sm">{{ role.key_error }}</p>
+                      {% endif %}
+                    </label>
+                    <div class="flex flex-wrap gap-2">
+                      {% if role.can_move_up %}
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="move-role-up:{{ role.index }}"
+                        >
+                          Move up
+                        </button>
+                      {% endif %}
+                      {% if role.can_move_down %}
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="move-role-down:{{ role.index }}"
+                        >
+                          Move down
+                        </button>
+                      {% endif %}
+                      {% if role.can_remove %}
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="remove-role:{{ role.index }}"
+                        >
+                          Remove role
+                        </button>
+                      {% endif %}
+                    </div>
                   </div>
-                </div>
-              </details>
-              <label class="flex flex-col gap-1">
-                <span class="text-sm">Display name</span>
-                <input
-                  class="input input-bordered"
-                  name="role_{{ role.index }}_name"
-                  required
-                  maxlength="80"
-                  value="{{ role.name }}"
-                />
-                {% if role.name_error != "" %}
-                  <p class="text-error text-sm">{{ role.name_error }}</p>
-                {% endif %}
-              </label>
-              <label class="flex flex-col gap-1">
-                <span class="text-sm">Expertise</span>
-                <textarea
-                  class="textarea textarea-bordered min-h-20"
-                  name="role_{{ role.index }}_expertise"
-                  maxlength="4096"
-                >
+                </details>
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Display name</span>
+                  <input
+                    class="input input-bordered"
+                    name="role_{{ role.index }}_name"
+                    required
+                    maxlength="80"
+                    value="{{ role.name }}"
+                  />
+                  {% if role.name_error != "" %}
+                    <p class="text-error text-sm">{{ role.name_error }}</p>
+                  {% endif %}
+                </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Expertise</span>
+                  <textarea
+                    class="textarea textarea-bordered min-h-20"
+                    name="role_{{ role.index }}_expertise"
+                    maxlength="4096"
+                  >
 {{- role.expertise -}}</textarea>
-                {% if role.expertise_error != "" %}
-                  <p class="text-error text-sm">{{ role.expertise_error }}</p>
-                {% endif %}
-              </label>
-              <label class="flex flex-col gap-1">
-                <span class="text-sm">Prompt defaults</span>
-                <textarea
-                  class="textarea textarea-bordered min-h-24"
-                  name="role_{{ role.index }}_prompt"
-                  maxlength="32768"
-                >
+                  {% if role.expertise_error != "" %}
+                    <p class="text-error text-sm">{{ role.expertise_error }}</p>
+                  {% endif %}
+                </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Prompt defaults</span>
+                  <textarea
+                    class="textarea textarea-bordered min-h-24"
+                    name="role_{{ role.index }}_prompt"
+                    maxlength="32768"
+                  >
 {{- role.prompt -}}</textarea>
-                {% if role.prompt_error != "" %}
-                  <p class="text-error text-sm">{{ role.prompt_error }}</p>
-                {% endif %}
-              </label>
-            </article>
-          {% endfor %}
-          {% if can_add_role %}
-            <button
-              class="btn btn-outline btn-sm self-start"
-              type="submit"
-              formnovalidate
-              name="intent"
-              value="add-role"
-            >
-              Add role
-            </button>
-          {% endif %}
-        </section>
+                  {% if role.prompt_error != "" %}
+                    <p class="text-error text-sm">{{ role.prompt_error }}</p>
+                  {% endif %}
+                </label>
+              </article>
+            {% endfor %}
+            {% if can_add_role %}
+              <button
+                class="btn btn-outline btn-sm self-start"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-role"
+              >
+                Add role
+              </button>
+            {% endif %}
+          </section>
+        </details>
 
         <section class="space-y-3" aria-labelledby="workflow-phases-heading">
           <div>
@@ -254,7 +257,7 @@
                     {% endif %}</span
                   >
                   <span class="text-quiet block text-xs"
-                    >{% if step.is_agent %}Model{% else if step.is_gate %}Approval{% else %}System{% endif %}</span
+                    >{{ step.purpose_label }}</span
                   >
                 </span>
               </button>
@@ -280,7 +283,6 @@
                       <input
                         class="input input-bordered input-sm font-mono"
                         name="step_{{ step.index }}_key"
-                        required
                         maxlength="32"
                         value="{{ step.key }}"
                       />
@@ -340,34 +342,92 @@
                 {% endif %}
               </label>
               <label class="flex flex-col gap-1">
-                <span class="text-sm">Action</span>
+                <span class="text-sm">Phase purpose</span>
                 <select
                   class="select select-bordered"
-                  name="step_{{ step.index }}_action"
+                  name="step_{{ step.index }}_purpose"
                 >
-                  <option
-                    value="agent"
-                    {% if step.is_agent %}selected{% endif %}
-                  >
-                    Agent
-                  </option>
-                  <option
-                    value="system-command"
-                    {% if !step.is_agent && !step.is_gate %}selected{% endif %}
-                  >
-                    System command
-                  </option>
-                  <option
-                    value="human-gate"
-                    {% if step.is_gate %}selected{% endif %}
-                  >
-                    Human gate
-                  </option>
+                  {% for purpose in step.purpose_choices %}
+                    <option
+                      value="{{ purpose.value }}"
+                      {% if purpose.selected %}selected{% endif %}
+                    >
+                      {{ purpose.label }}
+                    </option>
+                  {% endfor %}
                 </select>
-                {% if step.action_error != "" %}
-                  <p class="text-error text-sm">{{ step.action_error }}</p>
+                {% if step.purpose_error != "" %}
+                  <p class="text-error text-sm">{{ step.purpose_error }}</p>
                 {% endif %}
               </label>
+              {% if step.is_agent %}
+                {% if step.shared_role %}
+                  <p class="text-quiet text-sm">
+                    This phase uses shared role instructions. Edit them under
+                    Advanced settings: shared roles.
+                  </p>
+                {% endif %}
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Phase expertise</span>
+                  <textarea
+                    class="textarea textarea-bordered min-h-20"
+                    name="step_{{ step.index }}_expertise"
+                    {% if step.shared_role %}readonly{% endif %}
+                    maxlength="4096"
+                  >
+{{- step.expertise -}}</textarea>
+                  {% if step.expertise_error != "" %}
+                    <p class="text-error text-sm">{{ step.expertise_error }}</p>
+                  {% endif %}
+                </label>
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Phase instructions</span>
+                  <textarea
+                    class="textarea textarea-bordered min-h-24"
+                    name="step_{{ step.index }}_instructions"
+                    {% if step.shared_role %}readonly{% endif %}
+                    maxlength="32768"
+                  >
+{{- step.instructions -}}</textarea>
+                  {% if step.instructions_error != "" %}
+                    <p class="text-error text-sm">
+                      {{ step.instructions_error }}
+                    </p>
+                  {% endif %}
+                </label>
+              {% endif %}
+              <details class="workflow-advanced">
+                <summary>Advanced settings: executable action</summary>
+                <label class="flex flex-col gap-1">
+                  <span class="text-sm">Action type</span>
+                  <select
+                    class="select select-bordered"
+                    name="step_{{ step.index }}_action"
+                  >
+                    <option
+                      value="agent"
+                      {% if step.is_agent %}selected{% endif %}
+                    >
+                      Agent
+                    </option>
+                    <option
+                      value="system-command"
+                      {% if !step.is_agent && !step.is_gate %}selected{% endif %}
+                    >
+                      System command
+                    </option>
+                    <option
+                      value="human-gate"
+                      {% if step.is_gate %}selected{% endif %}
+                    >
+                      Human gate
+                    </option>
+                  </select>
+                  {% if step.action_error != "" %}
+                    <p class="text-error text-sm">{{ step.action_error }}</p>
+                  {% endif %}
+                </label>
+              </details>
               {% if step.can_review_gate %}
                 <fieldset
                   class="border-base-300 space-y-3 rounded-sm border p-3"
@@ -539,11 +599,10 @@
                 <details class="workflow-advanced">
                   <summary>Advanced settings: role mapping</summary>
                   <label class="flex flex-col gap-1">
-                    <span class="text-sm">Role identifier</span>
+                    <span class="text-sm">Shared role identifier</span>
                     <input
                       class="input input-bordered font-mono"
                       name="step_{{ step.index }}_role"
-                      required
                       maxlength="32"
                       value="{{ step.role }}"
                     />
@@ -897,49 +956,52 @@
                   {% endif %}
                 </label>
                 {% if step.show_outputs %}
-                  <fieldset class="space-y-3">
-                    <legend class="text-sm">Required outputs</legend>
-                    {% for output in step.outputs %}
-                      <div
-                        class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-2"
-                      >
-                        <label class="flex flex-col gap-1">
-                          <span class="text-quiet text-xs">Key</span>
-                          <input
-                            class="input input-bordered input-sm font-mono"
-                            name="step_{{ step.index }}_output_{{ output.index }}_key"
-                            required
-                            maxlength="32"
-                            value="{{ output.key }}"
-                          />
-                          {% if output.key_error != "" %}
-                            <p class="text-error text-sm">
-                              {{ output.key_error }}
-                            </p>
-                          {% endif %}
-                        </label>
-                        <label class="flex flex-col gap-1">
-                          <span class="text-quiet text-xs">Kind</span>
-                          <select
-                            class="select select-bordered select-sm"
-                            name="step_{{ step.index }}_output_{{ output.index }}_kind"
-                          >
-                            <option
-                              value="candidate-revision"
-                              {% if output.kind == "candidate-revision" %}selected{% endif %}
+                  <details class="workflow-advanced">
+                    <summary>Advanced settings: command outputs</summary>
+                    <fieldset class="space-y-3">
+                      <legend class="text-sm">Required outputs</legend>
+                      {% for output in step.outputs %}
+                        <div
+                          class="border-base-300 grid gap-2 rounded-sm border p-3 sm:grid-cols-2"
+                        >
+                          <label class="flex flex-col gap-1">
+                            <span class="text-quiet text-xs">Key</span>
+                            <input
+                              class="input input-bordered input-sm font-mono"
+                              name="step_{{ step.index }}_output_{{ output.index }}_key"
+                              required
+                              maxlength="32"
+                              value="{{ output.key }}"
+                            />
+                            {% if output.key_error != "" %}
+                              <p class="text-error text-sm">
+                                {{ output.key_error }}
+                              </p>
+                            {% endif %}
+                          </label>
+                          <label class="flex flex-col gap-1">
+                            <span class="text-quiet text-xs">Kind</span>
+                            <select
+                              class="select select-bordered select-sm"
+                              name="step_{{ step.index }}_output_{{ output.index }}_kind"
                             >
-                              Candidate revision
-                            </option>
-                          </select>
-                          {% if output.kind_error != "" %}
-                            <p class="text-error text-sm">
-                              {{ output.kind_error }}
-                            </p>
-                          {% endif %}
-                        </label>
-                      </div>
-                    {% endfor %}
-                  </fieldset>
+                              <option
+                                value="candidate-revision"
+                                {% if output.kind == "candidate-revision" %}selected{% endif %}
+                              >
+                                Candidate revision
+                              </option>
+                            </select>
+                            {% if output.kind_error != "" %}
+                              <p class="text-error text-sm">
+                                {{ output.kind_error }}
+                              </p>
+                            {% endif %}
+                          </label>
+                        </div>
+                      {% endfor %}
+                    </fieldset>
+                  </details>
                 {% endif %}
               {% endif %}
               <details class="workflow-advanced">
@@ -1062,15 +1124,63 @@
             </div>
           {% endfor %}
           {% if can_add_step %}
-            <button
-              class="btn btn-outline btn-sm self-start"
-              type="submit"
-              formnovalidate
-              name="intent"
-              value="add-step"
-            >
-              Add step
-            </button>
+            <div class="flex flex-wrap gap-2" aria-label="Add phase">
+              <span class="self-center text-sm">Add phase:</span>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:planning"
+              >
+                Planning
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:implementation"
+              >
+                Implementation
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:read-only-review"
+              >
+                Read-only review
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:review-and-fix"
+              >
+                Review and fix
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:code-approval"
+              >
+                Code approval
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:commit"
+              >
+                Commit
+              </button>
+            </div>
           {% endif %}
         </section>
 

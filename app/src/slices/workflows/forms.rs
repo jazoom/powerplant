@@ -24,12 +24,126 @@ pub(super) enum FormError {
     ReviewPolicy,
     ReviewTarget,
     HumanRevisionPolicy,
+    Purpose,
+    Connection,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PhasePurpose {
+    Planning,
+    Implementation,
+    ReadOnlyReview,
+    ReviewAndFix,
+    CodeApproval,
+    Commit,
+    Custom,
+}
+
+impl PhasePurpose {
+    pub(super) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "planning" | "plan" => Some(Self::Planning),
+            "implementation" | "implement" => Some(Self::Implementation),
+            "read-only-review" | "review" => Some(Self::ReadOnlyReview),
+            "review-and-fix" | "fixing-review" => Some(Self::ReviewAndFix),
+            "code-approval" | "approval" => Some(Self::CodeApproval),
+            "commit" => Some(Self::Commit),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Planning => "planning",
+            Self::Implementation => "implementation",
+            Self::ReadOnlyReview => "read-only-review",
+            Self::ReviewAndFix => "review-and-fix",
+            Self::CodeApproval => "code-approval",
+            Self::Commit => "commit",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Planning => "Planning",
+            Self::Implementation => "Implementation",
+            Self::ReadOnlyReview => "Read-only review",
+            Self::ReviewAndFix => "Review and fix",
+            Self::CodeApproval => "Code approval",
+            Self::Commit => "Commit",
+            Self::Custom => "Custom phase",
+        }
+    }
+
+    fn default_tools(self) -> Vec<ToolId> {
+        match self {
+            Self::Planning | Self::ReadOnlyReview | Self::CodeApproval => {
+                vec![ToolId::List, ToolId::Read, ToolId::Run]
+            }
+            Self::Implementation | Self::ReviewAndFix => ToolId::ALL.to_vec(),
+            Self::Commit | Self::Custom => Vec::new(),
+        }
+    }
+
+    fn default_name(self) -> &'static str {
+        match self {
+            Self::Planning => "Plan the change",
+            Self::Implementation => "Implement the change",
+            Self::ReadOnlyReview => "Review the current code",
+            Self::ReviewAndFix => "Review and fix the change",
+            Self::CodeApproval => "Approve the code",
+            Self::Commit => "Commit the candidate",
+            Self::Custom => "Custom phase",
+        }
+    }
+
+    fn default_expertise(self) -> &'static str {
+        match self {
+            Self::Planning => "Inspects the project and explains a safe implementation sequence.",
+            Self::Implementation => "Applies the requested change to an isolated candidate.",
+            Self::ReadOnlyReview => {
+                "Checks the candidate for correctness, security and regressions."
+            }
+            Self::ReviewAndFix => "Reviews the candidate and fixes safe issues.",
+            Self::CodeApproval => "Presents the exact candidate for a human decision.",
+            Self::Commit => "Applies an approved candidate to the project.",
+            Self::Custom => "Runs the configured phase.",
+        }
+    }
+
+    fn default_instructions(self) -> &'static str {
+        match self {
+            Self::Planning => {
+                "Inspect the project and produce a plan. Do not change the candidate."
+            }
+            Self::Implementation => {
+                "Implement the task in the candidate. Submit the complete candidate."
+            }
+            Self::ReadOnlyReview => {
+                "Review this exact candidate. Do not change it. Submit a structured review."
+            }
+            Self::ReviewAndFix => {
+                "Fix every safe issue that you find. Submit a structured verdict for your output candidate."
+            }
+            Self::CodeApproval => {
+                "Review the exact candidate diff and decide whether the project can proceed."
+            }
+            Self::Commit => {
+                "Apply the approved candidate. Do not change files outside the candidate."
+            }
+            Self::Custom => "Complete the assigned phase.",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FormIntent {
     Save,
     AddRole,
+    AddPhase(PhasePurpose),
+    SetPhasePurpose { step: usize, purpose: PhasePurpose },
     RemoveRole(usize),
     MoveRoleUp(usize),
     MoveRoleDown(usize),
@@ -92,6 +206,9 @@ pub(super) struct HumanRevisionDraft {
 pub(super) struct StepDraft {
     pub(super) key: String,
     pub(super) name: String,
+    pub(super) purpose: String,
+    pub(super) expertise: String,
+    pub(super) instructions: String,
     pub(super) action: String,
     pub(super) environment: String,
     pub(super) role: String,
@@ -144,6 +261,9 @@ pub(super) struct InputErrors {
 pub(super) struct StepErrors {
     pub(super) key: &'static str,
     pub(super) name: &'static str,
+    pub(super) purpose: &'static str,
+    pub(super) expertise: &'static str,
+    pub(super) instructions: &'static str,
     pub(super) action: &'static str,
     pub(super) environment: &'static str,
     pub(super) role: &'static str,
@@ -184,6 +304,8 @@ impl FormError {
             Self::Excessive => "That form has too many rows.",
             Self::Revision => "Reload the workflow and try again.",
             Self::ReviewTarget => "That action would invalidate a review revision target.",
+            Self::Purpose => "Choose a supported phase purpose.",
+            Self::Connection => "That action would break a phase connection.",
         }
     }
 }
@@ -236,6 +358,9 @@ impl StepErrors {
         let step = self;
         !step.key.is_empty()
             || !step.name.is_empty()
+            || !step.purpose.is_empty()
+            || !step.expertise.is_empty()
+            || !step.instructions.is_empty()
             || !step.action.is_empty()
             || !step.environment.is_empty()
             || !step.role.is_empty()
@@ -268,18 +393,13 @@ impl WorkflowFormState {
             name: String::new(),
             default_environment: String::new(),
             revision: None,
-            roles: vec![RoleDraft {
-                key: "role-1".to_owned(),
-                name: String::new(),
-                expertise: String::new(),
-                prompt: String::new(),
-            }],
-            steps: vec![blank_agent_step("step-1", "role-1")],
+            roles: Vec::new(),
+            steps: vec![phase_draft("phase-1", PhasePurpose::Implementation, "")],
         }
     }
 
     pub(super) fn from_record(record: &WorkflowRecord) -> Self {
-        let roles = record
+        let stored_roles: Vec<RoleDraft> = record
             .definition
             .roles()
             .iter()
@@ -290,11 +410,16 @@ impl WorkflowFormState {
                 prompt: role.prompt_defaults.clone(),
             })
             .collect();
-        let steps = record
+        let mut steps: Vec<_> = record
             .definition
             .steps()
             .iter()
             .map(step_from_definition)
+            .collect();
+        sync_phase_text_from_roles(&mut steps, &stored_roles);
+        let roles = stored_roles
+            .into_iter()
+            .filter(|role| steps.iter().filter(|step| step.role == role.key).count() > 1)
             .collect();
         Self {
             name: record.definition.name().to_owned(),
@@ -390,7 +515,9 @@ impl WorkflowFormState {
         if roles.len() > MAXIMUM_ROLES || steps.len() > MAXIMUM_STEPS {
             return Err(FormError::Excessive);
         }
+        sync_phase_text_from_roles(&mut steps, &roles);
         ensure_action_defaults(&mut steps);
+        normalise_phase_contracts(&mut steps);
         Ok((
             Self {
                 name,
@@ -416,6 +543,7 @@ impl WorkflowFormState {
                         .roles
                         .iter()
                         .map(|role| role.key.as_str())
+                        .chain(self.steps.iter().map(|step| step.role.as_str()))
                         .collect::<Vec<_>>(),
                 );
                 self.roles.push(RoleDraft {
@@ -427,36 +555,29 @@ impl WorkflowFormState {
                 Ok(())
             }
             FormIntent::RemoveRole(index) => {
-                if self.roles.len() <= 1 || index >= self.roles.len() {
+                if index >= self.roles.len() {
                     return Err(FormError::Index);
+                }
+                if self
+                    .steps
+                    .iter()
+                    .any(|step| step.role == self.roles[index].key)
+                {
+                    return Err(FormError::Connection);
                 }
                 self.roles.remove(index);
                 Ok(())
             }
             FormIntent::MoveRoleUp(index) => move_item(&mut self.roles, index, true),
             FormIntent::MoveRoleDown(index) => move_item(&mut self.roles, index, false),
-            FormIntent::AddStep => {
-                if self.steps.len() >= MAXIMUM_STEPS {
-                    return Err(FormError::Excessive);
+            FormIntent::AddPhase(purpose) => self.add_phase(purpose),
+            FormIntent::AddStep => self.add_phase(PhasePurpose::Implementation),
+            FormIntent::SetPhasePurpose { step, purpose } => {
+                if step >= self.steps.len() {
+                    return Err(FormError::Index);
                 }
-                let key = next_key(
-                    "step",
-                    &self
-                        .steps
-                        .iter()
-                        .map(|step| step.key.as_str())
-                        .collect::<Vec<_>>(),
-                );
-                let role = self
-                    .roles
-                    .first()
-                    .map(|role| role.key.clone())
-                    .unwrap_or_else(|| "role-1".to_owned());
-                let mut added = blank_agent_step(&key, &role);
-                if let Some(input) = added.inputs.first_mut() {
-                    input.source = latest_candidate_source(&self.steps);
-                }
-                self.steps.push(added);
+                self.steps[step].purpose = purpose.as_str().to_owned();
+                normalise_phase_contracts(&mut self.steps);
                 Ok(())
             }
             FormIntent::RemoveStep(index) => {
@@ -512,11 +633,14 @@ impl WorkflowFormState {
                 Ok(())
             }
             FormIntent::RemoveInput { step, input } => {
-                let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
+                let row = self.steps.get(step).ok_or(FormError::Index)?;
                 if input >= row.inputs.len() {
                     return Err(FormError::Index);
                 }
-                row.inputs.remove(input);
+                if input_removal_breaks_contract(row, input) {
+                    return Err(FormError::Connection);
+                }
+                self.steps[step].inputs.remove(input);
                 Ok(())
             }
             FormIntent::AddOutput(step) => {
@@ -531,11 +655,16 @@ impl WorkflowFormState {
                 Ok(())
             }
             FormIntent::RemoveOutput { step, output } => {
-                let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
+                let row = self.steps.get(step).ok_or(FormError::Index)?;
                 if row.outputs.len() <= 1 || output >= row.outputs.len() {
                     return Err(FormError::Index);
                 }
-                row.outputs.remove(output);
+                if output_is_required(row, output)
+                    || output_is_referenced(&self.steps, step, output)
+                {
+                    return Err(FormError::Connection);
+                }
+                self.steps[step].outputs.remove(output);
                 Ok(())
             }
             FormIntent::MoveOutputUp { step, output } => {
@@ -549,9 +678,65 @@ impl WorkflowFormState {
         }
     }
 
+    fn add_phase(&mut self, purpose: PhasePurpose) -> Result<(), FormError> {
+        if self.steps.len() >= MAXIMUM_STEPS {
+            return Err(FormError::Excessive);
+        }
+        let key = next_key(
+            "phase",
+            &self
+                .steps
+                .iter()
+                .map(|step| step.key.as_str())
+                .collect::<Vec<_>>(),
+        );
+        let existing: Vec<_> = self
+            .steps
+            .iter()
+            .map(|step| step.role.as_str())
+            .chain(self.roles.iter().map(|role| role.key.as_str()))
+            .collect();
+        let role = next_key("role", &existing);
+        self.steps.push(phase_draft(&key, purpose, &role));
+        normalise_phase_contracts(&mut self.steps);
+        Ok(())
+    }
+
     pub(super) fn to_definition(&self) -> Result<WorkflowDefinition, FormErrors> {
         let mut errors = FormErrors::sized(self.roles.len(), &self.steps);
         let mut roles = Vec::new();
+        {
+            for (index, step) in self.steps.iter().enumerate() {
+                if step.action != "agent" || self.roles.iter().any(|role| role.key == step.role) {
+                    continue;
+                }
+                let key = match RoleKey::parse(&step.role) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        errors.steps[index].role = error.message();
+                        continue;
+                    }
+                };
+                let name = format!("{} executor", phase_purpose(step).label());
+                match RoleDefinition::new(
+                    key,
+                    name,
+                    step.expertise.clone(),
+                    step.instructions.clone(),
+                ) {
+                    Ok(role) => roles.push(role),
+                    Err(error) => match error {
+                        crate::workflows::definition::DefinitionError::Expertise => {
+                            errors.steps[index].expertise = error.message();
+                        }
+                        crate::workflows::definition::DefinitionError::PromptDefaults => {
+                            errors.steps[index].instructions = error.message();
+                        }
+                        _ => errors.steps[index].role = error.message(),
+                    },
+                }
+            }
+        }
         for (index, role) in self.roles.iter().enumerate() {
             match RoleKey::parse(&role.key) {
                 Ok(key) => match RoleDefinition::new(
@@ -690,6 +875,9 @@ enum RolePart {
 enum StepPart {
     Key,
     Name,
+    Purpose,
+    Expertise,
+    Instructions,
     Action,
     Environment,
     Role,
@@ -760,6 +948,9 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
             let part = match parts.next() {
                 Some("key") => StepPart::Key,
                 Some("name") => StepPart::Name,
+                Some("purpose") => StepPart::Purpose,
+                Some("expertise") => StepPart::Expertise,
+                Some("instructions") => StepPart::Instructions,
                 Some("action") => StepPart::Action,
                 Some("environment") => StepPart::Environment,
                 Some("role") => StepPart::Role,
@@ -886,6 +1077,13 @@ fn parse_intent(raw: &str) -> Result<FormIntent, FormError> {
         "save" => Ok(FormIntent::Save),
         "add-role" => Ok(FormIntent::AddRole),
         "add-step" => Ok(FormIntent::AddStep),
+        value if value.starts_with("add-phase:") => {
+            let purpose = value
+                .strip_prefix("add-phase:")
+                .and_then(PhasePurpose::parse)
+                .ok_or(FormError::Purpose)?;
+            Ok(FormIntent::AddPhase(purpose))
+        }
         other => parse_indexed_intent(other),
     }
 }
@@ -903,6 +1101,19 @@ fn parse_indexed_intent(raw: &str) -> Result<FormIntent, FormError> {
         "move-step-down" if parts.next().is_none() => Ok(FormIntent::MoveStepDown(first)),
         "update-review-policy" if parts.next().is_none() => {
             Ok(FormIntent::UpdateReviewPolicy(first))
+        }
+        "set-purpose" => {
+            let purpose = parts
+                .next()
+                .and_then(PhasePurpose::parse)
+                .ok_or(FormError::Purpose)?;
+            if parts.next().is_some() {
+                return Err(FormError::Intent);
+            }
+            Ok(FormIntent::SetPhasePurpose {
+                step: first,
+                purpose,
+            })
         }
         "add-directory" if parts.next().is_none() => Ok(FormIntent::AddDirectory { step: first }),
         "remove-directory" => {
@@ -1004,6 +1215,9 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
         match part {
             StepPart::Key => step.key = value,
             StepPart::Name => step.name = value,
+            StepPart::Purpose => step.purpose = value,
+            StepPart::Expertise => step.expertise = value,
+            StepPart::Instructions => step.instructions = value,
             StepPart::Action => step.action = value,
             StepPart::Environment => step.environment = value,
             StepPart::Role => step.role = value,
@@ -1166,6 +1380,9 @@ fn is_checked(value: &str) -> bool {
 
 fn ensure_action_defaults(steps: &mut [StepDraft]) {
     for index in 0..steps.len() {
+        if !steps[index].purpose.is_empty() && steps[index].purpose != "custom" {
+            continue;
+        }
         if steps[index].action == "human-gate" {
             steps[index].environment.clear();
             steps[index].role.clear();
@@ -1280,6 +1497,486 @@ fn ensure_action_defaults(steps: &mut [StepDraft]) {
     }
 }
 
+fn normalise_phase_contracts(steps: &mut [StepDraft]) {
+    for index in 0..steps.len() {
+        let new_phase = steps[index].key.is_empty();
+        let key = if steps[index].key.trim().is_empty() {
+            let existing: Vec<_> = steps.iter().map(|step| step.key.as_str()).collect();
+            next_key("phase", &existing)
+        } else {
+            steps[index].key.clone()
+        };
+        steps[index].key = key;
+        let explicit_purpose = PhasePurpose::parse(&steps[index].purpose).is_some();
+        let purpose = phase_purpose(&steps[index]);
+        if steps[index].purpose.is_empty() {
+            steps[index].purpose = purpose.as_str().to_owned();
+        }
+        if matches!(
+            purpose,
+            PhasePurpose::Planning
+                | PhasePurpose::Implementation
+                | PhasePurpose::ReadOnlyReview
+                | PhasePurpose::ReviewAndFix
+        ) && steps[index].role.trim().is_empty()
+        {
+            let existing: Vec<_> = steps.iter().map(|step| step.role.as_str()).collect();
+            steps[index].role = next_key("role", &existing);
+        }
+        if new_phase && steps[index].name.is_empty() {
+            steps[index].name = purpose.default_name().to_owned();
+        }
+        if new_phase && steps[index].expertise.is_empty() {
+            steps[index].expertise = purpose.default_expertise().to_owned();
+        }
+        if new_phase && steps[index].instructions.is_empty() {
+            steps[index].instructions = purpose.default_instructions().to_owned();
+        }
+        if explicit_purpose && purpose != PhasePurpose::Custom {
+            apply_phase_contract(steps, index, purpose);
+        }
+    }
+}
+
+fn inferred_purpose(step: &StepDefinition) -> PhasePurpose {
+    match &step.action {
+        StepAction::Agent(action) => {
+            if action.candidate_authority == CandidateAuthority::Edit {
+                if action
+                    .required_outputs
+                    .iter()
+                    .any(|output| output.kind == OutputKind::ReviewReport)
+                {
+                    PhasePurpose::ReviewAndFix
+                } else {
+                    PhasePurpose::Implementation
+                }
+            } else if action
+                .required_outputs
+                .iter()
+                .any(|output| output.kind == OutputKind::Plan)
+            {
+                PhasePurpose::Planning
+            } else {
+                PhasePurpose::ReadOnlyReview
+            }
+        }
+        StepAction::SystemCommand(action) => {
+            if action.command == SystemCommandId::CommitCandidate {
+                PhasePurpose::Commit
+            } else {
+                PhasePurpose::Custom
+            }
+        }
+        StepAction::HumanGate(_) => PhasePurpose::CodeApproval,
+    }
+}
+
+fn phase_purpose(step: &StepDraft) -> PhasePurpose {
+    PhasePurpose::parse(&step.purpose).unwrap_or_else(|| {
+        if step.action == "human-gate" {
+            PhasePurpose::CodeApproval
+        } else if step.action == "system-command"
+            && step.command == SystemCommandId::CommitCandidate.as_str()
+        {
+            PhasePurpose::Commit
+        } else if step.action == "agent" {
+            let has_candidate = step
+                .outputs
+                .iter()
+                .any(|output| output.kind == OutputKind::CandidateRevision.as_str());
+            let has_plan = step
+                .outputs
+                .iter()
+                .any(|output| output.kind == OutputKind::Plan.as_str());
+            let has_review = step
+                .outputs
+                .iter()
+                .any(|output| output.kind == OutputKind::ReviewReport.as_str());
+            match (has_candidate, has_plan, has_review) {
+                (false, true, _) => PhasePurpose::Planning,
+                (true, _, true) => PhasePurpose::ReviewAndFix,
+                (true, _, _) => PhasePurpose::Implementation,
+                _ => PhasePurpose::ReadOnlyReview,
+            }
+        } else {
+            PhasePurpose::Custom
+        }
+    })
+}
+
+fn apply_phase_contract(steps: &mut [StepDraft], index: usize, purpose: PhasePurpose) {
+    let earlier = steps[..index].to_vec();
+    let mut current = steps[index].clone();
+    let mut prior = current.clone();
+    prior.purpose.clear();
+    if phase_purpose(&prior) != purpose {
+        current.tools = purpose.default_tools();
+        current.outputs.clear();
+        current.review_policy = None;
+        current.human_revision = None;
+    }
+    current.purpose = purpose.as_str().to_owned();
+    match purpose {
+        PhasePurpose::Planning | PhasePurpose::ReadOnlyReview => {
+            current.action = "agent".to_owned();
+            current.candidate_access = CandidateAuthority::ReadOnly.as_str().to_owned();
+            current.role = if current.role.is_empty() {
+                next_key("role", &[])
+            } else {
+                current.role
+            };
+        }
+        PhasePurpose::Implementation | PhasePurpose::ReviewAndFix => {
+            current.action = "agent".to_owned();
+            current.candidate_access = CandidateAuthority::Edit.as_str().to_owned();
+            current.role = if current.role.is_empty() {
+                next_key("role", &[])
+            } else {
+                current.role
+            };
+        }
+        PhasePurpose::CodeApproval => {
+            current.action = "human-gate".to_owned();
+            current.environment.clear();
+            current.role.clear();
+            current.candidate_access.clear();
+            current.command.clear();
+            current.tools.clear();
+            current.directories.clear();
+        }
+        PhasePurpose::Commit => {
+            current.action = "system-command".to_owned();
+            current.command = SystemCommandId::CommitCandidate.as_str().to_owned();
+            current.role.clear();
+            current.candidate_access.clear();
+            current.tools.clear();
+            current.directories.clear();
+        }
+        PhasePurpose::Custom => {}
+    }
+    if matches!(purpose, PhasePurpose::CodeApproval) {
+        current.outputs = preserve_outputs(
+            &current.outputs,
+            &[OutputKind::HumanDecision],
+            &["decision"],
+        );
+    } else if matches!(purpose, PhasePurpose::Commit) {
+        current.outputs = preserve_outputs(
+            &current.outputs,
+            &[OutputKind::CandidateRevision],
+            &["committed-candidate"],
+        );
+    } else {
+        let kinds = match purpose {
+            PhasePurpose::Planning => vec![OutputKind::AssistantReply, OutputKind::Plan],
+            PhasePurpose::Implementation => {
+                vec![OutputKind::AssistantReply, OutputKind::CandidateRevision]
+            }
+            PhasePurpose::ReadOnlyReview => {
+                vec![OutputKind::AssistantReply, OutputKind::ReviewReport]
+            }
+            PhasePurpose::ReviewAndFix => vec![
+                OutputKind::AssistantReply,
+                OutputKind::CandidateRevision,
+                OutputKind::ReviewReport,
+            ],
+            _ => Vec::new(),
+        };
+        current.outputs = preserve_outputs(&current.outputs, &kinds, &[]);
+    }
+    let mut specs = contract_inputs(purpose, &earlier);
+    if purpose == PhasePurpose::Commit {
+        for input in &current.inputs {
+            let Some(kind) = ArtefactKind::parse(&input.kind) else {
+                continue;
+            };
+            if matches!(
+                kind,
+                ArtefactKind::ReviewReport | ArtefactKind::HumanDecision
+            ) && !specs
+                .iter()
+                .any(|item| item.0 == kind && item.1 == input.source)
+            {
+                specs.push((kind, input.source.clone()));
+            }
+        }
+    }
+    current.inputs = preserve_inputs(&current.inputs, &specs);
+    steps[index] = current;
+}
+
+fn preserve_outputs(
+    existing: &[OutputDraft],
+    kinds: &[OutputKind],
+    fallback: &[&str],
+) -> Vec<OutputDraft> {
+    let mut outputs = existing.to_vec();
+    for (index, kind) in kinds.iter().enumerate() {
+        if !outputs
+            .iter()
+            .any(|output| OutputKind::parse(&output.kind) == Some(*kind))
+        {
+            let base = fallback
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| default_output_key(*kind));
+            let keys: Vec<_> = outputs.iter().map(|output| output.key.as_str()).collect();
+            let key = if keys.contains(&base) {
+                next_key(base, &keys)
+            } else {
+                base.to_owned()
+            };
+            outputs.push(OutputDraft {
+                key,
+                kind: kind.as_str().to_owned(),
+            });
+        }
+    }
+    outputs
+}
+
+fn default_output_key(kind: OutputKind) -> &'static str {
+    match kind {
+        OutputKind::AssistantReply => "assistant-reply",
+        OutputKind::Plan => "plan",
+        OutputKind::CandidateRevision => "candidate",
+        OutputKind::ReviewReport => "review",
+        OutputKind::TestReport => "test",
+        OutputKind::HumanDecision => "decision",
+    }
+}
+
+fn contract_inputs(purpose: PhasePurpose, earlier: &[StepDraft]) -> Vec<(ArtefactKind, String)> {
+    let mut inputs = Vec::new();
+    let candidate = if earlier.iter().any(|step| {
+        step.outputs
+            .iter()
+            .any(|output| output.kind == OutputKind::CandidateRevision.as_str())
+    }) {
+        "run-current-candidate".to_owned()
+    } else {
+        "run-initial-candidate".to_owned()
+    };
+    match purpose {
+        PhasePurpose::Planning
+        | PhasePurpose::Implementation
+        | PhasePurpose::ReadOnlyReview
+        | PhasePurpose::ReviewAndFix
+        | PhasePurpose::CodeApproval => {
+            inputs.push((ArtefactKind::CandidateRevision, candidate));
+        }
+        PhasePurpose::Commit => {
+            inputs.push((ArtefactKind::CandidateRevision, candidate));
+        }
+        PhasePurpose::Custom => return inputs,
+    }
+    if matches!(purpose, PhasePurpose::Implementation)
+        && let Some(source) = latest_output_source(earlier, OutputKind::Plan)
+    {
+        inputs.push((ArtefactKind::Plan, source));
+    }
+    if matches!(
+        purpose,
+        PhasePurpose::ReviewAndFix | PhasePurpose::CodeApproval
+    ) && let Some(source) = latest_output_source(earlier, OutputKind::ReviewReport)
+    {
+        inputs.push((ArtefactKind::ReviewReport, source));
+    }
+    if purpose == PhasePurpose::Commit {
+        // Assurance before the last candidate producer cannot approve its replacement.
+        let start = earlier
+            .iter()
+            .rposition(|step| {
+                step.outputs
+                    .iter()
+                    .any(|output| output.kind == OutputKind::CandidateRevision.as_str())
+            })
+            .unwrap_or(0);
+        let earlier = &earlier[start..];
+        for source in all_output_sources(earlier, OutputKind::ReviewReport) {
+            inputs.push((ArtefactKind::ReviewReport, source));
+        }
+        if let Some(source) = latest_output_source(earlier, OutputKind::HumanDecision) {
+            inputs.push((ArtefactKind::HumanDecision, source));
+        }
+    }
+    inputs
+}
+
+fn latest_output_source(steps: &[StepDraft], kind: OutputKind) -> Option<String> {
+    steps.iter().rev().find_map(|step| {
+        step.outputs.iter().rev().find_map(|output| {
+            (OutputKind::parse(&output.kind) == Some(kind))
+                .then(|| format!("step-output:{}:{}", step.key, output.key))
+        })
+    })
+}
+
+fn all_output_sources(steps: &[StepDraft], kind: OutputKind) -> Vec<String> {
+    steps
+        .iter()
+        .flat_map(|step| {
+            step.outputs
+                .iter()
+                .filter(|output| OutputKind::parse(&output.kind) == Some(kind))
+                .map(|output| format!("step-output:{}:{}", step.key, output.key))
+        })
+        .collect()
+}
+
+fn preserve_inputs(existing: &[InputDraft], specs: &[(ArtefactKind, String)]) -> Vec<InputDraft> {
+    let mut inputs = existing.to_vec();
+    for (index, (kind, source)) in specs.iter().enumerate() {
+        let required = specs[..=index]
+            .iter()
+            .filter(|item| item.0 == *kind)
+            .count();
+        if inputs
+            .iter()
+            .filter(|input| ArtefactKind::parse(&input.kind) == Some(*kind))
+            .count()
+            < required
+        {
+            let keys: Vec<_> = inputs.iter().map(|input| input.key.as_str()).collect();
+            let base = default_input_key(*kind, required - 1);
+            let key = if keys.contains(&base.as_str()) {
+                next_key(&base, &keys)
+            } else {
+                base
+            };
+            inputs.push(InputDraft {
+                key,
+                kind: kind.as_str().to_owned(),
+                source: source.clone(),
+            });
+        }
+    }
+    inputs
+}
+
+fn default_input_key(kind: ArtefactKind, occurrence: usize) -> String {
+    let base = match kind {
+        ArtefactKind::Plan => "plan",
+        ArtefactKind::CandidateRevision => "candidate",
+        ArtefactKind::ReviewReport => "review",
+        ArtefactKind::TestReport => "test",
+        ArtefactKind::HumanDecision => "decision",
+    };
+    if occurrence == 0 {
+        base.to_owned()
+    } else {
+        format!("{base}-{}", occurrence + 1)
+    }
+}
+
+pub(super) fn source_is_valid(raw: &str, kind: ArtefactKind, earlier: &[StepDraft]) -> bool {
+    if raw == "run-current-candidate" {
+        return kind == ArtefactKind::CandidateRevision;
+    }
+    if raw == "run-initial-candidate" {
+        return kind == ArtefactKind::CandidateRevision
+            && !earlier.iter().any(|step| {
+                step.outputs
+                    .iter()
+                    .any(|output| output.kind == OutputKind::CandidateRevision.as_str())
+            });
+    }
+    let Some(rest) = raw.strip_prefix("step-output:") else {
+        return false;
+    };
+    let Some((step, output)) = rest.split_once(':') else {
+        return false;
+    };
+    if kind == ArtefactKind::CandidateRevision {
+        return latest_output_source(earlier, OutputKind::CandidateRevision).as_deref()
+            == Some(raw);
+    }
+    earlier.iter().any(|candidate| {
+        candidate.key == step
+            && candidate.outputs.iter().any(|item| {
+                item.key == output
+                    && OutputKind::parse(&item.kind).and_then(OutputKind::as_artefact_kind)
+                        == Some(kind)
+            })
+    })
+}
+
+pub(super) fn input_removal_breaks_contract(step: &StepDraft, input: usize) -> bool {
+    let Some(item) = step.inputs.get(input) else {
+        return false;
+    };
+    let Some(kind) = ArtefactKind::parse(&item.kind) else {
+        return false;
+    };
+    if kind == ArtefactKind::CandidateRevision {
+        return phase_purpose(step) != PhasePurpose::Custom;
+    }
+    if phase_purpose(step) != PhasePurpose::Commit {
+        return false;
+    }
+    let mut remaining = step
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != input)
+        .filter_map(|(_, item)| ArtefactKind::parse(&item.kind));
+    let has_review = remaining
+        .clone()
+        .any(|kind| kind == ArtefactKind::ReviewReport);
+    let has_decision = remaining.any(|kind| kind == ArtefactKind::HumanDecision);
+    !has_review && !has_decision
+}
+
+pub(super) fn output_is_required(step: &StepDraft, output: usize) -> bool {
+    let Some(item) = step.outputs.get(output) else {
+        return false;
+    };
+    let purpose = phase_purpose(step);
+    let required = match purpose {
+        PhasePurpose::Planning => vec![OutputKind::AssistantReply, OutputKind::Plan],
+        PhasePurpose::Implementation => {
+            vec![OutputKind::AssistantReply, OutputKind::CandidateRevision]
+        }
+        PhasePurpose::ReadOnlyReview => vec![OutputKind::AssistantReply, OutputKind::ReviewReport],
+        PhasePurpose::ReviewAndFix => vec![
+            OutputKind::AssistantReply,
+            OutputKind::CandidateRevision,
+            OutputKind::ReviewReport,
+        ],
+        PhasePurpose::CodeApproval => vec![OutputKind::HumanDecision],
+        PhasePurpose::Commit => vec![OutputKind::CandidateRevision],
+        PhasePurpose::Custom => Vec::new(),
+    };
+    OutputKind::parse(&item.kind).is_some_and(|kind| required.contains(&kind))
+}
+
+fn output_is_referenced(steps: &[StepDraft], step: usize, output: usize) -> bool {
+    let Some(source) = steps
+        .get(step)
+        .and_then(|row| row.outputs.get(output))
+        .map(|item| format!("step-output:{}:{}", steps[step].key, item.key))
+    else {
+        return false;
+    };
+    steps.iter().enumerate().any(|(index, row)| {
+        (index != step && row.inputs.iter().any(|input| input.source == source))
+            || row.review_policy.as_ref().is_some_and(|policy| {
+                index == step && policy.report_output == steps[step].outputs[output].key
+            })
+    })
+}
+
+fn sync_phase_text_from_roles(steps: &mut [StepDraft], roles: &[RoleDraft]) {
+    for step in steps.iter_mut().filter(|step| step.action == "agent") {
+        let Some(role) = roles.iter().find(|role| role.key == step.role) else {
+            continue;
+        };
+        step.expertise = role.expertise.clone();
+        step.instructions = role.prompt.clone();
+    }
+}
+
 fn empty_review_policy() -> ReviewPolicyDraft {
     ReviewPolicyDraft {
         report_output: String::new(),
@@ -1299,6 +1996,9 @@ fn empty_step() -> StepDraft {
     StepDraft {
         key: String::new(),
         name: String::new(),
+        purpose: String::new(),
+        expertise: String::new(),
+        instructions: String::new(),
         action: "agent".to_owned(),
         environment: String::new(),
         role: String::new(),
@@ -1317,6 +2017,11 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
     StepDraft {
         key: key.to_owned(),
         name: String::new(),
+        purpose: PhasePurpose::Implementation.as_str().to_owned(),
+        expertise: PhasePurpose::Implementation.default_expertise().to_owned(),
+        instructions: PhasePurpose::Implementation
+            .default_instructions()
+            .to_owned(),
         action: "agent".to_owned(),
         environment: String::new(),
         role: role.to_owned(),
@@ -1335,6 +2040,17 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
             output_from_required(&candidate_revision_output()),
         ],
     }
+}
+
+fn phase_draft(key: &str, purpose: PhasePurpose, role: &str) -> StepDraft {
+    let mut draft = blank_agent_step(key, if role.is_empty() { "role-1" } else { role });
+    draft.inputs[0].source = "run-current-candidate".to_owned();
+    draft.name = purpose.default_name().to_owned();
+    draft.purpose = purpose.as_str().to_owned();
+    draft.tools = purpose.default_tools();
+    draft.expertise = purpose.default_expertise().to_owned();
+    draft.instructions = purpose.default_instructions().to_owned();
+    draft
 }
 
 fn latest_candidate_source(earlier: &[StepDraft]) -> String {
@@ -1417,6 +2133,9 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             StepDraft {
                 key: step.key.as_str().to_owned(),
                 name: step.name.clone(),
+                purpose: inferred_purpose(step).as_str().to_owned(),
+                expertise: String::new(),
+                instructions: String::new(),
                 action: "agent".to_owned(),
                 environment: step_environment_token(action.environment),
                 role: action.role.as_str().to_owned(),
@@ -1437,6 +2156,9 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
         StepAction::SystemCommand(action) => StepDraft {
             key: step.key.as_str().to_owned(),
             name: step.name.clone(),
+            purpose: inferred_purpose(step).as_str().to_owned(),
+            expertise: String::new(),
+            instructions: String::new(),
             action: "system-command".to_owned(),
             environment: step_environment_token(action.environment),
             role: String::new(),
@@ -1456,6 +2178,9 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
         StepAction::HumanGate(action) => StepDraft {
             key: step.key.as_str().to_owned(),
             name: step.name.clone(),
+            purpose: PhasePurpose::CodeApproval.as_str().to_owned(),
+            expertise: PhasePurpose::CodeApproval.default_expertise().to_owned(),
+            instructions: PhasePurpose::CodeApproval.default_instructions().to_owned(),
             action: "human-gate".to_owned(),
             environment: String::new(),
             role: String::new(),
@@ -1475,6 +2200,10 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
 }
 
 fn build_step(step: &StepDraft, errors: &mut StepErrors) -> Option<StepDefinition> {
+    if PhasePurpose::parse(&step.purpose).is_none() {
+        errors.purpose = FormError::Purpose.message();
+        return None;
+    }
     let key = match StepKey::parse(&step.key) {
         Ok(key) => key,
         Err(error) => {
@@ -1755,6 +2484,65 @@ fn relate_definition_error(
                 }
             }
         }
+        DefinitionError::ForwardInput
+        | DefinitionError::SelfInput
+        | DefinitionError::UnknownOutput
+        | DefinitionError::InputKind
+        | DefinitionError::AssistantInput => {
+            for (index, step) in state.steps.iter().enumerate() {
+                for (input_index, input) in step.inputs.iter().enumerate() {
+                    if !ArtefactKind::parse(&input.kind).is_some_and(|kind| {
+                        source_is_valid(&input.source, kind, &state.steps[..index])
+                    }) {
+                        errors.steps[index].inputs[input_index].source = error.message();
+                    }
+                }
+            }
+        }
+        DefinitionError::CandidateInput | DefinitionError::AssuranceInput => {
+            for (index, step) in state.steps.iter().enumerate() {
+                let candidates = step
+                    .inputs
+                    .iter()
+                    .filter(|input| input.kind == "candidate-revision")
+                    .count();
+                for (input_index, input) in step.inputs.iter().enumerate() {
+                    if input.kind == "candidate-revision"
+                        && (candidates != 1
+                            || !source_is_valid(
+                                &input.source,
+                                ArtefactKind::CandidateRevision,
+                                &state.steps[..index],
+                            ))
+                    {
+                        errors.steps[index].inputs[input_index].source = error.message();
+                    }
+                }
+            }
+        }
+        DefinitionError::CandidateOutput => {
+            for step in &mut errors.steps {
+                if step.candidate_access.is_empty() {
+                    step.candidate_access = error.message();
+                }
+                for output in &mut step.outputs {
+                    if output.kind.is_empty() || output.kind == "candidate-revision" {
+                        output.kind = error.message();
+                    }
+                }
+            }
+        }
+        DefinitionError::UnknownStep | DefinitionError::ReviewPolicy => {
+            for (index, step) in state.steps.iter().enumerate() {
+                if step.review_policy.is_some() {
+                    errors.steps[index].revision_target = error.message();
+                    errors.steps[index].review_policy = error.message();
+                }
+                if step.human_revision.is_some() {
+                    errors.steps[index].human_revision_target = error.message();
+                }
+            }
+        }
         DefinitionError::UnsupportedOutput => {
             for (index, step) in state.steps.iter().enumerate() {
                 if step.action != "system-command" {
@@ -1889,7 +2677,37 @@ fn review_targets_are_earlier(steps: &[StepDraft]) -> bool {
                 .iter()
                 .any(|candidate| candidate.key == policy.revision_target)
         });
-        review_target_ok && human_target_ok
+        let no_commit_in_route = step
+            .review_policy
+            .as_ref()
+            .map(|policy| policy.revision_target.as_str())
+            .into_iter()
+            .chain(
+                step.human_revision
+                    .as_ref()
+                    .map(|policy| policy.revision_target.as_str()),
+            )
+            .all(|target| {
+                steps[..index]
+                    .iter()
+                    .position(|candidate| candidate.key == target)
+                    .is_some_and(|start| {
+                        !steps[start..index].iter().any(|candidate| {
+                            candidate.action == "system-command"
+                                && candidate.command == SystemCommandId::CommitCandidate.as_str()
+                        })
+                    })
+            });
+        review_target_ok && human_target_ok && no_commit_in_route
+    }) && phase_connections_are_valid(steps)
+}
+
+fn phase_connections_are_valid(steps: &[StepDraft]) -> bool {
+    steps.iter().enumerate().all(|(index, step)| {
+        step.inputs.iter().all(|input| {
+            ArtefactKind::parse(&input.kind)
+                .is_some_and(|kind| source_is_valid(&input.source, kind, &steps[..index]))
+        })
     })
 }
 

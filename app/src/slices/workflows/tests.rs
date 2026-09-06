@@ -215,6 +215,44 @@ async fn a_catalogue_patch_is_rejected() {
 }
 
 #[tokio::test]
+async fn create_accepts_purpose_phases_without_role_or_key_fields() {
+    let state = test_state();
+    let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
+    let body = [
+        "intent=save",
+        "name=Implementation+and+review",
+        &format!("default-environment={}", environment.as_hex()),
+        "step_0_name=Implement+the+change",
+        "step_0_purpose=implementation",
+        "step_0_review-policy=none",
+        "step_1_name=Review+the+change",
+        "step_1_purpose=read-only-review",
+        "step_1_review-policy=none",
+    ]
+    .join("&");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("purpose phases");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let record = state.workflows.list().pop().expect("workflow");
+    assert_eq!(record.definition.roles().len(), 2);
+    assert_eq!(record.definition.steps()[0].key.as_str(), "phase-1");
+    assert_eq!(record.definition.steps()[1].key.as_str(), "phase-2");
+}
+
+#[tokio::test]
 async fn create_redirects_to_configuration() {
     let state = test_state();
     let token = connected(&state);
