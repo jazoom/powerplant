@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::id::AgentId;
 use super::tool_id::ToolId;
+use crate::providers::ModelSelection;
 
 pub(crate) const AGENT_RECORD_VERSION: u32 = 1;
 pub(crate) const MAXIMUM_AGENTS: usize = 32;
@@ -104,6 +105,7 @@ pub(crate) struct AgentRecord {
     pub(crate) revision: u32,
     pub(crate) name: String,
     pub(crate) instructions: String,
+    pub(crate) selection: Option<ModelSelection>,
     pub(crate) tools: Vec<ToolId>,
     pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
@@ -114,6 +116,7 @@ pub(crate) struct AgentRecord {
 pub(crate) struct AgentDraft {
     pub(crate) name: String,
     pub(crate) instructions: String,
+    pub(crate) selection: Option<ModelSelection>,
     pub(crate) tools: Vec<ToolId>,
     pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
@@ -131,8 +134,8 @@ pub(crate) enum AgentError {
     Revision,
     Name,
     Instructions,
+    Model,
     Tools,
-    ToolConflict,
     Network,
     Alias,
     DuplicateAlias,
@@ -157,8 +160,8 @@ impl AgentError {
             Self::Revision => "Power Plant cannot update this agent again.",
             Self::Name => "Enter a name of at most 80 bytes.",
             Self::Instructions => "Those instructions are too long.",
+            Self::Model => "Enter a valid model preference.",
             Self::Tools => "Choose tools from the built-in set.",
-            Self::ToolConflict => "That tool set needs a writable directory.",
             Self::Network => {
                 "Choose valid network access. Restricted access needs 1 to 32 domains."
             }
@@ -172,7 +175,7 @@ impl AgentError {
             Self::PathAccess => "Power Plant cannot access that directory.",
             Self::NestedPath => "Directory grants cannot overlap.",
             Self::Primary => "Choose one primary directory from the grants.",
-            Self::GrantCount => "Add between one and eight directory grants.",
+            Self::GrantCount => "Add at most eight directory grants.",
         }
     }
 }
@@ -193,6 +196,8 @@ pub(super) struct AgentFile {
     pub(super) revision: u32,
     pub(super) name: String,
     pub(super) instructions: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    pub(super) selection: Option<ModelSelection>,
     pub(super) tools: Vec<String>,
     pub(super) network: String,
     pub(super) network_domains: Vec<String>,
@@ -221,6 +226,7 @@ impl AgentRecord {
         let draft = AgentDraft {
             name: file.name,
             instructions: file.instructions,
+            selection: file.selection,
             tools: parse_stored_tools(&file.tools)?,
             network,
             directories: file
@@ -247,6 +253,7 @@ impl AgentRecord {
             revision: file.revision,
             name: normalised.name,
             instructions: normalised.instructions,
+            selection: normalised.selection,
             tools: normalised.tools,
             network: normalised.network,
             directories: normalised.directories,
@@ -261,6 +268,7 @@ impl AgentRecord {
             revision: self.revision,
             name: self.name.clone(),
             instructions: self.instructions.clone(),
+            selection: self.selection.clone(),
             tools: self
                 .tools
                 .iter()
@@ -294,9 +302,15 @@ impl AgentDraft {
     fn validate_inner(self, resolve_hosts: bool) -> Result<Self, AgentError> {
         let name = normalise_name(&self.name)?;
         let instructions = normalise_instructions(&self.instructions)?;
+        let selection = self.selection.clone().and_then(|selection| {
+            ModelSelection::new(selection.provider, selection.model, selection.thinking)
+        });
+        if self.selection.is_some() && selection.is_none() {
+            return Err(AgentError::Model);
+        }
         let tools = normalise_tools(&self.tools)?;
         let network = normalise_network(self.network)?;
-        if self.directories.is_empty() || self.directories.len() > MAXIMUM_GRANTS {
+        if self.directories.len() > MAXIMUM_GRANTS {
             return Err(AgentError::GrantCount);
         }
         let mut directories = Vec::with_capacity(self.directories.len());
@@ -321,14 +335,17 @@ impl AgentDraft {
         }
         reject_nested_hosts(&directories)?;
         let primary = self.primary_directory.trim();
-        if primary.is_empty() || !directories.iter().any(|grant| grant.alias == primary) {
+        if (directories.is_empty() && !primary.is_empty())
+            || (!directories.is_empty()
+                && (primary.is_empty() || !directories.iter().any(|grant| grant.alias == primary)))
+        {
             return Err(AgentError::Primary);
         }
         let primary_directory = primary.to_owned();
-        reject_tool_conflicts(&tools, &directories)?;
         Ok(Self {
             name,
             instructions,
+            selection,
             tools,
             network,
             directories,
@@ -491,17 +508,6 @@ fn reject_nested_hosts(directories: &[DirectoryGrant]) -> Result<(), AgentError>
 
 fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
-}
-
-fn reject_tool_conflicts(
-    tools: &[ToolId],
-    directories: &[DirectoryGrant],
-) -> Result<(), AgentError> {
-    let writable = directories.iter().any(|grant| grant.access.is_writable());
-    if tools.iter().any(|tool| tool.needs_write()) && !writable {
-        return Err(AgentError::ToolConflict);
-    }
-    Ok(())
 }
 
 fn map_fs_error(error: std::io::Error) -> AgentError {

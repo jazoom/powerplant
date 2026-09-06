@@ -10,6 +10,7 @@ fn composed_preamble_omits_host_paths() {
         revision: 2,
         name: "Maintainer".to_owned(),
         instructions: "Keep public interfaces stable.".to_owned(),
+        selection: None,
         tools: vec![ToolId::List, ToolId::Read],
         network: NetworkAccess::None,
         directories: vec![DirectoryGrant {

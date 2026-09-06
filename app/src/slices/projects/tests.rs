@@ -712,6 +712,7 @@ fn create_agent(state: &AppState, name: &str, path: &Path) -> crate::agents::Age
         .create(AgentDraft {
             name: name.to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: vec![ToolId::List],
             network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -898,6 +899,7 @@ async fn a_stale_grant_cannot_open_the_desk() {
             AgentDraft {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
+                selection: None,
                 tools: agent.tools.clone(),
                 network: agent.network.clone(),
                 directories: vec![DirectoryGrant {
@@ -1164,6 +1166,7 @@ async fn stale_grant_returns_conflict() {
             AgentDraft {
                 name: "Later".to_owned(),
                 instructions: agent.instructions.clone(),
+                selection: None,
                 tools: agent.tools.clone(),
                 network: agent.network.clone(),
                 directories: agent.directories.clone(),

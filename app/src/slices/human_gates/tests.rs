@@ -232,6 +232,7 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         .create(AgentDraft {
             name: "Desk agent".to_owned(),
             instructions: "Do the work.".to_owned(),
+            selection: None,
             tools: vec![ToolId::List],
             network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -692,6 +693,7 @@ async fn a_stale_agent_revision_interrupts_without_host_mutation() {
             AgentDraft {
                 name: "Renamed agent".to_owned(),
                 instructions: agent.instructions.clone(),
+                selection: None,
                 tools: agent.tools.clone(),
                 network: agent.network.clone(),
                 directories: agent.directories.clone(),
@@ -747,6 +749,7 @@ async fn a_changed_grant_interrupts_without_host_mutation() {
             AgentDraft {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
+                selection: None,
                 tools: agent.tools.clone(),
                 network: agent.network.clone(),
                 directories: vec![DirectoryGrant {

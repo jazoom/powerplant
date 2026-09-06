@@ -11,6 +11,23 @@ use super::{
 };
 
 impl ConversationStore {
+    pub(crate) fn begin_message(
+        &self,
+        id: &super::ConversationId,
+        expected_revision: u32,
+        selection: ModelSelection,
+        request: JobId,
+        text: String,
+    ) -> Result<super::ConversationRecord, ConversationError> {
+        self.begin_message_with_model(
+            id,
+            expected_revision,
+            super::ConversationModelConfiguration::direct(selection),
+            request,
+            text,
+        )
+    }
+
     pub(crate) fn in_memory() -> Self {
         Self {
             path: None,

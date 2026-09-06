@@ -19,6 +19,7 @@ fn draft(dir: &std::path::Path, name: &str) -> AgentDraft {
     AgentDraft {
         name: name.to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: vec![ToolId::List],
         network: NetworkAccess::None,
         directories: vec![DirectoryGrant {

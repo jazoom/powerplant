@@ -149,6 +149,7 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
         .create(crate::agents::AgentDraft {
             name: "Test agent".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: crate::agents::ToolId::ALL.to_vec(),
             network: crate::agents::NetworkAccess::None,
             directories: vec![crate::agents::DirectoryGrant {

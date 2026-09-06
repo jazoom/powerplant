@@ -7,11 +7,13 @@ use super::{
 };
 use crate::agents::id::AgentId;
 use crate::agents::tool_id::ToolId;
+use crate::providers::{ModelSelection, ProviderKind};
 
 fn draft(dir: &std::path::Path) -> AgentDraft {
     AgentDraft {
         name: "Repository maintainer".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: ToolId::ALL.to_vec(),
         network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
@@ -62,17 +64,29 @@ fn unknown_or_duplicate_tools_are_rejected() {
 }
 
 #[test]
-fn write_tools_need_a_writable_grant() {
+fn absent_primary_directory_is_valid_only_without_directory_grants() {
     let dir = tempfile::tempdir().expect("dir");
     let mut item = draft(dir.path());
-    item.directories[0].access = AccessMode::ReadOnly;
-    item.tools = vec![ToolId::Write];
-    assert_eq!(
-        item.clone().validate().err(),
-        Some(AgentError::ToolConflict)
-    );
-    item.tools = vec![ToolId::List, ToolId::Read];
+    item.primary_directory.clear();
+    assert_eq!(item.validate().err(), Some(AgentError::Primary));
+
+    let mut item = draft(dir.path());
+    item.directories.clear();
+    assert_eq!(item.clone().validate().err(), Some(AgentError::Primary));
+    item.primary_directory.clear();
     assert!(item.validate().is_ok());
+}
+
+#[test]
+fn tool_ceilings_do_not_require_a_directory_grant() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut item = draft(dir.path());
+    item.directories.clear();
+    item.primary_directory.clear();
+    item.tools = vec![ToolId::Write];
+    let validated = item.validate().expect("preset");
+    assert_eq!(validated.tools, vec![ToolId::Write]);
+    assert!(validated.directories.is_empty());
 }
 
 #[test]
@@ -120,6 +134,7 @@ fn grant_count_is_bounded() {
     let item = AgentDraft {
         name: "Many".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: vec![ToolId::List],
         network: NetworkAccess::None,
         directories,
@@ -133,6 +148,7 @@ fn relative_and_missing_paths_are_rejected() {
     let mut item = AgentDraft {
         name: "Agent".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: Vec::new(),
         network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
@@ -151,6 +167,8 @@ fn relative_and_missing_paths_are_rejected() {
 fn file_round_trip_keeps_the_identifier() {
     let dir = tempfile::tempdir().expect("dir");
     let mut draft = draft(dir.path());
+    draft.selection =
+        Some(ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model"));
     draft.network = NetworkAccess::Restricted(vec!["registry.npmjs.org".to_owned()]);
     let validated = draft.validate().expect("valid");
     let record = AgentRecord {
@@ -158,6 +176,7 @@ fn file_round_trip_keeps_the_identifier() {
         revision: 3,
         name: validated.name,
         instructions: validated.instructions,
+        selection: validated.selection,
         tools: validated.tools,
         network: validated.network,
         directories: validated.directories,
@@ -171,6 +190,7 @@ fn file_round_trip_keeps_the_identifier() {
         restored.network,
         NetworkAccess::Restricted(vec!["registry.npmjs.org".to_owned()])
     );
+    assert_eq!(restored.selection, record.selection);
 }
 
 #[test]
@@ -182,6 +202,7 @@ fn unknown_record_fields_are_rejected() {
         revision: 1,
         name: validated.name,
         instructions: validated.instructions,
+        selection: None,
         tools: validated.tools,
         network: validated.network,
         directories: validated.directories,

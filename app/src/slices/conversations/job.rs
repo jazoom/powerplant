@@ -28,6 +28,11 @@ pub(super) async fn run(
     job: Arc<Job>,
 ) {
     let history = history(&record);
+    let instructions = record
+        .model
+        .as_ref()
+        .map(|model| model.instructions.as_str())
+        .unwrap_or("");
     let mut reply = String::new();
     let mut event_count = 0usize;
     let result = tokio::select! {
@@ -35,7 +40,7 @@ pub(super) async fn run(
         _ = job.cancelled() => Err(Failure::Cancelled),
         _ = tokio::time::sleep(Duration::from_secs(600)) => Err(Failure::Provider(ProviderError::Unreachable)),
         result = async {
-            let mut stream = state.chat.stream_turn(&connection, &history, &[], &[], "").await.map_err(Failure::Provider)?;
+            let mut stream = state.chat.stream_turn(&connection, &history, &[], &[], instructions).await.map_err(Failure::Provider)?;
             while let Some(event) = tokio::select! {
                 biased;
                 _ = job.cancelled() => return Err(Failure::Cancelled),

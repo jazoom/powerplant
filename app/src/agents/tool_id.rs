@@ -36,8 +36,4 @@ impl ToolId {
             Self::Run => "Run",
         }
     }
-
-    pub(crate) fn needs_write(self) -> bool {
-        self == Self::Write
-    }
 }

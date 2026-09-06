@@ -19,8 +19,11 @@ fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
         .collect();
     let view = ConversationDetailView::from_record(
         &record,
-        &state.vault,
-        &state.models_dev,
+        ModelSources {
+            vault: &state.vault,
+            models: &state.models_dev,
+        },
+        &[],
         None,
         false,
         &record.title,

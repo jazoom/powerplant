@@ -98,6 +98,7 @@ async fn the_catalogue_shows_metadata_for_each_exact_grant_match() {
         .create(AgentDraft {
             name: "Both".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: vec![ToolId::List],
             network: NetworkAccess::None,
             directories: vec![
@@ -120,6 +121,7 @@ async fn the_catalogue_shows_metadata_for_each_exact_grant_match() {
         .create(AgentDraft {
             name: "None".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: vec![ToolId::List],
             network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -152,7 +154,8 @@ async fn the_catalogue_shows_metadata_for_each_exact_grant_match() {
     assert!(!text.contains(&unrelated.host_path.to_string_lossy().into_owned()));
     assert!(!text.contains(&crate::projects::desk_path(&harbour.id, &both.id)));
     assert!(!text.contains(&crate::projects::desk_path(&quay.id, &both.id)));
-    assert!(text.contains("No registered project access"));
+    assert!(text.contains("No registered project matches the directory ceiling"));
+    assert!(!text.contains("No local directory ceiling"));
     keep_dir(&state, harbour_dir);
     keep_dir(&state, quay_dir);
     keep_dir(&state, unrelated_dir);
@@ -252,6 +255,7 @@ async fn configuration_patch_returns_a_hypergraft_patch() {
         .create(AgentDraft {
             name: "Before".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: vec![ToolId::List],
             network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -307,6 +311,7 @@ async fn delete_redirects_to_the_catalogue() {
         .create(AgentDraft {
             name: "Gone".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: vec![ToolId::List],
             network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -346,6 +351,7 @@ fn seed_agent(state: &AppState, name: &str) -> (tempfile::TempDir, AgentRecord) 
         .create(AgentDraft {
             name: name.to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: vec![ToolId::List],
             network: NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -383,6 +389,7 @@ async fn stale_update_returns_conflict() {
             AgentDraft {
                 name: "After".to_owned(),
                 instructions: String::new(),
+                selection: None,
                 tools: vec![ToolId::List],
                 network: NetworkAccess::None,
                 directories: vec![DirectoryGrant {
@@ -442,6 +449,7 @@ async fn stale_delete_returns_conflict() {
             AgentDraft {
                 name: "Kept".to_owned(),
                 instructions: "Newer".to_owned(),
+                selection: None,
                 tools: vec![ToolId::List],
                 network: NetworkAccess::None,
                 directories: vec![DirectoryGrant {
@@ -491,29 +499,33 @@ fn encoded_path(path: &std::path::Path) -> String {
 }
 
 #[tokio::test]
-async fn new_agent_document_renders_one_directory_row() {
+async fn preset_creation_accepts_instructions_and_tool_ceilings_without_a_project() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
         .oneshot(
             Request::builder()
-                .uri("/agents/new")
+                .method("POST")
+                .uri("/agents")
                 .header(header::COOKIE, cookie(&token))
-                .body(Body::empty())
+                .header(header::ORIGIN, "http://localhost:4000")
+                .header("Graft-Request", "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("intent=save&name=Reviewer&instructions=Review+the+brief.&tool_write=on&network=none"))
                 .unwrap(),
         )
         .await
-        .expect("new agent");
+        .expect("new preset");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("<!doctype html>"));
-    assert!(text.contains("id=\"agent-form\""));
-    assert!(text.contains("name=\"alias_0\""));
-    assert!(!text.contains("name=\"alias_1\""));
-    assert!(text.contains("value=\"add-directory\""));
-    assert!(text.contains("value=\"save\""));
-    assert!(!text.contains("value=\"remove-directory:0\""));
+    let records = state.agents.list();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].instructions, "Review the brief.");
+    assert_eq!(records[0].tools, vec![ToolId::Write]);
+    assert_eq!(records[0].network, NetworkAccess::None);
+    assert!(records[0].directories.is_empty());
+    assert!(records[0].primary_directory.is_empty());
+    assert!(records[0].selection.is_none());
 }
 
 #[tokio::test]
@@ -803,6 +815,7 @@ async fn remove_directory_on_configuration_keeps_revision_and_does_not_save() {
         .create(AgentDraft {
             name: "Two".to_owned(),
             instructions: "Stay".to_owned(),
+            selection: None,
             tools: vec![ToolId::List],
             network: NetworkAccess::None,
             directories: vec![

@@ -62,13 +62,52 @@
           >
 {{- instructions -}}</textarea>
           <span id="agent-instructions-help" class="text-quiet text-xs">
-            Give this agent a role, context and project rules.
+            Give this reusable preset a role, context and project rules.
           </span>
         </label>
+        <fieldset class="file-section space-y-3">
+          <legend class="text-sm">Model preference</legend>
+          <p class="text-quiet text-xs">
+            This preference is optional. A conversation can use a model
+            directly.
+          </p>
+          <div class="grid gap-3 sm:grid-cols-3">
+            <label class="flex flex-col gap-1">
+              <span class="text-sm">Provider</span>
+              <input
+                class="input input-bordered"
+                name="provider"
+                maxlength="32"
+                value="{{ provider }}"
+                placeholder="Optional"
+              />
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-sm">Model</span>
+              <input
+                class="input input-bordered"
+                name="model"
+                maxlength="256"
+                value="{{ model }}"
+                placeholder="Optional"
+              />
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-sm">Thinking effort</span>
+              <input
+                class="input input-bordered"
+                name="thinking"
+                maxlength="32"
+                value="{{ thinking }}"
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+        </fieldset>
         <fieldset class="file-section space-y-2">
           <legend class="text-sm">Tools</legend>
           <p class="text-quiet text-xs">
-            Choose what they can do inside the sandbox.
+            These are ceilings. They do not give a conversation tool access.
           </p>
           {% for tool in tools %}
             <label class="flex items-center gap-2">
@@ -163,14 +202,23 @@
         <fieldset class="file-section space-y-3">
           <legend class="text-sm">Project access</legend>
           <p class="text-quiet text-xs">
-            Add each local folder that they can use.
+            Local folders are optional. Without one, this preset cannot run from
+            the old agent desk.
           </p>
+          {% if grants.len() == 1 %}
+            <p class="alert alert-warning text-sm">
+              Removal of this final directory removes the preset's directory
+              ceiling. Explicit conversation grants and workflow ceilings still
+              limit project access. Tool and network ceilings stay unchanged.
+              Saved-agent project execution becomes unavailable.
+            </p>
+          {% endif %}
           <label class="flex flex-col gap-1">
             <span class="text-sm">Primary folder alias</span>
             <input
               class="input input-bordered input-sm font-mono"
               name="primary"
-              required
+              {% if !grants.is_empty() %}required{% endif %}
               maxlength="32"
               value="{{ primary }}"
             />
@@ -274,8 +322,8 @@
           <summary>Delete agent</summary>
           <div class="max-w-xl space-y-3 pt-4">
             <p class="text-quiet text-sm">
-              This removes the agent record and its sandbox. Project files stay
-              unchanged.
+              This removes the reusable preset and its sandbox. Project files
+              stay unchanged.
             </p>
             <form
               data-graft

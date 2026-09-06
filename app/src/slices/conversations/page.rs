@@ -4,7 +4,11 @@ use askama::Template;
 mod tests;
 
 use crate::{
-    conversations::{ConversationMessage, ConversationRecord, MessageRole, MessageStatus},
+    agents::AgentRecord,
+    conversations::{
+        ConversationMessage, ConversationModelConfiguration, ConversationRecord, MessageRole,
+        MessageStatus,
+    },
     models::models_dev::ModelsDevCatalogue,
     providers::ModelSelection,
     sessions::{JobSnapshot, JobStatus},
@@ -83,6 +87,18 @@ pub(super) struct MessageView {
     pub(super) streaming: bool,
 }
 
+pub(super) struct ModelSources<'a> {
+    pub(super) vault: &'a ProviderVault,
+    pub(super) models: &'a ModelsDevCatalogue,
+}
+
+pub(super) struct PresetOption {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) description: String,
+    pub(super) selected: bool,
+}
+
 pub(super) struct ProviderOption {
     pub(super) value: &'static str,
     pub(super) label: &'static str,
@@ -105,6 +121,8 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) messages: &'a [MessageView],
     pub(super) omitted_messages: usize,
     pub(super) providers: &'a [ProviderOption],
+    pub(super) presets: &'a [PresetOption],
+    pub(super) model_summary: &'a str,
     pub(super) model_available: bool,
     pub(super) job_id: &'a str,
     pub(super) cursor: u64,
@@ -124,6 +142,8 @@ pub(super) struct ConversationDetailView {
     pub(super) messages: Vec<MessageView>,
     pub(super) omitted_messages: usize,
     pub(super) providers: Vec<ProviderOption>,
+    pub(super) presets: Vec<PresetOption>,
+    pub(super) model_summary: String,
     pub(super) model_available: bool,
     pub(super) job_id: String,
     pub(super) cursor: u64,
@@ -134,26 +154,33 @@ pub(super) struct ConversationDetailView {
 impl ConversationDetailView {
     pub(super) fn from_record(
         record: &ConversationRecord,
-        vault: &ProviderVault,
-        models: &ModelsDevCatalogue,
+        sources: ModelSources<'_>,
+        agents: &[AgentRecord],
         job: Option<&JobSnapshot>,
         session_busy: bool,
         title: &str,
         error: &'static str,
     ) -> Self {
-        let fallback = vault
-            .selected_connection()
-            .map(|connection| ModelSelection {
-                provider: connection.kind,
-                thinking: models.effective_effort(
-                    connection.kind,
-                    &connection.model,
-                    connection.thinking.as_ref(),
-                ),
-                model: connection.model,
+        let fallback = sources
+            .vault
+            .desk_providers()
+            .into_iter()
+            .find(|provider| provider.selected)
+            .map(|connection| {
+                ConversationModelConfiguration::direct(ModelSelection {
+                    provider: connection.kind,
+                    thinking: sources.models.effective_effort(
+                        connection.kind,
+                        &connection.model,
+                        connection.thinking.as_ref(),
+                    ),
+                    model: connection.model,
+                })
             });
-        let selection = record.selection.as_ref().or(fallback.as_ref());
-        let providers = vault
+        let configuration = record.model.as_ref().or(fallback.as_ref());
+        let selection = configuration.map(|configuration| &configuration.selection);
+        let providers = sources
+            .vault
             .desk_providers()
             .into_iter()
             .map(|provider| ProviderOption {
@@ -170,6 +197,40 @@ impl ConversationDetailView {
                 selected: selection.is_some_and(|selection| selection.provider == provider.kind),
             })
             .collect();
+        let presets = agents
+            .iter()
+            .map(|agent| PresetOption {
+                id: agent.id.as_hex(),
+                name: agent.name.clone(),
+                description: agent.selection.as_ref().map_or_else(
+                    || "Keep the current model".to_owned(),
+                    |selection| format!("{} · {}", selection.provider.label(), selection.model),
+                ),
+                selected: configuration
+                    .and_then(|configuration| configuration.preset.as_ref())
+                    .is_some_and(|preset| preset.id == agent.id),
+            })
+            .collect();
+        let model_summary = configuration.map_or_else(
+            || "No model selected".to_owned(),
+            |configuration| {
+                let selection = &configuration.selection;
+                let effort = selection
+                    .thinking
+                    .as_ref()
+                    .map(|effort| format!(" · Thinking: {}", effort.label()))
+                    .unwrap_or_else(|| " · Thinking: Not available".to_owned());
+                let source = configuration.preset.as_ref().map_or_else(
+                    || "Direct model".to_owned(),
+                    |preset| format!("Preset: {}", preset.name),
+                );
+                format!(
+                    "{source} · {} · {}{effort}",
+                    selection.provider.label(),
+                    selection.model
+                )
+            },
+        );
         let (job_id, cursor, job_active) = match job {
             Some(job) if job.status == JobStatus::Running => {
                 (job.id.as_hex(), job.latest_seq, true)
@@ -189,6 +250,8 @@ impl ConversationDetailView {
             omitted_messages,
             model_available: selection.is_some(),
             providers,
+            presets,
+            model_summary,
             job_id,
             cursor,
             job_active,
@@ -206,6 +269,8 @@ impl ConversationDetailView {
             messages: &self.messages,
             omitted_messages: self.omitted_messages,
             providers: &self.providers,
+            presets: &self.presets,
+            model_summary: &self.model_summary,
             model_available: self.model_available,
             job_id: &self.job_id,
             cursor: self.cursor,

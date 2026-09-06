@@ -592,6 +592,7 @@ fn agent_record(host_path: PathBuf) -> AgentRecord {
         revision: 1,
         name: "Worker".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: Vec::new(),
         network: crate::agents::NetworkAccess::None,
         directories: vec![DirectoryGrant {

@@ -6,12 +6,13 @@
     <div>
       <h1>Agents</h1>
       <p>
-        Agents define instructions, tools, network access and local projects.
+        Presets define reusable model preferences, instructions and authority
+        ceilings.
       </p>
     </div>
     {% if !agents.is_empty() %}
       <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
-        >New agent</a
+        >New preset</a
       >
     {% endif %}
   </div>
@@ -24,12 +25,13 @@
 
   {% if agents.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">Create your first agent</h2>
+      <h2 class="text-lg font-semibold">Create your first preset</h2>
       <p class="text-quiet max-w-[60ch]">
-        Define how an agent works and which local projects it can access.
+        Define a reusable model preference and instructions. Local project
+        access is optional.
       </p>
       <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
-        >Create the first agent</a
+        >Create the first preset</a
       >
     </section>
   {% else %}
@@ -38,9 +40,13 @@
         <li class="record-row">
           <div class="min-w-0">
             <p class="font-medium break-words">{{ agent.name }}</p>
-            <p class="text-quiet mt-2 text-xs">Project access</p>
-            {% if agent.projects.is_empty() %}
-              <p class="text-quiet text-xs">No registered project access</p>
+            <p class="text-quiet mt-2 text-xs">Project ceiling</p>
+            {% if !agent.has_directory_ceiling %}
+              <p class="text-quiet text-xs">No local directory ceiling</p>
+            {% else if agent.projects.is_empty() %}
+              <p class="text-quiet text-xs">
+                No registered project matches the directory ceiling
+              </p>
             {% else %}
               <ul class="mt-1 space-y-1">
                 {% for project in agent.projects %}

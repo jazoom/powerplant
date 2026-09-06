@@ -14,7 +14,10 @@ use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 use serde::Deserialize;
 
 use crate::{
-    conversations::{ConversationError, ConversationId, ConversationRecord},
+    agents::AgentId,
+    conversations::{
+        ConversationError, ConversationId, ConversationModelConfiguration, ConversationRecord,
+    },
     error::{AppError, AppResult},
     providers::{ModelSelection, ProviderKind, ThinkingEffort},
     responses,
@@ -22,7 +25,7 @@ use crate::{
     state::AppState,
 };
 
-use self::page::{CatalogueView, ConversationDetailView, ConversationFormView};
+use self::page::{CatalogueView, ConversationDetailView, ConversationFormView, ModelSources};
 
 const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
 
@@ -40,6 +43,10 @@ pub(super) fn router() -> Router<AppState> {
             post(cancel_message),
         )
         .route("/conversations/{conversation_id}/model", post(select_model))
+        .route(
+            "/conversations/{conversation_id}/preset",
+            post(apply_preset),
+        )
         .route(
             "/conversations/{conversation_id}/rename",
             post(rename_conversation),
@@ -78,6 +85,12 @@ struct ModelForm {
     provider: String,
     model: String,
     thinking: String,
+}
+
+#[derive(Deserialize)]
+struct PresetForm {
+    revision: String,
+    preset: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -181,7 +194,7 @@ async fn send_message(
             ),
         );
     }
-    let Some(selection) = effective_selection(&state, &record) else {
+    let Some(model) = effective_model(&state, &record) else {
         return render_detail_command(
             graft,
             PatchStatus::UnprocessableEntity,
@@ -194,14 +207,14 @@ async fn send_message(
             ),
         );
     };
-    if let Err(error) = valid_selection(&state, &selection) {
+    if let Err(error) = valid_selection(&state, &model.selection) {
         return render_detail_command(
             graft,
             PatchStatus::UnprocessableEntity,
             detail_view(&state, session.0, &record, &record.title, error),
         );
     }
-    let Some(connection) = state.vault.connection_for(&selection) else {
+    let Some(connection) = state.vault.connection_for(&model.selection) else {
         return render_detail_command(
             graft,
             PatchStatus::UnprocessableEntity,
@@ -234,10 +247,13 @@ async fn send_message(
             );
         }
     };
-    let started =
-        state
-            .conversations
-            .begin_message(&record.id, revision, selection, job.id(), form.message);
+    let started = state.conversations.begin_message_with_model(
+        &record.id,
+        revision,
+        model,
+        job.id(),
+        form.message,
+    );
     let started = match started {
         Ok(started) => started,
         Err(error) => {
@@ -414,6 +430,80 @@ async fn select_model(
     }
 }
 
+async fn apply_preset(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<PresetForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(preset) = AgentId::parse(&form.preset).and_then(|id| state.agents.get(&id)) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose an available preset.",
+            ),
+        );
+    };
+    let Some(selection) = preset
+        .selection
+        .clone()
+        .or_else(|| effective_model(&state, &record).map(|model| model.selection))
+    else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose a model before you apply a preset without a model preference.",
+            ),
+        );
+    };
+    if let Err(error) = valid_selection(&state, &selection) {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, error),
+        );
+    }
+    match state
+        .conversations
+        .apply_preset(&record.id, revision, &preset, selection)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("store conversation preset", error))
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
+}
+
 async fn rename_conversation(
     State(state): State<AppState>,
     session: RequiredSession,
@@ -516,19 +606,26 @@ async fn delete_conversation(
     }
 }
 
-fn effective_selection(state: &AppState, record: &ConversationRecord) -> Option<ModelSelection> {
-    record.selection.clone().or_else(|| {
+fn effective_model(
+    state: &AppState,
+    record: &ConversationRecord,
+) -> Option<ConversationModelConfiguration> {
+    record.model.clone().or_else(|| {
         state
             .vault
-            .selected_connection()
-            .map(|connection| ModelSelection {
-                provider: connection.kind,
-                thinking: state.models_dev.effective_effort(
-                    connection.kind,
-                    &connection.model,
-                    connection.thinking.as_ref(),
-                ),
-                model: connection.model,
+            .desk_providers()
+            .into_iter()
+            .find(|provider| provider.selected)
+            .map(|connection| {
+                ConversationModelConfiguration::direct(ModelSelection {
+                    provider: connection.kind,
+                    thinking: state.models_dev.effective_effort(
+                        connection.kind,
+                        &connection.model,
+                        connection.thinking.as_ref(),
+                    ),
+                    model: connection.model,
+                })
             })
     })
 }
@@ -536,6 +633,13 @@ fn effective_selection(state: &AppState, record: &ConversationRecord) -> Option<
 fn valid_selection(state: &AppState, selection: &ModelSelection) -> Result<(), &'static str> {
     if !state.vault.contains(selection.provider) {
         return Err("Choose a stored provider.");
+    }
+    if state
+        .models_dev
+        .model(selection.provider, &selection.model)
+        .is_none()
+    {
+        return Err("Choose an available model.");
     }
     match selection.thinking.as_ref() {
         Some(effort)
@@ -578,8 +682,11 @@ fn detail_view(
     };
     ConversationDetailView::from_record(
         record,
-        &state.vault,
-        &state.models_dev,
+        ModelSources {
+            vault: &state.vault,
+            models: &state.models_dev,
+        },
+        &state.agents.list(),
         snapshot.as_ref(),
         state.sessions.busy(&session) || record.active_job.is_some(),
         title,

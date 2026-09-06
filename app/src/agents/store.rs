@@ -69,6 +69,7 @@ impl AgentStore {
                 let draft = AgentDraft {
                     name: starter_name(&project.name),
                     instructions: String::new(),
+                    selection: None,
                     tools: ToolId::ALL.to_vec(),
                     network: NetworkAccess::None,
                     directories: vec![DirectoryGrant {
@@ -113,6 +114,7 @@ impl AgentStore {
             revision,
             name: draft.name,
             instructions: draft.instructions,
+            selection: draft.selection,
             tools: draft.tools,
             network: draft.network,
             directories: draft.directories,
@@ -199,6 +201,7 @@ fn insert_created(
         revision: 1,
         name: draft.name,
         instructions: draft.instructions,
+        selection: draft.selection,
         tools: draft.tools,
         network: draft.network,
         directories: draft.directories,

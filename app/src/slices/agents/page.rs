@@ -7,13 +7,14 @@ use crate::sandbox::OrphanSandbox;
 use super::forms::AgentFormState;
 
 pub(super) const CATALOGUE_TITLE: &str = "Agents | Power Plant";
-pub(super) const NEW_TITLE: &str = "New agent | Power Plant";
-pub(super) const CONFIG_TITLE: &str = "Configure agent | Power Plant";
+pub(super) const NEW_TITLE: &str = "New preset | Power Plant";
+pub(super) const CONFIG_TITLE: &str = "Configure preset | Power Plant";
 
 pub(super) struct AgentListItem {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) projects: Vec<AgentProjectMetadata>,
+    pub(super) has_directory_ceiling: bool,
 }
 
 pub(super) struct AgentProjectMetadata {
@@ -57,6 +58,7 @@ impl CatalogueView {
                 .map(|agent| AgentListItem {
                     id: agent.id.as_hex(),
                     name: agent.name.clone(),
+                    has_directory_ceiling: !agent.directories.is_empty(),
                     projects: eligible_projects(agent, projects)
                         .into_iter()
                         .map(|project| AgentProjectMetadata {
@@ -84,6 +86,9 @@ pub(super) struct AgentFormView {
     pub(super) submit: &'static str,
     pub(super) name: String,
     pub(super) instructions: String,
+    pub(super) provider: String,
+    pub(super) model: String,
+    pub(super) thinking: String,
     pub(super) primary: String,
     pub(super) network: String,
     pub(super) network_domains: String,
@@ -105,6 +110,9 @@ pub(super) struct AgentFormContents<'a> {
     pub(super) submit: &'static str,
     pub(super) name: &'a str,
     pub(super) instructions: &'a str,
+    pub(super) provider: &'a str,
+    pub(super) model: &'a str,
+    pub(super) thinking: &'a str,
     pub(super) primary: &'a str,
     pub(super) network: &'a str,
     pub(super) network_domains: &'a str,
@@ -120,9 +128,9 @@ pub(super) struct AgentFormContents<'a> {
 impl AgentFormView {
     pub(super) fn create(state: AgentFormState, error: &'static str) -> Self {
         Self::from_state(
-            "New agent",
+            "New preset",
             "/agents",
-            "Create agent",
+            "Create preset",
             state,
             error,
             "",
@@ -162,7 +170,7 @@ impl AgentFormView {
 
     pub(super) fn edit(record: &AgentRecord, state: AgentFormState, error: &'static str) -> Self {
         let mut view = Self::from_state(
-            "Configure agent",
+            "Configure preset",
             &format!("/agents/{}/configuration", record.id.as_hex()),
             "Save",
             state,
@@ -196,6 +204,9 @@ impl AgentFormView {
             submit,
             name: state.name,
             instructions: state.instructions,
+            provider: state.provider,
+            model: state.model,
+            thinking: state.thinking,
             primary: state.primary,
             network: state.network,
             network_domains: state.network_domains,
@@ -217,7 +228,7 @@ impl AgentFormView {
                     path: grant.path,
                     access: grant.access,
                     path_locked: false,
-                    can_remove: grant_count > 1,
+                    can_remove: true,
                 })
                 .collect(),
             can_add: grant_count < MAXIMUM_GRANTS,
@@ -236,6 +247,9 @@ impl AgentFormView {
             submit: self.submit,
             name: &self.name,
             instructions: &self.instructions,
+            provider: &self.provider,
+            model: &self.model,
+            thinking: &self.thinking,
             primary: &self.primary,
             network: &self.network,
             network_domains: &self.network_domains,

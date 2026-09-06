@@ -8,6 +8,7 @@ fn record(primary: &str, grants: Vec<DirectoryGrant>) -> AgentRecord {
         revision: 1,
         name: "Agent".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: vec![ToolId::List],
         network: NetworkAccess::None,
         directories: grants,

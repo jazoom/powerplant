@@ -777,6 +777,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
             .create(crate::agents::AgentDraft {
                 name: format!("Recovery {reference_updated}"),
                 instructions: String::new(),
+                selection: None,
                 tools: crate::agents::ToolId::ALL.to_vec(),
                 network: crate::agents::NetworkAccess::None,
                 directories: vec![crate::agents::DirectoryGrant {
@@ -1204,6 +1205,7 @@ fn source_capture_rejects_a_stale_agent_revision() {
         .create(crate::agents::AgentDraft {
             name: "Desk agent".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: crate::agents::ToolId::ALL.to_vec(),
             network: crate::agents::NetworkAccess::None,
             directories: vec![crate::agents::DirectoryGrant {
@@ -1224,6 +1226,7 @@ fn source_capture_rejects_a_stale_agent_revision() {
             crate::agents::AgentDraft {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
+                selection: None,
                 tools: agent.tools.clone(),
                 network: agent.network.clone(),
                 directories: agent.directories.clone(),
@@ -1250,6 +1253,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
         .create(crate::agents::AgentDraft {
             name: "Recovery agent".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: crate::agents::ToolId::ALL.to_vec(),
             network: crate::agents::NetworkAccess::None,
             directories: vec![crate::agents::DirectoryGrant {
@@ -1285,6 +1289,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
             crate::agents::AgentDraft {
                 name: agent.name.clone(),
                 instructions: agent.instructions.clone(),
+                selection: None,
                 tools: agent.tools.clone(),
                 network: agent.network.clone(),
                 directories: vec![crate::agents::DirectoryGrant {
@@ -1306,6 +1311,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
             crate::agents::AgentDraft {
                 name: agent.name,
                 instructions: agent.instructions,
+                selection: None,
                 tools: agent.tools,
                 network: agent.network,
                 directories: agent.directories,

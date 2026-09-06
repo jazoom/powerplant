@@ -146,6 +146,10 @@
             is visible to every local browser session. Model replies use this
             discussion history. Project files and tools are not available here.
           </p>
+          <p class="text-sm">
+            <span class="font-medium">Effective model:</span>
+            {{ model_summary }}
+          </p>
         </section>
         <section
           id="transcript"
@@ -154,10 +158,12 @@
           class="flex max-h-[55vh] min-h-48 flex-col gap-4 overflow-y-auto pr-1"
           aria-live="polite"
         >
-          {% if omitted_messages > 0 %}<p class="text-quiet text-sm">
-            {{ omitted_messages }} earlier messages exceed the display limit.
-            They remain in local history and model context.
-          </p>{% endif %}
+          {% if omitted_messages > 0 %}
+            <p class="text-quiet text-sm">
+              {{ omitted_messages }} earlier messages exceed the display limit.
+              They remain in local history and model context.
+            </p>
+          {% endif %}
           {% for message in messages %}{% include "conversations/templates/message_article.html" %}{% endfor %}
         </section>
         <div id="conversation-observe">
@@ -235,62 +241,111 @@
           </form>
         {% endif %}
         <details class="file-disclosure">
-          <summary>Model</summary>
-          <form
-            data-graft
-            method="post"
-            action="/conversations/{{ id }}/model"
-            class="mt-4 flex max-w-xl flex-col gap-3"
-          >
-            <input type="hidden" name="revision" value="{{ revision }}" /><label
-              class="flex flex-col gap-1"
-              for="conversation-provider"
-              ><span class="text-sm">Provider</span
-              ><select
-                id="conversation-provider"
-                class="select select-bordered"
-                name="provider"
+          <summary>Model and preset</summary>
+          {% if !presets.is_empty() %}
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ id }}/preset"
+              class="mt-4 flex max-w-xl flex-col gap-3"
+            >
+              <input type="hidden" name="revision" value="{{ revision }}" />
+              <label class="flex flex-col gap-1" for="conversation-preset">
+                <span class="text-sm">Apply preset</span>
+                <select
+                  id="conversation-preset"
+                  class="select select-bordered"
+                  name="preset"
+                  {% if job_active %}disabled{% endif %}
+                >
+                  {% for preset in presets %}
+                    <option
+                      value="{{ preset.id }}"
+                      {% if preset.selected %}selected{% endif %}
+                    >
+                      {{ preset.name }} — {{ preset.description }}
+                    </option>
+                  {% endfor %}
+                </select>
+                <span class="text-quiet text-xs"
+                  >This copies its instructions and model preference. Without a
+                  model preference, it keeps the current model. Its folders
+                  never grant this conversation access.</span
+                >
+              </label>
+              <button
+                class="btn btn-secondary self-start"
+                type="submit"
                 {% if job_active %}disabled{% endif %}
               >
-                {% for provider in providers %}
-                  <option
-                    value="{{ provider.value }}"
-                    {% if provider.selected %}selected{% endif %}
-                  >
-                    {{ provider.label }}
-                  </option>
-                {% endfor %}
-              </select></label
-            ><label class="flex flex-col gap-1" for="conversation-model"
-              ><span class="text-sm">Model</span
-              ><input
-                id="conversation-model"
-                class="input input-bordered"
-                name="model"
-                required
-                maxlength="256"
-                value="{% for provider in providers %}{% if provider.selected %}{{ provider.model }}{% endif %}{% endfor %}"
-                {% if job_active %}disabled{% endif %} /></label
-            ><label class="flex flex-col gap-1" for="conversation-thinking"
-              ><span class="text-sm">Thinking effort</span
-              ><input
-                id="conversation-thinking"
-                class="input input-bordered"
-                name="thinking"
-                maxlength="32"
-                value="{% for provider in providers %}{% if provider.selected %}{{ provider.thinking }}{% endif %}{% endfor %}"
-                {% if job_active %}disabled{% endif %}
-              /><span class="text-quiet text-xs"
-                >Leave blank when the model has no selected effort.</span
-              ></label
-            ><button
-              class="btn btn-secondary self-start"
-              type="submit"
-              {% if job_active %}disabled{% endif %}
+                Apply preset
+              </button>
+            </form>
+          {% else %}
+            <p class="text-quiet mt-4 text-sm">
+              Create a preset with a model preference to reuse it here.
+            </p>
+          {% endif %}
+          <div class="border-base-300 mt-5 border-t pt-5">
+            <h2 class="text-sm font-semibold">Use model directly</h2>
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ id }}/model"
+              class="mt-4 flex max-w-xl flex-col gap-3"
             >
-              Use this model
-            </button>
-          </form>
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ revision }}"
+              /><label class="flex flex-col gap-1" for="conversation-provider"
+                ><span class="text-sm">Provider</span
+                ><select
+                  id="conversation-provider"
+                  class="select select-bordered"
+                  name="provider"
+                  {% if job_active %}disabled{% endif %}
+                >
+                  {% for provider in providers %}
+                    <option
+                      value="{{ provider.value }}"
+                      {% if provider.selected %}selected{% endif %}
+                    >
+                      {{ provider.label }}
+                    </option>
+                  {% endfor %}
+                </select></label
+              ><label class="flex flex-col gap-1" for="conversation-model"
+                ><span class="text-sm">Model</span
+                ><input
+                  id="conversation-model"
+                  class="input input-bordered"
+                  name="model"
+                  required
+                  maxlength="256"
+                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.model }}{% endif %}{% endfor %}"
+                  {% if job_active %}disabled{% endif %} /></label
+              ><label class="flex flex-col gap-1" for="conversation-thinking"
+                ><span class="text-sm">Thinking effort</span
+                ><input
+                  id="conversation-thinking"
+                  class="input input-bordered"
+                  name="thinking"
+                  maxlength="32"
+                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.thinking }}{% endif %}{% endfor %}"
+                  {% if job_active %}disabled{% endif %}
+                /><span class="text-quiet text-xs"
+                  >Leave blank when the model has no selected effort.</span
+                ></label
+              ><button
+                class="btn btn-secondary self-start"
+                type="submit"
+                {% if job_active %}disabled{% endif %}
+              >
+                Use model directly
+              </button>
+            </form>
+          </div>
         </details>
         <section
           class="file-section space-y-3"

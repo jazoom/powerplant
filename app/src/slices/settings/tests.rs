@@ -228,6 +228,7 @@ fn create_agent(state: &AppState, name: &str, path: &Path) -> crate::agents::Age
         .create(AgentDraft {
             name: name.to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: ToolId::ALL.to_vec(),
             network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {

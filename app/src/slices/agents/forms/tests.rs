@@ -193,12 +193,13 @@ fn remove_directory_keeps_primary_when_another_row_owns_it() {
 }
 
 #[test]
-fn remove_directory_rejects_the_last_row() {
+fn remove_directory_allows_the_last_row_for_a_preset() {
     let mut pairs = valid_pairs();
     pairs[0] = pair("intent", "remove-directory:0");
     let (mut form, intent) = AgentFormState::parse(pairs).expect("parse");
-    assert_eq!(form.apply(intent).err(), Some(FormError::Index));
-    assert_eq!(form.directories.len(), 1);
+    form.apply(intent).expect("remove");
+    assert!(form.directories.is_empty());
+    assert!(form.primary.is_empty());
 }
 
 fn revision_form(revision: &str) -> AgentFormState {

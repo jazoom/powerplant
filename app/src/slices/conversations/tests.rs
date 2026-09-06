@@ -6,6 +6,7 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
+    agents::{AgentDraft, NetworkAccess, ToolId},
     config::RuntimeConfig,
     providers::{ModelSelection, ProviderConnection, ProviderKind},
     sessions,
@@ -275,6 +276,207 @@ async fn observation_uses_the_page_route_and_cancel_needs_only_the_job_identity(
     let body = text(response).await;
     assert!(body.contains("target=\"conversation-detail\""));
     assert!(!body.contains("navigate="));
+}
+
+#[tokio::test]
+async fn applied_preset_copies_model_and_instructions_without_directory_authority() {
+    let mut state = test_state();
+    let backend = crate::providers::tests::ScriptedBackend::accept();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
+    let token = connected(&state);
+    let conversation = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let model = "grok-4.6".to_owned();
+    let selection = ModelSelection::new(
+        ProviderKind::Xai,
+        model.clone(),
+        state
+            .models_dev
+            .effective_effort(ProviderKind::Xai, &model, None),
+    )
+    .expect("selection");
+    let preset = state
+        .agents
+        .create(AgentDraft {
+            name: "Review preset".to_owned(),
+            instructions: "Review only the supplied discussion.".to_owned(),
+            selection: Some(selection.clone()),
+            tools: vec![ToolId::Write],
+            network: NetworkAccess::Public,
+            directories: vec![crate::agents::DirectoryGrant {
+                alias: "project".to_owned(),
+                host_path: std::env::current_dir().expect("checkout"),
+                access: crate::agents::AccessMode::ReadWrite,
+            }],
+            primary_directory: "project".to_owned(),
+        })
+        .expect("preset");
+    let path = format!("/conversations/{}/preset", conversation.id);
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&preset={}", conversation.revision, preset.id),
+        ))
+        .await
+        .expect("apply preset");
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = state.conversations.get(&conversation.id).expect("updated");
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&preset={}", conversation.revision, preset.id),
+        ))
+        .await
+        .expect("stale apply");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state.conversations.get(&conversation.id).as_ref(),
+        Some(&updated)
+    );
+    let model = updated.model.as_ref().expect("model configuration");
+    assert_eq!(model.instructions, "Review only the supplied discussion.");
+    assert_eq!(model.selection, selection);
+    let applied = model.preset.as_ref().expect("preset identity");
+    assert_eq!((applied.id, applied.revision), (preset.id, preset.revision));
+    assert_eq!(updated.id, conversation.id);
+
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/messages", conversation.id),
+            &token,
+            &format!("revision={}&message=Hello", updated.revision),
+        ))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&conversation.id)
+            .expect("conversation")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settlement");
+    assert_eq!(
+        backend.last_preamble().as_deref(),
+        Some("Review only the supplied discussion.")
+    );
+    assert!(backend.last_tools().is_empty());
+
+    let instructions_only = state
+        .agents
+        .create(AgentDraft {
+            name: "Concise".to_owned(),
+            instructions: "Reply briefly.".to_owned(),
+            selection: None,
+            tools: Vec::new(),
+            network: NetworkAccess::None,
+            directories: Vec::new(),
+            primary_directory: String::new(),
+        })
+        .expect("instructions-only preset");
+    let current = state.conversations.get(&conversation.id).expect("current");
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&preset={}",
+                current.revision, instructions_only.id
+            ),
+        ))
+        .await
+        .expect("switch preset");
+    assert_eq!(response.status(), StatusCode::OK);
+    let current = state.conversations.get(&conversation.id).expect("current");
+    let model = current.model.as_ref().expect("model");
+    assert_eq!(model.selection, selection);
+    assert_eq!(model.instructions, "Reply briefly.");
+    assert_eq!(
+        model.preset.as_ref().expect("preset").id,
+        instructions_only.id
+    );
+
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/model", conversation.id),
+            &token,
+            &format!(
+                "revision={}&provider=xai&model={}&thinking={}",
+                current.revision,
+                selection.model,
+                selection
+                    .thinking
+                    .as_ref()
+                    .map(|effort| effort.as_str())
+                    .unwrap_or("")
+            ),
+        ))
+        .await
+        .expect("direct model");
+    assert_eq!(response.status(), StatusCode::OK);
+    let current = state.conversations.get(&conversation.id).expect("current");
+    let model = current.model.expect("direct model");
+    assert_eq!(model.selection, selection);
+    assert!(model.instructions.is_empty());
+    assert!(model.preset.is_none());
+}
+
+#[tokio::test]
+async fn unavailable_preset_models_do_not_replace_conversation_configuration() {
+    let state = test_state();
+    let token = connected(&state);
+    let conversation = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let selections = [
+        ModelSelection::new(ProviderKind::Deepseek, "deepseek-chat".to_owned(), None).unwrap(),
+        ModelSelection::new(ProviderKind::Xai, "missing-model".to_owned(), None).unwrap(),
+        ModelSelection::new(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            Some(crate::providers::ThinkingEffort::new("invalid".to_owned()).unwrap()),
+        )
+        .unwrap(),
+    ];
+    for selection in selections {
+        let preset = state
+            .agents
+            .create(AgentDraft {
+                name: "Unavailable".to_owned(),
+                instructions: String::new(),
+                selection: Some(selection),
+                tools: Vec::new(),
+                network: NetworkAccess::None,
+                directories: Vec::new(),
+                primary_directory: String::new(),
+            })
+            .expect("preset");
+        let response = app(&state)
+            .oneshot(command(
+                &format!("/conversations/{}/preset", conversation.id),
+                &token,
+                &format!("revision={}&preset={}", conversation.revision, preset.id),
+            ))
+            .await
+            .expect("apply");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            state.conversations.get(&conversation.id).as_ref(),
+            Some(&conversation)
+        );
+    }
 }
 
 #[tokio::test]

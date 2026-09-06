@@ -14,10 +14,11 @@ use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 use serde::Deserialize;
 
 use crate::{
-    agents::{AgentError, AgentId, AgentRecord},
+    agents::{AgentDraft, AgentError, AgentId, AgentRecord},
     error::{AppError, AppResult},
     local_data::HOST_PATH_RESET_PENDING,
     projects::{ProjectId, ProjectRecord, desk_path},
+    providers::ModelSelection,
     responses,
     sessions::RequiredSession,
     state::AppState,
@@ -143,6 +144,15 @@ async fn create(
             );
         }
     };
+    if let Err(error) = validate_preset_selection(&state, &draft) {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            page::NEW_TITLE,
+            create_form_view(starter.as_ref(), form, error),
+        );
+    }
     match state.agents.create(draft) {
         Ok(record) => {
             let destination = match &starter {
@@ -268,6 +278,15 @@ async fn update_configuration(
             );
         }
     };
+    if let Err(error) = validate_preset_selection(&state, &draft) {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            page::CONFIG_TITLE,
+            AgentFormView::edit(&record, form, error),
+        );
+    }
     match state.agents.update(&record.id, revision, draft) {
         Ok(updated) => render_form_command(
             &state,
@@ -357,6 +376,43 @@ async fn remove_orphan(
         PatchStatus::UnprocessableEntity
     };
     render_catalogue(&state, graft.into(), status, error)
+}
+
+fn validate_preset_selection(state: &AppState, draft: &AgentDraft) -> Result<(), &'static str> {
+    let Some(selection) = &draft.selection else {
+        return Ok(());
+    };
+    valid_selection(state, selection)
+}
+
+fn valid_selection(state: &AppState, selection: &ModelSelection) -> Result<(), &'static str> {
+    if !state.vault.contains(selection.provider) {
+        return Err("Connect the selected provider before you save this preset.");
+    }
+    if state
+        .models_dev
+        .model(selection.provider, &selection.model)
+        .is_none()
+    {
+        return Err("Choose an available model.");
+    }
+    match selection.thinking.as_ref() {
+        Some(effort)
+            if !state
+                .models_dev
+                .supports(selection.provider, &selection.model, effort) =>
+        {
+            Err("Choose an available thinking effort.")
+        }
+        None if !state
+            .models_dev
+            .efforts(selection.provider, &selection.model)
+            .is_empty() =>
+        {
+            Err("Choose an available thinking effort.")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn load_agent(state: &AppState, raw: &str) -> Option<AgentRecord> {

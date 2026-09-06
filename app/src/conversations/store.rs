@@ -6,6 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{AgentId, AgentRecord};
 use crate::providers::ModelSelection;
 use crate::sessions::JobId;
 
@@ -25,11 +26,47 @@ pub(crate) struct ConversationRecord {
     pub(crate) id: ConversationId,
     pub(crate) revision: u32,
     pub(crate) title: String,
-    pub(crate) selection: Option<ModelSelection>,
+    pub(crate) model: Option<ConversationModelConfiguration>,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) active_job: Option<JobId>,
     pub(crate) created_at_ms: u64,
     pub(crate) updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConversationModelConfiguration {
+    pub(crate) selection: ModelSelection,
+    pub(crate) instructions: String,
+    pub(crate) preset: Option<AppliedPreset>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AppliedPreset {
+    pub(crate) id: AgentId,
+    pub(crate) revision: u32,
+    pub(crate) name: String,
+}
+
+impl ConversationModelConfiguration {
+    pub(crate) fn direct(selection: ModelSelection) -> Self {
+        Self {
+            selection,
+            instructions: String::new(),
+            preset: None,
+        }
+    }
+
+    fn from_preset(record: &AgentRecord, selection: ModelSelection) -> Self {
+        Self {
+            selection,
+            instructions: record.instructions.clone(),
+            preset: Some(AppliedPreset {
+                id: record.id,
+                revision: record.revision,
+                name: record.name.clone(),
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -118,12 +155,29 @@ struct ConversationFile {
     revision: u32,
     title: String,
     #[serde(deserialize_with = "crate::storage::required_option")]
-    selection: Option<ModelSelection>,
+    model: Option<ConversationModelFile>,
     messages: Vec<MessageFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     active_job: Option<String>,
     created_at_ms: u64,
     updated_at_ms: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ConversationModelFile {
+    selection: ModelSelection,
+    instructions: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    preset: Option<AppliedPresetFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct AppliedPresetFile {
+    id: String,
+    revision: u32,
+    name: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -171,7 +225,7 @@ impl ConversationStore {
             id,
             revision: 1,
             title,
-            selection: None,
+            model: None,
             messages: Vec::new(),
             active_job: None,
             created_at_ms: now,
@@ -204,20 +258,47 @@ impl ConversationStore {
         expected_revision: u32,
         selection: ModelSelection,
     ) -> Result<ConversationRecord, ConversationError> {
+        self.select_model_configuration(
+            id,
+            expected_revision,
+            ConversationModelConfiguration::direct(selection),
+        )
+    }
+
+    pub(crate) fn apply_preset(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        preset: &AgentRecord,
+        selection: ModelSelection,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.select_model_configuration(
+            id,
+            expected_revision,
+            ConversationModelConfiguration::from_preset(preset, selection),
+        )
+    }
+
+    pub(crate) fn select_model_configuration(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        model: ConversationModelConfiguration,
+    ) -> Result<ConversationRecord, ConversationError> {
         self.replace(id, expected_revision, |current| {
             if current.active_job.is_some() {
                 return Err(ConversationError::Active);
             }
-            current.selection = Some(selection);
+            current.model = Some(model);
             Ok(())
         })
     }
 
-    pub(crate) fn begin_message(
+    pub(crate) fn begin_message_with_model(
         &self,
         id: &ConversationId,
         expected_revision: u32,
-        selection: ModelSelection,
+        model: ConversationModelConfiguration,
         request: JobId,
         text: String,
     ) -> Result<ConversationRecord, ConversationError> {
@@ -229,7 +310,7 @@ impl ConversationStore {
             if current.messages.len() > MAXIMUM_MESSAGES.saturating_sub(2) {
                 return Err(ConversationError::Full);
             }
-            current.selection = Some(selection);
+            current.model = Some(model);
             current.messages.push(ConversationMessage {
                 role: MessageRole::User,
                 text,
@@ -443,21 +524,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     if title != file.title {
         return Err(ConversationError::Corrupt);
     }
-    let selection = match file.selection {
-        Some(selection)
-            if ModelSelection::new(
-                selection.provider,
-                selection.model.clone(),
-                selection.thinking.clone(),
-            )
-            .as_ref()
-                == Some(&selection) =>
-        {
-            Some(selection)
-        }
-        None => None,
-        Some(_) => return Err(ConversationError::Corrupt),
-    };
+    let model = file.model.map(model_from_file).transpose()?;
     let messages: Result<Vec<_>, _> = file.messages.into_iter().map(message_from_file).collect();
     let messages = messages?;
     let active_job = file.active_job.as_deref().and_then(JobId::parse);
@@ -482,12 +549,65 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         id,
         revision: file.revision,
         title,
-        selection,
+        model,
         messages,
         active_job,
         created_at_ms: file.created_at_ms,
         updated_at_ms: file.updated_at_ms,
     })
+}
+
+fn model_from_file(
+    file: ConversationModelFile,
+) -> Result<ConversationModelConfiguration, ConversationError> {
+    let selection = ModelSelection::new(
+        file.selection.provider,
+        file.selection.model.clone(),
+        file.selection.thinking.clone(),
+    )
+    .filter(|selection| selection == &file.selection)
+    .ok_or(ConversationError::Corrupt)?;
+    if file.instructions.len() > crate::agents::MAXIMUM_INSTRUCTION_BYTES
+        || file
+            .instructions
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+    {
+        return Err(ConversationError::Corrupt);
+    }
+    let preset = match file.preset {
+        Some(preset)
+            if preset.revision > 0
+                && !preset.name.trim().is_empty()
+                && preset.name.len() <= crate::agents::MAXIMUM_NAME_BYTES
+                && !preset.name.chars().any(char::is_control) =>
+        {
+            Some(AppliedPreset {
+                id: AgentId::parse(&preset.id).ok_or(ConversationError::Corrupt)?,
+                revision: preset.revision,
+                name: preset.name,
+            })
+        }
+        None => None,
+        Some(_) => return Err(ConversationError::Corrupt),
+    };
+    Ok(ConversationModelConfiguration {
+        selection,
+        instructions: file.instructions,
+        preset,
+    })
+}
+
+fn model_to_file(model: &ConversationModelConfiguration) -> ConversationModelFile {
+    ConversationModelFile {
+        selection: model.selection.clone(),
+        instructions: model.instructions.clone(),
+        preset: model.preset.as_ref().map(|preset| AppliedPresetFile {
+            id: preset.id.as_hex(),
+            revision: preset.revision,
+            name: preset.name.clone(),
+        }),
+    }
 }
 
 fn message_from_file(file: MessageFile) -> Result<ConversationMessage, ConversationError> {
@@ -553,7 +673,7 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         id: record.id.as_hex(),
         revision: record.revision,
         title: record.title.clone(),
-        selection: record.selection.clone(),
+        model: record.model.as_ref().map(model_to_file),
         messages: record
             .messages
             .iter()

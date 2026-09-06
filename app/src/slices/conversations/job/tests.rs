@@ -204,7 +204,7 @@ fn pending_assistant_output_stays_out_of_the_next_request_history() {
         id: crate::conversations::ConversationId::generate().expect("conversation"),
         revision: 1,
         title: "Discussion".to_owned(),
-        selection: None,
+        model: None,
         messages: vec![
             ConversationMessage {
                 role: MessageRole::User,

@@ -320,6 +320,7 @@ async fn grant_agent(
     let draft = AgentDraft {
         name: agent.name.clone(),
         instructions: agent.instructions.clone(),
+        selection: agent.selection.clone(),
         tools: agent.tools.clone(),
         network: agent.network.clone(),
         directories,

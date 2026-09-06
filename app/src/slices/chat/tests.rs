@@ -185,6 +185,7 @@ async fn connect_session(state: &AppState) -> String {
         .create(AgentDraft {
             name: "Test agent".to_owned(),
             instructions: String::new(),
+            selection: None,
             tools: ToolId::ALL.to_vec(),
             network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -1816,6 +1817,7 @@ async fn two_agents_advertise_distinct_prompts_and_tools() {
         .create(AgentDraft {
             name: "Reader".to_owned(),
             instructions: "Only read files.".to_owned(),
+            selection: None,
             tools: vec![ToolId::List, ToolId::Read],
             network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {
@@ -2116,6 +2118,7 @@ async fn a_quick_task_uses_the_pinned_agent_instructions_once() {
             AgentDraft {
                 name: agent.name,
                 instructions: "Keep this exact instruction.".to_owned(),
+                selection: None,
                 tools: agent.tools,
                 network: agent.network,
                 directories: agent.directories,
@@ -2204,6 +2207,7 @@ async fn a_read_only_quick_task_omits_the_gate_and_commit() {
         .create(AgentDraft {
             name: "Reader".to_owned(),
             instructions: "Only read files.".to_owned(),
+            selection: None,
             tools: vec![ToolId::List, ToolId::Read],
             network: crate::agents::NetworkAccess::None,
             directories: vec![DirectoryGrant {

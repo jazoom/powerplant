@@ -56,6 +56,7 @@ fn agent_with_primary(tools: Vec<ToolId>, writable: bool, primary: &str) -> Agen
         revision: 1,
         name: "Agent".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools,
         network: NetworkAccess::None,
         directories: vec![DirectoryGrant {
@@ -246,6 +247,7 @@ fn selected_grant_replaces_the_saved_primary_for_attempt_authority() {
         revision: 3,
         name: "Agent".to_owned(),
         instructions: String::new(),
+        selection: None,
         tools: vec![ToolId::List],
         network: NetworkAccess::None,
         directories: vec![
