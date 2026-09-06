@@ -4,6 +4,7 @@ use crate::{
     agents::{AgentLeaseCoordinator, AgentStore},
     assets::AssetPaths,
     config::{RuntimeConfig, StartupConfig},
+    conversations::ConversationStore,
     environments::{
         EnvironmentCatalogue, EnvironmentPreparationScheduler, EnvironmentSnapshotRepository,
     },
@@ -34,6 +35,7 @@ pub(crate) struct AppState {
     pub(crate) plan_login: Arc<PlanLogin>,
     pub(crate) preferences: Arc<Preferences>,
     pub(crate) agents: Arc<AgentStore>,
+    pub(crate) conversations: Arc<ConversationStore>,
     pub(crate) projects: Arc<ProjectStore>,
     pub(crate) folder_picker: ProjectFolderPicker,
     pub(crate) local_data: LocalDataReset,
@@ -62,6 +64,8 @@ pub(crate) async fn build(
     let agents =
         AgentStore::open(data_dir.join("agents")).map_err(|error| error.message().to_owned())?;
     let projects = ProjectStore::open(data_dir.join("projects.json"))
+        .map_err(|error| error.message().to_owned())?;
+    let conversations = ConversationStore::open(data_dir.join("conversations"))
         .map_err(|error| error.message().to_owned())?;
     let environments = EnvironmentCatalogue::open(
         data_dir.join("environments.json"),
@@ -118,6 +122,7 @@ pub(crate) async fn build(
         plan_login: Arc::new(PlanLogin::new()),
         preferences: Arc::new(preferences),
         agents: Arc::new(agents),
+        conversations: Arc::new(conversations),
         projects: Arc::new(projects),
         folder_picker: ProjectFolderPicker::native(),
         local_data,

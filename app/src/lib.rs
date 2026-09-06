@@ -3,6 +3,7 @@
 mod agents;
 mod assets;
 mod config;
+mod conversations;
 mod environments;
 mod error;
 mod hex;

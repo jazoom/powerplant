@@ -5,6 +5,7 @@ use crate::state::AppState;
 mod agents;
 pub(crate) mod chat;
 mod connect;
+mod conversations;
 mod environments;
 mod human_gates;
 mod projects;
@@ -20,6 +21,7 @@ pub(crate) use chat::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action}
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .merge(connect::router())
+        .merge(conversations::router())
         .merge(projects::router())
         .merge(agents::router())
         .merge(chat::router())

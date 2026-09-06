@@ -29,6 +29,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         plan_login: Arc::new(PlanLogin::new()),
         preferences: Arc::new(Preferences::in_memory()),
         agents: Arc::new(AgentStore::in_memory()),
+        conversations: Arc::new(crate::conversations::ConversationStore::in_memory()),
         projects: Arc::new(ProjectStore::in_memory()),
         folder_picker: crate::projects::ProjectFolderPicker::scripted(),
         local_data: crate::local_data::LocalDataReset::detached(),
