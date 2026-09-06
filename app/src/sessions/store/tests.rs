@@ -221,6 +221,39 @@ fn remove_cancels_the_active_job() {
 }
 
 #[test]
+fn a_gate_can_release_and_reacquire_only_its_session_reservation() {
+    let store = super::SessionStore::new();
+    let token = sessions::generate_session_token().expect("token");
+    let id = token.id();
+    let first = crate::conversations::ConversationId::generate().expect("first conversation");
+    let second = crate::conversations::ConversationId::generate().expect("second conversation");
+    store.insert(id);
+    let first_job = store
+        .begin_conversation_job(&id, first, 1)
+        .expect("first job");
+    assert!(store.release_job_reservation(&id, Some(first), first_job.id()));
+    assert!(!store.busy(&id));
+
+    assert!(
+        store
+            .acquire_job_reservation(&id, Some(first), first_job.id())
+            .is_ok()
+    );
+    assert!(store.release_job_reservation(&id, Some(first), first_job.id()));
+    let second_job = store
+        .begin_conversation_job(&id, second, 1)
+        .expect("second job");
+    assert!(
+        store
+            .acquire_job_reservation(&id, Some(first), first_job.id())
+            .is_err()
+    );
+    assert!(store.finish_conversation_job(&id, first, first_job.id()));
+    assert!(store.busy(&id));
+    assert!(store.finish_conversation_job(&id, second, second_job.id()));
+}
+
+#[test]
 fn job_lookup_requires_the_conversation_identity() {
     let store = super::SessionStore::new();
     let token = sessions::generate_session_token().expect("token");

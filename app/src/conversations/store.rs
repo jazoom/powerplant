@@ -137,7 +137,9 @@ impl ConversationError {
             Self::Selection => "Choose an available model before you send a message.",
             Self::Projects => "This conversation can reference at most eight projects.",
             Self::DuplicateProject => "That project is already a context reference.",
-            Self::Access => "Grant read-only access to an attached project before inspection.",
+            Self::Access => {
+                "Grant project access to an attached project before inspection or changes."
+            }
             Self::Target => "Choose a granted project as the execution target.",
         }
     }
@@ -333,6 +335,39 @@ impl ConversationStore {
         project: ProjectId,
         project_revision: u32,
     ) -> Result<ConversationRecord, ConversationError> {
+        self.grant_access(
+            id,
+            expected_revision,
+            project,
+            project_revision,
+            AccessMode::ReadOnly,
+        )
+    }
+
+    pub(crate) fn grant_writable(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        project: ProjectId,
+        project_revision: u32,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.grant_access(
+            id,
+            expected_revision,
+            project,
+            project_revision,
+            AccessMode::ReadWrite,
+        )
+    }
+
+    pub(crate) fn grant_access(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        project: ProjectId,
+        project_revision: u32,
+        access: AccessMode,
+    ) -> Result<ConversationRecord, ConversationError> {
         self.replace(id, expected_revision, |current| {
             if current.active_job.is_some() {
                 return Err(ConversationError::Active);
@@ -347,13 +382,13 @@ impl ConversationStore {
             {
                 grant.project_revision = project_revision;
                 grant.authority_revision = current.revision;
-                grant.access = AccessMode::ReadOnly;
+                grant.access = access;
             } else {
                 current.grants.push(ConversationGrant {
                     project_id: project,
                     project_revision,
                     authority_revision: current.revision,
-                    access: AccessMode::ReadOnly,
+                    access,
                 });
             }
             current.execution_target = Some(project);
@@ -671,7 +706,6 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         let project_id = ProjectId::parse(&grant.project).ok_or(ConversationError::Corrupt)?;
         if grant.project_revision == 0
             || grant.authority_revision == 0
-            || grant.access != AccessMode::ReadOnly
             || !projects.contains(&project_id)
             || grants
                 .iter()

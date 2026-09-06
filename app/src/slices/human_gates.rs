@@ -221,28 +221,48 @@ async fn decide(
     let Some((run_id, gate_id)) = ids(&run_raw, &gate_raw) else {
         return Ok(responses::request_navigation(graft, "/runs"));
     };
+    let error_target = if pairs
+        .iter()
+        .any(|(key, value)| key == "surface" && value == "conversation")
+    {
+        "conversation-candidate"
+    } else {
+        "gate-detail"
+    };
     let form = match forms::DecisionForm::parse(pairs, matches!(action, DecisionAction::Revision)) {
         Ok(form) => form,
         Err(forms::FormError::Note) => {
-            return command_error(
+            return command_error_target(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 "Enter a revision note.",
+                error_target,
             );
         }
         Err(forms::FormError::Invalid) => {
-            return command_error(
+            return command_error_target(
                 graft,
                 PatchStatus::Conflict,
                 "That gate page is stale. Reload it.",
+                error_target,
             );
         }
     };
     let Some(run) = state.workflow_runs.get(&run_id) else {
-        return command_error(graft, PatchStatus::Conflict, "That gate is unavailable.");
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That gate is unavailable.",
+            error_target,
+        );
     };
     let Some(gate) = run.gates.iter().find(|gate| gate.id == gate_id) else {
-        return command_error(graft, PatchStatus::Conflict, "That gate is unavailable.");
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That gate is unavailable.",
+            error_target,
+        );
     };
     let target = run
         .artefact(&gate.candidate.id)
@@ -253,10 +273,12 @@ async fn decide(
         || target.as_deref() != Some(form.candidate.as_str())
         || !state.gate_continuations.available(&run_id, &session)
     {
-        return command_error(
+        return command_error_for_run(
             graft,
             PatchStatus::Conflict,
             "That gate page is stale. Reload it.",
+            &run,
+            form.conversation_surface,
         );
     }
     let Ok(diff) = crate::workflows::artefacts::CandidateDiff::load(
@@ -265,60 +287,122 @@ async fn decide(
         &gate.candidate,
         &state.workflow_artefacts,
     ) else {
-        return command_error(
+        return command_error_for_run(
             graft,
             PatchStatus::Conflict,
             "The immutable candidate diff is unavailable.",
+            &run,
+            form.conversation_surface,
         );
     };
 
     if matches!(action, DecisionAction::Revision) && run.kind == RunKind::QuickTask {
-        return command_error(
+        return command_error_for_run(
             graft,
             PatchStatus::Conflict,
             "That gate page is stale. Reload it.",
+            &run,
+            form.conversation_surface,
         );
     }
     let destination = decision_destination(&run);
+    let Some(continuation) = state.gate_continuations.take(&run_id) else {
+        return command_error_for_run(
+            graft,
+            PatchStatus::Conflict,
+            "That gate is unavailable.",
+            &run,
+            form.conversation_surface,
+        );
+    };
+    if continuation.session_id != session {
+        state.gate_continuations.put_back(continuation);
+        return command_error_for_run(
+            graft,
+            PatchStatus::Conflict,
+            "That gate is unavailable.",
+            &run,
+            form.conversation_surface,
+        );
+    }
+    let reservation_acquired = if run.conversation_id.is_some() {
+        if state
+            .sessions
+            .acquire_job_reservation(
+                &session,
+                continuation.conversation_id,
+                continuation.job.id(),
+            )
+            .is_err()
+        {
+            return_continuation(&state, continuation, false);
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "Another command is active in this browser session.",
+                &run,
+                form.conversation_surface,
+            );
+        }
+        true
+    } else {
+        false
+    };
     let leases = if matches!(action, DecisionAction::Approve) {
         let Ok(execution) = state.workflow_execution.acquire() else {
-            return command_error(
+            return_continuation(&state, continuation, reservation_acquired);
+            return command_error_for_run(
                 graft,
                 PatchStatus::Conflict,
                 "Another workflow is active. Try again.",
+                &run,
+                form.conversation_surface,
             );
         };
-        let Ok(agent) = state.agent_leases.acquire(run.agent_id) else {
-            return command_error(
-                graft,
-                PatchStatus::Conflict,
-                "That agent is active. Try again.",
-            );
+        let agent = if run.conversation_id.is_some() {
+            None
+        } else {
+            match state.agent_leases.acquire(run.agent_id) {
+                Ok(agent) => Some(agent),
+                Err(()) => {
+                    return_continuation(&state, continuation, reservation_acquired);
+                    return command_error_for_run(
+                        graft,
+                        PatchStatus::Conflict,
+                        "That agent is active. Try again.",
+                        &run,
+                        form.conversation_surface,
+                    );
+                }
+            }
         };
         Some((agent, execution))
     } else {
         None
     };
-    let Some(continuation) = state.gate_continuations.take(&run_id) else {
-        return command_error(graft, PatchStatus::Conflict, "That gate is unavailable.");
-    };
-    if continuation.session_id != session {
-        state.gate_continuations.put_back(continuation);
-        return command_error(graft, PatchStatus::Conflict, "That gate is unavailable.");
-    }
     if matches!(action, DecisionAction::Approve) {
         match continuation_authority(&state, &run, &continuation) {
             ContinuationAuthority::Ready => {}
             ContinuationAuthority::Unavailable => {
-                state.gate_continuations.put_back(continuation);
-                return command_error(
+                return_continuation(&state, continuation, reservation_acquired);
+                return command_error_for_run(
                     graft,
                     PatchStatus::Conflict,
                     "A granted directory is no longer at the saved path.",
+                    &run,
+                    form.conversation_surface,
                 );
             }
             ContinuationAuthority::Stale => {
-                return interrupt_and_redirect(state, continuation, run_id, graft, &destination);
+                return interrupt_and_redirect(
+                    state,
+                    continuation,
+                    run_id,
+                    graft,
+                    &destination,
+                    reservation_acquired,
+                    form.conversation_surface,
+                );
             }
         }
     }
@@ -328,11 +412,13 @@ async fn decide(
             run.cancel_gate(gate_id, form.revision, crate::workflows::now_ms())
         });
         if result.is_err() {
-            state.gate_continuations.put_back(continuation);
-            return command_error(
+            return_continuation(&state, continuation, reservation_acquired);
+            return command_error_for_run(
                 graft,
                 PatchStatus::Conflict,
                 "That gate page is stale. Reload it.",
+                &run,
+                form.conversation_surface,
             );
         }
         if run.kind == RunKind::QuickTask {
@@ -370,19 +456,23 @@ async fn decide(
         secret,
     );
     let Ok((bytes, object_hash, artefact_hash)) = encoded else {
-        state.gate_continuations.put_back(continuation);
-        return command_error(
+        return_continuation(&state, continuation, reservation_acquired);
+        return command_error_for_run(
             graft,
             PatchStatus::UnprocessableEntity,
             "That revision note is not valid.",
+            &run,
+            form.conversation_surface,
         );
     };
     if state.workflow_artefacts.publish(&bytes) != Ok(object_hash) {
-        state.gate_continuations.put_back(continuation);
-        return command_error(
+        return_continuation(&state, continuation, reservation_acquired);
+        return command_error_for_run(
             graft,
             PatchStatus::Conflict,
             "Power Plant could not store the decision. Try again.",
+            &run,
+            form.conversation_surface,
         );
     }
     let Some(record) = decision_record(
@@ -394,18 +484,26 @@ async fn decide(
         artefact_hash,
         bytes.len() as u64,
     ) else {
-        state.gate_continuations.put_back(continuation);
-        return command_error(graft, PatchStatus::Conflict, "That gate is unavailable.");
+        return_continuation(&state, continuation, reservation_acquired);
+        return command_error_for_run(
+            graft,
+            PatchStatus::Conflict,
+            "That gate is unavailable.",
+            &run,
+            form.conversation_surface,
+        );
     };
     let changed = state.workflow_runs.mutate(&run_id, |run| {
         run.decide_gate(gate_id, form.revision, record, kind, decided_at)
     });
     let Ok(changed) = changed else {
-        state.gate_continuations.put_back(continuation);
-        return command_error(
+        return_continuation(&state, continuation, reservation_acquired);
+        return command_error_for_run(
             graft,
             PatchStatus::Conflict,
             "That gate page is stale. Reload it.",
+            &run,
+            form.conversation_surface,
         );
     };
 
@@ -417,7 +515,7 @@ async fn decide(
             tokio::spawn(crate::workflows::execute_run(
                 state.clone(),
                 continuation,
-                Some(agent),
+                agent,
                 execution,
             ));
         }
@@ -435,6 +533,21 @@ async fn decide(
         }
     }
     Ok(responses::command_navigation(&destination))
+}
+
+fn return_continuation(
+    state: &AppState,
+    continuation: crate::workflows::WorkflowJob,
+    reservation_acquired: bool,
+) {
+    if reservation_acquired {
+        let _ = state.sessions.release_job_reservation(
+            &continuation.session_id,
+            continuation.conversation_id,
+            continuation.job.id(),
+        );
+    }
+    state.gate_continuations.put_back(continuation);
 }
 
 fn decision_record(
@@ -508,10 +621,26 @@ fn decision_record(
     })
 }
 
-fn command_error(
+fn command_error_for_run(
+    graft: PatchGraft,
+    status: PatchStatus,
+    message: &'static str,
+    run: &crate::workflows::WorkflowRun,
+    conversation_surface: bool,
+) -> AppResult<Response> {
+    let target = if conversation_surface && run.conversation_id.is_some() {
+        "conversation-candidate"
+    } else {
+        "gate-detail"
+    };
+    command_error_target(graft, status, message, target)
+}
+
+fn command_error_target(
     _graft: PatchGraft,
     status: PatchStatus,
     message: &'static str,
+    target: &'static str,
 ) -> AppResult<Response> {
     #[derive(askama::Template)]
     #[template(
@@ -522,17 +651,16 @@ fn command_error(
         message: &'static str,
     }
     let view = ErrorView { message };
-    Ok(hypergraft::outcome::children_patch(
-        status,
-        "gate-detail",
-        &view,
-    )?)
+    Ok(hypergraft::outcome::children_patch(status, target, &view)?)
 }
 
 fn decision_destination(run: &crate::workflows::WorkflowRun) -> String {
-    match run.kind {
-        RunKind::QuickTask => crate::projects::desk_path(&run.project_id, &run.agent_id),
-        RunKind::Configured => format!("/runs/{}", run.id.as_hex()),
+    match (run.kind, run.conversation_id) {
+        (RunKind::QuickTask, Some(conversation)) => {
+            format!("/conversations/{}", conversation.as_hex())
+        }
+        (RunKind::QuickTask, None) => crate::projects::desk_path(&run.project_id, &run.agent_id),
+        (RunKind::Configured, _) => format!("/runs/{}", run.id.as_hex()),
     }
 }
 
@@ -556,6 +684,38 @@ fn continuation_authority(
     let Some(project) = state.projects.get(&run.project_id) else {
         return ContinuationAuthority::Stale;
     };
+    if let Some(conversation_id) = run.conversation_id {
+        if continuation.conversation_id != Some(conversation_id) {
+            return ContinuationAuthority::Stale;
+        }
+        let Some(pinned) = continuation.authority.as_ref() else {
+            return ContinuationAuthority::Stale;
+        };
+        if !project.host_path_is_available() {
+            return ContinuationAuthority::Unavailable;
+        }
+        let current = match state.conversations.get(&conversation_id) {
+            Some(record) => match crate::conversations::resolve_authority(
+                &record,
+                &state.projects,
+                &state.agents,
+            ) {
+                Ok(Some(authority)) => authority.effective,
+                Ok(None) | Err(_) => return ContinuationAuthority::Stale,
+            },
+            None => return ContinuationAuthority::Stale,
+        };
+        if current != *pinned {
+            return ContinuationAuthority::Stale;
+        }
+        if pinned.revalidate_project(&project).is_err() {
+            return ContinuationAuthority::Stale;
+        }
+        if continuation.grant_access.is_writable() && !source_is_unchanged(state, run, &project) {
+            return ContinuationAuthority::Stale;
+        }
+        return ContinuationAuthority::Ready;
+    }
     let Some(agent) = state.agents.get(&run.agent_id) else {
         return ContinuationAuthority::Stale;
     };
@@ -587,23 +747,59 @@ fn continuation_authority(
     ContinuationAuthority::Ready
 }
 
+fn source_is_unchanged(
+    state: &AppState,
+    run: &crate::workflows::WorkflowRun,
+    project: &crate::projects::ProjectRecord,
+) -> bool {
+    let crate::workflows::RunSource::Captured { source } = &run.source else {
+        return false;
+    };
+    let Some(initial_record) = run.artefact(&source.initial.id) else {
+        return false;
+    };
+    let Ok(bytes) = state.workflow_artefacts.get(&initial_record.object_hash) else {
+        return false;
+    };
+    let Some(initial) =
+        crate::workflows::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(
+            &bytes,
+        )
+    else {
+        return false;
+    };
+    crate::workflows::artefacts::CandidateCapture::capture_host(
+        &project.host_path,
+        &state.workflow_artefacts,
+    )
+    .is_ok_and(|current| current == initial)
+}
+
 fn interrupt_and_redirect(
     state: AppState,
     continuation: crate::workflows::WorkflowJob,
     run_id: RunId,
     graft: PatchGraft,
     destination: &str,
+    reservation_acquired: bool,
+    conversation_surface: bool,
 ) -> AppResult<Response> {
     if state
         .workflow_runs
         .mutate(&run_id, |run| run.interrupt(crate::workflows::now_ms()))
         .is_err()
     {
-        state.gate_continuations.put_back(continuation);
-        return command_error(
+        let conversation = conversation_surface && continuation.conversation_id.is_some();
+        return_continuation(&state, continuation, reservation_acquired);
+        return command_error_target(
             graft,
             PatchStatus::Conflict,
             "That gate page is stale. Reload it.",
+            if conversation {
+                "conversation-candidate"
+            } else {
+                "gate-detail"
+            },
         );
     }
     if let Some(key) = continuation.conversation_key() {

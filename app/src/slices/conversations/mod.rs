@@ -122,6 +122,8 @@ struct ProjectForm {
 struct AccessForm {
     revision: String,
     project: String,
+    #[serde(default)]
+    access: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -343,7 +345,9 @@ async fn send_message(
                 );
             }
         };
-        Some((authority.clone(), pinned, environments, execution))
+        let run_id = workflows::RunId::generate()
+            .map_err(|error| AppError::new("create workflow run identifier", error))?;
+        Some((run_id, authority.clone(), pinned, environments, execution))
     } else {
         None
     };
@@ -389,9 +393,7 @@ async fn send_message(
         }
     };
     let view = detail_view(&state, session.0, &started, &started.title, "");
-    if let Some((authority, pinned, environments, execution)) = workflow {
-        let run_id = workflows::RunId::generate()
-            .map_err(|error| AppError::new("create workflow run identifier", error))?;
+    if let Some((run_id, authority, pinned, environments, execution)) = workflow {
         let run = WorkflowRun::create_for_conversation(
             run_id,
             workflows::now_ms(),
@@ -809,10 +811,36 @@ async fn grant_access(
             ),
         );
     }
-    match state
-        .conversations
-        .grant_read_only(&record.id, revision, project.id, project.revision)
-    {
+    let access = if form.access.trim().is_empty() {
+        crate::agents::AccessMode::ReadOnly
+    } else if let Some(access) = crate::agents::AccessMode::parse(&form.access) {
+        access
+    } else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose read-only or writable access.",
+            ),
+        );
+    };
+    let updated = match access {
+        crate::agents::AccessMode::ReadOnly => {
+            state
+                .conversations
+                .grant_read_only(&record.id, revision, project.id, project.revision)
+        }
+        crate::agents::AccessMode::ReadWrite => {
+            state
+                .conversations
+                .grant_writable(&record.id, revision, project.id, project.revision)
+        }
+    };
+    match updated {
         Ok(updated) => render_detail_command(
             graft,
             PatchStatus::Ok,
@@ -1128,11 +1156,19 @@ fn detail_view(
             .as_ref()
             .is_some_and(|job| job.status == crate::sessions::JobStatus::Failed)
     {
-        "The reply could not be stored. Restore access to local data, then restart Power Plant."
+        "This operation requires recovery. The conversation remains reserved until a restart reconciles the local records."
     } else {
         error
     };
-    ConversationDetailView::from_record(
+    let pending_gate = state
+        .workflow_runs
+        .active_runs()
+        .into_iter()
+        .find(|run| {
+            run.conversation_id == Some(record.id) && run.kind == workflows::RunKind::QuickTask
+        })
+        .and_then(|run| page::pending_code_gate(&run, &state.workflow_artefacts));
+    ConversationDetailView::from_record_with_gate(
         record,
         ModelSources {
             vault: &state.vault,
@@ -1144,6 +1180,7 @@ fn detail_view(
         state.sessions.busy(&session) || record.active_job.is_some(),
         title,
         error,
+        pending_gate,
     )
 }
 

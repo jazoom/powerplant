@@ -48,6 +48,7 @@ pub(crate) struct CommitResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CommitError {
     Assurance,
+    Authority,
     Preflight,
     Command,
     Apply,
@@ -58,6 +59,7 @@ impl CommitError {
     pub(crate) fn category(self) -> FailureCategory {
         match self {
             Self::Assurance => FailureCategory::Assurance,
+            Self::Authority => FailureCategory::Authority,
             Self::Preflight | Self::Operational => FailureCategory::Operational,
             Self::Command | Self::Apply => FailureCategory::Commit,
         }
@@ -66,6 +68,7 @@ impl CommitError {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::Assurance => NON_APPROVED_MESSAGE,
+            Self::Authority => "Project access changed before that commit.",
             Self::Preflight => "The project changed before that commit.",
             Self::Command => "Power Plant could not create the Git commit.",
             Self::Apply => "Power Plant could not apply the candidate.",

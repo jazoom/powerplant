@@ -5,7 +5,7 @@
 >
   <p class="text-sm">
     {% if quick_task %}
-      <a href="{{ desk_href }}" data-graft class="link">Back to project desk</a>
+      <a href="{{ back_href }}" data-graft class="link">{{ back_label }}</a>
     {% else %}
       <a href="/runs/{{ run_id }}" data-graft class="link"
         >Back to run detail</a

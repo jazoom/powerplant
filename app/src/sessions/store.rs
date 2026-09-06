@@ -61,7 +61,7 @@ pub(crate) struct ConversationKey {
 
 struct StoredSession {
     conversations: HashMap<ConversationKey, Conversation>,
-    // One in-flight command per session. Terminal settlement clears it.
+    // Safe gates release this token without release of conversation ownership.
     active: Option<JobId>,
     last_agents: HashMap<ProjectId, AgentId>,
     recent_projects: Vec<ProjectId>,
@@ -311,6 +311,59 @@ impl SessionStore {
             .map(|entry| entry.job.clone())
     }
 
+    pub(crate) fn release_job_reservation(
+        &self,
+        id: &SessionId,
+        conversation_id: Option<ConversationId>,
+        job_id: JobId,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let reservation = match conversation_id {
+            Some(conversation_id) => self
+                .conversation_jobs()
+                .get(&conversation_id)
+                .filter(|entry| entry.job.id() == job_id && entry.session == *id)
+                .map(|entry| entry.reservation),
+            None => Some(job_id),
+        };
+        let Some(reservation) = reservation else {
+            return false;
+        };
+        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
+            return false;
+        };
+        if session.active != Some(reservation) {
+            return false;
+        }
+        session.active = None;
+        true
+    }
+
+    pub(crate) fn acquire_job_reservation(
+        &self,
+        id: &SessionId,
+        conversation_id: Option<ConversationId>,
+        job_id: JobId,
+    ) -> Result<(), BeginTurnError> {
+        let mut sessions = self.lock();
+        let reservation = match conversation_id {
+            Some(conversation_id) => self
+                .conversation_jobs()
+                .get(&conversation_id)
+                .filter(|entry| entry.job.id() == job_id && entry.session == *id)
+                .map(|entry| entry.reservation),
+            None => Some(job_id),
+        }
+        .ok_or(BeginTurnError::Conflict)?;
+        let session =
+            live_mut(&mut sessions, id, self.clock.now()).ok_or(BeginTurnError::MissingSession)?;
+        if session.active.is_some() {
+            return Err(BeginTurnError::Conflict);
+        }
+        session.active = Some(reservation);
+        Ok(())
+    }
+
     pub(crate) fn finish_conversation_job(
         &self,
         id: &SessionId,
@@ -372,7 +425,7 @@ impl SessionStore {
             .collect()
     }
 
-    // Only the active job may complete the turn. A stale writer cannot overwrite a later command.
+    // Only the active job can complete the turn. A stale writer cannot overwrite a later command.
     fn complete_turn(
         &self,
         id: &SessionId,

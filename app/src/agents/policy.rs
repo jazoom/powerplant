@@ -94,10 +94,11 @@ impl EffectiveAuthority {
         if project.revision != project_revision || !project.host_path_is_available() {
             return Err(AuthorityError::Unavailable);
         }
-        if access != AccessMode::ReadOnly {
-            return Err(AuthorityError::MissingGrant);
-        }
-        let mut tools = vec![ToolId::List, ToolId::Read, ToolId::Run];
+        let mut tools = if access.is_writable() {
+            vec![ToolId::List, ToolId::Read, ToolId::Run, ToolId::Write]
+        } else {
+            vec![ToolId::List, ToolId::Read, ToolId::Run]
+        };
         let mut grant_access = access;
         if let Some(preset) = preset {
             tools.retain(|tool| preset.tools.contains(tool));

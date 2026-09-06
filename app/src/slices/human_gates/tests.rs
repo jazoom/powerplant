@@ -119,6 +119,7 @@ struct GateFixture {
     key: sessions::ConversationKey,
     run_id: workflows::RunId,
     gate_id: workflows::GateId,
+    conversation_id: Option<crate::conversations::ConversationId>,
     project_id: crate::projects::ProjectId,
     agent_id: crate::agents::AgentId,
     candidate: String,
@@ -139,7 +140,12 @@ impl GateFixture {
     }
 
     fn decision_body(&self, candidate: &str) -> String {
-        format!("gate-revision=1&candidate={candidate}")
+        let surface = if self.conversation_id.is_some() {
+            "&surface=conversation"
+        } else {
+            ""
+        };
+        format!("gate-revision=1&candidate={candidate}{surface}")
     }
 }
 
@@ -400,11 +406,119 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         key,
         run_id,
         gate_id,
+        conversation_id: None,
         project_id: project.id,
         agent_id: agent.id,
         candidate,
         host,
     }
+}
+
+fn conversation_awaiting_gate() -> GateFixture {
+    let mut fixture = awaiting_gate(RunKind::QuickTask);
+    let conversation = fixture
+        .state
+        .conversations
+        .create("Implementation".to_owned())
+        .expect("conversation");
+    let attached = fixture
+        .state
+        .conversations
+        .attach_project(&conversation.id, conversation.revision, fixture.project_id)
+        .expect("attach");
+    let granted = fixture
+        .state
+        .conversations
+        .grant_writable(&conversation.id, attached.revision, fixture.project_id, 1)
+        .expect("grant");
+    let old = fixture
+        .state
+        .gate_continuations
+        .take(&fixture.run_id)
+        .expect("old continuation");
+    drop(old);
+    let session_token = sessions::generate_session_token().expect("session token");
+    let session = session_token.id();
+    fixture.state.sessions.insert(session);
+    let selection =
+        crate::providers::ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+            .expect("selection");
+    let job = fixture
+        .state
+        .sessions
+        .begin_conversation_job(&session, conversation.id, 1)
+        .expect("job");
+    fixture
+        .state
+        .conversations
+        .begin_message(
+            &conversation.id,
+            granted.revision,
+            selection,
+            job.id(),
+            "Change the file".to_owned(),
+        )
+        .expect("message");
+    fixture
+        .state
+        .workflow_runs
+        .mutate(&fixture.run_id, |run| {
+            run.conversation_id = Some(conversation.id);
+            Ok(())
+        })
+        .expect("conversation run");
+    let run = fixture
+        .state
+        .workflow_runs
+        .get(&fixture.run_id)
+        .expect("run");
+    let authority = crate::conversations::resolve_authority(
+        &granted,
+        &fixture.state.projects,
+        &fixture.state.agents,
+    )
+    .expect("authority")
+    .expect("authority");
+    job.set_awaiting_decision();
+    assert!(fixture.state.sessions.release_job_reservation(
+        &session,
+        Some(conversation.id),
+        job.id(),
+    ));
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .insert(workflows::WorkflowJob {
+                run_id: fixture.run_id,
+                session_id: session,
+                project_id: fixture.project_id,
+                agent_id: run.agent_id,
+                agent_revision: authority.effective.revision,
+                conversation_id: Some(conversation.id),
+                authority: Some(authority.effective.clone()),
+                grant_alias: authority.effective.grant_alias.clone(),
+                grant_access: authority.effective.grant_access,
+                connection: ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6"),
+                host_policy: authority.effective.policy.clone(),
+                turns: vec![crate::providers::ChatTurn::user(
+                    "Change the file".to_owned()
+                )],
+                job,
+                eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(
+                    "Here is the change.".to_owned(),
+                )),
+            })
+    );
+    fixture.token = session_token.raw().as_str().to_owned();
+    fixture.session = session;
+    fixture.conversation_id = Some(conversation.id);
+    fixture.key = sessions::ConversationKey {
+        project_id: fixture.project_id,
+        agent_id: run.agent_id,
+    };
+    fixture.agent_id = run.agent_id;
+    fixture
 }
 
 async fn get_gate(fixture: &GateFixture, graft: Option<&str>) -> axum::http::Response<Body> {
@@ -439,6 +553,274 @@ async fn post_decision(
         .oneshot(builder.body(Body::from(body)).unwrap())
         .await
         .expect("decision")
+}
+
+#[tokio::test]
+async fn a_conversation_gate_shows_its_candidate_and_returns_to_the_conversation() {
+    let fixture = conversation_awaiting_gate();
+    let conversation = fixture.conversation_id.expect("conversation");
+    let response = app(&fixture.state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/conversations/{conversation}"))
+                .header(header::COOKIE, cookie(&fixture.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("conversation");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("value=\"{}\"", fixture.candidate)));
+    assert!(text.contains(&format!("action=\"{}/approve\"", fixture.gate_path())));
+    assert!(text.contains(&format!("action=\"{}/cancel\"", fixture.gate_path())));
+
+    let gate = body_text(get_gate(&fixture, None).await).await;
+    assert!(gate.contains(&format!("/conversations/{conversation}")));
+    assert!(!fixture.state.sessions.busy(&fixture.session));
+}
+
+#[tokio::test]
+async fn another_conversation_keeps_a_gate_open_until_the_original_session_is_free() {
+    let fixture = conversation_awaiting_gate();
+    let other = fixture
+        .state
+        .conversations
+        .create("Other conversation".to_owned())
+        .expect("other");
+    let other_job = fixture
+        .state
+        .sessions
+        .begin_conversation_job(&fixture.session, other.id, 1)
+        .expect("other job");
+    let response = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+    assert!(matches!(
+        fixture
+            .state
+            .workflow_runs
+            .get(&fixture.run_id)
+            .expect("run")
+            .state,
+        crate::workflows::run::RunState::AwaitingHuman { .. }
+    ));
+    assert!(fixture.state.sessions.finish_conversation_job(
+        &fixture.session,
+        other.id,
+        other_job.id()
+    ));
+    let approved = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(approved.status(), axum::http::StatusCode::OK);
+    assert!(body_text(approved).await.contains(&format!(
+        "navigate=\"/conversations/{}\"",
+        fixture.conversation_id.unwrap()
+    )));
+    let run = fixture
+        .state
+        .workflow_runs
+        .get(&fixture.run_id)
+        .expect("run");
+    let decision = run.gates[0].decision.as_ref().expect("approved decision");
+    let record = run.artefact(&decision.id).expect("decision record");
+    let bytes = fixture
+        .state
+        .workflow_artefacts
+        .get(&record.object_hash)
+        .expect("decision bytes");
+    let crate::workflows::artefacts::TypedPayload::HumanDecision(payload) =
+        crate::workflows::artefacts::parse_typed_payload(record.kind, &bytes).expect("decision")
+    else {
+        panic!("human decision")
+    };
+    assert_eq!(payload.candidate, fixture.candidate);
+    assert_eq!(
+        payload.decision,
+        crate::workflows::gates::HumanDecisionKind::Approved
+    );
+    let duplicate = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(duplicate.status(), axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_busy_executor_returns_the_conversation_gate_without_its_session_reservation() {
+    let fixture = conversation_awaiting_gate();
+    let execution = fixture
+        .state
+        .workflow_execution
+        .acquire()
+        .expect("other execution");
+    let response = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert!(!fixture.state.sessions.busy(&fixture.session));
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+    let run = fixture
+        .state
+        .workflow_runs
+        .get(&fixture.run_id)
+        .expect("run");
+    assert_eq!(
+        run.gates[0].state,
+        crate::workflows::gates::HumanGateState::AwaitingDecision
+    );
+    assert!(run.gates[0].decision.is_none());
+    assert!(
+        fixture
+            .state
+            .conversations
+            .get(&fixture.conversation_id.unwrap())
+            .expect("conversation")
+            .active_job
+            .is_some()
+    );
+    assert!(fixture.state.workflow_execution.acquire().is_err());
+    drop(execution);
+}
+
+#[tokio::test]
+async fn malformed_conversation_decisions_keep_the_error_on_the_conversation_surface() {
+    let fixture = conversation_awaiting_gate();
+    let response = post_decision(
+        &fixture,
+        "approve",
+        "gate-revision=invalid&surface=conversation".to_owned(),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    let body = body_text(response).await;
+    assert!(body.contains("target=\"conversation-candidate\""));
+    assert!(!body.contains("target=\"gate-detail\""));
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+    assert!(!fixture.state.sessions.busy(&fixture.session));
+}
+
+#[tokio::test]
+async fn a_conversation_discard_settles_only_that_conversation_and_rejects_duplicate_decisions() {
+    let fixture = conversation_awaiting_gate();
+    let conversation = fixture.conversation_id.expect("conversation");
+    let wrong = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body("sha256:00"),
+        None,
+    )
+    .await;
+    assert_eq!(wrong.status(), axum::http::StatusCode::CONFLICT);
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+
+    let response = post_decision(
+        &fixture,
+        "cancel",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains(&format!("navigate=\"/conversations/{conversation}\"")));
+    assert!(
+        fixture
+            .state
+            .conversations
+            .get(&conversation)
+            .expect("conversation")
+            .active_job
+            .is_none()
+    );
+    assert!(!fixture.state.sessions.busy(&fixture.session));
+    assert!(
+        !fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+
+    let duplicate = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(duplicate.status(), axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn source_drift_interrupts_a_conversation_before_commit() {
+    let fixture = conversation_awaiting_gate();
+    std::fs::write(fixture.host.join("file.txt"), b"outside change\n").expect("drift");
+    let response = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(matches!(
+        fixture
+            .state
+            .workflow_runs
+            .get(&fixture.run_id)
+            .expect("run")
+            .state,
+        crate::workflows::run::RunState::Interrupted
+    ));
+    assert!(
+        !fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+    assert_eq!(
+        std::fs::read(fixture.host.join("file.txt")).expect("file"),
+        b"outside change\n"
+    );
 }
 
 #[tokio::test]

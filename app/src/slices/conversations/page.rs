@@ -14,6 +14,7 @@ use crate::{
     providers::ModelSelection,
     sessions::{JobSnapshot, JobStatus},
     vault::ProviderVault,
+    workflows::WorkflowRun,
 };
 
 pub(super) const CATALOGUE_TITLE: &str = "Conversations | Power Plant";
@@ -35,7 +36,23 @@ pub(super) struct ProjectContextView {
     pub(super) name: String,
     pub(super) status: &'static str,
     pub(super) access_granted: bool,
+    pub(super) writable: bool,
     pub(super) execution_target: bool,
+}
+
+pub(super) struct CandidateChangeView {
+    pub(super) path: String,
+    pub(super) status: &'static str,
+}
+
+pub(super) struct PendingCodeGateView {
+    pub(super) run_id: String,
+    pub(super) gate_id: String,
+    pub(super) revision: String,
+    pub(super) candidate: String,
+    pub(super) diff_base: String,
+    pub(super) diff_href: String,
+    pub(super) changes: Vec<CandidateChangeView>,
 }
 
 #[derive(Template)]
@@ -170,6 +187,7 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
+    pub(super) pending_gate: Option<&'a PendingCodeGateView>,
 }
 
 #[derive(Template)]
@@ -194,9 +212,11 @@ pub(super) struct ConversationDetailView {
     pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
+    pub(super) pending_gate: Option<PendingCodeGateView>,
 }
 
 impl ConversationDetailView {
+    #[cfg(test)]
     pub(super) fn from_record(
         record: &ConversationRecord,
         sources: ModelSources<'_>,
@@ -205,6 +225,29 @@ impl ConversationDetailView {
         session_busy: bool,
         title: &str,
         error: &'static str,
+    ) -> Self {
+        Self::from_record_with_gate(
+            record,
+            sources,
+            agents,
+            job,
+            session_busy,
+            title,
+            error,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_record_with_gate(
+        record: &ConversationRecord,
+        sources: ModelSources<'_>,
+        agents: &[AgentRecord],
+        job: Option<&JobSnapshot>,
+        session_busy: bool,
+        title: &str,
+        error: &'static str,
+        pending_gate: Option<PendingCodeGateView>,
     ) -> Self {
         let fallback = sources
             .vault
@@ -260,18 +303,27 @@ impl ConversationDetailView {
             .projects
             .iter()
             .map(|id| {
-                let access_granted = record.grants.iter().any(|grant| grant.project_id == *id);
+                let access = record
+                    .grants
+                    .iter()
+                    .find(|grant| grant.project_id == *id)
+                    .map(|grant| grant.access);
+                let access_granted = access.is_some();
+                let writable = access == Some(crate::agents::AccessMode::ReadWrite);
                 let execution_target = record.execution_target == Some(*id);
                 match sources.projects.iter().find(|project| project.id == *id) {
                     Some(project) if project.host_path_is_available() => ProjectContextView {
                         id: id.as_hex(),
                         name: project.name.clone(),
-                        status: if access_granted {
+                        status: if writable {
+                            "Writable access granted. Tools: List, Read, Run and Write in the candidate workspace. Network: None."
+                        } else if access_granted {
                             "Read-only access granted. Tools: List, Read and Run. Network: None."
                         } else {
                             "Context reference only. File access is not granted."
                         },
                         access_granted,
+                        writable,
                         execution_target,
                     },
                     Some(project) => ProjectContextView {
@@ -279,6 +331,7 @@ impl ConversationDetailView {
                         name: project.name.clone(),
                         status: "Project unavailable. It remains a context reference without file access.",
                         access_granted: false,
+                        writable: false,
                         execution_target: false,
                     },
                     None => ProjectContextView {
@@ -286,6 +339,7 @@ impl ConversationDetailView {
                         name: "Project record unavailable".to_owned(),
                         status: "This context reference has no file access.",
                         access_granted: false,
+                        writable: false,
                         execution_target: false,
                     },
                 }
@@ -350,6 +404,7 @@ impl ConversationDetailView {
             cursor,
             job_active,
             session_busy,
+            pending_gate,
         }
     }
 
@@ -373,8 +428,43 @@ impl ConversationDetailView {
             cursor: self.cursor,
             job_active: self.job_active,
             session_busy: self.session_busy,
+            pending_gate: self.pending_gate.as_ref(),
         }
     }
+}
+
+pub(super) fn pending_code_gate(
+    run: &WorkflowRun,
+    store: &crate::workflows::WorkflowArtefactRepository,
+) -> Option<PendingCodeGateView> {
+    let gate = run
+        .gates
+        .iter()
+        .rev()
+        .find(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)?;
+    let diff = crate::workflows::artefacts::CandidateDiff::load(
+        run,
+        &gate.diff_base,
+        &gate.candidate,
+        store,
+    )
+    .ok()?;
+    let (_, changes) = diff.manifest_page(0, 16).ok()?;
+    Some(PendingCodeGateView {
+        run_id: run.id.as_hex(),
+        gate_id: gate.id.as_hex(),
+        revision: gate.revision.get().to_string(),
+        candidate: diff.target.as_str().to_owned(),
+        diff_base: diff.base.as_str().to_owned(),
+        diff_href: format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex()),
+        changes: changes
+            .into_iter()
+            .map(|change| CandidateChangeView {
+                path: change.path,
+                status: change.status,
+            })
+            .collect(),
+    })
 }
 
 // The transcript leaves envelope space for controls and retains stable message indices.

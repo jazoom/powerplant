@@ -30,13 +30,32 @@ const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 
 pub(crate) struct WorkflowContinuationRegistry {
     inner: std::sync::Mutex<std::collections::BTreeMap<RunId, WorkflowJob>>,
+    // An uncertain commit retains execution protection until startup reconciliation.
+    recovery_protection: std::sync::Mutex<Option<(Option<LeaseGuard>, ExecutionGuard)>>,
 }
 
 impl WorkflowContinuationRegistry {
     pub(crate) fn new() -> Self {
         Self {
             inner: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            recovery_protection: std::sync::Mutex::new(None),
         }
+    }
+
+    fn protect_commit_recovery(
+        &self,
+        job: &Job,
+        agent: Option<LeaseGuard>,
+        execution: ExecutionGuard,
+    ) {
+        let _ = job.finish(
+            JobStatus::Failed,
+            Some("Restart Power Plant to reconcile the uncertain Git commit. This operation retains its reservations."),
+        );
+        *self
+            .recovery_protection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((agent, execution));
     }
 
     pub(crate) fn insert(&self, job: WorkflowJob) -> bool {
@@ -202,6 +221,20 @@ pub(crate) async fn execute_run(
             }
             continue;
         }
+        if job.authority.is_some()
+            && let Err(error) = confirm_run_authority(&state, &job)
+        {
+            if state
+                .workflow_runs
+                .mutate(&job.run_id, |run| run.fail_before_attempt(now_ms()))
+                .is_err()
+            {
+                fail_operational(&state, &job);
+            } else {
+                settle_job(&state, &job, JobStatus::Failed, Some(&error));
+            }
+            return;
+        }
         let Some(step_key) = run.ready_step().cloned() else {
             fail_operational(&state, &job);
             return;
@@ -291,6 +324,19 @@ pub(crate) async fn execute_run(
             }
             job.job.set_step_label("Awaiting decision".to_owned());
             let _ = job.job.set_awaiting_decision();
+            if job.conversation_id.is_some()
+                && !state.sessions.release_job_reservation(
+                    &job.session_id,
+                    job.conversation_id,
+                    job.job.id(),
+                )
+            {
+                let _ = state
+                    .workflow_runs
+                    .mutate(&run.id, |run| run.interrupt(now_ms()));
+                settle_job(&state, &job, JobStatus::Cancelled, None);
+                return;
+            }
             if !state.gate_continuations.insert(job) {
                 let _ = state
                     .workflow_runs
@@ -425,32 +471,29 @@ pub(crate) async fn execute_run(
                 .iter()
                 .find(|attempt| attempt.id == attempt_id)
                 .and_then(|attempt| attempt.commit_transaction.as_ref())
-                .is_some_and(|transaction| {
-                    matches!(
-                        transaction.state,
-                        crate::workflows::commit::CommitTransactionState::ReferenceUpdated { .. }
-                    )
-                })
+                .is_some()
                 && !matches!(outcome, StepOutcome::Completed)
         });
         if recovery_pending {
-            if cleanup == crate::workflows::run::AttemptCleanupRecord::Complete
-                && recover_commit_transactions(&state).is_ok()
-                && state
-                    .workflow_runs
-                    .get(&job.run_id)
-                    .is_some_and(|run| run.is_terminal())
+            if cleanup != crate::workflows::run::AttemptCleanupRecord::Complete
+                || recover_commit_transactions(&state).is_err()
             {
-                settle_job(&state, &job, JobStatus::Completed, None);
-            } else {
-                settle_job(
-                    &state,
-                    &job,
-                    JobStatus::Failed,
-                    Some("Power Plant must recover the Git commit before this run can continue."),
+                state.gate_continuations.protect_commit_recovery(
+                    &job.job,
+                    _agent_lease,
+                    _execution_lease,
                 );
+                return;
             }
-            return;
+            if let Some(run) = state.workflow_runs.get(&job.run_id)
+                && run.active_attempt() != Some(attempt_id)
+            {
+                if run.is_terminal() {
+                    settle_terminal_job(&state, &job, &run);
+                    return;
+                }
+                continue;
+            }
         }
         let atomic_agent_publication = matches!(step.action, StepAction::Agent(_))
             && matches!(outcome, StepOutcome::Completed)
@@ -505,8 +548,15 @@ pub(crate) async fn execute_run(
                         })
                 })
                 .unwrap_or(false);
-            let journal_gone =
-                !retain_journal && state.commit_journals.remove(job.run_id, attempt_id).is_ok();
+            if retain_journal {
+                state.gate_continuations.protect_commit_recovery(
+                    &job.job,
+                    _agent_lease,
+                    _execution_lease,
+                );
+                return;
+            }
+            let journal_gone = state.commit_journals.remove(job.run_id, attempt_id).is_ok();
             if !journal_gone {
                 cleanup = match cleanup {
                     crate::workflows::run::AttemptCleanupRecord::Orphaned {
@@ -1092,6 +1142,9 @@ async fn execute_commit_transaction(
         .workflow_runs
         .get(&job.run_id)
         .ok_or(CommitError::Operational)?;
+    if job.authority.is_some() {
+        confirm_run_authority(state, job).map_err(|_| CommitError::Authority)?;
+    }
     let crate::workflows::RunSource::Captured { source } = &run.source else {
         return Err(CommitError::Operational);
     };
@@ -1471,6 +1524,14 @@ async fn run_agent_step(
     sandbox: &std::sync::Arc<GuestSandbox>,
     drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
 ) -> StepOutcome {
+    if job.authority.is_some()
+        && let Err(error) = confirm_run_authority(state, job)
+    {
+        return StepOutcome::Failed {
+            category: FailureCategory::Authority,
+            error: Some(error),
+        };
+    }
     if let Some(authority) = job.authority.as_ref() {
         if !action
             .authority
@@ -2838,14 +2899,32 @@ fn recovery_project_path(
     let Some(project) = state.projects.get(&run.project_id) else {
         return Err(error);
     };
-    let Some(agent) = state.agents.get(&run.agent_id) else {
-        return Err(error);
-    };
-    let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
-        return Err(error);
-    };
-    if !grant.access.is_writable()
-        || !project.host_path_is_available()
+    if let Some(conversation_id) = run.conversation_id {
+        let Some(conversation) = state.conversations.get(&conversation_id) else {
+            return Err(error);
+        };
+        let authority =
+            crate::conversations::resolve_authority(&conversation, &state.projects, &state.agents)
+                .ok()
+                .flatten();
+        if authority.is_none_or(|authority| {
+            authority.effective.project_id != project.id
+                || !authority.effective.grant_access.is_writable()
+        }) {
+            return Err(error);
+        }
+    } else {
+        let Some(agent) = state.agents.get(&run.agent_id) else {
+            return Err(error);
+        };
+        let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
+            return Err(error);
+        };
+        if !grant.access.is_writable() {
+            return Err(error);
+        }
+    }
+    if !project.host_path_is_available()
         || crate::workflows::artefacts::inspect_supported_worktree(&project.host_path).is_err()
     {
         return Err(error);

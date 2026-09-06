@@ -18,7 +18,9 @@ Power Plant is a local coding agent. The user runs a web server on their machine
 
 The Power Plant process stays on the host. It owns model calls, credentials, and sandbox lifecycle. Agent tools run only inside a guest virtual machine.
 
-The product stays local and account-free. The user brings a key or a plan login. A project desk turn starts a run against one project.
+The product stays local and account-free. The user brings a key or a plan login.
+
+Independent conversations are first-class work destinations. A conversation can discuss a general topic or receive explicit project authority.
 
 Success is a project file that an agent changes.
 
@@ -28,7 +30,13 @@ Power Plant is a thin local desk for coding agents. It is not an IDE. It is not 
 
 The user brings the provider key or plan login. Power Plant does not sell model access and does not create an account.
 
-The user registers projects, agents, environments and workflows on this machine. Agents work in sandboxes on the local machine. The project desk stays a transcript plus composer.
+The user registers projects, agents, environments and workflows on this machine. Agents work in sandboxes on the local machine. Conversations retain their discussion history on this machine.
+
+A conversation does not require a named agent. The user selects a model directly or applies an optional preset. Project attachments provide context references only until the user grants access.
+
+A read-only project grant permits List, Read and Run in an isolated candidate. A writable target grant also permits Write in that candidate. Guest network access remains None.
+
+A writable conversation message starts the system-owned Quick task. The agent creates an isolated candidate. The user reviews the exact candidate diff before Power Plant applies a local Git commit. Apply and Discard actions belong to the conversation and settle that conversation after the decision.
 
 ## Operating Context
 
@@ -70,9 +78,9 @@ A changed Quick task waits at a human gate. The user must approve the exact cand
 
 Configured workflows stay an advanced control on the same composer. The user can select a catalogue workflow. The control shows its review policy and environment preview.
 
-Each run records project identity and run kind. Run kinds are Configured and Quick task. A conversation belongs to one project and agent pair.
+Each run records project identity and run kind. Run kinds are Configured and Quick task. A run can belong to an independent conversation.
 
-The browser session remains the transcript owner. The session permits one active command. It can remember the last eligible agent and recent project order in memory only.
+The browser session remains a command boundary, not a conversation identity. The session permits one active command while a conversation reservation protects its unfinished operation. A safe approval gate releases the session reservation so another conversation can run a command.
 
 Each run pins the workflow definition and prepared environments. Run records track attempts, artefact references and human gates. Artefacts store candidate revisions and typed workflow outputs, such as plans, reviews, tests and human decisions.
 
@@ -113,8 +121,10 @@ Current capabilities:
 - Prepare environment snapshots for workflow use.
 - Create workflow definitions.
 - Edit and delete workflow definitions.
-- Send a Quick task from the project desk with no workflow selection.
-- Send a configured workflow from an advanced control on the same desk.
+- Send a Quick task from an independent conversation with no workflow selection.
+- Grant read-only or writable project authority from a conversation.
+- Review a candidate diff and Apply or Discard it from the owning conversation.
+- Send a configured workflow from an advanced control on the project desk.
 - Stream the reply into the transcript as HTML.
 - Run sandbox-backed workflow steps in isolated guests.
 - Expose the selected project at `/project` during sandbox-backed steps.
@@ -140,10 +150,11 @@ Current constraints:
 - The product does not create user accounts.
 - The project desk stays a transcript plus composer.
 - Agent tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig.
-- Project records, run records and artefacts persist locally. Browser transcripts remain memory-only. The product does not persist the transcript across process restarts.
-- One desk job can be active per browser session.
+- Conversation history, project records, run records and artefacts persist locally. Legacy project desk transcripts remain memory-only.
+- One session command can be active at a time.
+- One unfinished operation can reserve a conversation.
 - One workflow execution can be active process-wide.
-- The project catalogue grants no host access. An agent directory grant remains the only authority.
+- The project catalogue grants no file access. Explicit conversation grants or saved-agent directory grants supply execution authority.
 - Project paths cannot change. Project records cannot be deleted in this release.
 - Quick task needs the ready Alpine Git seed snapshot. The product does not fall back to another environment.
 - Quick task never enters the workflow catalogue.

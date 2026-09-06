@@ -48,7 +48,8 @@ pub(super) struct GatePage {
     pub(super) error: &'static str,
     pub(super) run_kind: &'static str,
     pub(super) project_id: String,
-    pub(super) desk_href: String,
+    pub(super) back_href: String,
+    pub(super) back_label: &'static str,
     pub(super) quick_task: bool,
     pub(super) host_unchanged: &'static str,
 }
@@ -168,7 +169,15 @@ impl GatePage {
             error,
             run_kind: run.kind.as_str(),
             project_id: run.project_id.as_hex(),
-            desk_href: crate::projects::desk_path(&run.project_id, &run.agent_id),
+            back_href: run.conversation_id.map_or_else(
+                || crate::projects::desk_path(&run.project_id, &run.agent_id),
+                |conversation| format!("/conversations/{}", conversation.as_hex()),
+            ),
+            back_label: if run.conversation_id.is_some() {
+                "Back to conversation"
+            } else {
+                "Back to project desk"
+            },
             quick_task,
             host_unchanged: crate::workflows::HOST_UNCHANGED,
         })

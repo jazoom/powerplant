@@ -1539,6 +1539,34 @@ async fn execute_gate_run(state: crate::state::AppState, job: crate::workflows::
     super::execute_run(state, job, Some(lease), execution).await;
 }
 
+#[test]
+fn uncertain_commit_protection_is_not_a_resumable_gate() {
+    let (state, workflow, session, _) =
+        gate_ready_fixture(crate::workflows::RunKind::QuickTask, GateCandidate::Changed);
+    let agent = state
+        .agent_leases
+        .acquire(workflow.agent_id)
+        .expect("agent lease");
+    let execution = state.workflow_execution.acquire().expect("execution lease");
+    state
+        .gate_continuations
+        .protect_commit_recovery(&workflow.job, Some(agent), execution);
+
+    assert!(state.workflow_execution.acquire().is_err());
+    assert!(state.agent_leases.acquire(workflow.agent_id).is_err());
+    assert!(state.sessions.busy(&session));
+    assert!(
+        !state
+            .gate_continuations
+            .available(&workflow.run_id, &session)
+    );
+    super::interrupt_provider_continuations(&state, workflow.connection.kind)
+        .expect("forget provider");
+    super::interrupt_session_continuations(&state, session).expect("expire session");
+    assert!(state.workflow_execution.acquire().is_err());
+    assert!(state.agent_leases.acquire(workflow.agent_id).is_err());
+}
+
 #[tokio::test]
 async fn execute_run_completes_an_unchanged_quick_task_without_a_gate() {
     let (state, job, session_id, key) = gate_ready_fixture(

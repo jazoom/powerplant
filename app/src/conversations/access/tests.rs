@@ -80,6 +80,30 @@ fn an_empty_preset_tool_ceiling_blocks_guest_tools_without_granting_network() {
 }
 
 #[test]
+fn a_writable_conversation_grant_includes_write_in_the_candidate() {
+    let directory = tempfile::tempdir().expect("directory");
+    let project = project(directory.path());
+    let conversation = crate::conversations::ConversationId::generate().expect("conversation");
+    let grant = ConversationGrant {
+        project_id: project.id,
+        project_revision: project.revision,
+        authority_revision: 1,
+        access: AccessMode::ReadWrite,
+    };
+    let authority = resolve_grant(&grant, &project, conversation, 1, None)
+        .expect("authority")
+        .effective;
+
+    assert_eq!(
+        authority.tools,
+        vec![ToolId::List, ToolId::Read, ToolId::Run, ToolId::Write]
+    );
+    assert_eq!(authority.grant_access, AccessMode::ReadWrite);
+    assert_eq!(authority.policy.primary_access(), AccessMode::ReadWrite);
+    assert_eq!(authority.network, NetworkAccess::None);
+}
+
+#[test]
 fn a_changed_project_revision_invalidates_the_candidate_authority() {
     let directory = tempfile::tempdir().expect("directory");
     let project = project(directory.path());

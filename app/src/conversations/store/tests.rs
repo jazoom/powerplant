@@ -229,6 +229,30 @@ fn project_associations_are_ordered_bounded_and_revisioned() {
 }
 
 #[test]
+fn writable_project_grants_survive_restart_with_their_revision() {
+    let dir = tempfile::tempdir().expect("directory");
+    let project = crate::projects::ProjectId::generate().expect("project");
+    let record;
+    {
+        let store = ConversationStore::open(dir.path().to_path_buf()).expect("store");
+        let conversation = store.create("Discussion".to_owned()).expect("conversation");
+        let attached = store
+            .attach_project(&conversation.id, conversation.revision, project)
+            .expect("attach");
+        record = store
+            .grant_writable(&attached.id, attached.revision, project, 3)
+            .expect("grant");
+    }
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("reopen");
+    let recovered = store.get(&record.id).expect("recovered");
+    assert_eq!(
+        recovered.grants[0].access,
+        crate::agents::AccessMode::ReadWrite
+    );
+    assert_eq!(recovered.execution_target, Some(project));
+}
+
+#[test]
 fn active_request_rejects_stale_settlement() {
     let store = ConversationStore::in_memory();
     let record = store.create("Discussion".to_owned()).expect("conversation");

@@ -5,6 +5,7 @@ pub(super) struct DecisionForm {
     pub(super) revision: GateRevision,
     pub(super) candidate: String,
     pub(super) note: Option<String>,
+    pub(super) conversation_surface: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +22,7 @@ impl DecisionForm {
         let mut revision = None;
         let mut candidate = None;
         let mut note = None;
+        let mut conversation_surface = false;
         let mut seen = Vec::new();
         for (key, value) in pairs {
             if seen.contains(&key) {
@@ -31,6 +33,7 @@ impl DecisionForm {
                 "gate-revision" => revision = GateRevision::parse(&value),
                 "candidate" => candidate = Some(value),
                 "note" if requires_note => note = normalise_revision_note(&value),
+                "surface" if value == "conversation" => conversation_surface = true,
                 _ => return Err(FormError::Invalid),
             }
         }
@@ -44,6 +47,7 @@ impl DecisionForm {
             revision: revision.ok_or(FormError::Invalid)?,
             candidate,
             note,
+            conversation_surface,
         })
     }
 }

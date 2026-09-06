@@ -28,7 +28,7 @@ impl ConversationAccessError {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::MissingProject => "That project is not in the catalogue.",
-            Self::MissingGrant => "Grant read-only access before you inspect this project.",
+            Self::MissingGrant => "Grant project access before you inspect or change this project.",
             Self::Stale => "The project or preset changed. Reload the conversation.",
             Self::Unavailable => "The selected project is unavailable.",
             Self::Path => "A granted directory is no longer at the saved path.",

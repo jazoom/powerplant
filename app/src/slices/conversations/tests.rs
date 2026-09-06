@@ -780,6 +780,52 @@ async fn stale_rename_returns_a_conflict_without_replacing_the_current_title() {
 }
 
 #[tokio::test]
+async fn writable_access_is_explicit_and_adds_write_without_network_access() {
+    let state = test_state();
+    let token = connected(&state);
+    let project = register_project(&state, "Writable project");
+    let conversation = state
+        .conversations
+        .create("Implementation".to_owned())
+        .expect("conversation");
+    let attached = state
+        .conversations
+        .attach_project(&conversation.id, conversation.revision, project.id)
+        .expect("attach");
+    let path = format!("/conversations/{}/access", conversation.id);
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&project={}&access=read-write",
+                attached.revision, project.id
+            ),
+        ))
+        .await
+        .expect("grant");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Writable access granted."));
+    assert!(body.contains("List, Read, Run and Write"));
+    assert!(body.contains("Network: None"));
+
+    let granted = state.conversations.get(&conversation.id).expect("granted");
+    let authority =
+        crate::conversations::resolve_authority(&granted, &state.projects, &state.agents)
+            .expect("authority")
+            .expect("writable authority")
+            .effective;
+    assert_eq!(authority.grant_access, crate::agents::AccessMode::ReadWrite);
+    assert_eq!(
+        authority.tools,
+        vec![ToolId::List, ToolId::Read, ToolId::Run, ToolId::Write]
+    );
+    assert_eq!(authority.network, NetworkAccess::None);
+}
+
+#[tokio::test]
 async fn read_only_access_is_explicit_revisioned_and_selects_one_target() {
     let state = test_state();
     let token = connected(&state);
