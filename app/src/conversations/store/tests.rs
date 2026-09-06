@@ -519,13 +519,24 @@ fn message_bounds_reserve_space_for_terminal_output() {
         )
         .expect("begin");
     let other = store.create("Other".to_owned()).expect("other");
-    assert_eq!(
-        store.begin_message(
+    let other_request = JobId::generate().expect("request");
+    store
+        .begin_message(
             &other.id,
             other.revision,
+            selection.clone(),
+            other_request,
+            "Review".to_owned(),
+        )
+        .expect("capacity for a linked review at a gate");
+    let third = store.create("Third".to_owned()).expect("third");
+    assert_eq!(
+        store.begin_message(
+            &third.id,
+            third.revision,
             selection,
             JobId::generate().expect("request"),
-            "Question".to_owned()
+            "Question".to_owned(),
         ),
         Err(ConversationError::Full)
     );
@@ -542,8 +553,16 @@ fn message_bounds_reserve_space_for_terminal_output() {
         .append_output(&record.id, request, reply.clone())
         .expect("reserved capacity");
     store
-        .settle_message(&record.id, request, reply, MessageStatus::Interrupted)
+        .settle_message(
+            &record.id,
+            request,
+            reply.clone(),
+            MessageStatus::Interrupted,
+        )
         .expect("terminal capacity");
+    store
+        .settle_message(&other.id, other_request, reply, MessageStatus::Complete)
+        .expect("linked review terminal capacity");
 }
 
 #[test]

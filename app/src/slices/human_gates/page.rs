@@ -32,6 +32,7 @@ pub(super) struct GatePage {
     pub(super) state: &'static str,
     pub(super) base: String,
     pub(super) target: String,
+    pub(super) review_href: String,
     pub(super) revision: u64,
     pub(super) total: usize,
     pub(super) range: String,
@@ -149,6 +150,12 @@ impl GatePage {
             state: state_label(gate.state),
             base: diff.base.as_str(),
             target: diff.target.as_str(),
+            review_href: format!(
+                "/conversations/candidate-review?run={}&candidate={}&diff_base={}",
+                run.id.as_hex(),
+                gate.candidate.id.as_hex(),
+                gate.diff_base.id.as_hex()
+            ),
             revision: gate.revision.get(),
             total,
             range: if start == end {

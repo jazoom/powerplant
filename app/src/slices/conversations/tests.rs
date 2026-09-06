@@ -81,6 +81,102 @@ fn register_project(state: &AppState, name: &str) -> crate::projects::ProjectRec
     project
 }
 
+fn candidate_run(
+    state: &AppState,
+) -> (
+    crate::workflows::WorkflowRun,
+    crate::workflows::artefacts::ArtefactReference,
+) {
+    let run_id = crate::workflows::RunId::generate().expect("run");
+    let pinned = crate::workflows::pin_quick_task(
+        crate::agents::AccessMode::ReadOnly,
+        &[ToolId::List, ToolId::Read],
+        "Review the selected candidate.",
+        crate::tests::test_environment_id(),
+    )
+    .expect("workflow");
+    let mut run = crate::workflows::WorkflowRun::create(
+        run_id,
+        1,
+        crate::projects::ProjectId::generate().expect("project"),
+        crate::agents::AgentId::generate().expect("agent"),
+        crate::workflows::RunKind::Configured,
+        pinned.clone(),
+        crate::tests::test_environment_set(&pinned.definition),
+    );
+    let content = b"Review candidate files.";
+    let file = state
+        .workflow_artefacts
+        .publish(content)
+        .expect("file object");
+    let candidate = crate::workflows::artefacts::candidate::CandidateRevisionArtefact {
+        format_version: crate::workflows::artefacts::CANDIDATE_SCHEMA,
+        candidate_hash: crate::workflows::artefacts::candidate::hash_entries(&[
+            crate::workflows::artefacts::candidate::CandidateEntry {
+                path: "AGENTS.md".to_owned(),
+                kind: crate::workflows::artefacts::candidate::CandidateEntryKind::Regular {
+                    executable: false,
+                    bytes: content.len() as u64,
+                    blob: file,
+                },
+            },
+        ]),
+        repository: crate::workflows::artefacts::candidate::RepositoryAnchor {
+            object_format: crate::workflows::artefacts::candidate::GitObjectFormat::Sha1,
+            head: None,
+        },
+        git_admin: crate::workflows::artefacts::candidate::GitAdministrativeFingerprint::parse(
+            &crate::workflows::artefacts::ObjectHash::of(b"git-admin").as_str(),
+        )
+        .expect("git fingerprint"),
+        entries: vec![crate::workflows::artefacts::candidate::CandidateEntry {
+            path: "AGENTS.md".to_owned(),
+            kind: crate::workflows::artefacts::candidate::CandidateEntryKind::Regular {
+                executable: false,
+                bytes: content.len() as u64,
+                blob: file,
+            },
+        }],
+    };
+    let bytes = candidate.manifest_bytes().expect("manifest");
+    let object = state
+        .workflow_artefacts
+        .publish(&bytes)
+        .expect("manifest object");
+    let record = crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().expect("artefact"),
+        kind: crate::workflows::definition::ArtefactKind::CandidateRevision,
+        artefact_hash: crate::workflows::artefacts::artefact_hash_for(
+            crate::workflows::definition::ArtefactKind::CandidateRevision,
+            candidate.format_version,
+            &bytes,
+        ),
+        object_hash: object,
+        payload_bytes: bytes.len() as u64,
+        created_at_ms: 1,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id,
+            producer: crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+            inputs: Vec::new(),
+        },
+        summary: crate::workflows::artefacts::ArtefactSummary::Candidate {
+            candidate: candidate.candidate_hash,
+            entries: 1,
+            bytes: content.len() as u64,
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+    };
+    let reference = crate::workflows::artefacts::ArtefactReference {
+        id: record.id,
+        kind: record.kind,
+        artefact_hash: record.artefact_hash,
+    };
+    run.record_initial_candidate(record)
+        .expect("initial candidate");
+    state.workflow_runs.create(run.clone()).expect("run");
+    (run, reference)
+}
+
 fn document(path: &str, token: &str) -> Request<Body> {
     Request::builder()
         .uri(path)
@@ -119,6 +215,127 @@ async fn text(response: axum::response::Response) -> String {
             .to_vec(),
     )
     .expect("text")
+}
+
+#[tokio::test]
+async fn candidate_review_uses_immutable_selection_without_source_approval() {
+    let mut state = test_state();
+    let backend = crate::providers::tests::ScriptedBackend::accept();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
+    let token = connected(&state);
+    let (run, candidate) = candidate_run(&state);
+    let path = format!(
+        "/conversations/candidate-review?run={}&candidate={}&diff_base={}",
+        run.id, candidate.id, candidate.id
+    );
+    let preview = app(&state)
+        .oneshot(document(&path, &token))
+        .await
+        .expect("preview");
+    assert_eq!(preview.status(), StatusCode::OK);
+
+    let unknown = crate::workflows::ArtefactId::generate().expect("unknown artefact");
+    let rejected = app(&state)
+        .oneshot(command(
+            "/conversations/candidate-review",
+            &token,
+            &format!(
+                "run={}&candidate={}&diff_base={}&brief=Review&provider=xai&model=grok-4.6&thinking=medium",
+                run.id, unknown, candidate.id
+            ),
+        ))
+        .await
+        .expect("candidate substitution");
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    assert!(
+        text(rejected)
+            .await
+            .contains("selected candidate is unavailable")
+    );
+    assert!(state.conversations.list().is_empty());
+
+    let started = app(&state)
+        .oneshot(command(
+            "/conversations/candidate-review",
+            &token,
+            &format!(
+                "run={}&candidate={}&diff_base={}&brief={}&provider=xai&model=grok-4.6&thinking=medium",
+                run.id,
+                candidate.id,
+                candidate.id,
+                form_value("Review only this candidate."),
+            ),
+        ))
+        .await
+        .expect("start review");
+    let started_status = started.status();
+    let started_body = text(started).await;
+    assert_eq!(started_status, StatusCode::OK, "{started_body}");
+    let review = state
+        .conversations
+        .list()
+        .pop()
+        .expect("review conversation");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&review.id)
+            .expect("review")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("review settlement");
+    let history = backend.last_history();
+    assert!(
+        history
+            .iter()
+            .any(|turn| turn.text.contains("Review candidate files."))
+    );
+    assert!(
+        history
+            .iter()
+            .any(|turn| turn.text.contains("Selected immutable candidate:"))
+    );
+    assert_eq!(state.workflow_runs.get(&run.id).expect("source"), run);
+    let mut follow_up = state.conversations.get(&review.id).expect("review");
+    follow_up.execution_target = Some(crate::projects::ProjectId::generate().expect("target"));
+    let result = super::start_message(
+        &state,
+        session_id(&token),
+        follow_up.clone(),
+        follow_up.revision,
+        follow_up.model.expect("model"),
+        "Read the host worktree instead.".to_owned(),
+    )
+    .await;
+    assert!(matches!(result, Err(super::StartMessageError::User(
+        hypergraft::PatchStatus::Conflict, message,
+    )) if message.contains("immutable evidence")));
+}
+
+#[test]
+fn candidate_review_rejects_changed_hashes_and_secret_instructions() {
+    let state = test_state();
+    let (run, candidate) = candidate_run(&state);
+    let mut changed = candidate.clone();
+    changed.artefact_hash = crate::workflows::artefacts::ArtefactHash::of(b"test", b"different");
+    assert!(
+        super::job::validate_candidate_review(&state, &run, &changed, &candidate, None,).is_err()
+    );
+    assert!(
+        super::job::validate_candidate_review(
+            &state,
+            &run,
+            &candidate,
+            &candidate,
+            Some("Review candidate files."),
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]

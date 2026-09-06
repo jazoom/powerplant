@@ -123,6 +123,8 @@ struct GateFixture {
     project_id: crate::projects::ProjectId,
     agent_id: crate::agents::AgentId,
     candidate: String,
+    candidate_id: crate::workflows::ArtefactId,
+    diff_base_id: crate::workflows::ArtefactId,
     host: std::path::PathBuf,
 }
 
@@ -348,8 +350,10 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
     let gate_id = workflows::GateId::generate().expect("gate");
     run.open_gate(gate_id, produced_ref, initial_ref, 4)
         .expect("gate");
+    let candidate_id = run.gates[0].candidate.id;
+    let diff_base_id = run.gates[0].diff_base.id;
     let candidate = run
-        .artefact(&run.gates[0].candidate.id)
+        .artefact(&candidate_id)
         .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
         .expect("candidate")
         .as_str()
@@ -410,6 +414,8 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         project_id: project.id,
         agent_id: agent.id,
         candidate,
+        candidate_id,
+        diff_base_id,
         host,
     }
 }
@@ -536,6 +542,20 @@ async fn get_gate(fixture: &GateFixture, graft: Option<&str>) -> axum::http::Res
         .expect("gate")
 }
 
+async fn post_candidate_review(fixture: &GateFixture, body: String) -> axum::http::Response<Body> {
+    let builder = Request::builder()
+        .method("POST")
+        .uri("/conversations/candidate-review")
+        .header(header::COOKIE, cookie(&fixture.token))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+    app(&fixture.state)
+        .oneshot(builder.body(Body::from(body)).unwrap())
+        .await
+        .expect("candidate review")
+}
+
 async fn post_decision(
     fixture: &GateFixture,
     action: &str,
@@ -578,6 +598,77 @@ async fn a_conversation_gate_shows_its_candidate_and_returns_to_the_conversation
     let gate = body_text(get_gate(&fixture, None).await).await;
     assert!(gate.contains(&format!("/conversations/{conversation}")));
     assert!(!fixture.state.sessions.busy(&fixture.session));
+}
+
+#[tokio::test]
+async fn a_linked_candidate_review_releases_the_session_but_not_the_source_gate() {
+    let mut fixture = conversation_awaiting_gate();
+    let backend = crate::providers::tests::ScriptedBackend::accept();
+    fixture.state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend));
+    let body = format!(
+        "run={}&candidate={}&diff_base={}&brief=Review+candidate&provider=xai&model=grok-4.6&thinking=medium",
+        fixture.run_id, fixture.candidate_id, fixture.diff_base_id,
+    );
+    let started = post_candidate_review(&fixture, body).await;
+    let started_status = started.status();
+    let started_body = body_text(started).await;
+    assert_eq!(started_status, axum::http::StatusCode::OK, "{started_body}");
+    let review = fixture
+        .state
+        .conversations
+        .list()
+        .into_iter()
+        .find(|record| record.id != fixture.conversation_id.expect("source"))
+        .expect("linked review");
+    assert!(
+        fixture
+            .state
+            .conversations
+            .get(&fixture.conversation_id.expect("source"))
+            .expect("source")
+            .active_job
+            .is_some()
+    );
+    assert!(fixture.state.sessions.busy(&fixture.session));
+
+    let rejected = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(rejected.status(), axum::http::StatusCode::CONFLICT);
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while fixture
+            .state
+            .conversations
+            .get(&review.id)
+            .expect("review")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("review settlement");
+    assert!(!fixture.state.sessions.busy(&fixture.session));
+    let approved = post_decision(
+        &fixture,
+        "approve",
+        fixture.decision_body(&fixture.candidate),
+        None,
+    )
+    .await;
+    assert_eq!(approved.status(), axum::http::StatusCode::OK);
 }
 
 #[tokio::test]

@@ -16,9 +16,10 @@ use serde::Deserialize;
 use crate::{
     agents::AgentId,
     conversations::{
-        ConversationError, ConversationId, ConversationModelConfiguration, ConversationRecord,
-        DocumentError, DocumentId, PlanDocument, PlanReviewCreation, PlanReviewLink,
-        PlanRevisionReference, PlanSource, resolve_authority,
+        CandidateReviewCreation, CandidateReviewLink, ConversationError, ConversationId,
+        ConversationModelConfiguration, ConversationRecord, DocumentError, DocumentId,
+        PlanDocument, PlanReviewCreation, PlanReviewLink, PlanRevisionReference, PlanSource,
+        resolve_authority,
     },
     error::{AppError, AppResult},
     projects::ProjectId,
@@ -30,9 +31,9 @@ use crate::{
 };
 
 use self::page::{
-    CatalogueView, ConversationDetailView, ConversationFormView, ConversationLinkView,
-    ModelSources, PlanDocumentPage, PlanReviewView, PresetOption, ProviderOption,
-    ReviewProjectOption,
+    CandidateReviewLinkView, CandidateReviewView, CatalogueView, ConversationDetailView,
+    ConversationFormView, ConversationLinkView, ModelSources, PlanDocumentPage, PlanReviewView,
+    PresetOption, ProviderOption, ReviewProjectOption,
 };
 
 const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
@@ -57,6 +58,10 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/plans/{document_id}/review",
             get(plan_review).post(create_plan_review),
+        )
+        .route(
+            "/conversations/candidate-review",
+            get(candidate_review).post(create_candidate_review),
         )
         .route(
             "/conversations/{conversation_id}/messages",
@@ -157,6 +162,27 @@ struct PlanAssociationForm {
 #[serde(default)]
 struct PlanReviewQuery {
     revision: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CandidateReviewQuery {
+    run: String,
+    candidate: String,
+    diff_base: String,
+}
+
+#[derive(Deserialize)]
+struct CandidateReviewForm {
+    run: String,
+    candidate: String,
+    diff_base: String,
+    brief: String,
+    provider: String,
+    model: String,
+    thinking: String,
+    #[serde(default)]
+    preset: String,
 }
 
 #[derive(Deserialize)]
@@ -558,6 +584,540 @@ async fn create_plan_review(
             patches.replace_location(conversation_path(&review))?;
             Ok(patches.respond(status)?)
         }
+    }
+}
+
+struct CandidateReviewSelection {
+    run: WorkflowRun,
+    candidate: crate::workflows::artefacts::ArtefactReference,
+    diff_base: crate::workflows::artefacts::ArtefactReference,
+    candidate_hash: crate::workflows::artefacts::CandidateHash,
+    diff_base_hash: crate::workflows::artefacts::CandidateHash,
+    preview: String,
+}
+
+async fn candidate_review(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: GraftRequest,
+    Query(query): Query<CandidateReviewQuery>,
+) -> AppResult<Response> {
+    let selection =
+        match resolve_candidate_review(&state, &query.run, &query.candidate, &query.diff_base) {
+            Ok(selection) => selection,
+            Err(error) => return render_candidate_review_error(&state, graft, error),
+        };
+    render_candidate_review(&state, graft, PatchStatus::Ok, &selection, "", None, None)
+}
+
+async fn create_candidate_review(
+    State(state): State<AppState>,
+    RequiredSession(session): RequiredSession,
+    graft: PatchGraft,
+    Form(form): Form<CandidateReviewForm>,
+) -> AppResult<Response> {
+    let selection =
+        match resolve_candidate_review(&state, &form.run, &form.candidate, &form.diff_base) {
+            Ok(selection) => selection,
+            Err(error) => return render_candidate_review_error(&state, graft, error),
+        };
+    let source = selection
+        .run
+        .conversation_id
+        .and_then(|id| state.conversations.get(&id));
+    let model = match candidate_review_model(&state, source.as_ref(), &form) {
+        Ok(model) => model,
+        Err(error) => {
+            return render_candidate_review(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                &selection,
+                &form.brief,
+                Some(error),
+                Some(&form),
+            );
+        }
+    };
+    let Some(connection) = state.vault.connection_for(&model.selection) else {
+        return render_candidate_review(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &selection,
+            &form.brief,
+            Some("Choose a stored provider."),
+            Some(&form),
+        );
+    };
+    let secret = match connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
+        crate::providers::AuthMethod::Plan => None,
+    };
+    if let Err(error) = job::validate_candidate_review(
+        &state,
+        &selection.run,
+        &selection.candidate,
+        &selection.diff_base,
+        secret,
+    ) {
+        return render_candidate_review(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            &selection,
+            &form.brief,
+            Some(error),
+            Some(&form),
+        );
+    }
+    let source_at_safe_gate = source_at_safe_gate(
+        &state,
+        &selection.run,
+        &selection.candidate,
+        &selection.diff_base,
+        &session,
+    );
+    if source
+        .as_ref()
+        .is_some_and(|record| record.active_job.is_some())
+        && !source_at_safe_gate
+    {
+        return render_candidate_review(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            &selection,
+            &form.brief,
+            Some("The source run is active. Start this review after it reaches a safe gate."),
+            Some(&form),
+        );
+    }
+    let review = match state
+        .conversations
+        .create_candidate_review(CandidateReviewCreation {
+            source_conversation: source.as_ref().map(|record| (record.id, record.revision)),
+            title: candidate_review_title(&selection.run),
+            model: model.clone(),
+            run_id: selection.run.id,
+            candidate: selection.candidate.clone(),
+            diff_base: selection.diff_base.clone(),
+            task_brief: form.brief.clone(),
+            source_at_safe_gate,
+        }) {
+        Ok(review) => review,
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            return Err(AppError::new("store candidate review conversation", error));
+        }
+        Err(error) => {
+            return render_candidate_review(
+                &state,
+                graft,
+                status_for(error),
+                &selection,
+                &form.brief,
+                Some(error.message()),
+                Some(&form),
+            );
+        }
+    };
+    match start_message(
+        &state,
+        session,
+        review.clone(),
+        review.revision,
+        model,
+        form.brief,
+    )
+    .await
+    {
+        Ok(_) => Ok(responses::command_navigation(&conversation_path(&review))),
+        Err(StartMessageError::Internal(error)) => Err(error),
+        Err(StartMessageError::User(status, error)) => {
+            let review = state.conversations.get(&review.id).unwrap_or(review);
+            render_detail(
+                &state,
+                session,
+                graft.into(),
+                status,
+                detail_view(&state, session, &review, &review.title, error),
+            )
+        }
+    }
+}
+
+fn resolve_candidate_review(
+    state: &AppState,
+    raw_run: &str,
+    raw_candidate: &str,
+    raw_diff_base: &str,
+) -> Result<CandidateReviewSelection, &'static str> {
+    let run_id = workflows::RunId::parse(raw_run).ok_or("Choose an available source run.")?;
+    let candidate_id = workflows::ArtefactId::parse(raw_candidate)
+        .ok_or("Choose an available candidate artefact.")?;
+    let diff_base_id = workflows::ArtefactId::parse(raw_diff_base)
+        .ok_or("Choose an available diff base artefact.")?;
+    let run = state
+        .workflow_runs
+        .get(&run_id)
+        .ok_or("The source run is unavailable.")?;
+    let candidate = run
+        .artefact(&candidate_id)
+        .filter(|record| record.kind == workflows::definition::ArtefactKind::CandidateRevision)
+        .ok_or("The selected candidate is unavailable.")?;
+    let diff_base = run
+        .artefact(&diff_base_id)
+        .filter(|record| record.kind == workflows::definition::ArtefactKind::CandidateRevision)
+        .ok_or("The selected diff base is unavailable.")?;
+    let candidate_reference = crate::workflows::artefacts::ArtefactReference {
+        id: candidate.id,
+        kind: candidate.kind,
+        artefact_hash: candidate.artefact_hash,
+    };
+    let diff_base_reference = crate::workflows::artefacts::ArtefactReference {
+        id: diff_base.id,
+        kind: diff_base.kind,
+        artefact_hash: diff_base.artefact_hash,
+    };
+    let diff = crate::workflows::artefacts::CandidateDiff::load(
+        &run,
+        &diff_base_reference,
+        &candidate_reference,
+        &state.workflow_artefacts,
+    )
+    .map_err(|_| "The selected immutable candidate or diff base is unavailable.")?;
+    let preview = candidate_review_preview(&diff, &state.workflow_artefacts)?;
+    Ok(CandidateReviewSelection {
+        run,
+        candidate: candidate_reference,
+        diff_base: diff_base_reference,
+        candidate_hash: diff.target,
+        diff_base_hash: diff.base,
+        preview,
+    })
+}
+
+fn candidate_review_preview(
+    diff: &crate::workflows::artefacts::CandidateDiff,
+    store: &crate::workflows::artefacts::WorkflowArtefactRepository,
+) -> Result<String, &'static str> {
+    const MAXIMUM_REVIEW_PREVIEW_BYTES: usize = 256 * 1024;
+    let (total, _) = diff
+        .manifest_page(0, 0)
+        .map_err(|_| "The selected candidate diff is unavailable.")?;
+    if total > crate::workflows::artefacts::candidate::MAXIMUM_PREVIEW_PATHS {
+        return Err(
+            "The selected candidate diff preview is too large. Choose a smaller candidate.",
+        );
+    }
+    let mut preview = String::from("Changed paths:\n");
+    for index in 0..total {
+        let change = diff
+            .change(index, store)
+            .map_err(|_| "The selected candidate diff is unavailable.")?;
+        preview.push_str("- ");
+        preview.push_str(change.status);
+        preview.push(' ');
+        preview.push_str(&change.path);
+        preview.push('\n');
+        for (side, facts) in [("Before", &change.old), ("After", &change.new)] {
+            if let Some(facts) = facts {
+                use std::fmt::Write;
+                let _ = writeln!(
+                    preview,
+                    "{side}: {}, executable: {}, {}",
+                    facts.kind, facts.executable, facts.detail,
+                );
+            }
+        }
+        if let Some(text) = change.text {
+            for fragment in text {
+                preview.push_str(&fragment.text);
+            }
+        } else if change.binary {
+            preview.push_str("Binary content is not shown.\n");
+        } else if change.text_too_large {
+            return Err(
+                "The selected candidate diff preview is too large. Choose a smaller candidate.",
+            );
+        }
+        if preview.len() > MAXIMUM_REVIEW_PREVIEW_BYTES {
+            return Err(
+                "The selected candidate diff preview is too large. Choose a smaller candidate.",
+            );
+        }
+    }
+    if crate::markdown::escape_plain(&preview).len() > MAXIMUM_REVIEW_PREVIEW_BYTES {
+        return Err(
+            "The selected candidate diff preview is too large. Choose a smaller candidate.",
+        );
+    }
+    Ok(preview)
+}
+
+fn source_at_safe_gate(
+    state: &AppState,
+    run: &WorkflowRun,
+    candidate: &crate::workflows::artefacts::ArtefactReference,
+    diff_base: &crate::workflows::artefacts::ArtefactReference,
+    session: &crate::sessions::SessionId,
+) -> bool {
+    let Some(gate) = run
+        .gates
+        .iter()
+        .rev()
+        .find(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
+    else {
+        return false;
+    };
+    matches!(run.state, workflows::run::RunState::AwaitingHuman { .. })
+        && gate.candidate == *candidate
+        && gate.diff_base == *diff_base
+        && state.gate_continuations.available(&run.id, session)
+}
+
+fn candidate_review_title(run: &WorkflowRun) -> String {
+    let prefix = "Review candidate: ";
+    let remaining = crate::conversations::MAXIMUM_TITLE_BYTES - prefix.len();
+    let source = run.pinned.definition.name();
+    let end = source.floor_char_boundary(remaining.min(source.len()));
+    format!("{prefix}{}", &source[..end])
+}
+
+fn candidate_review_model(
+    state: &AppState,
+    source: Option<&ConversationRecord>,
+    form: &CandidateReviewForm,
+) -> Result<ConversationModelConfiguration, &'static str> {
+    let selection = if form.preset.trim().is_empty() {
+        candidate_submitted_selection(state, form)?
+    } else {
+        let preset = AgentId::parse(form.preset.trim())
+            .and_then(|id| state.agents.get(&id))
+            .ok_or("Choose an available reviewer preset.")?;
+        preset
+            .selection
+            .clone()
+            .or_else(|| candidate_submitted_selection(state, form).ok())
+            .or_else(|| {
+                source
+                    .and_then(|record| effective_model(state, record).map(|model| model.selection))
+            })
+            .ok_or("Choose a model before you start this review.")?
+    };
+    valid_selection(state, &selection)?;
+    if form.preset.trim().is_empty() {
+        Ok(ConversationModelConfiguration::direct(selection))
+    } else {
+        let preset = AgentId::parse(form.preset.trim())
+            .and_then(|id| state.agents.get(&id))
+            .ok_or("Choose an available reviewer preset.")?;
+        Ok(ConversationModelConfiguration::from_preset(
+            &preset, selection,
+        ))
+    }
+}
+
+fn candidate_submitted_selection(
+    state: &AppState,
+    form: &CandidateReviewForm,
+) -> Result<ModelSelection, &'static str> {
+    let provider = ProviderKind::parse(form.provider.trim()).ok_or("Choose a stored provider.")?;
+    let thinking = if form.thinking.trim().is_empty() {
+        None
+    } else {
+        Some(
+            ThinkingEffort::new(form.thinking.clone())
+                .ok_or("Choose an available thinking effort.")?,
+        )
+    };
+    let selection = ModelSelection::new(provider, form.model.clone(), thinking)
+        .ok_or("Enter a valid model name.")?;
+    valid_selection(state, &selection)?;
+    Ok(selection)
+}
+
+fn candidate_review_view_model(
+    state: &AppState,
+    source: Option<&ConversationRecord>,
+    form: Option<&CandidateReviewForm>,
+) -> (Vec<ProviderOption>, Vec<PresetOption>, String) {
+    let selection = form
+        .and_then(|form| candidate_submitted_selection(state, form).ok())
+        .or_else(|| {
+            source.and_then(|record| effective_model(state, record).map(|model| model.selection))
+        })
+        .or_else(|| {
+            state
+                .vault
+                .desk_providers()
+                .into_iter()
+                .find(|provider| provider.selected)
+                .map(|provider| ModelSelection {
+                    provider: provider.kind,
+                    model: provider.model.clone(),
+                    thinking: state.models_dev.effective_effort(
+                        provider.kind,
+                        &provider.model,
+                        provider.thinking.as_ref(),
+                    ),
+                })
+        });
+    let providers = state
+        .vault
+        .desk_providers()
+        .into_iter()
+        .map(|provider| ProviderOption {
+            value: provider.kind.as_str(),
+            label: provider.kind.label(),
+            model: selection
+                .as_ref()
+                .filter(|item| item.provider == provider.kind)
+                .map_or(provider.model, |item| item.model.clone()),
+            thinking: selection
+                .as_ref()
+                .filter(|item| item.provider == provider.kind)
+                .and_then(|item| item.thinking.as_ref())
+                .map(|item| item.as_str().to_owned())
+                .unwrap_or_default(),
+            selected: selection
+                .as_ref()
+                .is_some_and(|item| item.provider == provider.kind),
+        })
+        .collect();
+    let selected_preset = form.map(|form| form.preset.trim()).unwrap_or_default();
+    let presets = state
+        .agents
+        .list()
+        .into_iter()
+        .map(|agent| PresetOption {
+            id: agent.id.as_hex(),
+            name: agent.name.clone(),
+            description: agent.selection.as_ref().map_or_else(
+                || "Keep the selected direct model".to_owned(),
+                |item| format!("{} · {}", item.provider.label(), item.model),
+            ),
+            selected: agent.id.as_hex() == selected_preset,
+        })
+        .collect();
+    let summary = if let Some(form) = form.filter(|form| !form.preset.trim().is_empty()) {
+        state
+            .agents
+            .list()
+            .into_iter()
+            .find(|agent| agent.id.as_hex() == form.preset.trim())
+            .map_or_else(
+                || "Reviewer preset is unavailable".to_owned(),
+                |agent| format!("Preset: {}", agent.name),
+            )
+    } else {
+        selection.map_or_else(
+            || "Choose a stored provider and model".to_owned(),
+            |item| {
+                format!(
+                    "Direct model: {} · {}{}",
+                    item.provider.label(),
+                    item.model,
+                    item.thinking
+                        .as_ref()
+                        .map(|effort| format!(" · Thinking: {}", effort.label()))
+                        .unwrap_or_default()
+                )
+            },
+        )
+    };
+    (providers, presets, summary)
+}
+
+fn default_candidate_review_brief() -> &'static str {
+    "Review this candidate for correctness, risks, missing tests and unintended changes. Return findings and recommendations. Do not approve or apply the candidate."
+}
+
+fn render_candidate_review(
+    state: &AppState,
+    graft: impl Into<GraftRequest>,
+    status: PatchStatus,
+    selection: &CandidateReviewSelection,
+    brief: &str,
+    error: Option<&'static str>,
+    form: Option<&CandidateReviewForm>,
+) -> AppResult<Response> {
+    let graft = graft.into();
+    let source = selection
+        .run
+        .conversation_id
+        .and_then(|id| state.conversations.get(&id));
+    let (providers, presets, reviewer_summary) =
+        candidate_review_view_model(state, source.as_ref(), form);
+    let source_title = source.as_ref().map_or_else(
+        || selection.run.pinned.definition.name().to_owned(),
+        |record| record.title.clone(),
+    );
+    let view = CandidateReviewView {
+        run_id: selection.run.id.as_hex(),
+        source_title,
+        candidate_id: selection.candidate.id.as_hex(),
+        diff_base_id: selection.diff_base.id.as_hex(),
+        candidate_hash: selection.candidate_hash.as_str(),
+        diff_base_hash: selection.diff_base_hash.as_str(),
+        preview: selection.preview.clone(),
+        instructions_summary: "Automatic project instructions come from the selected candidate's root AGENTS.md. This discussion receives the diff and root instructions without filesystem tools. The current host worktree is not used.".to_owned(),
+        brief: if brief.is_empty() { default_candidate_review_brief().to_owned() } else { brief.to_owned() },
+        reviewer_summary,
+        providers,
+        presets,
+        error: error.unwrap_or(""),
+    };
+    match graft {
+        GraftRequest::Document => {
+            let mut response =
+                responses::chat_page_response("Review candidate | Power Plant", state, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(
+            "Review candidate | Power Plant",
+            "chat-main",
+            &view,
+        )?),
+        GraftRequest::Patch => Ok(hypergraft::PatchSet::new()
+            .title("Review candidate | Power Plant")
+            .with_children("candidate-review-detail", &view.contents())?
+            .respond(status)?),
+    }
+}
+
+fn render_candidate_review_error(
+    state: &AppState,
+    graft: impl Into<GraftRequest>,
+    message: &'static str,
+) -> AppResult<Response> {
+    let graft = graft.into();
+    #[derive(askama::Template)]
+    #[template(
+        source = "<main data-section=\"conversations\" class=\"mx-auto max-w-4xl p-8\"><div role=\"alert\" class=\"alert alert-error\">{{ message }}</div><a href=\"/runs\" data-graft class=\"btn btn-ghost mt-4\">Runs</a></main>",
+        ext = "html"
+    )]
+    struct ErrorView {
+        message: &'static str,
+    }
+    let view = ErrorView { message };
+    match graft {
+        GraftRequest::Document => {
+            let mut response =
+                responses::chat_page_response("Review candidate | Power Plant", state, &view)?;
+            responses::apply_patch_status(&mut response, PatchStatus::Conflict);
+            Ok(response)
+        }
+        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(
+            "Review candidate | Power Plant",
+            "chat-main",
+            &view,
+        )?),
+        GraftRequest::Patch => Ok(hypergraft::PatchSet::new()
+            .title("Review candidate | Power Plant")
+            .with_children("chat-main", &view)?
+            .respond(PatchStatus::Conflict)?),
     }
 }
 
@@ -998,6 +1558,12 @@ async fn start_message(
             "Choose a stored provider.",
         ));
     };
+    if record.candidate_review_context.is_some() && record.execution_target.is_some() {
+        return Err(StartMessageError::User(
+            PatchStatus::Conflict,
+            "Candidate reviews use immutable evidence only. Remove the execution target before you continue this discussion.",
+        ));
+    }
     let authority = match resolve_authority(&record, &state.projects, &state.agents) {
         Ok(authority) => authority.map(|authority| authority.effective),
         Err(error) => {
@@ -1077,7 +1643,11 @@ async fn start_message(
             return Err(StartMessageError::User(status_for(error), error.message()));
         }
     };
-    let turns = match job::history_with_review(state, &started) {
+    let secret = match connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
+        crate::providers::AuthMethod::Plan => None,
+    };
+    let turns = match job::history_with_review(state, &started, secret) {
         Ok(turns) => turns,
         Err(error) => {
             let _ = state.conversations.settle_message(
@@ -2086,7 +2656,8 @@ fn detail_view(
             run.conversation_id == Some(record.id) && run.kind == workflows::RunKind::QuickTask
         })
         .and_then(|run| page::pending_code_gate(&run, &state.workflow_artefacts));
-    let (source_review, linked_reviews) = conversation_links(state, record);
+    let (source_review, linked_reviews, source_candidate_review, linked_candidate_reviews) =
+        conversation_links(state, record);
     ConversationDetailView::from_record_with_gate(
         record,
         ModelSources {
@@ -2103,13 +2674,20 @@ fn detail_view(
         pending_gate,
         source_review,
         linked_reviews,
+        source_candidate_review,
+        linked_candidate_reviews,
     )
 }
 
 fn conversation_links(
     state: &AppState,
     record: &ConversationRecord,
-) -> (Option<ConversationLinkView>, Vec<ConversationLinkView>) {
+) -> (
+    Option<ConversationLinkView>,
+    Vec<ConversationLinkView>,
+    Option<CandidateReviewLinkView>,
+    Vec<CandidateReviewLinkView>,
+) {
     let link_view = |link: &PlanReviewLink| {
         let title = state.conversations.get(&link.conversation_id).map_or_else(
             || "Conversation unavailable".to_owned(),
@@ -2132,9 +2710,35 @@ fn conversation_links(
             content_hash: link.plan.content_hash.as_str(),
         }
     };
+    let candidate_link_view = |link: &CandidateReviewLink| CandidateReviewLinkView {
+        title: link
+            .conversation_id
+            .and_then(|id| state.conversations.get(&id))
+            .map_or_else(String::new, |conversation| conversation.title),
+        href: link
+            .conversation_id
+            .map_or_else(String::new, |id| format!("/conversations/{}", id.as_hex())),
+        run_href: format!("/runs/{}", link.run_id.as_hex()),
+        candidate_hash: link.candidate.artefact_hash.as_str(),
+        diff_base_hash: link.diff_base.artefact_hash.as_str(),
+    };
     let source_review = record.source_review.as_ref().map(link_view);
     let linked_reviews = record.plan_reviews.iter().map(link_view).collect();
-    (source_review, linked_reviews)
+    let source_candidate_review = record
+        .source_candidate_review
+        .as_ref()
+        .map(candidate_link_view);
+    let linked_candidate_reviews = record
+        .candidate_reviews
+        .iter()
+        .map(candidate_link_view)
+        .collect();
+    (
+        source_review,
+        linked_reviews,
+        source_candidate_review,
+        linked_candidate_reviews,
+    )
 }
 
 fn default_review_brief() -> &'static str {

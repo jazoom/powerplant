@@ -9,7 +9,8 @@ pub(crate) use documents::{
 };
 pub(crate) use id::ConversationId;
 pub(crate) use store::{
-    ConversationError, ConversationMessage, ConversationModelConfiguration, ConversationRecord,
-    ConversationStore, MAXIMUM_PROJECT_ASSOCIATIONS, MAXIMUM_REPLY_BYTES, MAXIMUM_TITLE_BYTES,
-    MessageRole, MessageStatus, PlanReviewContext, PlanReviewCreation, PlanReviewLink,
+    CandidateReviewContext, CandidateReviewCreation, CandidateReviewLink, ConversationError,
+    ConversationMessage, ConversationModelConfiguration, ConversationRecord, ConversationStore,
+    MAXIMUM_PROJECT_ASSOCIATIONS, MAXIMUM_REPLY_BYTES, MAXIMUM_TITLE_BYTES, MessageRole,
+    MessageStatus, PlanReviewContext, PlanReviewCreation, PlanReviewLink,
 };

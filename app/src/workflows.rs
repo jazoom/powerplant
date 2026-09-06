@@ -11,7 +11,7 @@ mod execution;
 mod executor;
 pub(crate) mod gates;
 mod id;
-mod input_context;
+pub(crate) mod input_context;
 mod quick;
 mod resolve;
 pub(crate) mod run;

@@ -54,6 +54,7 @@ pub(super) struct PendingCodeGateView {
     pub(super) candidate: String,
     pub(super) diff_base: String,
     pub(super) diff_href: String,
+    pub(super) review_href: String,
     pub(super) changes: Vec<CandidateChangeView>,
 }
 
@@ -190,6 +191,68 @@ impl PlanReviewView {
     }
 }
 
+#[derive(Template)]
+#[template(
+    path = "conversations/templates/index.html",
+    block = "candidate_review_page"
+)]
+pub(super) struct CandidateReviewView {
+    pub(super) run_id: String,
+    pub(super) source_title: String,
+    pub(super) candidate_id: String,
+    pub(super) diff_base_id: String,
+    pub(super) candidate_hash: String,
+    pub(super) diff_base_hash: String,
+    pub(super) preview: String,
+    pub(super) instructions_summary: String,
+    pub(super) brief: String,
+    pub(super) reviewer_summary: String,
+    pub(super) providers: Vec<ProviderOption>,
+    pub(super) presets: Vec<PresetOption>,
+    pub(super) error: &'static str,
+}
+
+#[derive(Template)]
+#[template(
+    path = "conversations/templates/index.html",
+    block = "candidate_review_detail"
+)]
+pub(super) struct CandidateReviewContents<'a> {
+    pub(super) run_id: &'a str,
+    pub(super) source_title: &'a str,
+    pub(super) candidate_id: &'a str,
+    pub(super) diff_base_id: &'a str,
+    pub(super) candidate_hash: &'a str,
+    pub(super) diff_base_hash: &'a str,
+    pub(super) preview: &'a str,
+    pub(super) instructions_summary: &'a str,
+    pub(super) brief: &'a str,
+    pub(super) reviewer_summary: &'a str,
+    pub(super) providers: &'a [ProviderOption],
+    pub(super) presets: &'a [PresetOption],
+    pub(super) error: &'static str,
+}
+
+impl CandidateReviewView {
+    pub(super) fn contents(&self) -> CandidateReviewContents<'_> {
+        CandidateReviewContents {
+            run_id: &self.run_id,
+            source_title: &self.source_title,
+            candidate_id: &self.candidate_id,
+            diff_base_id: &self.diff_base_id,
+            candidate_hash: &self.candidate_hash,
+            diff_base_hash: &self.diff_base_hash,
+            preview: &self.preview,
+            instructions_summary: &self.instructions_summary,
+            brief: &self.brief,
+            reviewer_summary: &self.reviewer_summary,
+            providers: &self.providers,
+            presets: &self.presets,
+            error: self.error,
+        }
+    }
+}
+
 impl ConversationFormView {
     pub(super) fn new(title: &str, error: &'static str) -> Self {
         Self {
@@ -236,6 +299,14 @@ pub(super) struct ConversationLinkView {
     pub(super) plan_href: String,
     pub(super) plan_revision: u32,
     pub(super) content_hash: String,
+}
+
+pub(super) struct CandidateReviewLinkView {
+    pub(super) title: String,
+    pub(super) href: String,
+    pub(super) run_href: String,
+    pub(super) candidate_hash: String,
+    pub(super) diff_base_hash: String,
 }
 
 pub(super) struct ModelSources<'a> {
@@ -297,6 +368,8 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) plans: &'a [PlanDocumentView],
     pub(super) source_review: Option<&'a ConversationLinkView>,
     pub(super) linked_reviews: &'a [ConversationLinkView],
+    pub(super) source_candidate_review: Option<&'a CandidateReviewLinkView>,
+    pub(super) linked_candidate_reviews: &'a [CandidateReviewLinkView],
 }
 
 #[derive(Template)]
@@ -328,6 +401,8 @@ pub(super) struct ConversationDetailView {
     pub(super) plans: Vec<PlanDocumentView>,
     pub(super) source_review: Option<ConversationLinkView>,
     pub(super) linked_reviews: Vec<ConversationLinkView>,
+    pub(super) source_candidate_review: Option<CandidateReviewLinkView>,
+    pub(super) linked_candidate_reviews: Vec<CandidateReviewLinkView>,
 }
 impl ConversationDetailView {
     #[cfg(test)]
@@ -351,6 +426,8 @@ impl ConversationDetailView {
             None,
             None,
             Vec::new(),
+            None,
+            Vec::new(),
         )
     }
 
@@ -366,6 +443,8 @@ impl ConversationDetailView {
         pending_gate: Option<PendingCodeGateView>,
         source_review: Option<ConversationLinkView>,
         linked_reviews: Vec<ConversationLinkView>,
+        source_candidate_review: Option<CandidateReviewLinkView>,
+        linked_candidate_reviews: Vec<CandidateReviewLinkView>,
     ) -> Self {
         let fallback = sources
             .vault
@@ -576,6 +655,8 @@ impl ConversationDetailView {
             plans,
             source_review,
             linked_reviews,
+            source_candidate_review,
+            linked_candidate_reviews,
         }
     }
 
@@ -606,6 +687,8 @@ impl ConversationDetailView {
             plans: &self.plans,
             source_review: self.source_review.as_ref(),
             linked_reviews: &self.linked_reviews,
+            source_candidate_review: self.source_candidate_review.as_ref(),
+            linked_candidate_reviews: &self.linked_candidate_reviews,
         }
     }
 }
@@ -634,6 +717,12 @@ pub(super) fn pending_code_gate(
         candidate: diff.target.as_str().to_owned(),
         diff_base: diff.base.as_str().to_owned(),
         diff_href: format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex()),
+        review_href: format!(
+            "/conversations/candidate-review?run={}&candidate={}&diff_base={}",
+            run.id.as_hex(),
+            gate.candidate.id.as_hex(),
+            gate.diff_base.id.as_hex()
+        ),
         changes: changes
             .into_iter()
             .map(|change| CandidateChangeView {

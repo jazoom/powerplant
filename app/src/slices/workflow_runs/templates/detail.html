@@ -186,6 +186,14 @@
                               >{{ artefact.status }}</span
                             >
                           {% endif %}
+                          {% if artefact.review_href != "" %}
+                            <a
+                              href="{{ artefact.review_href }}"
+                              data-graft
+                              class="link text-xs"
+                              >Review in a new conversation</a
+                            >
+                          {% endif %}
                         </li>
                       {% endfor %}
                     </ul>

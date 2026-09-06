@@ -270,6 +270,7 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
                 candidate_hash: String::new(),
                 status: "",
                 note: "",
+                review_href: String::new(),
             }],
             commit: "01234567".to_owned(),
             gate_href: String::new(),

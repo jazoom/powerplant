@@ -34,6 +34,7 @@ pub(super) struct StepArtefactView {
     pub(super) candidate_hash: String,
     pub(super) status: &'static str,
     pub(super) note: &'static str,
+    pub(super) review_href: String,
 }
 
 pub(super) struct StepView {
@@ -265,6 +266,7 @@ impl RunDetailView {
                                     } else {
                                         ""
                                     },
+                                    review_href: candidate_review_href(run, record),
                                 }
                             })
                             .collect(),
@@ -322,6 +324,7 @@ impl RunDetailView {
                             candidate_hash: record.and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash).map(|hash| hash.short()).unwrap_or_default(),
                             status: if current { "Current" } else { "Superseded" },
                             note: "",
+                            review_href: candidate_review_href(run, record),
                         }
                     }).collect(),
                     route: review_route(Some(attempt)),
@@ -709,6 +712,30 @@ fn candidate_preview(
         &after.entries,
     );
     (crate::markdown::escape_plain(&text), truncated)
+}
+
+fn candidate_review_href(
+    run: &WorkflowRun,
+    record: Option<&crate::workflows::artefacts::ArtefactRecord>,
+) -> String {
+    let Some(record) = record.filter(|record| {
+        record.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+    }) else {
+        return String::new();
+    };
+    let Some(base) =
+        record.provenance.inputs.iter().find(|input| {
+            input.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+        })
+    else {
+        return String::new();
+    };
+    format!(
+        "/conversations/candidate-review?run={}&candidate={}&diff_base={}",
+        run.id.as_hex(),
+        record.id.as_hex(),
+        base.id.as_hex()
+    )
 }
 
 fn format_time(ms: u64) -> String {

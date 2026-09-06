@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AccessMode, AgentId, AgentRecord};
 use crate::projects::ProjectId;
-use crate::workflows::artefacts::{ArtefactHash, ObjectHash};
+use crate::workflows::artefacts::{ArtefactHash, ArtefactReference, ObjectHash};
+use crate::workflows::{ArtefactId, RunId};
 
 use super::access::ConversationGrant;
 use super::documents::{DocumentId, PlanRevisionReference};
@@ -19,7 +20,7 @@ use super::id::ConversationId;
 
 const CATALOGUE_VERSION: u32 = 1;
 const CATALOGUE_FILE: &str = "catalogue.json";
-const MAXIMUM_CATALOGUE_BYTES: usize = 1024 * 1024;
+const MAXIMUM_CATALOGUE_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MAXIMUM_CONVERSATIONS: usize = 128;
 pub(crate) const MAXIMUM_TITLE_BYTES: usize = 120;
 pub(crate) const MAXIMUM_MESSAGES: usize = 512;
@@ -39,6 +40,31 @@ pub(crate) struct PlanReviewLink {
 pub(crate) struct PlanReviewContext {
     pub(crate) source: PlanReviewLink,
     pub(crate) task_brief: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CandidateReviewLink {
+    pub(crate) conversation_id: Option<ConversationId>,
+    pub(crate) run_id: RunId,
+    pub(crate) candidate: ArtefactReference,
+    pub(crate) diff_base: ArtefactReference,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CandidateReviewContext {
+    pub(crate) source: CandidateReviewLink,
+    pub(crate) task_brief: String,
+}
+
+pub(crate) struct CandidateReviewCreation {
+    pub(crate) source_conversation: Option<(ConversationId, u32)>,
+    pub(crate) title: String,
+    pub(crate) model: ConversationModelConfiguration,
+    pub(crate) run_id: RunId,
+    pub(crate) candidate: ArtefactReference,
+    pub(crate) diff_base: ArtefactReference,
+    pub(crate) task_brief: String,
+    pub(crate) source_at_safe_gate: bool,
 }
 
 pub(crate) struct PlanReviewCreation {
@@ -65,6 +91,9 @@ pub(crate) struct ConversationRecord {
     pub(crate) source_review: Option<PlanReviewLink>,
     pub(crate) plan_reviews: Vec<PlanReviewLink>,
     pub(crate) review_context: Option<PlanReviewContext>,
+    pub(crate) source_candidate_review: Option<CandidateReviewLink>,
+    pub(crate) candidate_reviews: Vec<CandidateReviewLink>,
+    pub(crate) candidate_review_context: Option<CandidateReviewContext>,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) active_job: Option<JobId>,
     pub(crate) created_at_ms: u64,
@@ -223,6 +252,11 @@ struct ConversationFile {
     plan_reviews: Vec<ReviewLinkFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     review_context: Option<ReviewContextFile>,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    source_candidate_review: Option<CandidateReviewLinkFile>,
+    candidate_reviews: Vec<CandidateReviewLinkFile>,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    candidate_review_context: Option<CandidateReviewContextFile>,
     messages: Vec<MessageFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     active_job: Option<String>,
@@ -272,6 +306,30 @@ struct ReviewLinkFile {
 struct ReviewContextFile {
     source: ReviewLinkFile,
     task_brief: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct CandidateReviewLinkFile {
+    conversation: Option<String>,
+    run: String,
+    candidate: ArtefactRefFile,
+    diff_base: ArtefactRefFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct CandidateReviewContextFile {
+    source: CandidateReviewLinkFile,
+    task_brief: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ArtefactRefFile {
+    id: String,
+    kind: String,
+    artefact_hash: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -327,6 +385,9 @@ impl ConversationStore {
             source_review: None,
             plan_reviews: Vec::new(),
             review_context: None,
+            source_candidate_review: None,
+            candidate_reviews: Vec::new(),
+            candidate_review_context: None,
             messages: Vec::new(),
             active_job: None,
             created_at_ms: now,
@@ -433,6 +494,9 @@ impl ConversationStore {
                 source: source_link,
                 task_brief,
             }),
+            source_candidate_review: None,
+            candidate_reviews: Vec::new(),
+            candidate_review_context: None,
             messages: Vec::new(),
             active_job: None,
             created_at_ms: now,
@@ -447,6 +511,106 @@ impl ConversationStore {
         updated_source.plan_reviews.push(review_link);
         let previous = conversations.clone();
         conversations.insert(source_id, updated_source);
+        conversations.insert(id, review.clone());
+        if let Err(error) = persist(self.path.as_deref(), &conversations) {
+            *conversations = previous;
+            return Err(error);
+        }
+        Ok(review)
+    }
+
+    pub(crate) fn create_candidate_review(
+        &self,
+        creation: CandidateReviewCreation,
+    ) -> Result<ConversationRecord, ConversationError> {
+        let CandidateReviewCreation {
+            source_conversation,
+            title,
+            model,
+            run_id,
+            candidate,
+            diff_base,
+            task_brief,
+            source_at_safe_gate,
+        } = creation;
+        let title = normalise_title(&title)?;
+        let task_brief = normalise_message(&task_brief)?;
+        if task_brief.len() > MAXIMUM_REVIEW_BRIEF_BYTES
+            || candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+            || diff_base.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+        {
+            return Err(ConversationError::Review);
+        }
+        let mut conversations = self.lock();
+        let source = source_conversation
+            .map(|(id, revision)| {
+                let source = conversations
+                    .get(&id)
+                    .cloned()
+                    .ok_or(ConversationError::Missing)?;
+                if source.revision != revision {
+                    return Err(ConversationError::Conflict);
+                }
+                if source.active_job.is_some() && !source_at_safe_gate {
+                    return Err(ConversationError::Active);
+                }
+                if source.candidate_reviews.len() >= MAXIMUM_LINKED_REVIEWS {
+                    return Err(ConversationError::Review);
+                }
+                Ok(source)
+            })
+            .transpose()?;
+        if conversations.len() >= MAXIMUM_CONVERSATIONS {
+            return Err(ConversationError::Full);
+        }
+        let id = unused_identifier(&conversations)?;
+        let now = now_ms();
+        let source_link = CandidateReviewLink {
+            conversation_id: source.as_ref().map(|source| source.id),
+            run_id,
+            candidate: candidate.clone(),
+            diff_base: diff_base.clone(),
+        };
+        let review_link = CandidateReviewLink {
+            conversation_id: Some(id),
+            run_id,
+            candidate,
+            diff_base,
+        };
+        let review = ConversationRecord {
+            id,
+            revision: 1,
+            title,
+            projects: Vec::new(),
+            grants: Vec::new(),
+            execution_target: None,
+            network: crate::agents::NetworkAccess::None,
+            model: Some(model),
+            source_review: None,
+            plan_reviews: Vec::new(),
+            review_context: None,
+            source_candidate_review: Some(source_link.clone()),
+            candidate_reviews: Vec::new(),
+            candidate_review_context: Some(CandidateReviewContext {
+                source: source_link,
+                task_brief,
+            }),
+            messages: Vec::new(),
+            active_job: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        let previous = conversations.clone();
+        if let Some(source) = source {
+            let mut updated = source.clone();
+            updated.revision = source
+                .revision
+                .checked_add(1)
+                .ok_or(ConversationError::Revision)?;
+            updated.updated_at_ms = now.max(source.updated_at_ms);
+            updated.candidate_reviews.push(review_link);
+            conversations.insert(source.id, updated);
+        }
         conversations.insert(id, review.clone());
         if let Err(error) = persist(self.path.as_deref(), &conversations) {
             *conversations = previous;
@@ -940,6 +1104,34 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     {
         return Err(ConversationError::Corrupt);
     }
+    let source_candidate_review = file
+        .source_candidate_review
+        .map(candidate_review_link_from_file)
+        .transpose()?;
+    let candidate_reviews = file
+        .candidate_reviews
+        .into_iter()
+        .map(candidate_review_link_from_file)
+        .collect::<Result<Vec<_>, _>>()?;
+    if candidate_reviews.len() > MAXIMUM_LINKED_REVIEWS
+        || candidate_reviews.iter().enumerate().any(|(index, link)| {
+            candidate_reviews[..index]
+                .iter()
+                .any(|previous| previous == link)
+        })
+    {
+        return Err(ConversationError::Corrupt);
+    }
+    let candidate_review_context = file
+        .candidate_review_context
+        .map(candidate_review_context_from_file)
+        .transpose()?;
+    if candidate_review_context
+        .as_ref()
+        .is_some_and(|context| source_candidate_review.as_ref() != Some(&context.source))
+    {
+        return Err(ConversationError::Corrupt);
+    }
     let mut projects = Vec::with_capacity(file.projects.len());
     for raw in file.projects {
         let project = ProjectId::parse(&raw).ok_or(ConversationError::Corrupt)?;
@@ -1019,6 +1211,9 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         source_review,
         plan_reviews,
         review_context,
+        source_candidate_review,
+        candidate_reviews,
+        candidate_review_context,
         messages,
         active_job,
         created_at_ms: file.created_at_ms,
@@ -1131,6 +1326,76 @@ fn review_context_to_file(context: &PlanReviewContext) -> ReviewContextFile {
     }
 }
 
+fn artefact_ref_from_file(file: ArtefactRefFile) -> Result<ArtefactReference, ConversationError> {
+    Ok(ArtefactReference {
+        id: ArtefactId::parse(&file.id).ok_or(ConversationError::Corrupt)?,
+        kind: crate::workflows::definition::ArtefactKind::parse(&file.kind)
+            .ok_or(ConversationError::Corrupt)?,
+        artefact_hash: ArtefactHash::parse(&file.artefact_hash)
+            .ok_or(ConversationError::Corrupt)?,
+    })
+}
+
+fn artefact_ref_to_file(reference: &ArtefactReference) -> ArtefactRefFile {
+    ArtefactRefFile {
+        id: reference.id.as_hex(),
+        kind: reference.kind.as_str().to_owned(),
+        artefact_hash: reference.artefact_hash.as_str(),
+    }
+}
+
+fn candidate_review_link_from_file(
+    file: CandidateReviewLinkFile,
+) -> Result<CandidateReviewLink, ConversationError> {
+    let candidate = artefact_ref_from_file(file.candidate)?;
+    let diff_base = artefact_ref_from_file(file.diff_base)?;
+    if candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+        || diff_base.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+    {
+        return Err(ConversationError::Corrupt);
+    }
+    Ok(CandidateReviewLink {
+        conversation_id: match file.conversation {
+            Some(value) => Some(ConversationId::parse(&value).ok_or(ConversationError::Corrupt)?),
+            None => None,
+        },
+        run_id: RunId::parse(&file.run).ok_or(ConversationError::Corrupt)?,
+        candidate,
+        diff_base,
+    })
+}
+
+fn candidate_review_link_to_file(link: &CandidateReviewLink) -> CandidateReviewLinkFile {
+    CandidateReviewLinkFile {
+        conversation: link.conversation_id.map(|id| id.as_hex()),
+        run: link.run_id.as_hex(),
+        candidate: artefact_ref_to_file(&link.candidate),
+        diff_base: artefact_ref_to_file(&link.diff_base),
+    }
+}
+
+fn candidate_review_context_from_file(
+    file: CandidateReviewContextFile,
+) -> Result<CandidateReviewContext, ConversationError> {
+    let task_brief = normalise_message(&file.task_brief)?;
+    if task_brief.len() > MAXIMUM_REVIEW_BRIEF_BYTES {
+        return Err(ConversationError::Corrupt);
+    }
+    Ok(CandidateReviewContext {
+        source: candidate_review_link_from_file(file.source)?,
+        task_brief,
+    })
+}
+
+fn candidate_review_context_to_file(
+    context: &CandidateReviewContext,
+) -> CandidateReviewContextFile {
+    CandidateReviewContextFile {
+        source: candidate_review_link_to_file(&context.source),
+        task_brief: context.task_brief.clone(),
+    }
+}
+
 fn message_from_file(file: MessageFile) -> Result<ConversationMessage, ConversationError> {
     let limit = match file.role {
         MessageRole::User => MAXIMUM_MESSAGE_BYTES,
@@ -1175,6 +1440,7 @@ fn persist(
                 .messages
                 .last()
                 .map_or(0, |message| message.text.len());
+            // JSON can encode one control byte as six bytes, including replies at safe gates.
             6 * MAXIMUM_REPLY_BYTES.saturating_sub(used) + 64
         })
         .sum();
@@ -1216,6 +1482,19 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
             .map(review_link_to_file)
             .collect(),
         review_context: record.review_context.as_ref().map(review_context_to_file),
+        source_candidate_review: record
+            .source_candidate_review
+            .as_ref()
+            .map(candidate_review_link_to_file),
+        candidate_reviews: record
+            .candidate_reviews
+            .iter()
+            .map(candidate_review_link_to_file)
+            .collect(),
+        candidate_review_context: record
+            .candidate_review_context
+            .as_ref()
+            .map(candidate_review_context_to_file),
         messages: record
             .messages
             .iter()
