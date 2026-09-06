@@ -11,6 +11,7 @@ use rand::rand_core::TryRng;
 use rand::rngs::SysRng;
 use tokio::sync::Notify;
 
+use crate::conversations::ConversationId;
 use crate::hex;
 use crate::providers::{AssistantReply, ModelUsage, ToolOutput};
 use crate::workflows::RunId;
@@ -64,6 +65,12 @@ impl std::fmt::Display for JobIdError {
 impl std::error::Error for JobIdError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JobOwner {
+    Workflow(RunId),
+    Conversation(ConversationId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JobStatus {
     Running,
     AwaitingDecision,
@@ -92,7 +99,7 @@ pub(crate) struct JobEvent {
 #[derive(Clone, Debug)]
 pub(crate) struct JobSnapshot {
     pub(crate) id: JobId,
-    pub(crate) run_id: RunId,
+    pub(crate) owner: JobOwner,
     pub(crate) status: JobStatus,
     pub(crate) output: AssistantReply,
     pub(crate) latest_seq: u64,
@@ -105,7 +112,7 @@ pub(crate) struct JobSnapshot {
 
 pub(crate) struct Job {
     id: JobId,
-    run_id: RunId,
+    owner: JobOwner,
     assistant_index: usize,
     inner: Mutex<JobInner>,
     notify: Notify,
@@ -124,9 +131,21 @@ struct JobInner {
 
 impl Job {
     pub(crate) fn new(id: JobId, run_id: RunId, assistant_index: usize) -> Arc<Self> {
+        Self::with_owner(id, JobOwner::Workflow(run_id), assistant_index)
+    }
+
+    pub(crate) fn for_conversation(
+        id: JobId,
+        conversation: ConversationId,
+        assistant_index: usize,
+    ) -> Arc<Self> {
+        Self::with_owner(id, JobOwner::Conversation(conversation), assistant_index)
+    }
+
+    fn with_owner(id: JobId, owner: JobOwner, assistant_index: usize) -> Arc<Self> {
         Arc::new(Self {
             id,
-            run_id,
+            owner,
             assistant_index,
             inner: Mutex::new(JobInner {
                 status: JobStatus::Running,
@@ -147,7 +166,10 @@ impl Job {
     }
 
     pub(crate) fn run_id(&self) -> RunId {
-        self.run_id
+        match self.owner {
+            JobOwner::Workflow(run_id) => run_id,
+            JobOwner::Conversation(_) => unreachable!("conversation jobs have no workflow run"),
+        }
     }
 
     pub(crate) fn set_step_label(&self, label: String) {
@@ -243,7 +265,7 @@ impl Job {
         let inner = self.lock();
         JobSnapshot {
             id: self.id,
-            run_id: self.run_id,
+            owner: self.owner,
             status: inner.status,
             output: inner.output.clone(),
             latest_seq: inner.latest_seq,

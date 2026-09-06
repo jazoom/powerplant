@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     agents::AgentId,
+    conversations::ConversationId,
     projects::{MAXIMUM_PROJECTS, ProjectId},
     providers::{AssistantReply, ChatTurn},
     sessions::{
@@ -20,7 +21,14 @@ mod tests;
 
 pub(crate) struct SessionStore {
     sessions: Mutex<HashMap<SessionId, StoredSession>>,
+    conversation_jobs: Mutex<HashMap<ConversationId, ConversationJob>>,
     clock: Clock,
+}
+
+struct ConversationJob {
+    job: Arc<Job>,
+    session: SessionId,
+    reservation: JobId,
 }
 
 struct Clock {
@@ -53,8 +61,8 @@ pub(crate) struct ConversationKey {
 
 struct StoredSession {
     conversations: HashMap<ConversationKey, Conversation>,
-    // One in-flight command per session. finish_turn and fail_turn clear it.
-    active: Option<(ConversationKey, JobId)>,
+    // One in-flight command per session. Terminal settlement clears it.
+    active: Option<JobId>,
     last_agents: HashMap<ProjectId, AgentId>,
     recent_projects: Vec<ProjectId>,
     expires_at: Instant,
@@ -84,6 +92,7 @@ impl SessionStore {
     pub(crate) fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            conversation_jobs: Mutex::new(HashMap::new()),
             clock: Clock::real(),
         }
     }
@@ -210,7 +219,7 @@ impl SessionStore {
         conversation.turns.push(ChatTurn::user(message));
         let job = Job::new(job_id, run_id, conversation.turns.len());
         conversation.job = Some(job.clone());
-        session.active = Some((key, job_id));
+        session.active = Some(job_id);
         Ok(BegunTurn {
             job,
             turns: conversation.turns.clone(),
@@ -247,7 +256,7 @@ impl SessionStore {
         let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
             return false;
         };
-        if session.active != Some((*key, *job_id)) {
+        if session.active != Some(*job_id) {
             return false;
         }
         if let Some(conversation) = session.conversations.get_mut(key) {
@@ -261,6 +270,67 @@ impl SessionStore {
             }
         }
         session.active = None;
+        true
+    }
+
+    pub(crate) fn begin_conversation_job(
+        &self,
+        id: &SessionId,
+        conversation_id: ConversationId,
+        assistant_index: usize,
+    ) -> Result<Arc<Job>, BeginTurnError> {
+        let job_id = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
+        let reservation = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
+        let mut sessions = self.lock();
+        let session =
+            live_mut(&mut sessions, id, self.clock.now()).ok_or(BeginTurnError::MissingSession)?;
+        if session.active.is_some() || self.conversation_jobs().contains_key(&conversation_id) {
+            return Err(BeginTurnError::Conflict);
+        }
+        let job = Job::for_conversation(job_id, conversation_id, assistant_index);
+        self.conversation_jobs().insert(
+            conversation_id,
+            ConversationJob {
+                job: job.clone(),
+                session: *id,
+                reservation,
+            },
+        );
+        session.active = Some(reservation);
+        Ok(job)
+    }
+
+    pub(crate) fn conversation_job(
+        &self,
+        conversation_id: ConversationId,
+        job_id: JobId,
+    ) -> Option<Arc<Job>> {
+        self.conversation_jobs()
+            .get(&conversation_id)
+            .filter(|entry| entry.job.id() == job_id)
+            .map(|entry| entry.job.clone())
+    }
+
+    pub(crate) fn finish_conversation_job(
+        &self,
+        id: &SessionId,
+        conversation_id: ConversationId,
+        job_id: JobId,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let mut jobs = self.conversation_jobs();
+        let Some(entry) = jobs
+            .get(&conversation_id)
+            .filter(|entry| entry.job.id() == job_id && entry.session == *id)
+        else {
+            return false;
+        };
+        if let Some(session) = live_mut(&mut sessions, id, self.clock.now())
+            && session.active == Some(entry.reservation)
+        {
+            session.active = None;
+        }
+        jobs.remove(&conversation_id);
         true
     }
 
@@ -284,6 +354,13 @@ impl SessionStore {
     pub(crate) fn remove(&self, id: &SessionId) {
         let mut sessions = self.lock();
         cancel_and_remove(&mut sessions, id);
+        for entry in self
+            .conversation_jobs()
+            .values()
+            .filter(|entry| entry.session == *id)
+        {
+            entry.job.request_cancel();
+        }
     }
 
     pub(crate) fn expired_ids(&self) -> Vec<SessionId> {
@@ -307,7 +384,7 @@ impl SessionStore {
         let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
             return false;
         };
-        if session.active != Some((*key, *job_id)) {
+        if session.active != Some(*job_id) {
             return false;
         }
         if let Some(conversation) = session.conversations.get_mut(key)
@@ -317,6 +394,12 @@ impl SessionStore {
         }
         session.active = None;
         true
+    }
+
+    fn conversation_jobs(&self) -> MutexGuard<'_, HashMap<ConversationId, ConversationJob>> {
+        self.conversation_jobs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<SessionId, StoredSession>> {

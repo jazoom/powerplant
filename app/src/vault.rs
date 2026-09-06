@@ -138,6 +138,17 @@ impl ProviderVault {
         connection_from(self.path.as_deref(), &state, state.selected?)
     }
 
+    pub(crate) fn connection_for(
+        &self,
+        selection: &crate::providers::ModelSelection,
+    ) -> Option<ProviderConnection> {
+        let state = self.lock();
+        let mut connection = connection_from(self.path.as_deref(), &state, selection.provider)?;
+        connection.model = selection.model.clone();
+        connection.thinking = selection.thinking.clone();
+        Some(connection)
+    }
+
     pub(crate) fn desk_providers(&self) -> Vec<DeskProvider> {
         let state = self.lock();
         ProviderKind::ALL

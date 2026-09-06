@@ -1,0 +1,9 @@
+<div
+  class="prose max-w-none"
+  {% if message.streaming %}data-streaming-text="conversation-message-{{ message.index }}"{% endif %}
+>
+  {{ message.html|safe }}
+</div>
+{% if message.status != "" %}<p class="text-quiet mt-2 text-xs">
+  {{ message.status }}
+</p>{% endif %}

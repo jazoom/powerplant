@@ -587,10 +587,13 @@ pub(crate) async fn view(
 }
 
 pub(super) fn quick_task_finished(state: &AppState, job: &JobSnapshot) -> bool {
+    let crate::sessions::JobOwner::Workflow(run_id) = job.owner else {
+        return false;
+    };
     job.status == JobStatus::Completed
         && state
             .workflow_runs
-            .get(&job.run_id)
+            .get(&run_id)
             .is_some_and(|run| run.kind == RunKind::QuickTask)
 }
 
@@ -598,7 +601,10 @@ pub(super) fn review_href_for(state: &AppState, job: &JobSnapshot) -> String {
     if job.status != JobStatus::AwaitingDecision {
         return String::new();
     }
-    let Some(run) = state.workflow_runs.get(&job.run_id) else {
+    let crate::sessions::JobOwner::Workflow(run_id) = job.owner else {
+        return String::new();
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
         return String::new();
     };
     if run.kind != RunKind::QuickTask {

@@ -7,6 +7,7 @@ use std::pin::Pin;
 
 use futures_util::Stream;
 use rig_core::completion::{Message, ToolDefinition};
+use serde::{Deserialize, Serialize};
 
 pub(crate) const SYNTHETIC_BASE_URL: &str = "https://api.synthetic.new/openai/v1";
 pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -17,7 +18,8 @@ pub(crate) const MAXIMUM_MODEL_BYTES: usize = 256;
 pub(crate) const MAXIMUM_FAVOURITES: usize = 50;
 pub(crate) const MAXIMUM_PROVIDER_DETAIL_BYTES: usize = 400;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum ProviderKind {
     Xai,
     OpenaiCodex,
@@ -89,7 +91,7 @@ impl ProviderKind {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct ThinkingEffort(String);
 
 impl ThinkingEffort {
@@ -191,7 +193,39 @@ impl fmt::Debug for SecretString {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct ModelSelection {
+    pub(crate) provider: ProviderKind,
+    pub(crate) model: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    pub(crate) thinking: Option<ThinkingEffort>,
+}
+
+impl ModelSelection {
+    pub(crate) fn new(
+        provider: ProviderKind,
+        model: String,
+        thinking: Option<ThinkingEffort>,
+    ) -> Option<Self> {
+        let model = model.trim();
+        if model.is_empty()
+            || !model_is_bounded(model)
+            || thinking.as_ref().is_some_and(|effort| {
+                ThinkingEffort::new(effort.as_str().to_owned()).as_ref() != Some(effort)
+            })
+        {
+            return None;
+        }
+        Some(Self {
+            provider,
+            model: model.to_owned(),
+            thinking,
+        })
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct ProviderConnection {
     pub(crate) kind: ProviderKind,
     pub(crate) auth: AuthMethod,

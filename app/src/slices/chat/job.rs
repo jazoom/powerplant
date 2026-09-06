@@ -876,7 +876,10 @@ fn encode_observe_final(
             patches.append("transcript", &TurnArticle { turn: &turn })?;
         }
     }
-    let run_id = snapshot.run_id.as_hex();
+    let run_id = match snapshot.owner {
+        crate::sessions::JobOwner::Workflow(run_id) => run_id.as_hex(),
+        crate::sessions::JobOwner::Conversation(_) => String::new(),
+    };
     let run_step = snapshot.step_label.as_str();
     let workflow_name = snapshot.workflow_name.as_str();
     if more {

@@ -8,7 +8,7 @@ mod tokens;
 mod tests;
 
 pub(crate) use cookies::CookieRead;
-pub(crate) use job::{Job, JobEventKind, JobId, JobIdError, JobSnapshot, JobStatus};
+pub(crate) use job::{Job, JobEventKind, JobId, JobIdError, JobOwner, JobSnapshot, JobStatus};
 pub(crate) use live::LiveSessionGuard;
 pub(crate) use store::{BeginTurnError, ConversationKey, SessionSnapshot, SessionStore};
 pub(crate) use tokens::{SessionId, ValidatedToken, generate as generate_session_token};

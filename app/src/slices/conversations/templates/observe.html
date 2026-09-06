@@ -1,0 +1,12 @@
+{% if active %}
+  <div
+    data-island="observe"
+    data-observe-active="true"
+    data-observe-target="conversation-observe"
+  >
+    <form method="get" action="/conversations/{{ id }}" data-graft>
+      <input type="hidden" name="job" value="{{ job_id }}" />
+      <input type="hidden" name="cursor" value="{{ cursor }}" />
+    </form>
+  </div>
+{% endif %}

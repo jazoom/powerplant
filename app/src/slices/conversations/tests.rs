@@ -7,7 +7,7 @@ use tower::ServiceExt;
 
 use crate::{
     config::RuntimeConfig,
-    providers::{ProviderConnection, ProviderKind},
+    providers::{ModelSelection, ProviderConnection, ProviderKind},
     sessions,
     state::AppState,
 };
@@ -157,6 +157,124 @@ async fn create_rename_and_delete_use_independent_conversation_identity() {
     assert_eq!(delete.status(), StatusCode::OK);
     assert!(text(delete).await.contains("navigate=\"/conversations\""));
     assert!(state.conversations.get(&record.id).is_none());
+}
+
+#[tokio::test]
+async fn send_persists_a_project_free_reply() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let model = "grok-4.6".to_owned();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, &model, None);
+    let selection = ModelSelection::new(ProviderKind::Xai, model, effort).expect("selection");
+    let record = state
+        .conversations
+        .select_model(&record.id, record.revision, selection)
+        .expect("selection saved");
+    let path = format!("/conversations/{}/messages", record.id.as_hex());
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&message=Hello", record.revision),
+        ))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        text(response)
+            .await
+            .contains("target=\"conversation-detail\"")
+    );
+
+    for _ in 0..20 {
+        let current = state.conversations.get(&record.id).expect("conversation");
+        if current.active_job.is_none() {
+            assert_eq!(current.messages.len(), 2);
+            assert_eq!(current.messages[1].text, "Hello from Power Plant.");
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("reply did not settle");
+}
+
+#[tokio::test]
+async fn observation_uses_the_page_route_and_cancel_needs_only_the_job_identity() {
+    let state = test_state();
+    let token = connected(&state);
+    let owner = sessions::generate_session_token().expect("owner");
+    state.sessions.insert(owner.id());
+    let record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("record");
+    let job = state
+        .sessions
+        .begin_conversation_job(&owner.id(), record.id, 1)
+        .expect("job");
+    let selection =
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model");
+    state
+        .conversations
+        .begin_message(
+            &record.id,
+            record.revision,
+            selection,
+            job.id(),
+            "Question".to_owned(),
+        )
+        .expect("begin");
+    let path = format!("/conversations/{}", record.id);
+    let observe = format!("{path}?job={}&cursor=0", job.id());
+    for request in [document(&observe, &token), navigation(&observe, &token)] {
+        let response = app(&state).oneshot(request).await.expect("page");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(text(response).await.contains("Question"));
+    }
+    let response = app(&state)
+        .oneshot(command(
+            &format!("{path}/cancel"),
+            &token,
+            &format!("job={}", job.id()),
+        ))
+        .await
+        .expect("cancel");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(job.cancel_requested());
+    state
+        .conversations
+        .settle_message(
+            &record.id,
+            job.id(),
+            String::new(),
+            crate::conversations::MessageStatus::Interrupted,
+        )
+        .expect("settle");
+    state
+        .sessions
+        .finish_conversation_job(&owner.id(), record.id, job.id());
+    let request = Request::builder()
+        .uri(&observe)
+        .header(header::COOKIE, cookie(&token))
+        .header("Graft-Request", "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::empty())
+        .expect("request");
+    let response = app(&state)
+        .oneshot(request)
+        .await
+        .expect("final observation");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("target=\"conversation-detail\""));
+    assert!(!body.contains("navigate="));
 }
 
 #[tokio::test]

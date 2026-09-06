@@ -74,7 +74,7 @@ export function initComposer(
         }
         event.preventDefault();
         const submitter = root.querySelector<HTMLButtonElement>(
-            'button[type="submit"][name="mode"][value="quick"]',
+            'button[type="submit"][name="mode"][value="quick"], button[type="submit"]',
         );
         if (!submitter || submitter.disabled) {
             return;
@@ -97,8 +97,11 @@ export function initComposer(
                 return;
             }
             if (context.detail.form !== root) {
-                if (context.detail.targetIds.includes("composer")) {
-                    // Sandbox and workflow projections must not erase an unsent message.
+                if (
+                    context.detail.targetIds.includes("composer") ||
+                    context.detail.targetIds.includes("conversation-detail")
+                ) {
+                    // Projections must not erase an unsent message.
                     restoreDraft();
                 }
                 return;
@@ -106,9 +109,13 @@ export function initComposer(
             if (context.detail.targetIds.includes("composer")) {
                 captureDraft();
             }
+            if (context.detail.status !== 200) {
+                restoreDraft();
+                return;
+            }
             if (
-                context.detail.status !== 200 ||
-                !context.detail.targetIds.includes("transcript")
+                !context.detail.targetIds.includes("transcript") &&
+                !context.detail.targetIds.includes("conversation-detail")
             ) {
                 return;
             }

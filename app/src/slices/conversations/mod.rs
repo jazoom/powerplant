@@ -1,3 +1,4 @@
+mod job;
 mod page;
 
 #[cfg(test)]
@@ -5,7 +6,7 @@ mod tests;
 
 use axum::{
     Form, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Response,
     routing::{get, post},
 };
@@ -15,8 +16,9 @@ use serde::Deserialize;
 use crate::{
     conversations::{ConversationError, ConversationId, ConversationRecord},
     error::{AppError, AppResult},
+    providers::{ModelSelection, ProviderKind, ThinkingEffort},
     responses,
-    sessions::RequiredSession,
+    sessions::{JobId, RequiredSession},
     state::AppState,
 };
 
@@ -29,6 +31,15 @@ pub(super) fn router() -> Router<AppState> {
         .route("/conversations", get(catalogue).post(create))
         .route("/conversations/new", get(new_conversation))
         .route("/conversations/{conversation_id}", get(detail))
+        .route(
+            "/conversations/{conversation_id}/messages",
+            post(send_message),
+        )
+        .route(
+            "/conversations/{conversation_id}/cancel",
+            post(cancel_message),
+        )
+        .route("/conversations/{conversation_id}/model", post(select_model))
         .route(
             "/conversations/{conversation_id}/rename",
             post(rename_conversation),
@@ -53,6 +64,27 @@ struct RenameForm {
 #[derive(Deserialize)]
 struct RevisionForm {
     revision: String,
+}
+
+#[derive(Deserialize)]
+struct MessageForm {
+    revision: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct ModelForm {
+    revision: String,
+    provider: String,
+    model: String,
+    thinking: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ObserveQuery {
+    job: String,
+    cursor: String,
 }
 
 async fn catalogue(
@@ -99,24 +131,292 @@ async fn create(
 
 async fn detail(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     graft: GraftRequest,
     Path(conversation_id): Path<String>,
+    Query(query): Query<ObserveQuery>,
 ) -> AppResult<Response> {
     let Some(record) = load_conversation(&state, &conversation_id) else {
         return Ok(responses::request_navigation(graft, "/conversations"));
     };
+    if graft == GraftRequest::Patch && !query.job.is_empty() {
+        return observe_message(state, session.0, record, query);
+    }
     render_detail(
         &state,
+        session.0,
         graft,
         PatchStatus::Ok,
-        ConversationDetailView::from_record(&record, &record.title, ""),
+        detail_view(&state, session.0, &record, &record.title, ""),
     )
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<MessageForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    if record.active_job.is_some() {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                ConversationError::Active.message(),
+            ),
+        );
+    }
+    let Some(selection) = effective_selection(&state, &record) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                ConversationError::Selection.message(),
+            ),
+        );
+    };
+    if let Err(error) = valid_selection(&state, &selection) {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, error),
+        );
+    }
+    let Some(connection) = state.vault.connection_for(&selection) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose a stored provider.",
+            ),
+        );
+    };
+    let job = match state.sessions.begin_conversation_job(
+        &session.0,
+        record.id,
+        record.messages.len() + 1,
+    ) {
+        Ok(job) => job,
+        Err(_) => {
+            return render_detail_command(
+                graft,
+                PatchStatus::Conflict,
+                detail_view(
+                    &state,
+                    session.0,
+                    &record,
+                    &record.title,
+                    "Another command is active in this browser session.",
+                ),
+            );
+        }
+    };
+    let started =
+        state
+            .conversations
+            .begin_message(&record.id, revision, selection, job.id(), form.message);
+    let started = match started {
+        Ok(started) => started,
+        Err(error) => {
+            state
+                .sessions
+                .finish_conversation_job(&session.0, record.id, job.id());
+            let latest = state.conversations.get(&record.id).unwrap_or(record);
+            return render_detail_command(
+                graft,
+                status_for(error),
+                detail_view(&state, session.0, &latest, &latest.title, error.message()),
+            );
+        }
+    };
+    let view = detail_view(&state, session.0, &started, &started.title, "");
+    let run_state = state.clone();
+    tokio::spawn(job::run(
+        run_state, session.0, started.id, started, connection, job,
+    ));
+    render_detail_command(graft, PatchStatus::Ok, view)
+}
+
+async fn cancel_message(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<ObserveQuery>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(job_id) = JobId::parse(&form.job) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(job) = state.sessions.conversation_job(record.id, job_id) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "This reply is no longer active.",
+            ),
+        );
+    };
+    job.request_cancel();
+    render_detail_command(
+        graft,
+        PatchStatus::Ok,
+        detail_view(&state, session.0, &record, &record.title, ""),
+    )
+}
+
+fn observe_message(
+    state: AppState,
+    session: crate::sessions::SessionId,
+    record: ConversationRecord,
+    query: ObserveQuery,
+) -> AppResult<Response> {
+    if let Some(job) =
+        JobId::parse(&query.job).and_then(|id| state.sessions.conversation_job(record.id, id))
+    {
+        let cursor = query
+            .cursor
+            .parse::<u64>()
+            .unwrap_or(0)
+            .min(job.latest_seq());
+        return Ok(job::observe_response(
+            state, record.id, session, job, cursor,
+        ));
+    }
+    render_detail(
+        &state,
+        session,
+        GraftRequest::Patch,
+        PatchStatus::Ok,
+        detail_view(&state, session, &record, &record.title, ""),
+    )
+}
+
+async fn select_model(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<ModelForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(provider) = ProviderKind::parse(form.provider.trim()) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose a stored provider.",
+            ),
+        );
+    };
+    let has_thinking = !form.thinking.trim().is_empty();
+    let thinking = if has_thinking {
+        ThinkingEffort::new(form.thinking)
+    } else {
+        None
+    };
+    if has_thinking && thinking.is_none() {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose an available thinking effort.",
+            ),
+        );
+    }
+    let Some(selection) = ModelSelection::new(provider, form.model, thinking) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Enter a valid model name.",
+            ),
+        );
+    };
+    if let Err(error) = valid_selection(&state, &selection) {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, error),
+        );
+    }
+    match state
+        .conversations
+        .select_model(&record.id, revision, selection)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("store model selection", error))
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
 }
 
 async fn rename_conversation(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     graft: PatchGraft,
     Path(conversation_id): Path<String>,
     Form(form): Form<RenameForm>,
@@ -124,15 +424,12 @@ async fn rename_conversation(
     let Some(record) = load_conversation(&state, &conversation_id) else {
         return Ok(responses::command_navigation("/conversations"));
     };
-    let revision = match parse_revision(&form.revision) {
-        Some(revision) => revision,
-        None => {
-            return render_detail_command(
-                graft,
-                PatchStatus::UnprocessableEntity,
-                ConversationDetailView::from_record(&record, &form.title, REVISION_MESSAGE),
-            );
-        }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &form.title, REVISION_MESSAGE),
+        );
     };
     match state
         .conversations
@@ -141,7 +438,7 @@ async fn rename_conversation(
         Ok(updated) => render_detail_command(
             graft,
             PatchStatus::Ok,
-            ConversationDetailView::from_record(&updated, &updated.title, ""),
+            detail_view(&state, session.0, &updated, &updated.title, ""),
         ),
         Err(
             error @ (ConversationError::Random
@@ -154,7 +451,9 @@ async fn rename_conversation(
             render_detail_command(
                 graft,
                 PatchStatus::Conflict,
-                ConversationDetailView::from_record(
+                detail_view(
+                    &state,
+                    session.0,
                     &latest,
                     &latest.title,
                     ConversationError::Conflict.message(),
@@ -164,14 +463,14 @@ async fn rename_conversation(
         Err(error) => render_detail_command(
             graft,
             status_for(error),
-            ConversationDetailView::from_record(&record, &form.title, error.message()),
+            detail_view(&state, session.0, &record, &form.title, error.message()),
         ),
     }
 }
 
 async fn delete_conversation(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     graft: PatchGraft,
     Path(conversation_id): Path<String>,
     Form(form): Form<RevisionForm>,
@@ -179,15 +478,12 @@ async fn delete_conversation(
     let Some(record) = load_conversation(&state, &conversation_id) else {
         return Ok(responses::command_navigation("/conversations"));
     };
-    let revision = match parse_revision(&form.revision) {
-        Some(revision) => revision,
-        None => {
-            return render_detail_command(
-                graft,
-                PatchStatus::UnprocessableEntity,
-                ConversationDetailView::from_record(&record, &record.title, REVISION_MESSAGE),
-            );
-        }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
     };
     match state.conversations.delete(&record.id, revision) {
         Ok(()) | Err(ConversationError::Missing) => {
@@ -203,7 +499,9 @@ async fn delete_conversation(
             render_detail_command(
                 graft,
                 PatchStatus::Conflict,
-                ConversationDetailView::from_record(
+                detail_view(
+                    &state,
+                    session.0,
                     &latest,
                     &latest.title,
                     ConversationError::Conflict.message(),
@@ -213,33 +511,107 @@ async fn delete_conversation(
         Err(error) => render_detail_command(
             graft,
             status_for(error),
-            ConversationDetailView::from_record(&record, &record.title, error.message()),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
         ),
     }
+}
+
+fn effective_selection(state: &AppState, record: &ConversationRecord) -> Option<ModelSelection> {
+    record.selection.clone().or_else(|| {
+        state
+            .vault
+            .selected_connection()
+            .map(|connection| ModelSelection {
+                provider: connection.kind,
+                thinking: state.models_dev.effective_effort(
+                    connection.kind,
+                    &connection.model,
+                    connection.thinking.as_ref(),
+                ),
+                model: connection.model,
+            })
+    })
+}
+
+fn valid_selection(state: &AppState, selection: &ModelSelection) -> Result<(), &'static str> {
+    if !state.vault.contains(selection.provider) {
+        return Err("Choose a stored provider.");
+    }
+    match selection.thinking.as_ref() {
+        Some(effort)
+            if !state
+                .models_dev
+                .supports(selection.provider, &selection.model, effort) =>
+        {
+            Err("Choose an available thinking effort.")
+        }
+        None if !state
+            .models_dev
+            .efforts(selection.provider, &selection.model)
+            .is_empty() =>
+        {
+            Err("Choose an available thinking effort.")
+        }
+        _ => Ok(()),
+    }
+}
+
+fn detail_view(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    record: &ConversationRecord,
+    title: &str,
+    error: &'static str,
+) -> ConversationDetailView {
+    let snapshot = record
+        .active_job
+        .and_then(|job_id| state.sessions.conversation_job(record.id, job_id))
+        .map(|job| job.snapshot());
+    let error = if error.is_empty()
+        && snapshot
+            .as_ref()
+            .is_some_and(|job| job.status == crate::sessions::JobStatus::Failed)
+    {
+        "The reply could not be stored. Restore access to local data, then restart Power Plant."
+    } else {
+        error
+    };
+    ConversationDetailView::from_record(
+        record,
+        &state.vault,
+        &state.models_dev,
+        snapshot.as_ref(),
+        state.sessions.busy(&session) || record.active_job.is_some(),
+        title,
+        error,
+    )
 }
 
 fn load_conversation(state: &AppState, raw: &str) -> Option<ConversationRecord> {
     ConversationId::parse(raw).and_then(|id| state.conversations.get(&id))
 }
-
 fn parse_revision(raw: &str) -> Option<u32> {
     raw.parse().ok().filter(|revision| *revision > 0)
 }
-
 fn conversation_path(record: &ConversationRecord) -> String {
     format!("/conversations/{}", record.id.as_hex())
 }
-
 fn status_for(error: ConversationError) -> PatchStatus {
     match error {
-        ConversationError::Conflict | ConversationError::Missing => PatchStatus::Conflict,
+        ConversationError::Conflict | ConversationError::Missing | ConversationError::Active => {
+            PatchStatus::Conflict
+        }
         _ => PatchStatus::UnprocessableEntity,
     }
 }
-
 fn render_catalogue(state: &AppState, graft: GraftRequest) -> AppResult<Response> {
-    let view = CatalogueView::from_records(&state.conversations.list());
-    render_page(state, graft, PatchStatus::Ok, page::CATALOGUE_TITLE, &view)
+    render_page(
+        state,
+        graft,
+        PatchStatus::Ok,
+        page::CATALOGUE_TITLE,
+        &CatalogueView::from_records(&state.conversations.list()),
+    )
 }
 
 fn render_form_page(
@@ -266,7 +638,6 @@ fn render_form_page(
         )?),
     }
 }
-
 fn render_form_command(
     _graft: PatchGraft,
     status: PatchStatus,
@@ -278,9 +649,9 @@ fn render_form_command(
         &view.contents(),
     )?)
 }
-
 fn render_detail(
     state: &AppState,
+    _session: crate::sessions::SessionId,
     graft: GraftRequest,
     status: PatchStatus,
     view: ConversationDetailView,
@@ -303,7 +674,6 @@ fn render_detail(
         )?),
     }
 }
-
 fn render_detail_command(
     _graft: PatchGraft,
     status: PatchStatus,
@@ -314,7 +684,6 @@ fn render_detail_command(
         .with_children("conversation-detail", &view.contents())?
         .respond(status)?)
 }
-
 fn render_page<T: askama::Template>(
     state: &AppState,
     graft: GraftRequest,

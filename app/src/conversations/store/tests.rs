@@ -1,6 +1,14 @@
 use std::path::Path;
 
-use super::{ConversationError, ConversationStore, MAXIMUM_CATALOGUE_BYTES, MAXIMUM_TITLE_BYTES};
+use crate::{
+    providers::{ModelSelection, ProviderKind},
+    sessions::JobId,
+};
+
+use super::{
+    ConversationError, ConversationStore, MAXIMUM_CATALOGUE_BYTES, MAXIMUM_TITLE_BYTES,
+    MessageStatus,
+};
 
 impl ConversationStore {
     pub(crate) fn in_memory() -> Self {
@@ -138,6 +146,152 @@ fn rename_preserves_timestamp_order_after_clock_regression() {
     drop(store);
     let reopened = ConversationStore::open(dir.path().to_path_buf()).expect("reopen");
     assert_eq!(reopened.get(&record.id), Some(renamed));
+}
+
+#[test]
+fn active_request_rejects_stale_settlement() {
+    let store = ConversationStore::in_memory();
+    let record = store.create("Discussion".to_owned()).expect("conversation");
+    let request = JobId::generate().expect("request");
+    let selection =
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("selection");
+    store
+        .begin_message(
+            &record.id,
+            record.revision,
+            selection,
+            request,
+            "Question".to_owned(),
+        )
+        .expect("begin");
+
+    assert_eq!(
+        store.settle_message(
+            &record.id,
+            JobId::generate().expect("stale request"),
+            "Wrong reply".to_owned(),
+            MessageStatus::Complete,
+        ),
+        Err(ConversationError::Conflict)
+    );
+    let current = store.get(&record.id).expect("current");
+    assert_eq!(current.active_job, Some(request));
+    assert!(current.messages.last().expect("assistant").text.is_empty());
+}
+
+#[test]
+fn completed_and_interrupted_messages_survive_restart() {
+    let dir = tempfile::tempdir().expect("directory");
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("store");
+    let mut record = store.create("Discussion".to_owned()).expect("conversation");
+    let selection =
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model");
+    for complete in [true, false] {
+        let request = JobId::generate().expect("request");
+        record = store
+            .begin_message(
+                &record.id,
+                record.revision,
+                selection.clone(),
+                request,
+                "First line\n\tSecond line".to_owned(),
+            )
+            .expect("multiline message");
+        assert_eq!(
+            store.delete(&record.id, record.revision),
+            Err(ConversationError::Active)
+        );
+        store
+            .append_output(&record.id, request, "Partial reply".to_owned())
+            .expect("partial");
+        if complete {
+            store
+                .settle_message(
+                    &record.id,
+                    request,
+                    "Complete reply".to_owned(),
+                    MessageStatus::Complete,
+                )
+                .expect("settle");
+        }
+        record = store.get(&record.id).expect("current");
+    }
+    drop(store);
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("restart");
+    let recovered = store.get(&record.id).expect("recovered");
+    assert_eq!(recovered.active_job, None);
+    assert_eq!(recovered.messages[1].status, MessageStatus::Complete);
+    assert_eq!(recovered.messages[1].text, "Complete reply");
+    assert_eq!(recovered.messages[3].status, MessageStatus::Interrupted);
+    assert_eq!(recovered.messages[3].text, "Partial reply");
+    assert_eq!(
+        store.settle_message(
+            &record.id,
+            record.active_job.expect("old request"),
+            "Stale".to_owned(),
+            MessageStatus::Complete
+        ),
+        Err(ConversationError::Conflict)
+    );
+}
+
+#[test]
+fn message_bounds_reserve_space_for_terminal_output() {
+    let store = ConversationStore::in_memory();
+    let record = store.create("Discussion".to_owned()).expect("conversation");
+    let selection =
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model");
+    let request = JobId::generate().expect("request");
+    for text in [
+        "x".repeat(super::MAXIMUM_MESSAGE_BYTES + 1),
+        "invalid\0text".to_owned(),
+    ] {
+        assert_eq!(
+            store.begin_message(
+                &record.id,
+                record.revision,
+                selection.clone(),
+                request,
+                text
+            ),
+            Err(ConversationError::Message)
+        );
+    }
+    store
+        .begin_message(
+            &record.id,
+            record.revision,
+            selection.clone(),
+            request,
+            "Question".to_owned(),
+        )
+        .expect("begin");
+    let other = store.create("Other".to_owned()).expect("other");
+    assert_eq!(
+        store.begin_message(
+            &other.id,
+            other.revision,
+            selection,
+            JobId::generate().expect("request"),
+            "Question".to_owned()
+        ),
+        Err(ConversationError::Full)
+    );
+    assert_eq!(
+        store.append_output(
+            &record.id,
+            request,
+            "x".repeat(super::MAXIMUM_REPLY_BYTES + 1)
+        ),
+        Err(ConversationError::Message)
+    );
+    let reply = "\u{0001}".repeat(super::MAXIMUM_REPLY_BYTES);
+    store
+        .append_output(&record.id, request, reply.clone())
+        .expect("reserved capacity");
+    store
+        .settle_message(&record.id, request, reply, MessageStatus::Interrupted)
+        .expect("terminal capacity");
 }
 
 #[test]

@@ -268,7 +268,10 @@ impl ChatViewModel {
             if job.output.usage.is_some() {
                 latest_usage = job.output.usage.clone();
             }
-            run_id = job.run_id.as_hex();
+            run_id = match job.owner {
+                crate::sessions::JobOwner::Workflow(run) => run.as_hex(),
+                crate::sessions::JobOwner::Conversation(_) => String::new(),
+            };
             run_step = job.step_label.clone();
             workflow_name = job.workflow_name.clone();
             if !job.output.is_empty() && views.len() == job.assistant_index {

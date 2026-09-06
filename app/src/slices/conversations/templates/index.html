@@ -15,7 +15,6 @@
         >New conversation</a
       >
     </div>
-
     {% if conversations.is_empty() %}
       <section class="file-section space-y-3">
         <h2 class="text-lg font-semibold">Start a conversation</h2>
@@ -36,8 +35,7 @@
               data-graft
               class="link link-hover min-w-0 break-words"
               >{{ conversation.title }}</a
-            >
-            <a
+            ><a
               href="/conversations/{{ conversation.id }}"
               data-graft
               class="btn btn-ghost btn-sm"
@@ -81,9 +79,9 @@
               <p>{{ error }}</p>
             </div>
           {% endif %}
-          <label class="flex max-w-xl flex-col gap-1" for="conversation-title">
-            <span class="text-sm">Title</span>
-            <input
+          <label class="flex max-w-xl flex-col gap-1" for="conversation-title"
+            ><span class="text-sm">Title</span
+            ><input
               id="conversation-title"
               class="input input-bordered"
               name="title"
@@ -91,18 +89,17 @@
               maxlength="120"
               autofocus
               value="{{ title }}"
-            />
-            <span class="text-quiet text-xs">
-              Use a title that helps you find this discussion on this machine.
-            </span>
-          </label>
+            /><span class="text-quiet text-xs"
+              >Use a title that helps you find this discussion on this
+              machine.</span
+            ></label
+          >
           <div
             class="border-base-300 flex flex-wrap items-center gap-3 border-t pt-5"
           >
             <button class="btn btn-primary" type="submit">
-              Create conversation
-            </button>
-            <a href="/conversations" data-graft class="link link-hover"
+              Create conversation</button
+            ><a href="/conversations" data-graft class="link link-hover"
               >Cancel</a
             >
           </div>
@@ -116,9 +113,12 @@
   <main
     data-section="conversations"
     data-context-detail
-    class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
+    class="chat-sheet mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
   >
-    <section id="conversation-detail" class="flex flex-col gap-6">
+    <section
+      id="conversation-detail"
+      class="flex min-h-0 flex-1 flex-col gap-6"
+    >
       {% block conversation_detail %}
         <div class="page-intro">
           <div>
@@ -140,18 +140,158 @@
           </div>
         {% endif %}
         <section class="file-section space-y-3">
-          <div>
-            <h2 class="text-lg font-semibold">Discussion</h2>
-            <p class="text-quiet mt-1 max-w-[60ch] text-sm">
-              This conversation belongs to this local Power Plant installation.
-              It is visible to every local browser session.
-            </p>
-          </div>
-          <p class="text-quiet text-sm">
-            Messaging, model selection and project context become available here
-            in later steps.
+          <h2 class="text-lg font-semibold">Discussion</h2>
+          <p class="text-quiet max-w-[60ch] text-sm">
+            This conversation belongs to this local Power Plant installation. It
+            is visible to every local browser session. Model replies use this
+            discussion history. Project files and tools are not available here.
           </p>
         </section>
+        <section
+          id="transcript"
+          data-island="transcript"
+          tabindex="-1"
+          class="flex max-h-[55vh] min-h-48 flex-col gap-4 overflow-y-auto pr-1"
+          aria-live="polite"
+        >
+          {% if omitted_messages > 0 %}<p class="text-quiet text-sm">
+            {{ omitted_messages }} earlier messages exceed the display limit.
+            They remain in local history and model context.
+          </p>{% endif %}
+          {% for message in messages %}{% include "conversations/templates/message_article.html" %}{% endfor %}
+        </section>
+        <div id="conversation-observe">
+          {% block conversation_observe %}{% if job_active %}
+            <div
+              data-island="observe"
+              data-observe-active="true"
+              data-observe-target="conversation-observe"
+            >
+              <form method="get" action="/conversations/{{ id }}" data-graft>
+                <input type="hidden" name="job" value="{{ job_id }}" /><input
+                  type="hidden"
+                  name="cursor"
+                  value="{{ cursor }}"
+                />
+              </form>
+            </div>
+          {% endif %}{% endblock conversation_observe %}
+        </div>
+        <form
+          id="conversation-composer"
+          data-island="composer"
+          data-graft
+          method="post"
+          action="/conversations/{{ id }}/messages"
+          class="border-base-300 bg-base-200 flex flex-col gap-3 border p-4"
+        >
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <label class="flex flex-col gap-1" for="composer-message"
+            ><span class="text-sm font-semibold">Message</span
+            ><textarea
+              id="composer-message"
+              name="message"
+              class="textarea textarea-bordered min-h-24"
+              required
+              maxlength="32768"
+              {% if job_active || session_busy || !model_available %}disabled{% endif %}
+            ></textarea>
+          </label>
+          {% if !model_available %}
+            <p class="text-quiet text-sm">
+              Connect a provider before you send a message.
+            </p>
+          {% endif %}
+          {% if session_busy && !job_active %}
+            <p class="text-quiet text-sm">
+              Another command is active in this browser session.
+            </p>
+          {% endif %}
+          <div class="flex flex-wrap items-center gap-3">
+            <button
+              class="btn btn-primary"
+              type="submit"
+              {% if job_active || session_busy || !model_available %}disabled{% endif %}
+            >
+              Send</button
+            ><span
+              data-island="shortcut-hint"
+              class="text-quiet text-xs"
+            ></span>
+          </div>
+        </form>
+        {% if job_active %}
+          <form
+            data-graft
+            method="post"
+            action="/conversations/{{ id }}/cancel"
+          >
+            <input type="hidden" name="job" value="{{ job_id }}" /><button
+              class="btn btn-ghost btn-sm"
+              type="submit"
+            >
+              Cancel reply
+            </button>
+          </form>
+        {% endif %}
+        <details class="file-disclosure">
+          <summary>Model</summary>
+          <form
+            data-graft
+            method="post"
+            action="/conversations/{{ id }}/model"
+            class="mt-4 flex max-w-xl flex-col gap-3"
+          >
+            <input type="hidden" name="revision" value="{{ revision }}" /><label
+              class="flex flex-col gap-1"
+              for="conversation-provider"
+              ><span class="text-sm">Provider</span
+              ><select
+                id="conversation-provider"
+                class="select select-bordered"
+                name="provider"
+                {% if job_active %}disabled{% endif %}
+              >
+                {% for provider in providers %}
+                  <option
+                    value="{{ provider.value }}"
+                    {% if provider.selected %}selected{% endif %}
+                  >
+                    {{ provider.label }}
+                  </option>
+                {% endfor %}
+              </select></label
+            ><label class="flex flex-col gap-1" for="conversation-model"
+              ><span class="text-sm">Model</span
+              ><input
+                id="conversation-model"
+                class="input input-bordered"
+                name="model"
+                required
+                maxlength="256"
+                value="{% for provider in providers %}{% if provider.selected %}{{ provider.model }}{% endif %}{% endfor %}"
+                {% if job_active %}disabled{% endif %} /></label
+            ><label class="flex flex-col gap-1" for="conversation-thinking"
+              ><span class="text-sm">Thinking effort</span
+              ><input
+                id="conversation-thinking"
+                class="input input-bordered"
+                name="thinking"
+                maxlength="32"
+                value="{% for provider in providers %}{% if provider.selected %}{{ provider.thinking }}{% endif %}{% endfor %}"
+                {% if job_active %}disabled{% endif %}
+              /><span class="text-quiet text-xs"
+                >Leave blank when the model has no selected effort.</span
+              ></label
+            ><button
+              class="btn btn-secondary self-start"
+              type="submit"
+              {% if job_active %}disabled{% endif %}
+            >
+              Use this model
+            </button>
+          </form>
+        </details>
         <section
           class="file-section space-y-3"
           aria-labelledby="conversation-name-heading"
@@ -168,19 +308,18 @@
             action="/conversations/{{ id }}/rename"
             class="flex max-w-xl flex-col gap-3"
           >
-            <input type="hidden" name="revision" value="{{ revision }}" />
-            <label class="flex flex-col gap-1" for="conversation-rename-title">
-              <span class="sr-only">Title</span>
-              <input
+            <input type="hidden" name="revision" value="{{ revision }}" /><label
+              class="flex flex-col gap-1"
+              for="conversation-rename-title"
+              ><span class="sr-only">Title</span
+              ><input
                 id="conversation-rename-title"
                 class="input input-bordered"
                 name="title"
                 required
                 maxlength="120"
-                value="{{ title }}"
-              />
-            </label>
-            <button class="btn btn-primary self-start" type="submit">
+                value="{{ title }}" /></label
+            ><button class="btn btn-primary self-start" type="submit">
               Save title
             </button>
           </form>
@@ -189,16 +328,19 @@
           <summary>Delete conversation</summary>
           <div class="max-w-xl space-y-3 pt-4">
             <p class="text-quiet text-sm">
-              This removes this discussion from local history. Future runs can
-              keep their independent evidence.
+              This removes this discussion from local history. You cannot delete
+              an active conversation.
             </p>
             <form
               data-graft
               method="post"
               action="/conversations/{{ id }}/delete"
             >
-              <input type="hidden" name="revision" value="{{ revision }}" />
-              <button class="btn btn-error btn-outline btn-sm" type="submit">
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ revision }}"
+              /><button class="btn btn-error btn-outline btn-sm" type="submit">
                 Delete conversation
               </button>
             </form>

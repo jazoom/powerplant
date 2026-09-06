@@ -1,0 +1,7 @@
+<article
+  id="conversation-message-{{ message.index }}"
+  class="chat-turn {% if message.user %}chat-turn-user{% else %}chat-turn-assistant{% endif %}"
+  {% if message.streaming %}data-streaming="true"{% endif %}
+>
+  {% include "conversations/templates/message_body.html" %}
+</article>
