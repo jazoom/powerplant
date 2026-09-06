@@ -28,11 +28,7 @@ pub(super) async fn run(
     job: Arc<Job>,
 ) {
     let history = history(&record);
-    let instructions = record
-        .model
-        .as_ref()
-        .map(|model| model.instructions.as_str())
-        .unwrap_or("");
+    let instructions = instructions(&state, &record);
     let mut reply = String::new();
     let mut event_count = 0usize;
     let result = tokio::select! {
@@ -40,7 +36,7 @@ pub(super) async fn run(
         _ = job.cancelled() => Err(Failure::Cancelled),
         _ = tokio::time::sleep(Duration::from_secs(600)) => Err(Failure::Provider(ProviderError::Unreachable)),
         result = async {
-            let mut stream = state.chat.stream_turn(&connection, &history, &[], &[], instructions).await.map_err(Failure::Provider)?;
+            let mut stream = state.chat.stream_turn(&connection, &history, &[], &[], &instructions).await.map_err(Failure::Provider)?;
             while let Some(event) = tokio::select! {
                 biased;
                 _ = job.cancelled() => return Err(Failure::Cancelled),
@@ -117,6 +113,37 @@ fn append_text(reply: &mut String, text: &str) -> Result<(), Failure> {
     }
     reply.push_str(text);
     Ok(())
+}
+
+fn instructions(state: &AppState, record: &ConversationRecord) -> String {
+    let mut text = record
+        .model
+        .as_ref()
+        .map_or_else(String::new, |model| model.instructions.clone());
+    if record.projects.is_empty() {
+        return text;
+    }
+    if !text.is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str("Related project references:\n");
+    for id in &record.projects {
+        match state.projects.get(id) {
+            Some(project) if project.host_path_is_available() => {
+                text.push_str("- ");
+                text.push_str(&project.name);
+                text.push('\n');
+            }
+            Some(project) => {
+                text.push_str("- ");
+                text.push_str(&project.name);
+                text.push_str(" (unavailable)\n");
+            }
+            None => text.push_str("- Project record unavailable\n"),
+        }
+    }
+    text.push_str("These references grant no file access, tools or network access.");
+    text
 }
 
 fn history(record: &ConversationRecord) -> Vec<ChatTurn> {

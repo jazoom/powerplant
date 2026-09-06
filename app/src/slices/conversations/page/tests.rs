@@ -22,6 +22,7 @@ fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
         ModelSources {
             vault: &state.vault,
             models: &state.models_dev,
+            projects: &[],
         },
         &[],
         None,

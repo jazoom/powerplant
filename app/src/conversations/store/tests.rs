@@ -166,6 +166,69 @@ fn rename_preserves_timestamp_order_after_clock_regression() {
 }
 
 #[test]
+fn project_associations_survive_restart() {
+    let dir = tempfile::tempdir().expect("directory");
+    let first = crate::projects::ProjectId::generate().expect("first project");
+    let second = crate::projects::ProjectId::generate().expect("second project");
+    let record;
+    {
+        let store = ConversationStore::open(dir.path().to_path_buf()).expect("store");
+        let created = store.create("Discussion".to_owned()).expect("conversation");
+        let attached = store
+            .attach_project(&created.id, created.revision, first)
+            .expect("attach first");
+        record = store
+            .attach_project(&attached.id, attached.revision, second)
+            .expect("attach second");
+    }
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("reopen");
+    assert_eq!(store.get(&record.id), Some(record));
+}
+
+#[test]
+fn project_associations_are_ordered_bounded_and_revisioned() {
+    let store = ConversationStore::in_memory();
+    let record = store.create("Discussion".to_owned()).expect("conversation");
+    let first = crate::projects::ProjectId::generate().expect("first project");
+    let second = crate::projects::ProjectId::generate().expect("second project");
+    let attached = store
+        .attach_project(&record.id, record.revision, first)
+        .expect("attach first");
+    let attached = store
+        .attach_project(&record.id, attached.revision, second)
+        .expect("attach second");
+    assert_eq!(attached.projects, vec![first, second]);
+    assert_eq!(
+        store.attach_project(&attached.id, attached.revision, first),
+        Err(ConversationError::DuplicateProject)
+    );
+    assert_eq!(
+        store.detach_project(&attached.id, attached.revision - 1, first),
+        Err(ConversationError::Conflict)
+    );
+    assert_eq!(store.get(&attached.id), Some(attached.clone()));
+
+    let mut current = attached;
+    for _ in current.projects.len()..super::MAXIMUM_PROJECT_ASSOCIATIONS {
+        current = store
+            .attach_project(
+                &current.id,
+                current.revision,
+                crate::projects::ProjectId::generate().expect("project"),
+            )
+            .expect("attach within bound");
+    }
+    assert_eq!(
+        store.attach_project(
+            &current.id,
+            current.revision,
+            crate::projects::ProjectId::generate().expect("overflow project"),
+        ),
+        Err(ConversationError::Projects)
+    );
+}
+
+#[test]
 fn active_request_rejects_stale_settlement() {
     let store = ConversationStore::in_memory();
     let record = store.create("Discussion".to_owned()).expect("conversation");

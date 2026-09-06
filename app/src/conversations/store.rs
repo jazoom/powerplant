@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentId, AgentRecord};
+use crate::projects::ProjectId;
 use crate::providers::ModelSelection;
 use crate::sessions::JobId;
 
@@ -20,12 +21,14 @@ pub(crate) const MAXIMUM_TITLE_BYTES: usize = 120;
 pub(crate) const MAXIMUM_MESSAGES: usize = 512;
 pub(crate) const MAXIMUM_MESSAGE_BYTES: usize = 32 * 1024;
 pub(crate) const MAXIMUM_REPLY_BYTES: usize = 128 * 1024;
+pub(crate) const MAXIMUM_PROJECT_ASSOCIATIONS: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConversationRecord {
     pub(crate) id: ConversationId,
     pub(crate) revision: u32,
     pub(crate) title: String,
+    pub(crate) projects: Vec<ProjectId>,
     pub(crate) model: Option<ConversationModelConfiguration>,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) active_job: Option<JobId>,
@@ -106,6 +109,8 @@ pub(crate) enum ConversationError {
     Message,
     Active,
     Selection,
+    Projects,
+    DuplicateProject,
 }
 
 impl ConversationError {
@@ -124,6 +129,8 @@ impl ConversationError {
             Self::Message => "Enter a message within the conversation limit.",
             Self::Active => "This conversation has an active request. Wait for it to finish.",
             Self::Selection => "Choose an available model before you send a message.",
+            Self::Projects => "This conversation can reference at most eight projects.",
+            Self::DuplicateProject => "That project is already a context reference.",
         }
     }
 }
@@ -154,6 +161,7 @@ struct ConversationFile {
     id: String,
     revision: u32,
     title: String,
+    projects: Vec<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     model: Option<ConversationModelFile>,
     messages: Vec<MessageFile>,
@@ -225,6 +233,7 @@ impl ConversationStore {
             id,
             revision: 1,
             title,
+            projects: Vec::new(),
             model: None,
             messages: Vec::new(),
             active_job: None,
@@ -248,6 +257,45 @@ impl ConversationStore {
         let title = normalise_title(&title)?;
         self.replace(id, expected_revision, |current| {
             current.title = title;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn attach_project(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        project: ProjectId,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            if current.projects.contains(&project) {
+                return Err(ConversationError::DuplicateProject);
+            }
+            if current.projects.len() >= MAXIMUM_PROJECT_ASSOCIATIONS {
+                return Err(ConversationError::Projects);
+            }
+            current.projects.push(project);
+            Ok(())
+        })
+    }
+
+    pub(crate) fn detach_project(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        project: ProjectId,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            let Some(index) = current.projects.iter().position(|item| *item == project) else {
+                return Err(ConversationError::Missing);
+            };
+            current.projects.remove(index);
             Ok(())
         })
     }
@@ -517,6 +565,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     if file.revision == 0
         || file.updated_at_ms < file.created_at_ms
         || file.messages.len() > MAXIMUM_MESSAGES
+        || file.projects.len() > MAXIMUM_PROJECT_ASSOCIATIONS
     {
         return Err(ConversationError::Corrupt);
     }
@@ -525,6 +574,14 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         return Err(ConversationError::Corrupt);
     }
     let model = file.model.map(model_from_file).transpose()?;
+    let mut projects = Vec::with_capacity(file.projects.len());
+    for raw in file.projects {
+        let project = ProjectId::parse(&raw).ok_or(ConversationError::Corrupt)?;
+        if projects.contains(&project) {
+            return Err(ConversationError::Corrupt);
+        }
+        projects.push(project);
+    }
     let messages: Result<Vec<_>, _> = file.messages.into_iter().map(message_from_file).collect();
     let messages = messages?;
     let active_job = file.active_job.as_deref().and_then(JobId::parse);
@@ -549,6 +606,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         id,
         revision: file.revision,
         title,
+        projects,
         model,
         messages,
         active_job,
@@ -673,6 +731,7 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         id: record.id.as_hex(),
         revision: record.revision,
         title: record.title.clone(),
+        projects: record.projects.iter().map(ProjectId::as_hex).collect(),
         model: record.model.as_ref().map(model_to_file),
         messages: record
             .messages

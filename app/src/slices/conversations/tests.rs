@@ -45,6 +45,24 @@ fn cookie(token: &str) -> String {
     format!("powerplant_session={token}")
 }
 
+fn register_project(state: &AppState, name: &str) -> crate::projects::ProjectRecord {
+    let directory = tempfile::tempdir().expect("project directory");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git")
+            .success()
+    );
+    let project = state
+        .projects
+        .create(name.to_owned(), directory.path().to_path_buf())
+        .expect("project");
+    state.keep_temp_dir(directory);
+    project
+}
+
 fn document(path: &str, token: &str) -> Request<Body> {
     Request::builder()
         .uri(path)
@@ -477,6 +495,256 @@ async fn unavailable_preset_models_do_not_replace_conversation_configuration() {
             Some(&conversation)
         );
     }
+}
+
+#[tokio::test]
+async fn project_context_references_are_distinct_and_do_not_expose_paths() {
+    let mut state = test_state();
+    let backend = crate::providers::tests::ScriptedBackend::accept();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
+    let token = connected(&state);
+    let first = register_project(&state, "First project");
+    let second = register_project(&state, "Second project");
+    let conversation = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let path = format!("/conversations/{}/projects", conversation.id);
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&project={}", conversation.revision, first.id),
+        ))
+        .await
+        .expect("attach first");
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_attachment = state.conversations.get(&conversation.id).expect("attached");
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&project={}",
+                first_attachment.revision, second.id
+            ),
+        ))
+        .await
+        .expect("attach second");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("First project"));
+    assert!(body.contains("Second project"));
+    assert!(body.contains("Context reference only. File access is not granted."));
+    assert!(!body.contains(first.host_path.to_string_lossy().as_ref()));
+    assert!(!body.contains(second.host_path.to_string_lossy().as_ref()));
+    let attached = state.conversations.get(&conversation.id).expect("attached");
+    assert_eq!(attached.projects, vec![first.id, second.id]);
+    let model = "grok-4.6".to_owned();
+    let attached = state
+        .conversations
+        .select_model(
+            &attached.id,
+            attached.revision,
+            ModelSelection::new(
+                ProviderKind::Xai,
+                model.clone(),
+                state
+                    .models_dev
+                    .effective_effort(ProviderKind::Xai, &model, None),
+            )
+            .expect("model"),
+        )
+        .expect("select model");
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/messages", attached.id),
+            &token,
+            &format!("revision={}&message=Hello", attached.revision),
+        ))
+        .await
+        .expect("send");
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&attached.id)
+            .expect("conversation")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settlement");
+    let preamble = backend.last_preamble().expect("project metadata");
+    assert!(preamble.contains("First project"));
+    assert!(preamble.contains("Second project"));
+    assert!(!preamble.contains(first.host_path.to_string_lossy().as_ref()));
+    assert!(!preamble.contains(second.host_path.to_string_lossy().as_ref()));
+    assert!(backend.last_tools().is_empty());
+
+    state
+        .conversations
+        .create("Unrelated conversation".to_owned())
+        .expect("unrelated conversation");
+    let filter_path = format!("/conversations?project={}", first.id);
+    let patch = Request::builder()
+        .uri(&filter_path)
+        .header(header::COOKIE, cookie(&token))
+        .header("graft-request", "patch")
+        .header(header::ACCEPT, "text/vnd.hypergraft.patches+html")
+        .body(Body::empty())
+        .expect("patch request");
+    for request in [
+        document(&filter_path, &token),
+        navigation(&filter_path, &token),
+        patch,
+    ] {
+        let response = app(&state).oneshot(request).await.expect("filter");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = text(response).await;
+        assert!(body.contains("Discussion"));
+        assert!(!body.contains("Unrelated conversation"));
+    }
+
+    std::fs::remove_dir_all(&first.host_path).expect("remove project directory");
+    let response = app(&state)
+        .oneshot(document(&format!("/conversations/{}", attached.id), &token))
+        .await
+        .expect("unavailable project");
+    let body = text(response).await;
+    assert!(body.contains("Project unavailable."));
+    assert!(body.contains("First project"));
+    let current = state.conversations.get(&attached.id).expect("conversation");
+    let response = app(&state)
+        .oneshot(command(
+            &format!("{path}/{}", first.id),
+            &token,
+            &format!("revision={}", current.revision),
+        ))
+        .await
+        .expect("detach unavailable project");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        state
+            .conversations
+            .get(&attached.id)
+            .expect("conversation")
+            .projects,
+        vec![second.id]
+    );
+}
+
+#[tokio::test]
+async fn project_context_rejects_unknown_duplicate_stale_and_active_changes() {
+    let state = test_state();
+    let token = connected(&state);
+    let project = register_project(&state, "Project");
+    let conversation = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let path = format!("/conversations/{}/projects", conversation.id);
+
+    for submitted in [
+        "not-a-project".to_owned(),
+        crate::projects::ProjectId::generate()
+            .expect("unknown identifier")
+            .as_hex(),
+        project.host_path.to_string_lossy().into_owned(),
+    ] {
+        let response = app(&state)
+            .oneshot(command(
+                &path,
+                &token,
+                &format!("revision={}&project={submitted}", conversation.revision),
+            ))
+            .await
+            .expect("invalid project");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            state.conversations.get(&conversation.id),
+            Some(conversation.clone())
+        );
+    }
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&project={}", conversation.revision, project.id),
+        ))
+        .await
+        .expect("attach");
+    assert_eq!(response.status(), StatusCode::OK);
+    let attached = state.conversations.get(&conversation.id).expect("attached");
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&project={}", attached.revision, project.id),
+        ))
+        .await
+        .expect("duplicate");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        state.conversations.get(&conversation.id),
+        Some(attached.clone())
+    );
+
+    let detach = format!("{path}/{}", project.id);
+    let response = app(&state)
+        .oneshot(command(
+            &detach,
+            &token,
+            &format!("revision={}", conversation.revision),
+        ))
+        .await
+        .expect("stale detach");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state.conversations.get(&conversation.id),
+        Some(attached.clone())
+    );
+
+    let owner = sessions::generate_session_token().expect("owner");
+    state.sessions.insert(owner.id());
+    let job = state
+        .sessions
+        .begin_conversation_job(&owner.id(), conversation.id, 1)
+        .expect("job");
+    let selection =
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("selection");
+    state
+        .conversations
+        .begin_message(
+            &conversation.id,
+            attached.revision,
+            selection,
+            job.id(),
+            "Question".to_owned(),
+        )
+        .expect("active message");
+    let active = state.conversations.get(&conversation.id).expect("active");
+    let response = app(&state)
+        .oneshot(command(
+            &detach,
+            &token,
+            &format!("revision={}", active.revision),
+        ))
+        .await
+        .expect("active detach");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state
+            .conversations
+            .get(&conversation.id)
+            .expect("unchanged"),
+        active
+    );
 }
 
 #[tokio::test]

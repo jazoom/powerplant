@@ -15,6 +15,44 @@
         >New conversation</a
       >
     </div>
+    {% if !projects.is_empty() %}
+      <form
+        method="get"
+        action="/conversations"
+        data-graft
+        class="border-base-300 flex flex-wrap items-end gap-3 border-y py-4"
+      >
+        <label
+          class="flex min-w-56 flex-col gap-1"
+          for="conversation-project-filter"
+        >
+          <span class="text-sm">Project</span>
+          <select
+            id="conversation-project-filter"
+            class="select select-bordered"
+            name="project"
+          >
+            <option value="" {% if filter.is_empty() %}selected{% endif %}>
+              All projects
+            </option>
+            {% for project in projects %}
+              <option
+                value="{{ project.id }}"
+                {% if project.selected %}selected{% endif %}
+              >
+                {{ project.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="btn btn-secondary btn-sm" type="submit">Filter</button>
+      </form>
+    {% endif %}
+    {% if error != "" %}
+      <div class="alert alert-error" role="alert" tabindex="-1">
+        <p>{{ error }}</p>
+      </div>
+    {% endif %}
     {% if conversations.is_empty() %}
       <section class="file-section space-y-3">
         <h2 class="text-lg font-semibold">Start a conversation</h2>
@@ -150,6 +188,95 @@
             <span class="font-medium">Effective model:</span>
             {{ model_summary }}
           </p>
+        </section>
+        <section
+          class="file-section space-y-4"
+          aria-labelledby="project-context-heading"
+        >
+          <div>
+            <h2 id="project-context-heading" class="text-lg font-semibold">
+              Project context
+            </h2>
+            <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+              Project attachments identify related work. They do not grant file
+              access, tools or network access.
+            </p>
+          </div>
+          {% if attached_projects.is_empty() %}
+            <p class="text-quiet text-sm">
+              No projects are attached to this conversation.
+            </p>
+          {% else %}
+            <ul class="record-list" aria-label="Project context">
+              {% for project in attached_projects %}
+                <li class="record-row flex-wrap gap-3">
+                  <div class="min-w-0 flex-1">
+                    <p class="font-medium break-words">{{ project.name }}</p>
+                    <p class="text-quiet mt-1 text-xs">{{ project.status }}</p>
+                  </div>
+                  <form
+                    data-graft
+                    method="post"
+                    action="/conversations/{{ id }}/projects/{{ project.id }}"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ revision }}"
+                    />
+                    <button
+                      class="btn btn-ghost btn-sm"
+                      type="submit"
+                      {% if job_active || session_busy %}disabled{% endif %}
+                    >
+                      Detach
+                    </button>
+                  </form>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if project_limit_reached %}
+            <p class="text-quiet text-sm">
+              This conversation has the maximum of eight project references.
+            </p>
+          {% else if attachable_projects.is_empty() %}
+            <p class="text-quiet text-sm">
+              Register another project before you attach it here.
+            </p>
+          {% else %}
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ id }}/projects"
+              class="flex max-w-xl flex-wrap items-end gap-3"
+            >
+              <input type="hidden" name="revision" value="{{ revision }}" />
+              <label
+                class="flex min-w-56 flex-1 flex-col gap-1"
+                for="conversation-project"
+              >
+                <span class="text-sm">Attach a project</span>
+                <select
+                  id="conversation-project"
+                  class="select select-bordered"
+                  name="project"
+                  {% if job_active || session_busy %}disabled{% endif %}
+                >
+                  {% for project in attachable_projects %}
+                    <option value="{{ project.id }}">{{ project.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button
+                class="btn btn-secondary"
+                type="submit"
+                {% if job_active || session_busy %}disabled{% endif %}
+              >
+                Attach project
+              </button>
+            </form>
+          {% endif %}
         </section>
         <section
           id="transcript"

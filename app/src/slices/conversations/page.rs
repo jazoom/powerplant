@@ -6,10 +6,11 @@ mod tests;
 use crate::{
     agents::AgentRecord,
     conversations::{
-        ConversationMessage, ConversationModelConfiguration, ConversationRecord, MessageRole,
-        MessageStatus,
+        ConversationMessage, ConversationModelConfiguration, ConversationRecord,
+        MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus,
     },
     models::models_dev::ModelsDevCatalogue,
+    projects::{ProjectId, ProjectRecord},
     providers::ModelSelection,
     sessions::{JobSnapshot, JobStatus},
     vault::ProviderVault,
@@ -23,6 +24,18 @@ pub(super) struct ConversationListItem {
     pub(super) title: String,
 }
 
+pub(super) struct CatalogueProjectOption {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) selected: bool,
+}
+
+pub(super) struct ProjectContextView {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) status: &'static str,
+}
+
 #[derive(Template)]
 #[template(
     path = "conversations/templates/index.html",
@@ -30,19 +43,42 @@ pub(super) struct ConversationListItem {
 )]
 pub(super) struct CatalogueView {
     pub(super) conversations: Vec<ConversationListItem>,
+    pub(super) projects: Vec<CatalogueProjectOption>,
+    pub(super) filter: String,
+    pub(super) error: &'static str,
 }
 
 impl CatalogueView {
-    pub(super) fn from_records(records: &[ConversationRecord]) -> Self {
+    pub(super) fn from_records(
+        records: &[ConversationRecord],
+        project_records: &[ProjectRecord],
+        filter: Option<ProjectId>,
+        error: &'static str,
+    ) -> Self {
         let mut conversations: Vec<_> = records
             .iter()
+            .filter(|record| filter.is_none_or(|project| record.projects.contains(&project)))
             .map(|record| ConversationListItem {
                 id: record.id.as_hex(),
                 title: record.title.clone(),
             })
             .collect();
         conversations.sort_by(|left, right| left.title.cmp(&right.title));
-        Self { conversations }
+        let mut projects: Vec<_> = project_records
+            .iter()
+            .map(|project| CatalogueProjectOption {
+                id: project.id.as_hex(),
+                name: project.name.clone(),
+                selected: filter.is_some_and(|selected| selected == project.id),
+            })
+            .collect();
+        projects.sort_by(|left, right| left.name.cmp(&right.name));
+        Self {
+            conversations,
+            projects,
+            filter: filter.map_or_else(String::new, |project| project.as_hex()),
+            error,
+        }
     }
 }
 
@@ -90,6 +126,7 @@ pub(super) struct MessageView {
 pub(super) struct ModelSources<'a> {
     pub(super) vault: &'a ProviderVault,
     pub(super) models: &'a ModelsDevCatalogue,
+    pub(super) projects: &'a [ProjectRecord],
 }
 
 pub(super) struct PresetOption {
@@ -122,6 +159,9 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) omitted_messages: usize,
     pub(super) providers: &'a [ProviderOption],
     pub(super) presets: &'a [PresetOption],
+    pub(super) attached_projects: &'a [ProjectContextView],
+    pub(super) attachable_projects: &'a [CatalogueProjectOption],
+    pub(super) project_limit_reached: bool,
     pub(super) model_summary: &'a str,
     pub(super) model_available: bool,
     pub(super) job_id: &'a str,
@@ -143,6 +183,9 @@ pub(super) struct ConversationDetailView {
     pub(super) omitted_messages: usize,
     pub(super) providers: Vec<ProviderOption>,
     pub(super) presets: Vec<PresetOption>,
+    pub(super) attached_projects: Vec<ProjectContextView>,
+    pub(super) attachable_projects: Vec<CatalogueProjectOption>,
+    pub(super) project_limit_reached: bool,
     pub(super) model_summary: String,
     pub(super) model_available: bool,
     pub(super) job_id: String,
@@ -211,6 +254,38 @@ impl ConversationDetailView {
                     .is_some_and(|preset| preset.id == agent.id),
             })
             .collect();
+        let attached_projects = record
+            .projects
+            .iter()
+            .map(|id| match sources.projects.iter().find(|project| project.id == *id) {
+                Some(project) if project.host_path_is_available() => ProjectContextView {
+                    id: id.as_hex(),
+                    name: project.name.clone(),
+                    status: "Context reference only. File access is not granted.",
+                },
+                Some(project) => ProjectContextView {
+                    id: id.as_hex(),
+                    name: project.name.clone(),
+                    status: "Project unavailable. It remains a context reference without file access.",
+                },
+                None => ProjectContextView {
+                    id: id.as_hex(),
+                    name: "Project record unavailable".to_owned(),
+                    status: "This context reference has no file access.",
+                },
+            })
+            .collect();
+        let mut attachable_projects: Vec<_> = sources
+            .projects
+            .iter()
+            .filter(|project| !record.projects.contains(&project.id))
+            .map(|project| CatalogueProjectOption {
+                id: project.id.as_hex(),
+                name: project.name.clone(),
+                selected: false,
+            })
+            .collect();
+        attachable_projects.sort_by(|left, right| left.name.cmp(&right.name));
         let model_summary = configuration.map_or_else(
             || "No model selected".to_owned(),
             |configuration| {
@@ -251,6 +326,9 @@ impl ConversationDetailView {
             model_available: selection.is_some(),
             providers,
             presets,
+            attached_projects,
+            attachable_projects,
+            project_limit_reached: record.projects.len() >= MAXIMUM_PROJECT_ASSOCIATIONS,
             model_summary,
             job_id,
             cursor,
@@ -270,6 +348,9 @@ impl ConversationDetailView {
             omitted_messages: self.omitted_messages,
             providers: &self.providers,
             presets: &self.presets,
+            attached_projects: &self.attached_projects,
+            attachable_projects: &self.attachable_projects,
+            project_limit_reached: self.project_limit_reached,
             model_summary: &self.model_summary,
             model_available: self.model_available,
             job_id: &self.job_id,

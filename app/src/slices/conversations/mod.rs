@@ -19,6 +19,7 @@ use crate::{
         ConversationError, ConversationId, ConversationModelConfiguration, ConversationRecord,
     },
     error::{AppError, AppResult},
+    projects::ProjectId,
     providers::{ModelSelection, ProviderKind, ThinkingEffort},
     responses,
     sessions::{JobId, RequiredSession},
@@ -46,6 +47,14 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/preset",
             post(apply_preset),
+        )
+        .route(
+            "/conversations/{conversation_id}/projects",
+            post(attach_project),
+        )
+        .route(
+            "/conversations/{conversation_id}/projects/{project_id}",
+            post(detach_project),
         )
         .route(
             "/conversations/{conversation_id}/rename",
@@ -93,6 +102,18 @@ struct PresetForm {
     preset: String,
 }
 
+#[derive(Deserialize)]
+struct ProjectForm {
+    revision: String,
+    project: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CatalogueQuery {
+    project: String,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct ObserveQuery {
@@ -104,8 +125,19 @@ async fn catalogue(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: GraftRequest,
+    Query(query): Query<CatalogueQuery>,
 ) -> AppResult<Response> {
-    render_catalogue(&state, graft)
+    let filter = if query.project.is_empty() {
+        None
+    } else {
+        ProjectId::parse(&query.project).filter(|project| state.projects.get(project).is_some())
+    };
+    let error = if query.project.is_empty() || filter.is_some() {
+        ""
+    } else {
+        "Choose a project from the catalogue."
+    };
+    render_catalogue(&state, graft, filter, error)
 }
 
 async fn new_conversation(
@@ -504,6 +536,162 @@ async fn apply_preset(
     }
 }
 
+async fn attach_project(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<ProjectForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    if state.sessions.busy(&session.0) {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Another command is active in this browser session.",
+            ),
+        );
+    }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(project) =
+        ProjectId::parse(&form.project).filter(|project| state.projects.get(project).is_some())
+    else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose a project from the catalogue.",
+            ),
+        );
+    };
+    match state
+        .conversations
+        .attach_project(&record.id, revision, project)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("store project context", error))
+        }
+        Err(ConversationError::Conflict) => {
+            let latest = state.conversations.get(&record.id).unwrap_or(record);
+            render_detail_command(
+                graft,
+                PatchStatus::Conflict,
+                detail_view(
+                    &state,
+                    session.0,
+                    &latest,
+                    &latest.title,
+                    ConversationError::Conflict.message(),
+                ),
+            )
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
+}
+
+async fn detach_project(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path((conversation_id, project_id)): Path<(String, String)>,
+    Form(form): Form<RevisionForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    if state.sessions.busy(&session.0) {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Another command is active in this browser session.",
+            ),
+        );
+    }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(project) = ProjectId::parse(&project_id) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "That project reference is invalid.",
+            ),
+        );
+    };
+    match state
+        .conversations
+        .detach_project(&record.id, revision, project)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("store project context", error))
+        }
+        Err(ConversationError::Conflict) => {
+            let latest = state.conversations.get(&record.id).unwrap_or(record);
+            render_detail_command(
+                graft,
+                PatchStatus::Conflict,
+                detail_view(
+                    &state,
+                    session.0,
+                    &latest,
+                    &latest.title,
+                    ConversationError::Conflict.message(),
+                ),
+            )
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
+}
+
 async fn rename_conversation(
     State(state): State<AppState>,
     session: RequiredSession,
@@ -685,6 +873,7 @@ fn detail_view(
         ModelSources {
             vault: &state.vault,
             models: &state.models_dev,
+            projects: &state.projects.list(),
         },
         &state.agents.list(),
         snapshot.as_ref(),
@@ -711,13 +900,27 @@ fn status_for(error: ConversationError) -> PatchStatus {
         _ => PatchStatus::UnprocessableEntity,
     }
 }
-fn render_catalogue(state: &AppState, graft: GraftRequest) -> AppResult<Response> {
+fn render_catalogue(
+    state: &AppState,
+    graft: GraftRequest,
+    filter: Option<ProjectId>,
+    error: &'static str,
+) -> AppResult<Response> {
     render_page(
         state,
         graft,
-        PatchStatus::Ok,
+        if error.is_empty() {
+            PatchStatus::Ok
+        } else {
+            PatchStatus::UnprocessableEntity
+        },
         page::CATALOGUE_TITLE,
-        &CatalogueView::from_records(&state.conversations.list()),
+        &CatalogueView::from_records(
+            &state.conversations.list(),
+            &state.projects.list(),
+            filter,
+            error,
+        ),
     )
 }
 
