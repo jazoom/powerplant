@@ -2,8 +2,8 @@ use super::{
     ONE_AGENT_V1, PLAN_A_CHANGE_V1, SEQUENTIAL_TEAM_V1, SeedKey, WorkflowSeed,
     correctness_security_definition, implement_and_review_definition,
     implement_with_approval_definition, one_agent_definition, plan_a_change_definition,
-    review_current_code_definition, review_until_approved_definition, review_with_fixes_definition,
-    sequential_team_definition,
+    plan_then_implement_definition, review_current_code_definition,
+    review_until_approved_definition, review_with_fixes_definition, sequential_team_definition,
 };
 use crate::agents::ToolId;
 use crate::tests::test_environment_id;
@@ -45,14 +45,15 @@ fn first_open_seeds_ordinary_workflows_once() {
             "Implement and review".to_owned(),
             "Implement with approval".to_owned(),
             "Plan a change".to_owned(),
+            "Plan then implement".to_owned(),
             "Review current code".to_owned(),
         ]
     );
-    assert_eq!(first.applied_seed_count(), 4);
+    assert_eq!(first.applied_seed_count(), 5);
     let ids: Vec<_> = first.list().into_iter().map(|record| record.id).collect();
     let second = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
-    assert_eq!(second.list().len(), 4);
-    assert_eq!(second.applied_seed_count(), 4);
+    assert_eq!(second.list().len(), 5);
+    assert_eq!(second.applied_seed_count(), 5);
     let reopened: Vec<_> = second.list().into_iter().map(|record| record.id).collect();
     assert_eq!(reopened, ids);
 }
@@ -73,7 +74,7 @@ fn restart_preserves_an_edited_seeded_workflow() {
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     let loaded = reopened.get(&seeded.id).expect("loaded");
     assert_eq!(loaded.definition.name(), "Edited plan");
-    assert_eq!(reopened.applied_seed_count(), 4);
+    assert_eq!(reopened.applied_seed_count(), 5);
 }
 
 #[test]
@@ -92,15 +93,16 @@ fn restart_does_not_restore_a_deleted_seeded_workflow() {
     let remaining = vec![
         "Implement and review".to_owned(),
         "Implement with approval".to_owned(),
+        "Plan then implement".to_owned(),
         "Review current code".to_owned(),
     ];
     assert_eq!(names(&catalogue), remaining);
     assert!(catalogue.retired_ids().contains(&seeded.id));
-    assert_eq!(catalogue.applied_seed_count(), 4);
+    assert_eq!(catalogue.applied_seed_count(), 5);
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     assert_eq!(names(&reopened), remaining);
     assert!(reopened.retired_ids().contains(&seeded.id));
-    assert_eq!(reopened.applied_seed_count(), 4);
+    assert_eq!(reopened.applied_seed_count(), 5);
 }
 
 #[test]
@@ -123,6 +125,7 @@ fn a_present_seed_key_is_not_reapplied_from_code() {
             "Custom".to_owned(),
             "Implement and review".to_owned(),
             "Implement with approval".to_owned(),
+            "Plan then implement".to_owned(),
             "Review current code".to_owned(),
         ]
     );
@@ -168,6 +171,7 @@ fn production_seed_keys_are_stable() {
             "review-current-code-v1",
             "implement-with-approval-v1",
             "implement-and-review-v1",
+            "plan-then-implement-v1",
         ]
     );
 }
@@ -241,6 +245,63 @@ fn code_changing_starters_require_human_approval_before_commit() {
             .iter()
             .any(|input| input.kind == ArtefactKind::HumanDecision)
     );
+}
+
+#[test]
+fn plan_then_implement_accepts_a_plan_before_code_and_keeps_code_approval_separate() {
+    let definition = plan_then_implement_definition(test_environment_id());
+    let checkpoint = definition
+        .steps()
+        .iter()
+        .find(|step| step.name == "Accept the plan")
+        .expect("plan checkpoint");
+    let StepAction::HumanGate(action) = &checkpoint.action else {
+        panic!("plan checkpoint action");
+    };
+    assert_eq!(action.required_output.kind, OutputKind::PlanDecision);
+    assert!(
+        checkpoint
+            .inputs
+            .iter()
+            .all(|input| input.kind == ArtefactKind::Plan)
+    );
+    let implementation = definition
+        .steps()
+        .iter()
+        .find(|step| step.name == "Implement the accepted plan")
+        .expect("implementation");
+    assert!(
+        implementation
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::PlanDecision)
+    );
+    let commit = definition.steps().last().expect("commit");
+    assert!(
+        commit
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::HumanDecision)
+    );
+    assert!(
+        !commit
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::PlanDecision)
+    );
+    let automatic = definition
+        .with_commit_policy(crate::workflows::definition::CommitPolicy::AutomaticAfterReview)
+        .expect("automatic commit after code review");
+    let gates: Vec<_> = automatic
+        .steps()
+        .iter()
+        .filter_map(|step| match &step.action {
+            StepAction::HumanGate(gate) => Some(gate),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gates.len(), 1);
+    assert!(gates[0].is_plan_checkpoint());
 }
 
 #[test]

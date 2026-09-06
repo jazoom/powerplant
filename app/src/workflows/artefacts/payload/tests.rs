@@ -47,6 +47,34 @@ fn payload_bounds_and_nul_text_are_rejected() {
 }
 
 #[test]
+fn plan_decisions_bind_an_exact_plan_and_use_a_distinct_payload() {
+    let (_, _, plan) = encode_plan("# Plan\n", None).expect("plan");
+    let (bytes, _, decision_hash) = encode_plan_decision(
+        plan,
+        crate::workflows::gates::PlanDecisionKind::Accepted,
+        None,
+        1,
+        None,
+    )
+    .expect("decision");
+    assert_ne!(plan, decision_hash);
+    let TypedPayload::PlanDecision(decision) =
+        parse_typed_payload(ArtefactKind::PlanDecision, &bytes).expect("parsed decision")
+    else {
+        panic!("plan decision payload");
+    };
+    assert_eq!(decision.plan, plan.as_str());
+    assert_eq!(
+        decision.decision,
+        crate::workflows::gates::PlanDecisionKind::Accepted
+    );
+    assert_eq!(
+        parse_typed_payload(ArtefactKind::PlanDecision, br#"{"format-version":1,"plan":"bad","decision":"accepted","note":null,"decided-at-ms":1}"#).err(),
+        Some(PayloadError::Format)
+    );
+}
+
+#[test]
 fn duplicate_fields_are_rejected() {
     let bytes = br#"{"format-version":1,"markdown":"a","markdown":"b"}"#;
     assert_eq!(

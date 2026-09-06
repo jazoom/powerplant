@@ -34,6 +34,157 @@ fn app(state: &AppState) -> axum::Router {
 }
 
 #[test]
+fn plan_checkpoint_rejects_code_decisions_and_stale_plan_hashes() {
+    use crate::workflows::definition::{ArtefactKind, StepKey};
+
+    let environment = crate::tests::test_environment_id();
+    let definition = workflows::seeds::plan_then_implement_definition(environment);
+    let pinned = workflows::definition::PinnedWorkflowDefinition::pin(None, definition.clone());
+    let project = crate::projects::ProjectId::parse(&"a".repeat(32)).expect("project");
+    let agent = crate::agents::AgentId::generate().expect("agent");
+    let mut run = workflows::WorkflowRun::create(
+        workflows::RunId::generate().expect("run"),
+        1,
+        project,
+        agent,
+        RunKind::Configured,
+        pinned,
+        crate::tests::test_environment_set(&definition),
+    );
+    run.state = workflows::run::RunState::Ready {
+        step: StepKey::parse("plan-acceptance").expect("checkpoint"),
+    };
+    let store = crate::workflows::WorkflowArtefactRepository::in_memory();
+    let (plan_bytes, plan_object, plan_hash) =
+        crate::workflows::artefacts::payload::encode_plan("Exact plan", None).expect("plan");
+    let plan = crate::workflows::artefacts::ArtefactReference {
+        id: crate::workflows::ArtefactId::generate().expect("plan id"),
+        kind: ArtefactKind::Plan,
+        artefact_hash: plan_hash,
+    };
+    run.artefacts
+        .push(crate::workflows::artefacts::ArtefactRecord {
+            id: plan.id,
+            kind: plan.kind,
+            artefact_hash: plan.artefact_hash,
+            object_hash: plan_object,
+            payload_bytes: plan_bytes.len() as u64,
+            created_at_ms: 2,
+            provenance: crate::workflows::artefacts::ArtefactProvenance {
+                run_id: run.id,
+                producer: crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+                    attempt_id: crate::workflows::AttemptId::generate().expect("attempt"),
+                    step: StepKey::parse("planner").expect("planner"),
+                    output: Some(
+                        crate::workflows::definition::OutputKey::parse("plan").expect("output"),
+                    ),
+                    disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+                },
+                inputs: Vec::new(),
+            },
+            summary: crate::workflows::artefacts::ArtefactSummary::Plan { markdown_bytes: 10 },
+        });
+    let gate = run
+        .open_plan_gate(
+            workflows::GateId::generate().expect("gate"),
+            plan.clone(),
+            2,
+        )
+        .expect("plan gate");
+    assert!(super::load_gate_plan(&run, &gate, &store).is_none());
+    store.publish(&plan_bytes).expect("publish plan");
+    assert_eq!(
+        super::load_gate_plan(&run, &gate, &store).as_deref(),
+        Some("Exact plan")
+    );
+    let (_bytes, object_hash, artefact_hash) = crate::workflows::artefacts::encode_plan_decision(
+        plan.artefact_hash,
+        crate::workflows::gates::PlanDecisionKind::Accepted,
+        None,
+        3,
+        None,
+    )
+    .expect("plan decision");
+    let decision = super::plan_decision_record(
+        &run,
+        &gate,
+        crate::workflows::gates::PlanDecisionKind::Accepted,
+        3,
+        object_hash,
+        artefact_hash,
+        1,
+    )
+    .expect("plan decision record");
+    let code_decision = crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().expect("code decision id"),
+        kind: ArtefactKind::HumanDecision,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::of(b"kind", b"code"),
+        object_hash: crate::workflows::artefacts::ObjectHash::of(b"code"),
+        payload_bytes: 4,
+        created_at_ms: 3,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id: run.id,
+            producer: crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+            inputs: Vec::new(),
+        },
+        summary: crate::workflows::artefacts::ArtefactSummary::HumanDecision {
+            candidate: crate::workflows::artefacts::CandidateHash::of(b"candidate"),
+            diff_base: crate::workflows::artefacts::CandidateHash::of(b"base"),
+            decision: crate::workflows::gates::HumanDecisionKind::Approved,
+        },
+    };
+    assert!(
+        run.decide_gate(
+            gate.id,
+            gate.revision,
+            code_decision,
+            crate::workflows::gates::HumanDecisionKind::Approved,
+            None,
+            None,
+            3,
+        )
+        .is_err()
+    );
+    let mut accepted = run.clone();
+    accepted
+        .decide_plan_gate(
+            gate.id,
+            gate.revision,
+            decision.clone(),
+            crate::workflows::gates::PlanDecisionKind::Accepted,
+            None,
+            None,
+            4,
+        )
+        .expect("accept plan");
+    assert!(matches!(
+        accepted.state,
+        workflows::run::RunState::Ready { .. }
+    ));
+
+    run.gates[0].candidate.artefact_hash =
+        crate::workflows::artefacts::ArtefactHash::of(b"plan", b"changed plan");
+    run.gates[0].diff_base = run.gates[0].candidate.clone();
+    assert!(super::load_gate_plan(&run, &run.gates[0], &store).is_none());
+    assert!(
+        run.decide_plan_gate(
+            gate.id,
+            gate.revision,
+            decision,
+            crate::workflows::gates::PlanDecisionKind::Accepted,
+            None,
+            None,
+            4,
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        run.state,
+        workflows::run::RunState::AwaitingHuman { .. }
+    ));
+}
+
+#[test]
 fn decision_forms_reject_duplicate_and_blank_revision_fields() {
     let duplicate = vec![
         ("gate-revision".to_owned(), "1".to_owned()),

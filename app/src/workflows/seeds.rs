@@ -13,6 +13,7 @@ pub(crate) const PLAN_A_CHANGE_V1: &str = "plan-a-change-v1";
 pub(crate) const REVIEW_CURRENT_CODE_V1: &str = "review-current-code-v1";
 pub(crate) const IMPLEMENT_WITH_APPROVAL_V1: &str = "implement-with-approval-v1";
 pub(crate) const IMPLEMENT_AND_REVIEW_V1: &str = "implement-and-review-v1";
+pub(crate) const PLAN_THEN_IMPLEMENT_V1: &str = "plan-then-implement-v1";
 
 #[cfg(test)]
 pub(crate) const ONE_AGENT_V1: &str = "one-agent-v1";
@@ -71,6 +72,10 @@ pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<Workfl
         (
             IMPLEMENT_AND_REVIEW_V1,
             implement_and_review_definition(default_environment),
+        ),
+        (
+            PLAN_THEN_IMPLEMENT_V1,
+            plan_then_implement_definition(default_environment),
         ),
     ]
     .into_iter()
@@ -154,6 +159,110 @@ pub(crate) fn implement_with_approval_definition(
         default_environment,
         roles,
         vec![implementer, approval, commit],
+    )
+}
+
+pub(crate) fn plan_then_implement_definition(
+    default_environment: EnvironmentId,
+) -> WorkflowDefinition {
+    let roles = vec![
+        role(
+            "planner",
+            "Planner",
+            "Inspects the project and prepares the first plan.",
+            "Inspect the project and produce a plan. Do not change the candidate.",
+        ),
+        role(
+            "plan-reviewer",
+            "Plan reviewer",
+            "Reviews and corrects the exact plan before acceptance.",
+            "Review the exact plan. Correct it when needed and explain the result. Do not change the candidate.",
+        ),
+        role(
+            "implementer",
+            "Implementer",
+            "Applies the accepted plan to an isolated candidate.",
+            "Apply the accepted plan. Submit the complete candidate for review.",
+        ),
+        role(
+            "reviewer",
+            "Reviewer",
+            "Checks the candidate for correctness, security and regressions.",
+            "Review this exact candidate. Do not change it. Submit a structured review.",
+        ),
+    ];
+    let planner = agent_step(
+        "planner",
+        "Prepare the plan",
+        "planner",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![initial_candidate_input()],
+        vec![assistant_output(), output("plan", OutputKind::Plan)],
+        None,
+    );
+    let plan_review = agent_step(
+        "plan-review",
+        "Review and correct the plan",
+        "plan-reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![
+            initial_candidate_input(),
+            RequiredInput {
+                key: InputKey::parse("plan").expect("plan input"),
+                kind: ArtefactKind::Plan,
+                source: ArtefactSource::RunCurrentPlan,
+            },
+        ],
+        vec![assistant_output(), output("plan", OutputKind::Plan)],
+        None,
+    );
+    let plan_checkpoint = plan_checkpoint_step("plan-review", "plan");
+    let implementer = agent_step(
+        "implementer",
+        "Implement the accepted plan",
+        "implementer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![
+            current_candidate_input(),
+            input("plan", ArtefactKind::Plan, "plan-review", "plan"),
+            input(
+                "plan-decision",
+                ArtefactKind::PlanDecision,
+                "plan-acceptance",
+                "plan-decision",
+            ),
+        ],
+        vec![assistant_output(), candidate_revision_output()],
+        None,
+    );
+    let reviewer = agent_step(
+        "reviewer",
+        "Review the implementation",
+        "reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), review_output()],
+        None,
+    );
+    let approval = human_approval_step("implementer", Some("reviewer"));
+    let commit = commit_with_approval("implementer", Some("reviewer"), "approval");
+    definition(
+        "Plan then implement",
+        default_environment,
+        roles,
+        vec![
+            planner,
+            plan_review,
+            plan_checkpoint,
+            implementer,
+            reviewer,
+            approval,
+            commit,
+        ],
     )
 }
 
@@ -611,6 +720,22 @@ fn commit_step(candidate_step: &str, review_step: &str) -> StepDefinition {
             command: SystemCommandId::CommitCandidate,
             environment: StepEnvironment::WorkflowDefault,
             required_outputs: vec![output("committed-candidate", OutputKind::CandidateRevision)],
+        }),
+        review: None,
+    }
+}
+
+fn plan_checkpoint_step(plan_step: &str, plan_output: &str) -> StepDefinition {
+    StepDefinition {
+        key: StepKey::parse("plan-acceptance").expect("plan checkpoint"),
+        name: "Accept the plan".to_owned(),
+        inputs: vec![input("plan", ArtefactKind::Plan, plan_step, plan_output)],
+        action: StepAction::HumanGate(HumanGateStep {
+            required_output: output("plan-decision", OutputKind::PlanDecision),
+            revision: Some(HumanRevisionPolicy {
+                revision_target: StepKey::parse(plan_step).expect("plan revision target"),
+                attempt_limit: 3,
+            }),
         }),
         review: None,
     }

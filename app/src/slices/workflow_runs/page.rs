@@ -883,6 +883,7 @@ fn next_candidate_hash(
             crate::workflows::run::RunSource::Captured { source } => &source.accepted,
             crate::workflows::run::RunSource::Pending => return None,
         },
+        crate::workflows::definition::ArtefactSource::RunCurrentPlan => return None,
         crate::workflows::definition::ArtefactSource::LaunchInput { .. } => return None,
         crate::workflows::definition::ArtefactSource::StepOutput { step, output } => {
             &run.attempts
@@ -1082,6 +1083,15 @@ fn artefact_body(kind: crate::workflows::definition::ArtefactKind, bytes: Vec<u8
         Ok(crate::workflows::artefacts::TypedPayload::HumanDecision(decision)) => {
             let note = decision.note.unwrap_or_default();
             crate::markdown::escape_plain(&format!("{}\n{}", decision.decision.as_label(), note))
+        }
+        Ok(crate::workflows::artefacts::TypedPayload::PlanDecision(decision)) => {
+            let note = decision.note.unwrap_or_default();
+            crate::markdown::escape_plain(&format!(
+                "{}\n{}\nPlan: {}",
+                decision.decision.as_label(),
+                note,
+                decision.plan
+            ))
         }
         Err(_) => match String::from_utf8(bytes) {
             Ok(text) => crate::markdown::escape_plain(&text),

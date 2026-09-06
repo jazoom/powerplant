@@ -1,4 +1,4 @@
-use super::artefacts::{ArtefactReference, CandidateHash};
+use super::artefacts::{ArtefactHash, ArtefactReference, CandidateHash};
 use super::definition::{OutputKey, StepKey};
 use super::id::GateId;
 
@@ -68,6 +68,22 @@ impl HumanDecisionKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PlanDecisionKind {
+    Accepted,
+    RevisionRequested,
+}
+
+impl PlanDecisionKind {
+    pub(crate) fn as_label(self) -> &'static str {
+        match self {
+            Self::Accepted => "Plan accepted",
+            Self::RevisionRequested => "Plan changes requested",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct HumanDecisionPayload {
@@ -75,6 +91,16 @@ pub(crate) struct HumanDecisionPayload {
     pub(crate) candidate: String,
     pub(crate) diff_base: String,
     pub(crate) decision: HumanDecisionKind,
+    pub(crate) note: Option<String>,
+    pub(crate) decided_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct PlanDecisionPayload {
+    pub(crate) format_version: u32,
+    pub(crate) plan: String,
+    pub(crate) decision: PlanDecisionKind,
     pub(crate) note: Option<String>,
     pub(crate) decided_at_ms: u64,
 }
@@ -98,4 +124,8 @@ pub(crate) fn hashes(payload: &HumanDecisionPayload) -> Option<(CandidateHash, C
         CandidateHash::parse(&payload.candidate)?,
         CandidateHash::parse(&payload.diff_base)?,
     ))
+}
+
+pub(crate) fn plan_hash(payload: &PlanDecisionPayload) -> Option<ArtefactHash> {
+    ArtefactHash::parse(&payload.plan)
 }

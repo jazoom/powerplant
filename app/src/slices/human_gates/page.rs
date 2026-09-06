@@ -26,6 +26,9 @@ pub(super) struct TextRow {
 #[template(path = "human_gates/templates/detail.html")]
 pub(super) struct GatePage {
     pub(super) run_id: String,
+    pub(super) plan_gate: bool,
+    pub(super) plan_text: String,
+    pub(super) plan_bytes: u64,
     pub(super) gate_id: String,
     pub(super) gate_name: String,
     pub(super) position: usize,
@@ -62,31 +65,38 @@ impl GatePage {
     pub(super) fn new(
         run: &WorkflowRun,
         gate: &HumanGateRecord,
-        diff: CandidateDiff,
+        diff: Option<CandidateDiff>,
+        plan_text: Option<String>,
         store: &crate::workflows::WorkflowArtefactRepository,
         query: super::forms::DiffQuery,
         error: &'static str,
     ) -> Option<Self> {
-        let start = query.page.checked_mul(MANIFEST_PAGE_SIZE)?;
-        let (total, page) = diff.manifest_page(start, MANIFEST_PAGE_SIZE).ok()?;
-        let end = start + page.len();
+        let plan_gate = gate.candidate.kind == crate::workflows::definition::ArtefactKind::Plan;
         let root = format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex());
-        let changes = page
-            .iter()
-            .enumerate()
-            .map(|(offset, change)| {
-                let index = start + offset;
-                ChangeRow {
-                    path: change.path.clone(),
-                    status: change.status,
-                    old: facts(change.old.as_ref()),
-                    new: facts(change.new.as_ref()),
-                    href: format!("{root}?page={}&change={index}", query.page),
-                    base_download: download(&root, "base", index, change.old.as_ref()),
-                    target_download: download(&root, "target", index, change.new.as_ref()),
-                }
-            })
-            .collect();
+        let (start, total, end, changes) = if let Some(diff) = diff.as_ref() {
+            let start = query.page.checked_mul(MANIFEST_PAGE_SIZE)?;
+            let (total, page) = diff.manifest_page(start, MANIFEST_PAGE_SIZE).ok()?;
+            let end = start + page.len();
+            let changes = page
+                .iter()
+                .enumerate()
+                .map(|(offset, change)| {
+                    let index = start + offset;
+                    ChangeRow {
+                        path: change.path.clone(),
+                        status: change.status,
+                        old: facts(change.old.as_ref()),
+                        new: facts(change.new.as_ref()),
+                        href: format!("{root}?page={}&change={index}", query.page),
+                        base_download: download(&root, "base", index, change.old.as_ref()),
+                        target_download: download(&root, "target", index, change.new.as_ref()),
+                    }
+                })
+                .collect();
+            (start, total, end, changes)
+        } else {
+            (0, 0, 0, Vec::new())
+        };
         let mut selected_path = String::new();
         let mut text = Vec::new();
         let mut text_previous = String::new();
@@ -94,6 +104,7 @@ impl GatePage {
         let mut binary = false;
         let mut text_too_large = false;
         if let Some(index) = query.change {
+            let diff = diff.as_ref()?;
             let change = diff.change(index, store).ok()?;
             selected_path = change.path.clone();
             binary = change.binary;
@@ -144,6 +155,15 @@ impl GatePage {
             && (run.kind != RunKind::QuickTask || run.conversation_id.is_some());
         Some(Self {
             run_id: run.id.as_hex(),
+            plan_gate,
+            plan_text: plan_text.unwrap_or_default(),
+            plan_bytes: if plan_gate {
+                run.artefact(&gate.candidate.id)
+                    .map(|record| record.payload_bytes)
+                    .unwrap_or(0)
+            } else {
+                0
+            },
             gate_id: gate.id.as_hex(),
             gate_name: run.pinned.definition.step(&gate.step)?.name.clone(),
             position: run
@@ -154,8 +174,16 @@ impl GatePage {
                 .position(|step| step.key == gate.step)?
                 + 1,
             state: state_label(gate.state),
-            base: diff.base.as_str(),
-            target: diff.target.as_str(),
+            base: if plan_gate {
+                gate.candidate.artefact_hash.as_str()
+            } else {
+                diff.as_ref()?.base.as_str()
+            },
+            target: if plan_gate {
+                gate.candidate.artefact_hash.as_str()
+            } else {
+                diff.as_ref()?.target.as_str()
+            },
             review_href: format!(
                 "/conversations/candidate-review?run={}&candidate={}&diff_base={}",
                 run.id.as_hex(),

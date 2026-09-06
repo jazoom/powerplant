@@ -243,6 +243,39 @@ fn purpose_edits_preserve_optional_connections_and_empty_tool_ceiling() {
 }
 
 #[test]
+fn plan_checkpoint_phase_keeps_plan_decision_distinct_from_code_approval() {
+    let (mut form, _) = WorkflowFormState::parse(purpose_only_pairs()).expect("form");
+    form.apply(FormIntent::SetPhasePurpose {
+        step: 0,
+        purpose: PhasePurpose::Planning,
+    })
+    .expect("planning");
+    form.apply(FormIntent::AddPhase(PhasePurpose::PlanReview))
+        .expect("plan review");
+    form.apply(FormIntent::AddPhase(PhasePurpose::PlanCheckpoint))
+        .expect("plan checkpoint");
+    form.apply(FormIntent::AddPhase(PhasePurpose::Implementation))
+        .expect("implementation");
+    let definition = form.to_definition().expect("definition");
+    let checkpoint = &definition.steps()[3];
+    assert!(matches!(
+        checkpoint.action,
+        crate::workflows::definition::StepAction::HumanGate(ref action)
+            if action.is_plan_checkpoint()
+    ));
+    assert_eq!(
+        checkpoint.required_outputs()[0].kind,
+        crate::workflows::definition::OutputKind::PlanDecision
+    );
+    assert!(
+        definition.steps()[4]
+            .inputs
+            .iter()
+            .any(|input| input.kind == crate::workflows::definition::ArtefactKind::PlanDecision)
+    );
+}
+
+#[test]
 fn purpose_change_allocates_a_distinct_role_and_preserves_invalid_values() {
     let (mut form, _) = WorkflowFormState::parse(purpose_only_pairs()).expect("parse");
     form.apply(FormIntent::AddPhase(PhasePurpose::CodeApproval))

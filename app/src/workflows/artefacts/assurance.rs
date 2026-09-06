@@ -24,6 +24,7 @@ pub(crate) fn candidate_constraint(payload: &TypedPayload) -> Option<CandidateHa
         TypedPayload::Review(report) => CandidateHash::parse(&report.candidate),
         TypedPayload::Test(report) => CandidateHash::parse(&report.candidate),
         TypedPayload::HumanDecision(decision) => CandidateHash::parse(&decision.candidate),
+        TypedPayload::PlanDecision(_) => None,
     }
 }
 

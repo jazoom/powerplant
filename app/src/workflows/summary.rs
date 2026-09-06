@@ -23,6 +23,7 @@ pub(crate) enum ProcessAction {
     Model(CandidateAuthority),
     Command(SystemCommandId),
     Approval,
+    PlanApproval,
     Invalid,
 }
 
@@ -67,6 +68,13 @@ impl ProcessPhase {
                 "Changes no project files by itself.",
                 "A safe pause. The candidate remains available for inspection.",
             ),
+            ProcessAction::PlanApproval => (
+                "Plan checkpoint",
+                "A person reviews the exact plan and records acceptance or requested changes."
+                    .to_owned(),
+                "Changes no project files and does not approve code.",
+                "A safe pause. The exact plan remains available for inspection.",
+            ),
             ProcessAction::Invalid => (
                 "Incomplete phase",
                 "This phase needs a valid action.".to_owned(),
@@ -83,6 +91,8 @@ impl ProcessPhase {
             context: context.to_owned(),
             approval: if matches!(action, ProcessAction::Approval) {
                 "Approval stop. The exact candidate needs a human decision."
+            } else if matches!(action, ProcessAction::PlanApproval) {
+                "Plan checkpoint. The exact plan needs human acceptance."
             } else {
                 "No approval stop."
             }
@@ -109,10 +119,25 @@ pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPh
             let action = match &step.action {
                 StepAction::Agent(agent) => ProcessAction::Model(agent.candidate_authority),
                 StepAction::SystemCommand(command) => ProcessAction::Command(command.command),
+                StepAction::HumanGate(action) if action.is_plan_checkpoint() => {
+                    ProcessAction::PlanApproval
+                }
                 StepAction::HumanGate(_) => ProcessAction::Approval,
             };
             let mut phase = ProcessPhase::new(index + 1, step.name.clone(), action);
             phase.approval = match &step.action {
+                StepAction::HumanGate(action) if action.is_plan_checkpoint() => {
+                    match &action.revision {
+                        Some(policy) => format_plan_revision(
+                            definition,
+                            &policy.revision_target,
+                            policy.attempt_limit,
+                        ),
+                        None => {
+                            "Plan checkpoint. The exact plan needs human acceptance.".to_owned()
+                        }
+                    }
+                }
                 StepAction::HumanGate(action) => match &action.revision {
                     Some(policy) => format_revision(
                         true,
@@ -137,6 +162,20 @@ pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPh
         .collect()
 }
 
+fn format_plan_revision(
+    definition: &WorkflowDefinition,
+    target: &super::definition::StepKey,
+    attempt_limit: u8,
+) -> String {
+    let target = definition
+        .step(target)
+        .map(|step| step.name.as_str())
+        .unwrap_or("the earlier planning phase");
+    format!(
+        "Plan checkpoint. Request changes returns to {target}. Maximum {attempt_limit} attempts, including the first attempt."
+    )
+}
+
 fn format_revision(
     human: bool,
     definition: &WorkflowDefinition,
@@ -158,6 +197,7 @@ pub(crate) fn process_summary(definition: &WorkflowDefinition) -> String {
             let action = match &step.action {
                 StepAction::Agent(_) => "model phase",
                 StepAction::SystemCommand(_) => "system action",
+                StepAction::HumanGate(action) if action.is_plan_checkpoint() => "plan checkpoint",
                 StepAction::HumanGate(_) => "human approval",
             };
             format!("{} ({action})", step.name)
@@ -192,28 +232,48 @@ pub(crate) fn code_effects(definition: &WorkflowDefinition) -> String {
 }
 
 pub(crate) fn approval_stops(definition: &WorkflowDefinition) -> String {
-    let human_stops: Vec<_> = definition
+    let stops: Vec<_> = definition
         .steps()
         .iter()
         .filter_map(|step| {
             let StepAction::HumanGate(action) = &step.action else {
                 return None;
             };
-            Some(match &action.revision {
-                Some(policy) => format!(
-                    "{} with request changes to {}",
-                    step.name,
-                    definition
-                        .step(&policy.revision_target)
-                        .map(|target| target.name.as_str())
-                        .unwrap_or("the earlier implementation")
-                ),
-                None => step.name.to_owned(),
-            })
+            let target = action.revision.as_ref().map(|policy| {
+                definition
+                    .step(&policy.revision_target)
+                    .map(|target| target.name.as_str())
+                    .unwrap_or("the earlier phase")
+            });
+            Some((
+                action.is_plan_checkpoint(),
+                target
+                    .map(|target| format!("{} with request changes to {target}", step.name))
+                    .unwrap_or_else(|| step.name.to_owned()),
+            ))
         })
         .collect();
-    if !human_stops.is_empty() {
-        format!("Human approval at {}", human_stops.join(", "))
+    if !stops.is_empty() {
+        let plan: Vec<_> = stops
+            .iter()
+            .filter(|(is_plan, _)| *is_plan)
+            .map(|(_, stop)| stop.clone())
+            .collect();
+        let code: Vec<_> = stops
+            .iter()
+            .filter(|(is_plan, _)| !*is_plan)
+            .map(|(_, stop)| stop.clone())
+            .collect();
+        match (plan.is_empty(), code.is_empty()) {
+            (false, false) => format!(
+                "Plan acceptance at {}; human approval at {}",
+                plan.join(", "),
+                code.join(", ")
+            ),
+            (false, true) => format!("Plan acceptance at {}", plan.join(", ")),
+            (true, false) => format!("Human approval at {}", code.join(", ")),
+            (true, true) => unreachable!(),
+        }
     } else {
         match definition.commit_policy() {
             crate::workflows::definition::CommitPolicy::AutomaticAfterReview => {

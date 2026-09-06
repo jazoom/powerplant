@@ -399,30 +399,45 @@ pub(crate) async fn execute_run(
                     return;
                 }
             }
-            let Some(candidate) = inputs
+            let plan_checkpoint = matches!(
+                &step.action,
+                StepAction::HumanGate(action) if action.is_plan_checkpoint()
+            );
+            let subject = inputs
                 .iter()
                 .find(|input| {
                     input.artefact.kind
-                        == crate::workflows::definition::ArtefactKind::CandidateRevision
+                        == if plan_checkpoint {
+                            crate::workflows::definition::ArtefactKind::Plan
+                        } else {
+                            crate::workflows::definition::ArtefactKind::CandidateRevision
+                        }
                 })
-                .map(|input| input.artefact.clone())
-            else {
+                .map(|input| input.artefact.clone());
+            let Some(subject) = subject else {
                 settle_job(
                     &state,
                     &job,
                     JobStatus::Failed,
-                    Some("A human gate needs a candidate input."),
+                    Some(if plan_checkpoint {
+                        "A plan checkpoint needs a plan input."
+                    } else {
+                        "A human gate needs a candidate input."
+                    }),
                 );
                 return;
             };
-            let crate::workflows::RunSource::Captured { source } = &run.source else {
-                settle_job(
-                    &state,
-                    &job,
-                    JobStatus::Failed,
-                    Some(OPERATIONAL_STORE_ERROR),
-                );
-                return;
+            let initial = match &run.source {
+                crate::workflows::RunSource::Captured { source } => source.initial.clone(),
+                crate::workflows::RunSource::Pending => {
+                    settle_job(
+                        &state,
+                        &job,
+                        JobStatus::Failed,
+                        Some(OPERATIONAL_STORE_ERROR),
+                    );
+                    return;
+                }
             };
             let Ok(gate_id) = crate::workflows::GateId::generate() else {
                 settle_job(
@@ -434,8 +449,13 @@ pub(crate) async fn execute_run(
                 return;
             };
             let opened = state.workflow_runs.mutate(&job.run_id, |run| {
-                run.open_gate(gate_id, candidate.clone(), source.initial.clone(), now_ms())
-                    .map(|_| ())
+                if plan_checkpoint {
+                    run.open_plan_gate(gate_id, subject.clone(), now_ms())
+                        .map(|_| ())
+                } else {
+                    run.open_gate(gate_id, subject.clone(), initial.clone(), now_ms())
+                        .map(|_| ())
+                }
             });
             if opened.is_err() {
                 settle_job(
@@ -2565,6 +2585,9 @@ fn resolve_inputs(
                 };
                 source.accepted.clone()
             }
+            crate::workflows::definition::ArtefactSource::RunCurrentPlan => {
+                run.current_plan().ok_or("The current plan is missing.")?
+            }
             crate::workflows::definition::ArtefactSource::LaunchInput { source } => run
                 .artefacts
                 .iter()
@@ -2675,7 +2698,8 @@ fn candidate_hash_of(
         crate::workflows::artefacts::ArtefactSummary::Candidate { candidate, .. }
         | crate::workflows::artefacts::ArtefactSummary::Review { candidate, .. }
         | crate::workflows::artefacts::ArtefactSummary::Test { candidate, .. } => Some(*candidate),
-        crate::workflows::artefacts::ArtefactSummary::Plan { .. } => None,
+        crate::workflows::artefacts::ArtefactSummary::Plan { .. }
+        | crate::workflows::artefacts::ArtefactSummary::PlanDecision { .. } => None,
         crate::workflows::artefacts::ArtefactSummary::HumanDecision { candidate, .. } => {
             Some(*candidate)
         }

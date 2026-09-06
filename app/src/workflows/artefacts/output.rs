@@ -80,7 +80,8 @@ impl OutputDrafts {
             },
             OutputKind::AssistantReply
             | OutputKind::CandidateRevision
-            | OutputKind::HumanDecision => {
+            | OutputKind::HumanDecision
+            | OutputKind::PlanDecision => {
                 return Err(OutputDraftError::Kind);
             }
         };

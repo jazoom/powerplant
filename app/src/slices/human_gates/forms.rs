@@ -4,6 +4,7 @@ use crate::workflows::gates::{GateRevision, normalise_revision_note};
 pub(super) struct DecisionForm {
     pub(super) revision: GateRevision,
     pub(super) candidate: String,
+    pub(super) plan: String,
     pub(super) note: Option<String>,
     pub(super) conversation_surface: bool,
 }
@@ -21,6 +22,7 @@ impl DecisionForm {
     ) -> Result<Self, FormError> {
         let mut revision = None;
         let mut candidate = None;
+        let mut plan = None;
         let mut note = None;
         let mut conversation_surface = false;
         let mut seen = Vec::new();
@@ -32,6 +34,7 @@ impl DecisionForm {
             match key.as_str() {
                 "gate-revision" => revision = GateRevision::parse(&value),
                 "candidate" => candidate = Some(value),
+                "plan" => plan = Some(value),
                 "note" if requires_note => note = normalise_revision_note(&value),
                 "surface" if value == "conversation" => conversation_surface = true,
                 _ => return Err(FormError::Invalid),
@@ -42,10 +45,15 @@ impl DecisionForm {
         }
         let candidate = candidate
             .filter(|value| !value.is_empty())
-            .ok_or(FormError::Invalid)?;
+            .unwrap_or_default();
+        let plan = plan.filter(|value| !value.is_empty()).unwrap_or_default();
+        if candidate.is_empty() == plan.is_empty() {
+            return Err(FormError::Invalid);
+        }
         Ok(Self {
             revision: revision.ok_or(FormError::Invalid)?,
             candidate,
+            plan,
             note,
             conversation_surface,
         })

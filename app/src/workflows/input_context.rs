@@ -646,12 +646,13 @@ fn verify_revision_feedback(
     let super::run::RunSource::Captured { source } = &run.source else {
         return Err(InputContextError::Source);
     };
+    let plan_revision = reservation.candidate.kind == ArtefactKind::Plan;
     if reservation.target != step.key
         || gate.state != super::gates::HumanGateState::RevisionRequested
         || gate.decision.as_ref() != Some(&reservation.decision)
         || gate.candidate != reservation.candidate
         || gate.diff_base != reservation.diff_base
-        || source.initial != reservation.diff_base
+        || (!plan_revision && source.initial != reservation.diff_base)
         || !resolved
             .iter()
             .any(|input| input.artefact == reservation.candidate)
@@ -664,7 +665,11 @@ fn verify_revision_feedback(
     let declared = RequiredInput {
         key: super::definition::InputKey::parse("human-revision-feedback")
             .expect("revision input key"),
-        kind: ArtefactKind::HumanDecision,
+        kind: if plan_revision {
+            ArtefactKind::PlanDecision
+        } else {
+            ArtefactKind::HumanDecision
+        },
         source: ArtefactSource::StepOutput {
             step: gate.step.clone(),
             output: gate.output.clone(),
@@ -686,27 +691,39 @@ fn verify_revision_feedback(
     let bytes = store
         .get(&record.object_hash)
         .map_err(|_| InputContextError::Missing)?;
-    let TypedPayload::HumanDecision(decision) =
-        parse_typed_payload(record.kind, &bytes).map_err(map_payload)?
-    else {
-        return Err(InputContextError::Kind);
-    };
-    let candidate = run
-        .artefact(&reservation.candidate.id)
-        .and_then(super::artefacts::ArtefactRecord::candidate_hash)
-        .ok_or(InputContextError::Changed)?;
-    let base = run
-        .artefact(&reservation.diff_base.id)
-        .and_then(super::artefacts::ArtefactRecord::candidate_hash)
-        .ok_or(InputContextError::Changed)?;
-    if decision.decision != super::gates::HumanDecisionKind::RevisionRequested
-        || decision.candidate != candidate.as_str()
-        || decision.diff_base != base.as_str()
-        || decision.note.as_deref() != Some(reservation.feedback.as_str())
-    {
-        return Err(InputContextError::Changed);
+    let payload = parse_typed_payload(record.kind, &bytes).map_err(map_payload)?;
+    if plan_revision {
+        let TypedPayload::PlanDecision(decision) = payload else {
+            return Err(InputContextError::Kind);
+        };
+        if decision.decision != super::gates::PlanDecisionKind::RevisionRequested
+            || decision.plan != reservation.candidate.artefact_hash.as_str()
+            || decision.note.as_deref() != Some(reservation.feedback.as_str())
+        {
+            return Err(InputContextError::Changed);
+        }
+        Ok(decision.note)
+    } else {
+        let TypedPayload::HumanDecision(decision) = payload else {
+            return Err(InputContextError::Kind);
+        };
+        let candidate = run
+            .artefact(&reservation.candidate.id)
+            .and_then(super::artefacts::ArtefactRecord::candidate_hash)
+            .ok_or(InputContextError::Changed)?;
+        let base = run
+            .artefact(&reservation.diff_base.id)
+            .and_then(super::artefacts::ArtefactRecord::candidate_hash)
+            .ok_or(InputContextError::Changed)?;
+        if decision.decision != super::gates::HumanDecisionKind::RevisionRequested
+            || decision.candidate != candidate.as_str()
+            || decision.diff_base != base.as_str()
+            || decision.note.as_deref() != Some(reservation.feedback.as_str())
+        {
+            return Err(InputContextError::Changed);
+        }
+        Ok(decision.note)
     }
-    Ok(decision.note)
 }
 
 pub(crate) fn verify_inputs(
@@ -725,6 +742,31 @@ pub(crate) fn verify_inputs(
             return Err(InputContextError::Source);
         }
         verified.push(verify_one(run, declared, resolved, store, &mut imported)?);
+    }
+    let plan_decisions: Vec<_> = verified
+        .iter()
+        .filter(|input| input.kind == ArtefactKind::PlanDecision)
+        .collect();
+    if !plan_decisions.is_empty() {
+        let plans: Vec<_> = verified
+            .iter()
+            .filter(|input| input.kind == ArtefactKind::Plan)
+            .collect();
+        if plans.len() != 1
+            || plan_decisions.iter().any(|input| {
+                !run.artefact(&input.artefact_id).is_some_and(|record| {
+                    matches!(
+                        record.summary,
+                        ArtefactSummary::PlanDecision {
+                            plan,
+                            decision: super::gates::PlanDecisionKind::Accepted,
+                        } if plan == plans[0].artefact_hash
+                    )
+                })
+            })
+        {
+            return Err(InputContextError::Changed);
+        }
     }
     let decisions: Vec<_> = verified
         .iter()
@@ -790,6 +832,12 @@ pub(crate) fn format_agent_context(inputs: &[VerifiedInput], writes_source: bool
                 "Context: prior review only. Its verdict grants no candidate authority.".to_owned(),
             );
         }
+        if input.kind == ArtefactKind::PlanDecision {
+            lines.push(
+                "Context: the plan checkpoint accepted this exact plan. It grants no code approval."
+                    .to_owned(),
+            );
+        }
         if let Some(text) = &input.text {
             lines.push(String::new());
             lines.push(text.clone());
@@ -802,6 +850,12 @@ pub(crate) fn format_agent_context(inputs: &[VerifiedInput], writes_source: bool
         sections.push(lines.join("\n"));
     }
     let direction = if writes_source
+        && inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::PlanDecision)
+    {
+        "The accepted plan is task direction. Apply it to produce the complete candidate."
+    } else if writes_source
         && inputs
             .iter()
             .any(|input| input.kind == ArtefactKind::Plan && input.producer_step.is_none())
@@ -855,6 +909,12 @@ fn verify_one(
                 return Err(InputContextError::Source);
             };
             if source.accepted != resolved.artefact {
+                return Err(InputContextError::Source);
+            }
+        }
+        (ArtefactSource::RunCurrentPlan, _) => {
+            let current = run.current_plan().ok_or(InputContextError::Source)?;
+            if current != resolved.artefact {
                 return Err(InputContextError::Source);
             }
         }
@@ -914,12 +974,13 @@ fn verify_one(
         ArtefactKind::Plan
         | ArtefactKind::ReviewReport
         | ArtefactKind::TestReport
-        | ArtefactKind::HumanDecision => {
+        | ArtefactKind::HumanDecision
+        | ArtefactKind::PlanDecision => {
             let payload = parse_typed_payload(record.kind, &bytes).map_err(map_payload)?;
-            let schema = if record.kind == ArtefactKind::HumanDecision {
-                super::artefacts::payload::HUMAN_DECISION_SCHEMA
-            } else {
-                super::artefacts::payload::PLAN_SCHEMA
+            let schema = match record.kind {
+                ArtefactKind::HumanDecision => super::artefacts::payload::HUMAN_DECISION_SCHEMA,
+                ArtefactKind::PlanDecision => super::artefacts::payload::PLAN_DECISION_SCHEMA,
+                _ => super::artefacts::payload::PLAN_SCHEMA,
             };
             let hash = super::artefacts::artefact_hash_for(record.kind, schema, &bytes);
             if hash != record.artefact_hash {
@@ -948,6 +1009,21 @@ fn verify_one(
                             .ok_or(InputContextError::Changed)?,
                     ),
                 ),
+                TypedPayload::PlanDecision(decision) => {
+                    let plan =
+                        super::gates::plan_hash(&decision).ok_or(InputContextError::Changed)?;
+                    if !matches!(
+                        &record.summary,
+                        ArtefactSummary::PlanDecision { plan: bound, decision: kind }
+                            if *bound == plan && *kind == decision.decision
+                    ) {
+                        return Err(InputContextError::Changed);
+                    }
+                    (
+                        format!("Plan decision: {}", decision.decision.as_label()),
+                        None,
+                    )
+                }
             };
             *imported = imported
                 .checked_add(markdown.len())

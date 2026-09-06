@@ -869,6 +869,31 @@ fn commit_approval_rejects_decision_provenance_mismatches() {
 }
 
 #[test]
+fn commit_rejects_plan_acceptance_as_code_assurance() {
+    let store = store();
+    let (run, _, reference, _, _dir) = captured_candidate(&store);
+    let commit = commit_step(&run);
+    let plan_decision = AttemptArtefactInput {
+        key: InputKey::parse("decision").expect("key"),
+        artefact: ArtefactReference {
+            id: ArtefactId::generate().expect("id"),
+            kind: ArtefactKind::PlanDecision,
+            artefact_hash: artefact_hash_for(ArtefactKind::PlanDecision, 1, b"plan decision"),
+        },
+    };
+    assert_eq!(
+        require_commit_approval(
+            &run,
+            &commit,
+            &[candidate_input(&reference), plan_decision],
+            &store,
+        )
+        .err(),
+        Some(CommitError::Assurance)
+    );
+}
+
+#[test]
 fn project_drift_stops_a_commit_before_host_application() {
     let store = store();
     let (_, _, _, initial, dir) = captured_candidate(&store);

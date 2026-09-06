@@ -173,6 +173,7 @@ pub(super) struct StepRow {
     pub(super) instructions_error: &'static str,
     pub(super) is_agent: bool,
     pub(super) is_gate: bool,
+    pub(super) plan_checkpoint: bool,
     pub(super) environment: String,
     pub(super) environment_error: &'static str,
     pub(super) environment_hint: String,
@@ -455,6 +456,7 @@ fn step_row(
     let input_count = step.inputs.len();
     let is_agent = step.action == "agent";
     let is_gate = step.action == "human-gate";
+    let plan_checkpoint = PhasePurpose::parse(&step.purpose) == Some(PhasePurpose::PlanCheckpoint);
     let command_id = crate::workflows::definition::SystemCommandId::parse(&step.command);
     let show_outputs = is_agent
         || is_gate
@@ -475,6 +477,8 @@ fn step_row(
         purpose_error: errors.purpose,
         purpose_choices: [
             PhasePurpose::Planning,
+            PhasePurpose::PlanReview,
+            PhasePurpose::PlanCheckpoint,
             PhasePurpose::Implementation,
             PhasePurpose::ReadOnlyReview,
             PhasePurpose::ReviewAndFix,
@@ -495,6 +499,7 @@ fn step_row(
         instructions_error: errors.instructions,
         is_agent,
         is_gate,
+        plan_checkpoint,
         environment: step.environment.clone(),
         environment_error: errors.environment,
         environment_hint: String::new(),
@@ -658,6 +663,9 @@ fn draft_process_overview(steps: &[StepDraft]) -> Vec<ProcessPhase> {
                     "read-only" => ProcessAction::Model(CandidateAuthority::ReadOnly),
                     _ => ProcessAction::Invalid,
                 },
+                "human-gate" if step.outputs.iter().any(|output| {
+                    output.kind == "plan-decision"
+                }) => ProcessAction::PlanApproval,
                 "human-gate" => ProcessAction::Approval,
                 "system-command" => SystemCommandId::parse(&step.command)
                     .map(ProcessAction::Command)
@@ -680,7 +688,15 @@ fn draft_process_overview(steps: &[StepDraft]) -> Vec<ProcessPhase> {
                     .position(|step| step.key == *target)
                     .map(|index| format!("phase {} ({})", index + 1, steps[index].name))
                     .unwrap_or_else(|| "an unavailable phase".to_owned());
-                phase.approval = summary::revision_summary(human, &destination, limit);
+                phase.approval = if step.outputs.iter().any(|output| {
+                    output.kind == "plan-decision"
+                }) {
+                    format!(
+                        "Plan checkpoint. Request changes returns to {destination}. Maximum {limit} attempts, including the first attempt."
+                    )
+                } else {
+                    summary::revision_summary(human, &destination, limit)
+                };
             }
             phase
         })
@@ -695,6 +711,17 @@ fn source_options(earlier: &[StepDraft], kind: &str, current: &str) -> Vec<Sourc
             label: "Saved plan selected at launch".to_owned(),
             selected: current == "launch-input:saved-plan",
         });
+        if super::forms::source_is_valid(
+            "run-current-plan",
+            crate::workflows::definition::ArtefactKind::Plan,
+            earlier,
+        ) {
+            options.push(SourceOption {
+                value: "run-current-plan".to_owned(),
+                label: "Current plan from this workflow".to_owned(),
+                selected: current == "run-current-plan",
+            });
+        }
     }
     if kind == "candidate-revision" {
         options.push(SourceOption {

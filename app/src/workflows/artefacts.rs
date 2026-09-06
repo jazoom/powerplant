@@ -19,7 +19,7 @@ pub(crate) use id::{ArtefactHash, CandidateHash, ObjectHash};
 pub(crate) use materialise::CandidateMaterialise;
 pub(crate) use payload::{
     ReviewVerdict, TestOutcome, TypedPayload, artefact_hash_for, encode_human_decision,
-    parse_typed_payload,
+    encode_plan_decision, parse_typed_payload,
 };
 pub(crate) use store::{ArtefactStoreError, WorkflowArtefactRepository};
 
@@ -110,6 +110,10 @@ pub(crate) enum ArtefactSummary {
         diff_base: CandidateHash,
         decision: crate::workflows::gates::HumanDecisionKind,
     },
+    PlanDecision {
+        plan: ArtefactHash,
+        decision: crate::workflows::gates::PlanDecisionKind,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,7 +178,7 @@ impl ArtefactRecord {
             | ArtefactSummary::Test { candidate, .. }
             | ArtefactSummary::Candidate { candidate, .. }
             | ArtefactSummary::HumanDecision { candidate, .. } => Some(*candidate),
-            ArtefactSummary::Plan { .. } => None,
+            ArtefactSummary::Plan { .. } | ArtefactSummary::PlanDecision { .. } => None,
         }
     }
 
@@ -220,6 +224,9 @@ impl ArtefactRecord {
                 decision,
                 ..
             } => format!("{} · {}", decision.as_label(), candidate.short()),
+            ArtefactSummary::PlanDecision { plan, decision } => {
+                format!("{} · {}", decision.as_label(), plan.short())
+            }
             ArtefactSummary::Plan { .. } => String::new(),
         }
     }

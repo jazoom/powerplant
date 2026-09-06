@@ -80,21 +80,42 @@ async fn detail(
             "That diff page is not valid.",
         );
     };
-    let Ok(diff) = crate::workflows::artefacts::CandidateDiff::load(
+    let (diff, plan_text) =
+        if gate.candidate.kind == crate::workflows::definition::ArtefactKind::Plan {
+            let Some(plan) = load_gate_plan(&run, gate, &state.workflow_artefacts) else {
+                return static_error(
+                    PatchStatus::UnprocessableEntity,
+                    graft,
+                    &state,
+                    "The immutable plan is unavailable.",
+                );
+            };
+            (None, Some(plan))
+        } else {
+            let Ok(diff) = crate::workflows::artefacts::CandidateDiff::load(
+                &run,
+                &gate.diff_base,
+                &gate.candidate,
+                &state.workflow_artefacts,
+            ) else {
+                return static_error(
+                    PatchStatus::UnprocessableEntity,
+                    graft,
+                    &state,
+                    "The immutable candidate diff is unavailable.",
+                );
+            };
+            (Some(diff), None)
+        };
+    let Some(view) = page::GatePage::new(
         &run,
-        &gate.diff_base,
-        &gate.candidate,
+        gate,
+        diff,
+        plan_text,
         &state.workflow_artefacts,
+        query,
+        "",
     ) else {
-        return static_error(
-            PatchStatus::UnprocessableEntity,
-            graft,
-            &state,
-            "The immutable candidate diff is unavailable.",
-        );
-    };
-    let Some(view) = page::GatePage::new(&run, gate, diff, &state.workflow_artefacts, query, "")
-    else {
         return static_error(
             PatchStatus::UnprocessableEntity,
             graft,
@@ -264,13 +285,22 @@ async fn decide(
             error_target,
         );
     };
-    let target = run
-        .artefact(&gate.candidate.id)
-        .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
-        .map(|hash| hash.as_str());
+    let plan_gate = gate.candidate.kind == crate::workflows::definition::ArtefactKind::Plan;
+    let target = if plan_gate {
+        Some(gate.candidate.artefact_hash.as_str())
+    } else {
+        run.artefact(&gate.candidate.id)
+            .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
+            .map(|hash| hash.as_str())
+    };
+    let submitted_target = if plan_gate {
+        form.plan.as_str()
+    } else {
+        form.candidate.as_str()
+    };
     if gate.state != crate::workflows::gates::HumanGateState::AwaitingDecision
         || gate.revision != form.revision
-        || target.as_deref() != Some(form.candidate.as_str())
+        || target.as_deref() != Some(submitted_target)
         || !state.gate_continuations.available(&run_id, &session)
     {
         return command_error_for_run(
@@ -281,19 +311,35 @@ async fn decide(
             form.conversation_surface,
         );
     }
-    let Ok(diff) = crate::workflows::artefacts::CandidateDiff::load(
-        &run,
-        &gate.diff_base,
-        &gate.candidate,
-        &state.workflow_artefacts,
-    ) else {
-        return command_error_for_run(
-            graft,
-            PatchStatus::Conflict,
-            "The immutable candidate diff is unavailable.",
+    let diff = if plan_gate {
+        if !matches!(action, DecisionAction::Cancel)
+            && load_gate_plan(&run, gate, &state.workflow_artefacts).is_none()
+        {
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "The immutable plan is unavailable.",
+                &run,
+                form.conversation_surface,
+            );
+        }
+        None
+    } else {
+        let Ok(diff) = crate::workflows::artefacts::CandidateDiff::load(
             &run,
-            form.conversation_surface,
-        );
+            &gate.diff_base,
+            &gate.candidate,
+            &state.workflow_artefacts,
+        ) else {
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "The immutable candidate diff is unavailable.",
+                &run,
+                form.conversation_surface,
+            );
+        };
+        Some(diff)
     };
 
     if matches!(action, DecisionAction::Revision) {
@@ -440,6 +486,134 @@ async fn decide(
         return Ok(responses::command_navigation(&destination));
     }
 
+    if plan_gate {
+        let kind = if matches!(action, DecisionAction::Approve) {
+            crate::workflows::gates::PlanDecisionKind::Accepted
+        } else {
+            crate::workflows::gates::PlanDecisionKind::RevisionRequested
+        };
+        let reserved_attempt = if matches!(action, DecisionAction::Revision) {
+            match crate::workflows::AttemptId::generate() {
+                Ok(attempt) => Some(attempt),
+                Err(_) => {
+                    if let Some((agent, execution)) = leases {
+                        drop(agent);
+                        drop(execution);
+                    }
+                    return_continuation(&state, continuation, reservation_acquired);
+                    return command_error_for_run(
+                        graft,
+                        PatchStatus::Conflict,
+                        "Power Plant could not prepare the plan revision. Try again.",
+                        &run,
+                        form.conversation_surface,
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let connection = continuation
+            .active_connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .unwrap_or_else(|| continuation.connection.clone());
+        let secret = match connection.auth {
+            crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
+            crate::providers::AuthMethod::Plan => None,
+        };
+        let decided_at = crate::workflows::now_ms();
+        let Ok((bytes, object_hash, artefact_hash)) =
+            crate::workflows::artefacts::encode_plan_decision(
+                gate.candidate.artefact_hash,
+                kind,
+                form.note.as_deref(),
+                decided_at,
+                secret,
+            )
+        else {
+            return_continuation(&state, continuation, reservation_acquired);
+            return command_error_for_run(
+                graft,
+                PatchStatus::UnprocessableEntity,
+                "That plan decision note is not valid.",
+                &run,
+                form.conversation_surface,
+            );
+        };
+        if state.workflow_artefacts.publish(&bytes) != Ok(object_hash) {
+            return_continuation(&state, continuation, reservation_acquired);
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "Power Plant could not store the plan decision. Try again.",
+                &run,
+                form.conversation_surface,
+            );
+        }
+        let Some(record) = plan_decision_record(
+            &run,
+            gate,
+            kind,
+            decided_at,
+            object_hash,
+            artefact_hash,
+            bytes.len() as u64,
+        ) else {
+            return_continuation(&state, continuation, reservation_acquired);
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "That plan checkpoint is unavailable.",
+                &run,
+                form.conversation_surface,
+            );
+        };
+        let changed = state.workflow_runs.mutate(&run_id, |run| {
+            run.decide_plan_gate(
+                gate_id,
+                form.revision,
+                record,
+                kind,
+                if matches!(
+                    kind,
+                    crate::workflows::gates::PlanDecisionKind::RevisionRequested
+                ) {
+                    form.note.clone()
+                } else {
+                    None
+                },
+                reserved_attempt,
+                decided_at,
+            )
+        });
+        let Ok(changed) = changed else {
+            return_continuation(&state, continuation, reservation_acquired);
+            return command_error_for_run(
+                graft,
+                PatchStatus::Conflict,
+                "That checkpoint is stale. Reload it.",
+                &run,
+                form.conversation_surface,
+            );
+        };
+        if let Some((agent, execution)) = leases {
+            if changed.is_terminal() {
+                crate::workflows::settle_terminal_job(&state, &continuation, &changed);
+            } else {
+                continuation.job.resume();
+                tokio::spawn(crate::workflows::execute_run(
+                    state.clone(),
+                    continuation,
+                    agent,
+                    execution,
+                ));
+            }
+        }
+        return Ok(responses::command_navigation(&destination));
+    }
+
     let kind = if matches!(action, DecisionAction::Approve) {
         crate::workflows::gates::HumanDecisionKind::Approved
     } else {
@@ -477,6 +651,7 @@ async fn decide(
         crate::providers::AuthMethod::Plan => None,
     };
     let decided_at = crate::workflows::now_ms();
+    let diff = diff.expect("candidate gate diff");
     let encoded = crate::workflows::artefacts::encode_human_decision(
         diff.target,
         diff.base,
@@ -608,6 +783,7 @@ fn decision_record(
                     _ => return None,
                 }
             }
+            crate::workflows::definition::ArtefactSource::RunCurrentPlan => run.current_plan()?,
             crate::workflows::definition::ArtefactSource::LaunchInput { source } => {
                 run.artefacts.iter().rev().find_map(|record| {
                     matches!(
@@ -666,6 +842,75 @@ fn decision_record(
         summary: crate::workflows::artefacts::ArtefactSummary::HumanDecision {
             candidate: run.artefact(&gate.candidate.id)?.candidate_hash()?,
             diff_base: run.artefact(&gate.diff_base.id)?.candidate_hash()?,
+            decision,
+        },
+    })
+}
+
+fn load_gate_plan(
+    run: &crate::workflows::WorkflowRun,
+    gate: &crate::workflows::gates::HumanGateRecord,
+    store: &crate::workflows::WorkflowArtefactRepository,
+) -> Option<String> {
+    let record = run.artefact(&gate.candidate.id)?;
+    if record.kind != crate::workflows::definition::ArtefactKind::Plan
+        || record.artefact_hash != gate.candidate.artefact_hash
+        || record.provenance.run_id != run.id
+    {
+        return None;
+    }
+    let bytes = store.get(&record.object_hash).ok()?;
+    let crate::workflows::artefacts::TypedPayload::Plan(plan) =
+        crate::workflows::artefacts::parse_typed_payload(record.kind, &bytes).ok()?
+    else {
+        return None;
+    };
+    if crate::workflows::artefacts::ObjectHash::of(&bytes) != record.object_hash
+        || crate::workflows::artefacts::artefact_hash_for(record.kind, plan.format_version, &bytes)
+            != record.artefact_hash
+    {
+        return None;
+    }
+    Some(plan.markdown)
+}
+
+fn plan_decision_record(
+    run: &crate::workflows::WorkflowRun,
+    gate: &crate::workflows::gates::HumanGateRecord,
+    decision: crate::workflows::gates::PlanDecisionKind,
+    at: u64,
+    object_hash: crate::workflows::artefacts::ObjectHash,
+    artefact_hash: crate::workflows::artefacts::ArtefactHash,
+    bytes: u64,
+) -> Option<crate::workflows::artefacts::ArtefactRecord> {
+    let step = run.pinned.definition.step(&gate.step)?;
+    if !matches!(
+        &step.action,
+        crate::workflows::definition::StepAction::HumanGate(action)
+            if action.is_plan_checkpoint()
+    ) || gate.candidate.kind != crate::workflows::definition::ArtefactKind::Plan
+        || gate.diff_base != gate.candidate
+    {
+        return None;
+    }
+    Some(crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().ok()?,
+        kind: crate::workflows::definition::ArtefactKind::PlanDecision,
+        artefact_hash,
+        object_hash,
+        payload_bytes: bytes,
+        created_at_ms: at,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id: run.id,
+            producer: crate::workflows::artefacts::ArtefactProducer::HumanGate {
+                gate_id: gate.id,
+                step: gate.step.clone(),
+                output: gate.output.clone(),
+            },
+            inputs: vec![gate.candidate.clone()],
+        },
+        summary: crate::workflows::artefacts::ArtefactSummary::PlanDecision {
+            plan: gate.candidate.artefact_hash,
             decision,
         },
     })

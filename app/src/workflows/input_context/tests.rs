@@ -186,6 +186,126 @@ fn implementer_candidate_producer() -> ArtefactProducer {
 }
 
 #[test]
+fn plan_acceptance_requires_the_same_plan_and_an_accepted_payload() {
+    use crate::workflows::gates::PlanDecisionKind;
+
+    let store = store();
+    let mut run = run();
+    let definition = crate::workflows::seeds::plan_then_implement_definition(test_environment_id());
+    let mut step = definition
+        .step(&StepKey::parse("implementer").expect("step"))
+        .expect("implementation")
+        .clone();
+    step.inputs
+        .retain(|input| input.kind != ArtefactKind::CandidateRevision);
+    let producer = ArtefactProducer::StepAttempt {
+        attempt_id: AttemptId::generate().expect("attempt"),
+        step: StepKey::parse("plan-review").expect("step"),
+        output: Some(OutputKey::parse("plan").expect("output")),
+        disposition: ProductionDisposition::RequiredOutput,
+    };
+    let plan = publish_plan(&mut run, &store, producer.clone(), "The accepted plan.");
+    let changed = publish_plan(&mut run, &store, producer, "A different plan.");
+    for kind in [
+        PlanDecisionKind::Accepted,
+        PlanDecisionKind::RevisionRequested,
+    ] {
+        let note = (kind == PlanDecisionKind::RevisionRequested).then_some("Correct the plan.");
+        let (bytes, object_hash, artefact_hash) =
+            payload::encode_plan_decision(plan.artefact_hash, kind, note, 2, None)
+                .expect("decision");
+        store.publish(&bytes).expect("publish");
+        let decision = ArtefactRecord {
+            id: ArtefactId::generate().expect("decision id"),
+            kind: ArtefactKind::PlanDecision,
+            artefact_hash,
+            object_hash,
+            payload_bytes: bytes.len() as u64,
+            created_at_ms: 2,
+            provenance: ArtefactProvenance {
+                run_id: run.id,
+                producer: ArtefactProducer::HumanGate {
+                    gate_id: crate::workflows::GateId::generate().expect("gate"),
+                    step: StepKey::parse("plan-acceptance").expect("step"),
+                    output: OutputKey::parse("plan-decision").expect("output"),
+                },
+                inputs: vec![input_of("plan", &plan).artefact],
+            },
+            summary: ArtefactSummary::PlanDecision {
+                plan: plan.artefact_hash,
+                decision: kind,
+            },
+        };
+        run.artefacts.push(decision.clone());
+        let inputs = vec![
+            input_of("plan", &plan),
+            input_of("plan-decision", &decision),
+        ];
+        if kind == PlanDecisionKind::Accepted {
+            assert!(verify_inputs(&run, &step, &inputs, &store).is_ok());
+            assert_eq!(
+                verify_inputs(
+                    &run,
+                    &step,
+                    &[input_of("plan", &changed), inputs[1].clone()],
+                    &store
+                )
+                .err(),
+                Some(InputContextError::Changed),
+            );
+        } else {
+            assert_eq!(
+                verify_inputs(&run, &step, &inputs, &store).err(),
+                Some(InputContextError::Changed)
+            );
+            run.artefacts.last_mut().expect("decision").summary = ArtefactSummary::PlanDecision {
+                plan: plan.artefact_hash,
+                decision: PlanDecisionKind::Accepted,
+            };
+            assert_eq!(
+                verify_inputs(&run, &step, &inputs, &store).err(),
+                Some(InputContextError::Changed)
+            );
+        }
+    }
+}
+
+#[test]
+fn plan_revision_uses_the_rejected_plan_instead_of_an_unrelated_later_output() {
+    let store = store();
+    let mut run = run();
+    let definition = crate::workflows::seeds::plan_then_implement_definition(test_environment_id());
+    let mut step = definition
+        .step(&StepKey::parse("plan-review").expect("step"))
+        .expect("plan review")
+        .clone();
+    step.inputs.retain(|input| input.kind == ArtefactKind::Plan);
+    let rejected = publish_plan(&mut run, &store, planner_plan_producer(), "Rejected plan.");
+    let unrelated = publish_plan(&mut run, &store, planner_plan_producer(), "Another plan.");
+    run.revision_reservation = Some(crate::workflows::run::RevisionReservation {
+        attempt: AttemptId::generate().expect("attempt"),
+        gate: crate::workflows::GateId::generate().expect("gate"),
+        target: step.key.clone(),
+        decision: ArtefactReference {
+            id: ArtefactId::generate().expect("decision"),
+            kind: ArtefactKind::PlanDecision,
+            artefact_hash: crate::workflows::artefacts::ArtefactHash::of(b"decision", b"revise"),
+        },
+        candidate: input_of("plan", &rejected).artefact.clone(),
+        diff_base: input_of("plan", &rejected).artefact,
+        feedback: "Correct the selected plan.".to_owned(),
+        started: false,
+    });
+    let verified = verify_inputs(&run, &step, &[input_of("plan", &rejected)], &store)
+        .expect("rejected plan input");
+    assert!(format_agent_context(&verified, false).contains("Rejected plan."));
+    assert_eq!(
+        verify_inputs(&run, &step, &[input_of("plan", &unrelated)], &store).err(),
+        Some(InputContextError::Source),
+    );
+}
+
+#[test]
 fn saved_plan_launch_input_keeps_its_run_and_source_identity() {
     let store = store();
     let base = sequential_team_definition(test_environment_id());

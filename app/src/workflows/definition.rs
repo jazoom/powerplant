@@ -101,6 +101,12 @@ pub(crate) struct HumanGateStep {
     pub(crate) revision: Option<HumanRevisionPolicy>,
 }
 
+impl HumanGateStep {
+    pub(crate) fn is_plan_checkpoint(&self) -> bool {
+        self.required_output.kind == OutputKind::PlanDecision
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HumanRevisionPolicy {
     pub(crate) revision_target: StepKey,
@@ -215,6 +221,7 @@ impl LaunchInputSource {
 pub(crate) enum ArtefactSource {
     RunInitialCandidate,
     RunCurrentCandidate,
+    RunCurrentPlan,
     LaunchInput { source: LaunchInputSource },
     StepOutput { step: StepKey, output: OutputKey },
 }
@@ -233,6 +240,7 @@ pub(crate) enum OutputKind {
     ReviewReport,
     TestReport,
     HumanDecision,
+    PlanDecision,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -242,6 +250,7 @@ pub(crate) enum ArtefactKind {
     ReviewReport,
     TestReport,
     HumanDecision,
+    PlanDecision,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -300,6 +309,7 @@ pub(crate) enum DefinitionError {
     CandidateOutput,
     AssuranceInput,
     LaunchInput,
+    PlanDecisionInput,
     SecondaryWrite,
     UnusedRole,
     UnknownRole,
@@ -349,6 +359,7 @@ impl DefinitionError {
                 "A step that uses an assurance artefact also needs a candidate input."
             }
             Self::LaunchInput => "A saved plan launch input must use the plan artefact kind.",
+            Self::PlanDecisionInput => "A plan decision must accompany the exact accepted plan.",
             Self::SecondaryWrite => "Secondary directory grants must stay read-only.",
             Self::UnusedRole => "Every role must be used by an agent step.",
             Self::UnknownRole => "An agent step names an unknown role.",
@@ -479,6 +490,7 @@ struct InputFile {
 enum InputSourceFile {
     RunInitialCandidate,
     RunCurrentCandidate,
+    RunCurrentPlan,
     LaunchInput { input: String },
     StepOutput { step: String, output: String },
 }
@@ -526,7 +538,7 @@ impl WorkflowDefinition {
             let removed_gates: Vec<_> = steps
                 .iter()
                 .filter_map(|step| match &step.action {
-                    StepAction::HumanGate(action) => {
+                    StepAction::HumanGate(action) if !action.is_plan_checkpoint() => {
                         Some((step.key.clone(), action.required_output.key.clone()))
                     }
                     _ => None,
@@ -541,7 +553,9 @@ impl WorkflowDefinition {
                     Some(policy),
                 );
             }
-            steps.retain(|step| !matches!(step.action, StepAction::HumanGate(_)));
+            steps.retain(|step| {
+                !matches!(&step.action, StepAction::HumanGate(action) if !action.is_plan_checkpoint())
+            });
             for step in &mut steps {
                 step.inputs.retain(|input| {
                     !removed_gates.iter().any(|(gate, output)| {
@@ -795,6 +809,7 @@ impl StepDefinition {
                     source: match &input.source {
                         ArtefactSource::RunInitialCandidate => InputSourceFile::RunInitialCandidate,
                         ArtefactSource::RunCurrentCandidate => InputSourceFile::RunCurrentCandidate,
+                        ArtefactSource::RunCurrentPlan => InputSourceFile::RunCurrentPlan,
                         ArtefactSource::LaunchInput { source } => InputSourceFile::LaunchInput {
                             input: source.as_str().to_owned(),
                         },
@@ -1057,6 +1072,7 @@ impl OutputKind {
             "review-report" => Some(Self::ReviewReport),
             "test-report" => Some(Self::TestReport),
             "human-decision" => Some(Self::HumanDecision),
+            "plan-decision" => Some(Self::PlanDecision),
             _ => None,
         }
     }
@@ -1069,6 +1085,7 @@ impl OutputKind {
             Self::ReviewReport => "review-report",
             Self::TestReport => "test-report",
             Self::HumanDecision => "human-decision",
+            Self::PlanDecision => "plan-decision",
         }
     }
 
@@ -1080,6 +1097,7 @@ impl OutputKind {
             Self::ReviewReport => Some(ArtefactKind::ReviewReport),
             Self::TestReport => Some(ArtefactKind::TestReport),
             Self::HumanDecision => Some(ArtefactKind::HumanDecision),
+            Self::PlanDecision => Some(ArtefactKind::PlanDecision),
         }
     }
 }
@@ -1092,6 +1110,7 @@ impl ArtefactKind {
             "review-report" => Some(Self::ReviewReport),
             "test-report" => Some(Self::TestReport),
             "human-decision" => Some(Self::HumanDecision),
+            "plan-decision" => Some(Self::PlanDecision),
             _ => None,
         }
     }
@@ -1103,6 +1122,7 @@ impl ArtefactKind {
             Self::ReviewReport => "review-report",
             Self::TestReport => "test-report",
             Self::HumanDecision => "human-decision",
+            Self::PlanDecision => "plan-decision",
         }
     }
 
@@ -1220,6 +1240,7 @@ fn assemble(
     reject_review_policies(&steps)?;
     reject_human_revisions(&steps)?;
     reject_handoff(&steps)?;
+    reject_plan_decision_inputs(&steps)?;
     let commit_policy = requested_policy.unwrap_or_else(|| derive_commit_policy(&steps));
     reject_commit_policy(&steps, commit_policy)?;
     Ok(WorkflowDefinition {
@@ -1301,6 +1322,7 @@ fn parse_inputs(files: Vec<InputFile>) -> Result<Vec<RequiredInput>, DefinitionE
         let source = match file.source {
             InputSourceFile::RunInitialCandidate => ArtefactSource::RunInitialCandidate,
             InputSourceFile::RunCurrentCandidate => ArtefactSource::RunCurrentCandidate,
+            InputSourceFile::RunCurrentPlan => ArtefactSource::RunCurrentPlan,
             InputSourceFile::LaunchInput { input } => ArtefactSource::LaunchInput {
                 source: LaunchInputSource::parse(&input).ok_or(DefinitionError::Format)?,
             },
@@ -1380,6 +1402,14 @@ fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), Definition
                     .iter()
                     .filter(|output| output.kind == OutputKind::ReviewReport)
                     .count();
+                if action.required_outputs.iter().any(|output| {
+                    matches!(
+                        output.kind,
+                        OutputKind::HumanDecision | OutputKind::PlanDecision
+                    )
+                }) {
+                    return Err(DefinitionError::UnsupportedOutput);
+                }
                 match action.candidate_authority {
                     CandidateAuthority::ReadOnly if candidate_outputs != 0 => {
                         return Err(DefinitionError::CandidateOutput);
@@ -1406,13 +1436,28 @@ fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), Definition
                 }
             }
             StepAction::HumanGate(action) => {
-                if action.required_output.kind != OutputKind::HumanDecision
-                    || step
-                        .inputs
-                        .iter()
-                        .filter(|input| input.kind == ArtefactKind::CandidateRevision)
-                        .count()
-                        != 1
+                let valid_inputs = if action.is_plan_checkpoint() {
+                    action.required_output.kind == OutputKind::PlanDecision
+                        && step
+                            .inputs
+                            .iter()
+                            .filter(|input| input.kind == ArtefactKind::Plan)
+                            .count()
+                            == 1
+                        && !step
+                            .inputs
+                            .iter()
+                            .any(|input| input.kind == ArtefactKind::CandidateRevision)
+                } else {
+                    action.required_output.kind == OutputKind::HumanDecision
+                        && step
+                            .inputs
+                            .iter()
+                            .filter(|input| input.kind == ArtefactKind::CandidateRevision)
+                            .count()
+                            == 1
+                };
+                if !valid_inputs
                     || step.inputs.iter().any(|input| {
                         !matches!(
                             input.kind,
@@ -1421,6 +1466,7 @@ fn reject_unsupported_outputs(steps: &[StepDefinition]) -> Result<(), Definition
                                 | ArtefactKind::ReviewReport
                                 | ArtefactKind::TestReport
                                 | ArtefactKind::HumanDecision
+                                | ArtefactKind::PlanDecision
                         )
                     })
                 {
@@ -1476,7 +1522,24 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
                     OutputKind::ReviewReport | OutputKind::TestReport
                 )
             });
-        if step.is_sandbox_backed() || assurance || matches!(step.action, StepAction::HumanGate(_))
+        let plan_checkpoint = matches!(
+            &step.action,
+            StepAction::HumanGate(action) if action.is_plan_checkpoint()
+        );
+        if plan_checkpoint {
+            if !candidate_inputs.is_empty()
+                || step
+                    .inputs
+                    .iter()
+                    .filter(|input| input.kind == ArtefactKind::Plan)
+                    .count()
+                    != 1
+            {
+                return Err(DefinitionError::CandidateInput);
+            }
+        } else if step.is_sandbox_backed()
+            || assurance
+            || matches!(step.action, StepAction::HumanGate(_))
         {
             if candidate_inputs.len() != 1 {
                 return Err(DefinitionError::CandidateInput);
@@ -1489,6 +1552,7 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
                     }
                 }
                 ArtefactSource::RunCurrentCandidate => {}
+                ArtefactSource::RunCurrentPlan => {}
                 ArtefactSource::LaunchInput { .. } => {
                     return Err(DefinitionError::CandidateInput);
                 }
@@ -1511,6 +1575,27 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
             match &input.source {
                 ArtefactSource::RunInitialCandidate | ArtefactSource::RunCurrentCandidate => {
                     if input.kind != ArtefactKind::CandidateRevision {
+                        return Err(DefinitionError::InputKind);
+                    }
+                }
+                ArtefactSource::RunCurrentPlan => {
+                    let launch_plan = steps[..index].iter().any(|step| {
+                        step.inputs.iter().any(|input| {
+                            input.kind == ArtefactKind::Plan
+                                && matches!(
+                                    input.source,
+                                    ArtefactSource::LaunchInput {
+                                        source: LaunchInputSource::SavedPlan
+                                    }
+                                )
+                        })
+                    });
+                    if input.kind != ArtefactKind::Plan
+                        || (!produced
+                            .iter()
+                            .any(|(_, _, kind)| *kind == ArtefactKind::Plan)
+                            && !launch_plan)
+                    {
                         return Err(DefinitionError::InputKind);
                     }
                 }
@@ -1580,6 +1665,28 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
     Ok(())
 }
 
+fn reject_plan_decision_inputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
+    for step in steps {
+        let decisions = step
+            .inputs
+            .iter()
+            .filter(|input| input.kind == ArtefactKind::PlanDecision)
+            .count();
+        if decisions > 0
+            && (decisions != 1
+                || step
+                    .inputs
+                    .iter()
+                    .filter(|input| input.kind == ArtefactKind::Plan)
+                    .count()
+                    != 1)
+        {
+            return Err(DefinitionError::PlanDecisionInput);
+        }
+    }
+    Ok(())
+}
+
 fn reject_role_use(
     roles: &[RoleDefinition],
     steps: &[StepDefinition],
@@ -1635,10 +1742,9 @@ fn derive_commit_policy(steps: &[StepDefinition]) -> CommitPolicy {
     if !has_commit {
         return CommitPolicy::NoCommit;
     }
-    if steps
-        .iter()
-        .any(|step| matches!(step.action, StepAction::HumanGate(_)))
-    {
+    if steps.iter().any(|step| {
+        matches!(&step.action, StepAction::HumanGate(action) if !action.is_plan_checkpoint())
+    }) {
         CommitPolicy::HumanApproval
     } else {
         CommitPolicy::AutomaticAfterReview
@@ -1847,23 +1953,40 @@ fn reject_human_revisions(steps: &[StepDefinition]) -> Result<(), DefinitionErro
         else {
             return Err(DefinitionError::UnknownStep);
         };
+        let target_is_plan = action.is_plan_checkpoint();
+        let target_is_valid =
+            if target_is_plan {
+                matches!(
+                    steps[target_index].action,
+                    StepAction::Agent(AgentStep {
+                        candidate_authority: CandidateAuthority::ReadOnly,
+                        ..
+                    })
+                ) && steps[target_index]
+                    .required_outputs()
+                    .iter()
+                    .any(|output| output.kind == OutputKind::Plan)
+                    && steps[target_index].inputs.iter().any(|input| {
+                        input.kind == ArtefactKind::Plan
+                            && input.source == ArtefactSource::RunCurrentPlan
+                    })
+            } else {
+                !steps[target_index].required_outputs().iter().any(|output| {
+                    output.kind.as_artefact_kind() == Some(ArtefactKind::ReviewReport)
+                }) && matches!(
+                    steps[target_index].action,
+                    StepAction::Agent(AgentStep {
+                        candidate_authority: CandidateAuthority::Edit,
+                        ..
+                    })
+                ) && steps[target_index]
+                    .inputs
+                    .iter()
+                    .find(|input| input.kind == ArtefactKind::CandidateRevision)
+                    .is_none_or(|input| input.source == ArtefactSource::RunCurrentCandidate)
+            };
         if target_index >= gate_index
-            || steps[target_index]
-                .required_outputs()
-                .iter()
-                .any(|output| output.kind.as_artefact_kind() == Some(ArtefactKind::ReviewReport))
-            || !matches!(
-                steps[target_index].action,
-                StepAction::Agent(AgentStep {
-                    candidate_authority: CandidateAuthority::Edit,
-                    ..
-                })
-            )
-            || steps[target_index]
-                .inputs
-                .iter()
-                .find(|input| input.kind == ArtefactKind::CandidateRevision)
-                .is_none_or(|input| input.source != ArtefactSource::RunCurrentCandidate)
+            || !target_is_valid
             || steps[target_index..=gate_index].iter().any(|item| {
                 matches!(
                     &item.action,

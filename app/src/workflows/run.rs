@@ -566,6 +566,10 @@ enum SummaryFile {
         diff_base: String,
         decision: String,
     },
+    PlanDecision {
+        plan: String,
+        decision: String,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -828,7 +832,8 @@ impl WorkflowRun {
         let StepAction::HumanGate(action) = &definition.action else {
             return Err(TransitionError::Invalid);
         };
-        if candidate.kind != super::definition::ArtefactKind::CandidateRevision
+        if action.is_plan_checkpoint()
+            || candidate.kind != super::definition::ArtefactKind::CandidateRevision
             || diff_base.kind != super::definition::ArtefactKind::CandidateRevision
         {
             return Err(TransitionError::Invalid);
@@ -856,6 +861,63 @@ impl WorkflowRun {
         Ok(gate)
     }
 
+    pub(crate) fn open_plan_gate(
+        &mut self,
+        gate_id: GateId,
+        plan: ArtefactReference,
+        at_ms: u64,
+    ) -> Result<HumanGateRecord, TransitionError> {
+        if !self.accepts_time(at_ms) || self.gates.iter().any(|gate| gate.id == gate_id) {
+            return Err(TransitionError::Invalid);
+        }
+        let RunState::Ready { step } = self.state.clone() else {
+            return Err(TransitionError::Invalid);
+        };
+        let definition = self
+            .pinned
+            .definition
+            .step(&step)
+            .ok_or(TransitionError::Invalid)?;
+        let StepAction::HumanGate(action) = &definition.action else {
+            return Err(TransitionError::Invalid);
+        };
+        if !action.is_plan_checkpoint()
+            || plan.kind != super::definition::ArtefactKind::Plan
+            || definition
+                .inputs
+                .iter()
+                .filter(|input| input.kind == super::definition::ArtefactKind::Plan)
+                .count()
+                != 1
+            || self
+                .artefact(&plan.id)
+                .is_none_or(|record| !artefact_matches_reference(record, &plan))
+        {
+            return Err(TransitionError::Invalid);
+        }
+        let sequence = u32::try_from(self.gates.len() + 1).map_err(|_| TransitionError::Invalid)?;
+        let revision = GateRevision::new(u64::from(sequence)).ok_or(TransitionError::Invalid)?;
+        let gate = HumanGateRecord {
+            id: gate_id,
+            step: step.clone(),
+            sequence,
+            revision,
+            opened_at_ms: at_ms,
+            closed_at_ms: None,
+            candidate: plan.clone(),
+            diff_base: plan,
+            state: HumanGateState::AwaitingDecision,
+            decision: None,
+            output: action.required_output.key.clone(),
+        };
+        self.gates.push(gate.clone());
+        self.state = RunState::AwaitingHuman {
+            step,
+            gate: gate_id,
+        };
+        Ok(gate)
+    }
+
     pub(crate) fn human_revision_policy(
         &self,
         step: &StepKey,
@@ -871,6 +933,22 @@ impl WorkflowRun {
             .iter()
             .filter(|gate| gate.step == *step && gate.state == HumanGateState::RevisionRequested)
             .count()
+    }
+
+    pub(crate) fn current_plan(&self) -> Option<ArtefactReference> {
+        // A revision starts from the rejected plan, not a later unrelated plan output.
+        if let Some(reservation) = &self.revision_reservation
+            && reservation.candidate.kind == super::definition::ArtefactKind::Plan
+        {
+            return Some(reservation.candidate.clone());
+        }
+        self.artefacts.iter().rev().find_map(|record| {
+            (record.kind == super::definition::ArtefactKind::Plan).then_some(ArtefactReference {
+                id: record.id,
+                kind: record.kind,
+                artefact_hash: record.artefact_hash,
+            })
+        })
     }
 
     pub(crate) fn revision_feedback(&self, step: &StepKey) -> Option<&str> {
@@ -910,6 +988,17 @@ impl WorkflowRun {
             .ok_or(TransitionError::Invalid)?;
         if gate_record.state != HumanGateState::AwaitingDecision || gate_record.revision != revision
         {
+            return Err(TransitionError::Invalid);
+        }
+        let gate_definition = self
+            .pinned
+            .definition
+            .step(&step)
+            .ok_or(TransitionError::Invalid)?;
+        if matches!(
+            &gate_definition.action,
+            StepAction::HumanGate(action) if action.is_plan_checkpoint()
+        ) {
             return Err(TransitionError::Invalid);
         }
         let reference = ArtefactReference {
@@ -986,6 +1075,133 @@ impl WorkflowRun {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn decide_plan_gate(
+        &mut self,
+        gate_id: GateId,
+        revision: GateRevision,
+        record: ArtefactRecord,
+        kind: super::gates::PlanDecisionKind,
+        feedback: Option<String>,
+        reserved_attempt: Option<AttemptId>,
+        at_ms: u64,
+    ) -> Result<(), TransitionError> {
+        if !self.accepts_time(at_ms)
+            || record.provenance.run_id != self.id
+            || self.artefacts.iter().any(|item| item.id == record.id)
+        {
+            return Err(TransitionError::Invalid);
+        }
+        let RunState::AwaitingHuman { step, gate } = self.state.clone() else {
+            return Err(TransitionError::Invalid);
+        };
+        if gate != gate_id || record.kind != super::definition::ArtefactKind::PlanDecision {
+            return Err(TransitionError::Invalid);
+        }
+        let gate_record = self
+            .gates
+            .iter()
+            .find(|item| item.id == gate_id)
+            .ok_or(TransitionError::Invalid)?;
+        if gate_record.state != HumanGateState::AwaitingDecision
+            || gate_record.revision != revision
+            || gate_record.candidate.kind != super::definition::ArtefactKind::Plan
+            || gate_record.diff_base != gate_record.candidate
+            || !matches!(
+                &self.pinned.definition.step(&step).map(|step| &step.action),
+                Some(StepAction::HumanGate(action)) if action.is_plan_checkpoint()
+            )
+            || !matches!(
+                &record.summary,
+                crate::workflows::artefacts::ArtefactSummary::PlanDecision {
+                    plan,
+                    decision,
+                } if *plan == gate_record.candidate.artefact_hash && *decision == kind
+            )
+            || !matches!(
+                &record.provenance.producer,
+                crate::workflows::artefacts::ArtefactProducer::HumanGate {
+                    gate_id,
+                    step,
+                    output,
+                } if *gate_id == gate_record.id
+                    && *step == gate_record.step
+                    && *output == gate_record.output
+            )
+            || !record
+                .provenance
+                .inputs
+                .iter()
+                .any(|input| input == &gate_record.candidate)
+        {
+            return Err(TransitionError::Invalid);
+        }
+        let reference = ArtefactReference {
+            id: record.id,
+            kind: record.kind,
+            artefact_hash: record.artefact_hash,
+        };
+        let next_state = match kind {
+            super::gates::PlanDecisionKind::Accepted => {
+                if feedback.is_some() || reserved_attempt.is_some() {
+                    return Err(TransitionError::Invalid);
+                }
+                advanced_state(&self.pinned.definition, &step)?
+            }
+            super::gates::PlanDecisionKind::RevisionRequested => {
+                let (revision_target, attempt_limit) = {
+                    let policy = self
+                        .human_revision_policy(&step)
+                        .ok_or(TransitionError::Invalid)?;
+                    (policy.revision_target.clone(), policy.attempt_limit)
+                };
+                let attempt = reserved_attempt.ok_or(TransitionError::Invalid)?;
+                let feedback = feedback
+                    .filter(|feedback| !feedback.is_empty())
+                    .ok_or(TransitionError::Invalid)?;
+                if self.revision_reservation.is_some() {
+                    return Err(TransitionError::Invalid);
+                }
+                if self.human_revision_count(&step) >= usize::from(attempt_limit.saturating_sub(1))
+                {
+                    RunState::Escalated {
+                        step,
+                        report: reference.clone(),
+                        reason: EscalationReason::AttemptLimit,
+                    }
+                } else {
+                    self.revision_reservation = Some(RevisionReservation {
+                        attempt,
+                        gate: gate_id,
+                        target: revision_target.clone(),
+                        decision: reference.clone(),
+                        candidate: gate_record.candidate.clone(),
+                        diff_base: gate_record.diff_base.clone(),
+                        feedback,
+                        started: false,
+                    });
+                    RunState::Ready {
+                        step: revision_target,
+                    }
+                }
+            }
+        };
+        let gate = self
+            .gates
+            .iter_mut()
+            .find(|item| item.id == gate_id)
+            .ok_or(TransitionError::Invalid)?;
+        gate.closed_at_ms = Some(at_ms);
+        gate.decision = Some(reference.clone());
+        gate.state = match kind {
+            super::gates::PlanDecisionKind::Accepted => HumanGateState::Approved,
+            super::gates::PlanDecisionKind::RevisionRequested => HumanGateState::RevisionRequested,
+        };
+        self.artefacts.push(record);
+        self.state = next_state;
+        Ok(())
+    }
+
     pub(crate) fn cancel_gate(
         &mut self,
         gate_id: GateId,
@@ -1048,10 +1264,7 @@ impl WorkflowRun {
                 || reservation.target != step
                 || inputs
                     .iter()
-                    .find(|input| {
-                        input.artefact.kind
-                            == crate::workflows::definition::ArtefactKind::CandidateRevision
-                    })
+                    .find(|input| input.artefact.kind == reservation.candidate.kind)
                     .is_none_or(|input| input.artefact != reservation.candidate))
         {
             return Err(TransitionError::Invalid);
@@ -2114,7 +2327,26 @@ fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
             || gate.sequence != u32::try_from(index + 1).map_err(|_| RunRecordError::Corrupt)?
             || gate.revision.get() != u64::from(gate.sequence)
             || gate.opened_at_ms < run.created_at_ms
-            || gate.candidate.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+        let step = run
+            .pinned
+            .definition
+            .step(&gate.step)
+            .ok_or(RunRecordError::Corrupt)?;
+        let StepAction::HumanGate(action) = &step.action else {
+            return Err(RunRecordError::Corrupt);
+        };
+        let plan_gate = action.is_plan_checkpoint();
+        if plan_gate {
+            if gate.candidate.kind != crate::workflows::definition::ArtefactKind::Plan
+                || gate.diff_base != gate.candidate
+            {
+                return Err(RunRecordError::Corrupt);
+            }
+        } else if gate.candidate.kind
+            != crate::workflows::definition::ArtefactKind::CandidateRevision
             || gate.diff_base.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
         {
             return Err(RunRecordError::Corrupt);
@@ -2133,14 +2365,6 @@ fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
                 return Err(RunRecordError::Corrupt);
             }
         }
-        let step = run
-            .pinned
-            .definition
-            .step(&gate.step)
-            .ok_or(RunRecordError::Corrupt)?;
-        let StepAction::HumanGate(action) = &step.action else {
-            return Err(RunRecordError::Corrupt);
-        };
         if gate.output != action.required_output.key {
             return Err(RunRecordError::Corrupt);
         }
@@ -2165,26 +2389,52 @@ fn validate_gates(run: &WorkflowRun) -> Result<(), RunRecordError> {
                     || *step != gate.step
                     || *output != gate.output
                     || gate.closed_at_ms.is_none()
-                    || decision.kind != crate::workflows::definition::ArtefactKind::HumanDecision
                 {
                     return Err(RunRecordError::Corrupt);
                 }
-                let expected = if gate.state == HumanGateState::Approved {
-                    super::gates::HumanDecisionKind::Approved
+                if plan_gate {
+                    let expected = if gate.state == HumanGateState::Approved {
+                        super::gates::PlanDecisionKind::Accepted
+                    } else {
+                        super::gates::PlanDecisionKind::RevisionRequested
+                    };
+                    if decision.kind != crate::workflows::definition::ArtefactKind::PlanDecision
+                        || !matches!(
+                            &record.summary,
+                            crate::workflows::artefacts::ArtefactSummary::PlanDecision {
+                                plan,
+                                decision,
+                            } if *decision == expected
+                                && *plan == candidate.artefact_hash
+                                && record
+                                    .provenance
+                                    .inputs
+                                    .iter()
+                                    .any(|input| input == &gate.candidate)
+                        )
+                    {
+                        return Err(RunRecordError::Corrupt);
+                    }
                 } else {
-                    super::gates::HumanDecisionKind::RevisionRequested
-                };
-                if !matches!(
-                    &record.summary,
-                    crate::workflows::artefacts::ArtefactSummary::HumanDecision {
-                        candidate: decision_candidate,
-                        diff_base: decision_diff_base,
-                        decision,
-                    } if *decision == expected
-                        && Some(*decision_candidate) == candidate.candidate_hash()
-                        && Some(*decision_diff_base) == diff_base.candidate_hash()
-                ) {
-                    return Err(RunRecordError::Corrupt);
+                    let expected = if gate.state == HumanGateState::Approved {
+                        super::gates::HumanDecisionKind::Approved
+                    } else {
+                        super::gates::HumanDecisionKind::RevisionRequested
+                    };
+                    if decision.kind != crate::workflows::definition::ArtefactKind::HumanDecision
+                        || !matches!(
+                            &record.summary,
+                            crate::workflows::artefacts::ArtefactSummary::HumanDecision {
+                                candidate: decision_candidate,
+                                diff_base: decision_diff_base,
+                                decision,
+                            } if *decision == expected
+                                && Some(*decision_candidate) == candidate.candidate_hash()
+                                && Some(*decision_diff_base) == diff_base.candidate_hash()
+                        )
+                    {
+                        return Err(RunRecordError::Corrupt);
+                    }
                 }
             }
             HumanGateState::Cancelled | HumanGateState::Interrupted => {
@@ -2718,6 +2968,14 @@ fn summary_to_file(summary: &crate::workflows::artefacts::ArtefactSummary) -> Su
             }
             .to_owned(),
         },
+        ArtefactSummary::PlanDecision { plan, decision } => SummaryFile::PlanDecision {
+            plan: plan.as_str(),
+            decision: match decision {
+                super::gates::PlanDecisionKind::Accepted => "accepted",
+                super::gates::PlanDecisionKind::RevisionRequested => "revision-requested",
+            }
+            .to_owned(),
+        },
     }
 }
 
@@ -2772,6 +3030,15 @@ fn summary_from_file(
             decision: match decision.as_str() {
                 "approved" => super::gates::HumanDecisionKind::Approved,
                 "revision-requested" => super::gates::HumanDecisionKind::RevisionRequested,
+                _ => return Err(RunRecordError::Corrupt),
+            },
+        },
+        SummaryFile::PlanDecision { plan, decision } => ArtefactSummary::PlanDecision {
+            plan: crate::workflows::artefacts::ArtefactHash::parse(&plan)
+                .ok_or(RunRecordError::Corrupt)?,
+            decision: match decision.as_str() {
+                "accepted" => super::gates::PlanDecisionKind::Accepted,
+                "revision-requested" => super::gates::PlanDecisionKind::RevisionRequested,
                 _ => return Err(RunRecordError::Corrupt),
             },
         },
@@ -2831,6 +3098,7 @@ fn gate_input_candidate(run: &WorkflowRun, step: &StepDefinition) -> Option<Arte
             };
             source.accepted.clone()
         }
+        crate::workflows::definition::ArtefactSource::RunCurrentPlan => return None,
         crate::workflows::definition::ArtefactSource::LaunchInput { .. } => return None,
         crate::workflows::definition::ArtefactSource::StepOutput {
             step: source_step,
@@ -3596,10 +3864,12 @@ fn validate_revision_reservation(run: &WorkflowRun) -> Result<(), RunRecordError
     let policy = run
         .human_revision_policy(&gate.step)
         .ok_or(RunRecordError::Corrupt)?;
+    let plan_gate = gate.candidate.kind == crate::workflows::definition::ArtefactKind::Plan;
     if gate.state != HumanGateState::RevisionRequested
         || gate.decision.as_ref() != Some(&reservation.decision)
         || gate.candidate != reservation.candidate
         || gate.diff_base != reservation.diff_base
+        || (plan_gate && gate.diff_base != gate.candidate)
         || reservation.feedback.is_empty()
         || reservation.feedback.len() > super::gates::MAXIMUM_REVISION_NOTE_BYTES
         || reservation.target != policy.revision_target
@@ -3615,6 +3885,17 @@ fn validate_revision_reservation(run: &WorkflowRun) -> Result<(), RunRecordError
             ))
     {
         return Err(RunRecordError::Corrupt);
+    }
+    if plan_gate {
+        let Some(step) = run.pinned.definition.step(&gate.step) else {
+            return Err(RunRecordError::Corrupt);
+        };
+        let StepAction::HumanGate(action) = &step.action else {
+            return Err(RunRecordError::Corrupt);
+        };
+        if !action.is_plan_checkpoint() {
+            return Err(RunRecordError::Corrupt);
+        }
     }
     Ok(())
 }
@@ -3987,8 +4268,21 @@ fn validate_artefacts(run: &WorkflowRun) -> Result<(), RunRecordError> {
                     .iter()
                     .find(|gate| gate.id == *gate_id)
                     .ok_or(RunRecordError::Corrupt)?;
+                let plan_gate = run
+                    .pinned
+                    .definition
+                    .step(&gate.step)
+                    .and_then(|step| match &step.action {
+                        StepAction::HumanGate(action) => Some(action.is_plan_checkpoint()),
+                        _ => None,
+                    })
+                    .ok_or(RunRecordError::Corrupt)?;
                 if gate.step != *step
                     || gate.output != *output
+                    || (plan_gate
+                        && record.kind != crate::workflows::definition::ArtefactKind::PlanDecision)
+                    || (!plan_gate
+                        && record.kind != crate::workflows::definition::ArtefactKind::HumanDecision)
                     || gate
                         .decision
                         .as_ref()
@@ -4020,6 +4314,9 @@ fn artefact_kind_matches_summary(record: &ArtefactRecord) -> bool {
         ) | (
             crate::workflows::definition::ArtefactKind::HumanDecision,
             crate::workflows::artefacts::ArtefactSummary::HumanDecision { .. },
+        ) | (
+            crate::workflows::definition::ArtefactKind::PlanDecision,
+            crate::workflows::artefacts::ArtefactSummary::PlanDecision { .. },
         ),
     )
 }

@@ -837,8 +837,14 @@
                 >
                   <legend class="text-sm">Human revision route</legend>
                   <p class="text-quiet text-xs">
-                    Request changes sends the current candidate to an earlier
-                    implementation phase in a fresh attempt.
+                    {% if step.plan_checkpoint %}
+                      Request plan changes sends the exact plan to an earlier
+                      planning phase in a fresh attempt. It does not approve
+                      code.
+                    {% else %}
+                      Request changes sends the current candidate to an earlier
+                      implementation phase in a fresh attempt.
+                    {% endif %}
                   </p>
                   <label class="flex flex-col gap-1">
                     <span class="text-sm">Policy</span>
@@ -907,16 +913,26 @@
                     {% endif %}
                   </label>
                   <p class="text-quiet text-xs">
-                    The limit counts implementation attempts across reopened
-                    gates.
+                    The limit counts
+                    {% if step.plan_checkpoint %}planning{% else %}implementation{% endif %}
+                    attempts across reopened gates.
                   </p>
                 </fieldset>
                 <p class="text-quiet text-sm">
-                  Pauses the run for a decision on the exact candidate diff.
+                  {% if step.plan_checkpoint %}
+                    Pauses the run for acceptance of the exact plan.
+                  {% else %}
+                    Pauses the run for a decision on the exact candidate diff.
+                  {% endif %}
                 </p>
                 <div class="border-base-300 rounded-sm border p-3 text-sm">
-                  Required output: <span class="font-mono">decision</span> ·
-                  Human decision
+                  Required output:
+                  <span class="font-mono"
+                    >{% if step.plan_checkpoint %}plan-decision{% else %}decision{% endif %}</span
+                  >
+                  ·
+                  {% if step.plan_checkpoint %}Plan decision{% else %}Human
+                  decision{% endif %}
                 </div>
                 {% for output in step.outputs %}
                   <input
@@ -927,7 +943,7 @@
                   <input
                     type="hidden"
                     name="step_{{ step.index }}_output_{{ output.index }}_kind"
-                    value="human-decision"
+                    value="{% if step.plan_checkpoint %}plan-decision{% else %}human-decision{% endif %}"
                   />
                 {% endfor %}
               {% else %}
@@ -1064,6 +1080,12 @@
                             >
                               Human decision
                             </option>
+                            <option
+                              value="plan-decision"
+                              {% if input.kind == "plan-decision" %}selected{% endif %}
+                            >
+                              Plan decision
+                            </option>
                           </select>
                           {% if input.kind_error != "" %}
                             <p class="text-error text-sm">
@@ -1143,6 +1165,24 @@
                 value="add-phase:implementation"
               >
                 Implementation
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:plan-review"
+              >
+                Plan review
+              </button>
+              <button
+                class="btn btn-outline btn-sm"
+                type="submit"
+                formnovalidate
+                name="intent"
+                value="add-phase:plan-checkpoint"
+              >
+                Plan checkpoint
               </button>
               <button
                 class="btn btn-outline btn-sm"
