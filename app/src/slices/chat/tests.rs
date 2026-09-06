@@ -315,51 +315,6 @@ async fn wait_until_job_idle(state: &AppState, token: &str) {
     panic!("job did not finish");
 }
 
-#[test]
-fn workflow_policy_follows_the_commit_edges() {
-    use crate::workflows::definition::{ArtefactKind, ArtefactSource, WorkflowDefinition};
-
-    let environment = crate::tests::test_environment_id();
-    let read_only = crate::workflows::seeds::read_only_review_definition(environment);
-    assert_eq!(
-        super::workflow_policy(&read_only),
-        "Read-only review before commit"
-    );
-    let independent = crate::workflows::seeds::review_with_fixes_definition(environment);
-    assert_eq!(
-        super::workflow_policy(&independent),
-        "Fixing review with independent read-only review"
-    );
-
-    let mut steps = independent.steps().to_vec();
-    steps.retain(|step| step.key.as_str() != "independent-reviewer");
-    let commit = steps
-        .iter_mut()
-        .find(|step| step.key.as_str() == "commit")
-        .expect("commit");
-    let report = commit
-        .inputs
-        .iter_mut()
-        .find(|input| input.kind == ArtefactKind::ReviewReport)
-        .expect("report");
-    report.source = ArtefactSource::StepOutput {
-        step: crate::workflows::definition::StepKey::parse("fixing-reviewer").expect("step"),
-        output: crate::workflows::definition::OutputKey::parse("review").expect("output"),
-    };
-    let roles = independent
-        .roles()
-        .iter()
-        .filter(|role| role.key.as_str() != "independent-reviewer")
-        .cloned()
-        .collect();
-    let direct = WorkflowDefinition::from_parts("Direct".to_owned(), environment, roles, steps)
-        .expect("direct workflow");
-    assert_eq!(
-        super::workflow_policy(&direct),
-        "Fixing review with direct commit policy"
-    );
-}
-
 #[tokio::test]
 async fn a_native_send_is_rejected_before_the_job_starts() {
     let state = test_state();

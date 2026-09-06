@@ -5,6 +5,7 @@ impl super::WorkflowCatalogue {
         Self {
             path: None,
             inner: Mutex::new(empty_state()),
+            unavailable_starters: Vec::new(),
         }
     }
     pub(crate) fn open(
@@ -37,6 +38,7 @@ use crate::workflows::definition::{
     initial_candidate_input,
 };
 use crate::workflows::id::WorkflowId;
+use crate::workflows::seeds::{SeedKey, WorkflowSeed};
 
 fn named(name: &str) -> WorkflowDefinition {
     test_named_definition(name)
@@ -55,6 +57,92 @@ fn create_assigns_a_random_identifier_and_first_revision() {
     assert_eq!(record.definition_version, record.definition.version());
     assert_eq!(catalogue.list().len(), 1);
     assert_eq!(catalogue.get(&record.id).expect("get").id, record.id);
+}
+
+#[test]
+fn absent_starters_do_not_break_a_full_existing_catalogue() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("workflows.json");
+    let catalogue = WorkflowCatalogue::open_with_seeds(path.clone(), &[]).expect("open");
+    for index in 0..super::MAXIMUM_WORKFLOWS {
+        catalogue
+            .create(named(&format!("Existing {index}")))
+            .expect("create existing workflow");
+    }
+    let starter = WorkflowSeed {
+        key: SeedKey::parse("capacity-starter-v1").expect("seed key"),
+        definition: named("Starter workflow"),
+    };
+    let reopened = WorkflowCatalogue::open_with_seeds(path, &[starter]).expect("reopen");
+    assert_eq!(reopened.list().len(), super::MAXIMUM_WORKFLOWS);
+    assert_eq!(
+        reopened.unavailable_starters(),
+        vec!["Starter workflow".to_owned()]
+    );
+}
+
+#[test]
+fn absent_starters_respect_the_serialised_byte_limit_without_changing_existing_data() {
+    use crate::workflows::definition::{MAXIMUM_PROMPT_DEFAULTS_BYTES, MAXIMUM_ROLES};
+
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("workflows.json");
+    let base = crate::workflows::seeds::plan_a_change_definition(test_environment_id());
+    let mut roles = base.roles().to_vec();
+    roles[0].prompt_defaults = "\"".repeat(MAXIMUM_PROMPT_DEFAULTS_BYTES);
+    for index in 1..MAXIMUM_ROLES {
+        let mut role = roles[0].clone();
+        role.key = RoleKey::parse(&format!("role-{index}")).expect("role key");
+        roles.push(role);
+    }
+    let steps = roles
+        .iter()
+        .enumerate()
+        .map(|(index, role)| {
+            let mut step = base.steps()[0].clone();
+            step.key = StepKey::parse(&format!("step-{index}")).expect("step key");
+            let StepAction::Agent(action) = &mut step.action else {
+                unreachable!()
+            };
+            action.role = role.key.clone();
+            step
+        })
+        .collect();
+    let large = WorkflowDefinition::from_parts(
+        "Large starter".to_owned(),
+        test_environment_id(),
+        roles,
+        steps,
+    )
+    .expect("large definition");
+    let mut state = empty_state();
+    loop {
+        let definition = named_seed_definition(&state.workflows, &large).expect("unique name");
+        state.workflows.push(WorkflowRecord {
+            id: unused_identifier(&state).expect("id"),
+            revision: 1,
+            definition_version: definition.version(),
+            definition,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        });
+        if matches!(encode_state(&state), Err(CatalogueError::Full)) {
+            state.workflows.pop();
+            break;
+        }
+    }
+    assert!(state.workflows.len() < MAXIMUM_WORKFLOWS);
+    persist(Some(&path), &state).expect("persist existing catalogue");
+    let before = std::fs::read(&path).expect("existing bytes");
+    let starter = WorkflowSeed {
+        key: SeedKey::parse("large-starter-v1").expect("seed key"),
+        definition: large,
+    };
+    let reopened = WorkflowCatalogue::open_with_seeds(path.clone(), &[starter]).expect("reopen");
+    assert_eq!(reopened.list().len(), state.workflows.len());
+    assert_eq!(reopened.applied_seed_count(), 0);
+    assert_eq!(reopened.unavailable_starters(), vec!["Large starter"]);
+    assert_eq!(std::fs::read(path).expect("retained bytes"), before);
 }
 
 #[test]

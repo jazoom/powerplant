@@ -18,6 +18,7 @@ pub(crate) mod run;
 
 pub(crate) mod seeds;
 mod store;
+pub(crate) mod summary;
 pub(crate) mod workspace;
 
 pub(crate) use artefacts::WorkflowArtefactRepository;

@@ -1,6 +1,8 @@
 use super::{
-    ONE_AGENT_V1, SEQUENTIAL_TEAM_V1, SeedKey, WorkflowSeed, correctness_security_definition,
-    one_agent_definition, review_until_approved_definition, review_with_fixes_definition,
+    ONE_AGENT_V1, PLAN_A_CHANGE_V1, SEQUENTIAL_TEAM_V1, SeedKey, WorkflowSeed,
+    correctness_security_definition, implement_and_review_definition,
+    implement_with_approval_definition, one_agent_definition, plan_a_change_definition,
+    review_current_code_definition, review_until_approved_definition, review_with_fixes_definition,
     sequential_team_definition,
 };
 use crate::agents::ToolId;
@@ -40,19 +42,17 @@ fn first_open_seeds_ordinary_workflows_once() {
     assert_eq!(
         names(&first),
         vec![
-            "Correctness and security review".to_owned(),
-            "One agent".to_owned(),
-            "Read-only review".to_owned(),
-            "Review until approved".to_owned(),
-            "Review with fixes".to_owned(),
-            "Sequential team".to_owned(),
+            "Implement and review".to_owned(),
+            "Implement with approval".to_owned(),
+            "Plan a change".to_owned(),
+            "Review current code".to_owned(),
         ]
     );
-    assert_eq!(first.applied_seed_count(), 6);
+    assert_eq!(first.applied_seed_count(), 4);
     let ids: Vec<_> = first.list().into_iter().map(|record| record.id).collect();
     let second = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
-    assert_eq!(second.list().len(), 6);
-    assert_eq!(second.applied_seed_count(), 6);
+    assert_eq!(second.list().len(), 4);
+    assert_eq!(second.applied_seed_count(), 4);
     let reopened: Vec<_> = second.list().into_iter().map(|record| record.id).collect();
     assert_eq!(reopened, ids);
 }
@@ -65,15 +65,15 @@ fn restart_preserves_an_edited_seeded_workflow() {
     let seeded = catalogue
         .list()
         .into_iter()
-        .find(|record| record.definition.name() == "Sequential team")
+        .find(|record| record.definition.name() == "Plan a change")
         .expect("seed");
     catalogue
-        .update(&seeded.id, seeded.revision, named("Edited team"))
+        .update(&seeded.id, seeded.revision, named("Edited plan"))
         .expect("edit");
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     let loaded = reopened.get(&seeded.id).expect("loaded");
-    assert_eq!(loaded.definition.name(), "Edited team");
-    assert_eq!(reopened.applied_seed_count(), 6);
+    assert_eq!(loaded.definition.name(), "Edited plan");
+    assert_eq!(reopened.applied_seed_count(), 4);
 }
 
 #[test]
@@ -84,25 +84,23 @@ fn restart_does_not_restore_a_deleted_seeded_workflow() {
     let seeded = catalogue
         .list()
         .into_iter()
-        .find(|record| record.definition.name() == "Sequential team")
+        .find(|record| record.definition.name() == "Plan a change")
         .expect("seed");
     catalogue
         .delete(&seeded.id, seeded.revision)
         .expect("delete");
     let remaining = vec![
-        "Correctness and security review".to_owned(),
-        "One agent".to_owned(),
-        "Read-only review".to_owned(),
-        "Review until approved".to_owned(),
-        "Review with fixes".to_owned(),
+        "Implement and review".to_owned(),
+        "Implement with approval".to_owned(),
+        "Review current code".to_owned(),
     ];
     assert_eq!(names(&catalogue), remaining);
     assert!(catalogue.retired_ids().contains(&seeded.id));
-    assert_eq!(catalogue.applied_seed_count(), 6);
+    assert_eq!(catalogue.applied_seed_count(), 4);
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("reopen");
     assert_eq!(names(&reopened), remaining);
     assert!(reopened.retired_ids().contains(&seeded.id));
-    assert_eq!(reopened.applied_seed_count(), 6);
+    assert_eq!(reopened.applied_seed_count(), 4);
 }
 
 #[test]
@@ -112,7 +110,7 @@ fn a_present_seed_key_is_not_reapplied_from_code() {
     let catalogue = WorkflowCatalogue::open_with_seeds(
         path.clone(),
         &[WorkflowSeed {
-            key: SeedKey::parse(ONE_AGENT_V1).expect("key"),
+            key: SeedKey::parse(PLAN_A_CHANGE_V1).expect("key"),
             definition: named("Custom"),
         }],
     )
@@ -122,12 +120,10 @@ fn a_present_seed_key_is_not_reapplied_from_code() {
     assert_eq!(
         names(&reopened),
         vec![
-            "Correctness and security review".to_owned(),
             "Custom".to_owned(),
-            "Read-only review".to_owned(),
-            "Review until approved".to_owned(),
-            "Review with fixes".to_owned(),
-            "Sequential team".to_owned(),
+            "Implement and review".to_owned(),
+            "Implement with approval".to_owned(),
+            "Review current code".to_owned(),
         ]
     );
 }
@@ -138,25 +134,144 @@ fn a_name_collision_creates_a_suffixed_ordinary_record() {
     let path = dir.path().join("workflows.json");
     let catalogue = WorkflowCatalogue::open_with_seeds(path.clone(), &[]).expect("open");
     let user = catalogue
-        .create(named("Sequential team"))
+        .create(named("Plan a change"))
         .expect("user record");
     let reopened = WorkflowCatalogue::open(path, test_environment_id()).expect("seed later");
     let records = reopened.list();
     assert!(
         records
             .iter()
-            .any(|record| record.id == user.id && record.definition.name() == "Sequential team")
+            .any(|record| record.id == user.id && record.definition.name() == "Plan a change")
     );
     assert!(
         records
             .iter()
-            .any(|record| record.definition.name() == "Sequential team 2")
+            .any(|record| record.definition.name() == "Plan a change 2")
     );
     assert!(
         records
             .iter()
-            .any(|record| record.definition.name() == "One agent")
+            .any(|record| record.definition.name() == "Implement and review")
     );
+}
+
+#[test]
+fn production_seed_keys_are_stable() {
+    let seeds = super::production_seeds(test_environment_id());
+    assert_eq!(
+        seeds
+            .iter()
+            .map(|seed| seed.key.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "plan-a-change-v1",
+            "review-current-code-v1",
+            "implement-with-approval-v1",
+            "implement-and-review-v1",
+        ]
+    );
+}
+
+#[test]
+fn plan_and_review_starters_are_read_only() {
+    let environment = test_environment_id();
+    for definition in [
+        plan_a_change_definition(environment),
+        review_current_code_definition(environment),
+    ] {
+        assert!(definition.steps().iter().all(|step| {
+            !step.writes_primary_source()
+                && !matches!(
+                    &step.action,
+                    StepAction::SystemCommand(command)
+                        if command.command == SystemCommandId::CommitCandidate
+                )
+                && !matches!(step.action, StepAction::HumanGate(_))
+        }));
+    }
+    assert!(
+        plan_a_change_definition(environment).steps()[0]
+            .required_outputs()
+            .iter()
+            .any(|output| output.kind == OutputKind::Plan)
+    );
+    assert!(
+        review_current_code_definition(environment).steps()[0]
+            .required_outputs()
+            .iter()
+            .any(|output| output.kind == OutputKind::ReviewReport)
+    );
+}
+
+#[test]
+fn code_changing_starters_require_human_approval_before_commit() {
+    let environment = test_environment_id();
+    let approval = implement_with_approval_definition(environment);
+    assert!(matches!(
+        approval.steps()[1].action,
+        StepAction::HumanGate(_)
+    ));
+    assert!(matches!(
+        approval.steps()[2].action,
+        StepAction::SystemCommand(ref command)
+            if command.command == SystemCommandId::CommitCandidate
+    ));
+    assert!(
+        approval.steps()[2]
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::HumanDecision)
+    );
+
+    let reviewed = implement_and_review_definition(environment);
+    assert!(matches!(
+        reviewed.steps()[2].action,
+        StepAction::HumanGate(_)
+    ));
+    let commit = &reviewed.steps()[3];
+    assert!(
+        commit
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::ReviewReport)
+    );
+    assert!(
+        commit
+            .inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::HumanDecision)
+    );
+}
+
+#[test]
+fn starter_authority_effects_match_their_code_effects() {
+    let environment = test_environment_id();
+    let read_only = [ToolId::List, ToolId::Read, ToolId::Run];
+    let readonly_grant = [("project".to_owned(), crate::agents::AccessMode::ReadOnly)];
+    for definition in [
+        plan_a_change_definition(environment),
+        review_current_code_definition(environment),
+    ] {
+        assert!(crate::workflows::catalogue::definition_fits_agent(
+            &definition,
+            &read_only,
+            &readonly_grant,
+            "project"
+        ));
+    }
+    assert!(!crate::workflows::catalogue::definition_fits_agent(
+        &implement_with_approval_definition(environment),
+        &read_only,
+        &readonly_grant,
+        "project"
+    ));
+    let writable_grant = [("project".to_owned(), crate::agents::AccessMode::ReadWrite)];
+    assert!(crate::workflows::catalogue::definition_fits_agent(
+        &implement_and_review_definition(environment),
+        &ToolId::ALL,
+        &writable_grant,
+        "project"
+    ));
 }
 
 #[test]

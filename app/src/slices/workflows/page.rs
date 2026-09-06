@@ -3,10 +3,10 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::agents::ToolId;
-use crate::workflows::WorkflowRecord;
 use crate::workflows::definition::{
     MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS,
 };
+use crate::workflows::{WorkflowRecord, summary};
 
 use super::forms::{
     FormErrors, RoleDraft, StepDraft, WorkflowFormState, can_move_step, can_remove_step,
@@ -26,6 +26,10 @@ pub(super) const CONFIG_TITLE: &str = "Configure workflow | Power Plant";
 pub(super) struct CatalogueItem {
     pub(super) id: String,
     pub(super) name: String,
+    pub(super) summary: String,
+    pub(super) effects: String,
+    pub(super) inputs: String,
+    pub(super) approvals: String,
     pub(super) roles: usize,
     pub(super) steps: usize,
     pub(super) updated: String,
@@ -35,21 +39,30 @@ pub(super) struct CatalogueItem {
 #[template(path = "workflows/templates/index.html")]
 pub(super) struct CatalogueView {
     pub(super) workflows: Vec<CatalogueItem>,
+    pub(super) unavailable_starters: Vec<String>,
 }
 
 impl CatalogueView {
-    pub(super) fn from_records(records: &[WorkflowRecord]) -> Self {
+    pub(super) fn from_records_with_starters(
+        records: &[WorkflowRecord],
+        unavailable_starters: Vec<String>,
+    ) -> Self {
         Self {
             workflows: records
                 .iter()
                 .map(|record| CatalogueItem {
                     id: record.id.as_hex(),
                     name: record.definition.name().to_owned(),
+                    summary: summary::process_summary(&record.definition),
+                    effects: summary::code_effects(&record.definition),
+                    inputs: summary::REQUIRED_INPUTS.to_owned(),
+                    approvals: summary::approval_stops(&record.definition),
                     roles: record.definition.roles().len(),
                     steps: record.definition.steps().len(),
                     updated: format_time(record.updated_at_ms),
                 })
                 .collect(),
+            unavailable_starters,
         }
     }
 }

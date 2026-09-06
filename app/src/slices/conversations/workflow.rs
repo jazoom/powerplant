@@ -53,6 +53,8 @@ struct WorkflowOption {
     name: String,
     summary: String,
     effects: String,
+    inputs: String,
+    approvals: String,
     selected: bool,
 }
 
@@ -496,8 +498,10 @@ async fn launch_view(
             WorkflowOption {
                 token: selection.as_token(),
                 name: record.definition.name().to_owned(),
-                summary: workflow_summary(&record.definition),
-                effects: workflow_effects(&record.definition),
+                summary: workflows::summary::process_summary(&record.definition),
+                effects: workflows::summary::code_effects(&record.definition),
+                inputs: workflows::summary::REQUIRED_INPUTS.to_owned(),
+                approvals: workflows::summary::approval_stops(&record.definition),
                 selected: selected_workflow == selection.as_token(),
             }
         })
@@ -915,40 +919,6 @@ fn selected_workflow(records: &[workflows::WorkflowRecord], raw: Option<&str>) -
             .as_token()
         })
         .unwrap_or_default()
-}
-
-fn workflow_summary(definition: &workflows::definition::WorkflowDefinition) -> String {
-    definition
-        .steps()
-        .iter()
-        .map(|step| {
-            let action = match &step.action {
-                workflows::definition::StepAction::Agent(_) => "model phase",
-                workflows::definition::StepAction::SystemCommand(_) => "system command",
-                workflows::definition::StepAction::HumanGate(_) => "approval stop",
-            };
-            format!("{} ({action})", step.name)
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-fn workflow_effects(definition: &workflows::definition::WorkflowDefinition) -> String {
-    if definition.steps().iter().any(|step| {
-        matches!(&step.action, workflows::definition::StepAction::SystemCommand(action)
-            if action.command == workflows::definition::SystemCommandId::CommitCandidate)
-    }) {
-        return "Can commit the candidate after its required approval".to_owned();
-    }
-    if definition
-        .steps()
-        .iter()
-        .any(workflows::definition::StepDefinition::writes_primary_source)
-    {
-        "Can edit a candidate. Does not commit project changes".to_owned()
-    } else {
-        "Does not write the project".to_owned()
-    }
 }
 
 fn target_access_summary(

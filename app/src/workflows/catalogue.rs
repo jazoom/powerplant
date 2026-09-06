@@ -81,6 +81,7 @@ struct CatalogueState {
 pub(crate) struct WorkflowCatalogue {
     path: Option<PathBuf>,
     inner: Mutex<CatalogueState>,
+    unavailable_starters: Vec<String>,
 }
 
 impl CatalogueError {
@@ -151,9 +152,11 @@ impl WorkflowCatalogue {
         if seeded {
             persist(Some(&path), &state)?;
         }
+        let unavailable_starters = unavailable_starter_names(&state, seeds);
         Ok(Self {
             path: Some(path),
             inner: Mutex::new(state),
+            unavailable_starters,
         })
     }
 
@@ -175,6 +178,10 @@ impl WorkflowCatalogue {
             .iter()
             .find(|record| record.id == *id)
             .cloned()
+    }
+
+    pub(crate) fn unavailable_starters(&self) -> Vec<String> {
+        self.unavailable_starters.clone()
     }
 
     pub(crate) fn referencing(&self, environment: &EnvironmentId) -> Vec<WorkflowRecord> {
@@ -484,7 +491,7 @@ fn apply_absent_seeds(
         if state.applied_seeds.len() >= MAXIMUM_APPLIED_SEEDS
             || state.workflows.len() >= MAXIMUM_WORKFLOWS
         {
-            return Err(CatalogueError::Full);
+            continue;
         }
         let definition = named_seed_definition(&state.workflows, &seed.definition)?;
         let id = unused_identifier(state)?;
@@ -501,9 +508,29 @@ fn apply_absent_seeds(
             key: seed.key.clone(),
             workflow_id: id,
         });
-        changed = true;
+        match encode_state(state) {
+            Ok(_) => changed = true,
+            Err(CatalogueError::Full) => {
+                state.workflows.pop();
+                state.applied_seeds.pop();
+            }
+            Err(error) => return Err(error),
+        }
     }
     Ok(changed)
+}
+
+fn unavailable_starter_names(state: &CatalogueState, seeds: &[WorkflowSeed]) -> Vec<String> {
+    seeds
+        .iter()
+        .filter(|seed| {
+            !state
+                .applied_seeds
+                .iter()
+                .any(|applied| applied.key == seed.key)
+        })
+        .map(|seed| seed.definition.name().to_owned())
+        .collect()
 }
 
 fn unused_identifier(state: &CatalogueState) -> Result<WorkflowId, CatalogueError> {
@@ -583,6 +610,13 @@ fn persist(path: Option<&Path>, state: &CatalogueState) -> Result<(), CatalogueE
     let Some(path) = path else {
         return Ok(());
     };
+    let bytes = encode_state(state)?;
+    let dir = path.parent().ok_or(CatalogueError::Persist)?;
+    crate::storage::ensure_private_dir(dir).map_err(|_| CatalogueError::Persist)?;
+    crate::storage::write_private(path, &bytes).map_err(|_| CatalogueError::Persist)
+}
+
+fn encode_state(state: &CatalogueState) -> Result<Vec<u8>, CatalogueError> {
     let file = CatalogueFile {
         file_version: CATALOGUE_FILE_VERSION,
         applied_seeds: state
@@ -604,9 +638,7 @@ fn persist(path: Option<&Path>, state: &CatalogueState) -> Result<(), CatalogueE
     if bytes.len() > MAXIMUM_CATALOGUE_BYTES {
         return Err(CatalogueError::Full);
     }
-    let dir = path.parent().ok_or(CatalogueError::Persist)?;
-    crate::storage::ensure_private_dir(dir).map_err(|_| CatalogueError::Persist)?;
-    crate::storage::write_private(path, &bytes).map_err(|_| CatalogueError::Persist)
+    Ok(bytes)
 }
 
 fn record_to_file(record: &WorkflowRecord) -> WorkflowRecordFile {

@@ -131,7 +131,7 @@ pub(crate) struct PreviewLine {
 pub(crate) struct WorkflowOption {
     pub(crate) token: String,
     pub(crate) label: String,
-    pub(crate) policy: String,
+    pub(crate) summary: String,
     pub(crate) selected: bool,
 }
 

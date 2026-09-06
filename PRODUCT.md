@@ -64,7 +64,7 @@ An agent network policy permits no network, selected domain suffixes or the publ
 
 They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. A workflow can use only a ready snapshot.
 
-They create workflow definitions with a default environment, roles and ordered steps. A new installation includes starter workflow definitions. A step can run an agent, a registered system command or a human gate.
+They create workflow definitions with a default environment, roles and ordered steps. A new installation includes selectable starter processes for planning, code review, implementation with approval and implementation with review. Each process preview shows its required inputs, candidate effects and approval stops. A step can run an agent, a registered system command or a human gate.
 
 They open a project to see its conversations. The project page lists conversations that reference the project and offers New conversation. The new conversation form carries the project reference without granting file access.
 

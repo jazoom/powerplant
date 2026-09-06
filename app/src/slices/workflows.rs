@@ -375,7 +375,10 @@ fn status_for(error: CatalogueError) -> PatchStatus {
 }
 
 fn render_catalogue(state: &AppState, graft: PageGraft) -> AppResult<Response> {
-    let view = CatalogueView::from_records(&state.workflows.list());
+    let view = CatalogueView::from_records_with_starters(
+        &state.workflows.list(),
+        state.workflows.unavailable_starters(),
+    );
     match graft {
         PageGraft::Document => {
             let mut response = responses::chat_page_response(page::INDEX_TITLE, state, &view)?;

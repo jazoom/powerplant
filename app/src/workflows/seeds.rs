@@ -4,17 +4,19 @@ use crate::environments::EnvironmentId;
 use super::commands::SystemCommandId;
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition,
-    RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey, SystemCommandStep,
-    WorkflowDefinition, candidate_revision_output, initial_candidate_input,
+    HumanGateStep, InputKey, OutputKey, OutputKind, RequiredInput, RequiredOutput, ReviewPolicy,
+    RoleDefinition, RoleKey, StepAction, StepDefinition, StepEnvironment, StepKey,
+    SystemCommandStep, WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
+pub(crate) const PLAN_A_CHANGE_V1: &str = "plan-a-change-v1";
+pub(crate) const REVIEW_CURRENT_CODE_V1: &str = "review-current-code-v1";
+pub(crate) const IMPLEMENT_WITH_APPROVAL_V1: &str = "implement-with-approval-v1";
+pub(crate) const IMPLEMENT_AND_REVIEW_V1: &str = "implement-and-review-v1";
 
+#[cfg(test)]
 pub(crate) const ONE_AGENT_V1: &str = "one-agent-v1";
+#[cfg(test)]
 pub(crate) const SEQUENTIAL_TEAM_V1: &str = "sequential-team-v1";
-pub(crate) const READ_ONLY_REVIEW_V1: &str = "read-only-review-v1";
-pub(crate) const REVIEW_WITH_FIXES_V1: &str = "review-with-fixes-v1";
-pub(crate) const REVIEW_UNTIL_APPROVED_V1: &str = "review-until-approved-v1";
-pub(crate) const CORRECTNESS_SECURITY_REVIEW_V1: &str = "correctness-security-v1";
 
 const SEED_KEY_BYTES: usize = 32;
 
@@ -53,26 +55,21 @@ impl SeedKey {
 
 pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<WorkflowSeed> {
     [
-        (ONE_AGENT_V1, one_agent_definition(default_environment)),
         (
-            SEQUENTIAL_TEAM_V1,
-            sequential_team_definition(default_environment),
+            PLAN_A_CHANGE_V1,
+            plan_a_change_definition(default_environment),
         ),
         (
-            READ_ONLY_REVIEW_V1,
-            read_only_review_definition(default_environment),
+            REVIEW_CURRENT_CODE_V1,
+            review_current_code_definition(default_environment),
         ),
         (
-            REVIEW_WITH_FIXES_V1,
-            review_with_fixes_definition(default_environment),
+            IMPLEMENT_WITH_APPROVAL_V1,
+            implement_with_approval_definition(default_environment),
         ),
         (
-            REVIEW_UNTIL_APPROVED_V1,
-            review_until_approved_definition(default_environment),
-        ),
-        (
-            CORRECTNESS_SECURITY_REVIEW_V1,
-            correctness_security_definition(default_environment),
+            IMPLEMENT_AND_REVIEW_V1,
+            implement_and_review_definition(default_environment),
         ),
     ]
     .into_iter()
@@ -83,6 +80,130 @@ pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<Workfl
     .collect()
 }
 
+pub(crate) fn plan_a_change_definition(default_environment: EnvironmentId) -> WorkflowDefinition {
+    let roles = vec![role(
+        "planner",
+        "Planner",
+        "Inspects the project and explains a safe implementation sequence.",
+        "Inspect the project and produce a plan. Do not change the candidate.",
+    )];
+    let planner = agent_step(
+        "planner",
+        "Plan the change",
+        "planner",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![initial_candidate_input()],
+        vec![assistant_output(), output("plan", OutputKind::Plan)],
+        None,
+    );
+    definition("Plan a change", default_environment, roles, vec![planner])
+}
+
+pub(crate) fn review_current_code_definition(
+    default_environment: EnvironmentId,
+) -> WorkflowDefinition {
+    let roles = vec![role(
+        "reviewer",
+        "Reviewer",
+        "Checks the current project for correctness, security and regressions.",
+        "Inspect the current project and produce a review. Do not change the candidate.",
+    )];
+    let reviewer = agent_step(
+        "reviewer",
+        "Review the current code",
+        "reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![initial_candidate_input()],
+        vec![assistant_output(), review_output()],
+        None,
+    );
+    definition(
+        "Review current code",
+        default_environment,
+        roles,
+        vec![reviewer],
+    )
+}
+
+pub(crate) fn implement_with_approval_definition(
+    default_environment: EnvironmentId,
+) -> WorkflowDefinition {
+    let roles = vec![role(
+        "implementer",
+        "Implementer",
+        "Applies the requested change to an isolated candidate.",
+        "Implement the task in the candidate. Submit the complete candidate for approval.",
+    )];
+    let implementer = agent_step(
+        "implementer",
+        "Implement the change",
+        "implementer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![initial_candidate_input()],
+        vec![assistant_output(), candidate_revision_output()],
+        None,
+    );
+    let approval = human_approval_step("implementer", None);
+    let commit = commit_with_approval("implementer", None, "approval");
+    definition(
+        "Implement with approval",
+        default_environment,
+        roles,
+        vec![implementer, approval, commit],
+    )
+}
+
+pub(crate) fn implement_and_review_definition(
+    default_environment: EnvironmentId,
+) -> WorkflowDefinition {
+    let roles = vec![
+        role(
+            "implementer",
+            "Implementer",
+            "Applies the requested change to an isolated candidate.",
+            "Implement the task in the candidate. Submit the complete candidate for review.",
+        ),
+        role(
+            "reviewer",
+            "Reviewer",
+            "Checks the candidate for correctness, security and regressions.",
+            "Review this exact candidate. Do not change it. Submit a structured review.",
+        ),
+    ];
+    let implementer = agent_step(
+        "implementer",
+        "Implement the change",
+        "implementer",
+        CandidateAuthority::Edit,
+        ToolId::ALL.to_vec(),
+        vec![initial_candidate_input()],
+        vec![assistant_output(), candidate_revision_output()],
+        None,
+    );
+    let reviewer = agent_step(
+        "reviewer",
+        "Review the change",
+        "reviewer",
+        CandidateAuthority::ReadOnly,
+        review_tools(),
+        vec![current_candidate_input()],
+        vec![assistant_output(), review_output()],
+        None,
+    );
+    let approval = human_approval_step("implementer", Some("reviewer"));
+    let commit = commit_with_approval("implementer", Some("reviewer"), "approval");
+    definition(
+        "Implement and review",
+        default_environment,
+        roles,
+        vec![implementer, reviewer, approval, commit],
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn one_agent_definition(default_environment: EnvironmentId) -> WorkflowDefinition {
     let role = role("coding-agent", "Coding agent", "", "");
     let step = agent_step(
@@ -98,6 +219,7 @@ pub(crate) fn one_agent_definition(default_environment: EnvironmentId) -> Workfl
     definition("One agent", default_environment, vec![role], vec![step])
 }
 
+#[cfg(test)]
 pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> WorkflowDefinition {
     let roles = vec![
         role(
@@ -169,60 +291,7 @@ pub(crate) fn sequential_team_definition(default_environment: EnvironmentId) -> 
     )
 }
 
-pub(crate) fn read_only_review_definition(
-    default_environment: EnvironmentId,
-) -> WorkflowDefinition {
-    let roles = vec![
-        role(
-            "implementer",
-            "Implementer",
-            "Implements the requested change.",
-            "Implement the task and submit the complete candidate.",
-        ),
-        role(
-            "reviewer",
-            "Reviewer",
-            "Checks correctness, security, regressions, and scope.",
-            "Assess this exact candidate. Submit a structured review verdict.",
-        ),
-    ];
-    let implementer = agent_step(
-        "implementer",
-        "Implementer",
-        "implementer",
-        CandidateAuthority::Edit,
-        ToolId::ALL.to_vec(),
-        vec![initial_candidate_input()],
-        vec![assistant_output(), candidate_revision_output()],
-        None,
-    );
-    let reviewer = agent_step(
-        "reviewer",
-        "Reviewer",
-        "reviewer",
-        CandidateAuthority::ReadOnly,
-        review_tools(),
-        vec![input(
-            "candidate",
-            ArtefactKind::CandidateRevision,
-            "implementer",
-            "candidate",
-        )],
-        vec![assistant_output(), review_output()],
-        None,
-    );
-    definition(
-        "Read-only review",
-        default_environment,
-        roles,
-        vec![
-            implementer,
-            reviewer,
-            commit_step("implementer", "reviewer"),
-        ],
-    )
-}
-
+#[cfg(test)]
 pub(crate) fn review_with_fixes_definition(
     default_environment: EnvironmentId,
 ) -> WorkflowDefinition {
@@ -311,6 +380,7 @@ pub(crate) fn review_with_fixes_definition(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn review_until_approved_definition(
     default_environment: EnvironmentId,
 ) -> WorkflowDefinition {
@@ -360,6 +430,7 @@ pub(crate) fn review_until_approved_definition(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn correctness_security_definition(
     default_environment: EnvironmentId,
 ) -> WorkflowDefinition {
@@ -445,6 +516,7 @@ fn current_candidate_input() -> RequiredInput {
     }
 }
 
+#[cfg(test)]
 fn review_policy(output: &str, revision: &str, limit: u8) -> ReviewPolicy {
     ReviewPolicy {
         report_output: OutputKey::parse(output).expect("output"),
@@ -453,6 +525,7 @@ fn review_policy(output: &str, revision: &str, limit: u8) -> ReviewPolicy {
     }
 }
 
+#[cfg(test)]
 fn commit_step_current(reviews: &[(&str, &str)]) -> StepDefinition {
     let mut inputs = vec![current_candidate_input()];
     inputs.extend(
@@ -519,6 +592,7 @@ fn agent_step(
     }
 }
 
+#[cfg(test)]
 fn commit_step(candidate_step: &str, review_step: &str) -> StepDefinition {
     StepDefinition {
         key: StepKey::parse("commit").expect("step"),
@@ -532,6 +606,70 @@ fn commit_step(candidate_step: &str, review_step: &str) -> StepDefinition {
             ),
             input("review", ArtefactKind::ReviewReport, review_step, "review"),
         ],
+        action: StepAction::SystemCommand(SystemCommandStep {
+            command: SystemCommandId::CommitCandidate,
+            environment: StepEnvironment::WorkflowDefault,
+            required_outputs: vec![output("committed-candidate", OutputKind::CandidateRevision)],
+        }),
+        review: None,
+    }
+}
+
+fn human_approval_step(candidate_step: &str, review_step: Option<&str>) -> StepDefinition {
+    let mut inputs = vec![input(
+        "candidate",
+        ArtefactKind::CandidateRevision,
+        candidate_step,
+        "candidate",
+    )];
+    if let Some(review_step) = review_step {
+        inputs.push(input(
+            "review",
+            ArtefactKind::ReviewReport,
+            review_step,
+            "review",
+        ));
+    }
+    StepDefinition {
+        key: StepKey::parse("approval").expect("approval step"),
+        name: "Approve changes".to_owned(),
+        inputs,
+        action: StepAction::HumanGate(HumanGateStep {
+            required_output: output("decision", OutputKind::HumanDecision),
+        }),
+        review: None,
+    }
+}
+
+fn commit_with_approval(
+    candidate_step: &str,
+    review_step: Option<&str>,
+    approval_step: &str,
+) -> StepDefinition {
+    let mut inputs = vec![input(
+        "candidate",
+        ArtefactKind::CandidateRevision,
+        candidate_step,
+        "candidate",
+    )];
+    if let Some(review_step) = review_step {
+        inputs.push(input(
+            "review",
+            ArtefactKind::ReviewReport,
+            review_step,
+            "review",
+        ));
+    }
+    inputs.push(input(
+        "decision",
+        ArtefactKind::HumanDecision,
+        approval_step,
+        "decision",
+    ));
+    StepDefinition {
+        key: StepKey::parse("commit").expect("step"),
+        name: "Commit".to_owned(),
+        inputs,
         action: StepAction::SystemCommand(SystemCommandStep {
             command: SystemCommandId::CommitCandidate,
             environment: StepEnvironment::WorkflowDefault,
