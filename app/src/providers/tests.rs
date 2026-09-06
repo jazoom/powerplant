@@ -424,6 +424,7 @@ mod scripted_fixture {
         round: Arc<AtomicUsize>,
         last_preamble: Arc<Mutex<Option<String>>>,
         last_tools: Arc<Mutex<Vec<String>>>,
+        last_history: Arc<Mutex<Vec<ChatTurn>>>,
     }
 
     impl ScriptedBackend {
@@ -439,6 +440,7 @@ mod scripted_fixture {
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
+                last_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -452,6 +454,7 @@ mod scripted_fixture {
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
+                last_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -465,6 +468,7 @@ mod scripted_fixture {
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
+                last_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -485,6 +489,7 @@ mod scripted_fixture {
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
+                last_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -498,6 +503,7 @@ mod scripted_fixture {
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
+                last_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -511,6 +517,7 @@ mod scripted_fixture {
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),
+                last_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -528,6 +535,13 @@ mod scripted_fixture {
                 .clone()
         }
 
+        pub(crate) fn last_history(&self) -> Vec<ChatTurn> {
+            self.last_history
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+
         pub(crate) fn verify(&self, _connection: &ProviderConnection) -> Result<(), ProviderError> {
             self.verify_result.clone()
         }
@@ -535,7 +549,7 @@ mod scripted_fixture {
         pub(crate) fn stream_turn(
             &self,
             _connection: &ProviderConnection,
-            _history: &[ChatTurn],
+            history: &[ChatTurn],
             _extra: &[Message],
             tools: &[ToolDefinition],
             preamble: &str,
@@ -544,6 +558,10 @@ mod scripted_fixture {
                 .last_preamble
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(preamble.to_owned());
+            *self
+                .last_history
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = history.to_vec();
             *self
                 .last_tools
                 .lock()

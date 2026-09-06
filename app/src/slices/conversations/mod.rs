@@ -17,7 +17,8 @@ use crate::{
     agents::AgentId,
     conversations::{
         ConversationError, ConversationId, ConversationModelConfiguration, ConversationRecord,
-        DocumentError, DocumentId, PlanDocument, resolve_authority,
+        DocumentError, DocumentId, PlanDocument, PlanReviewCreation, PlanReviewLink,
+        PlanRevisionReference, PlanSource, resolve_authority,
     },
     error::{AppError, AppResult},
     projects::ProjectId,
@@ -29,7 +30,9 @@ use crate::{
 };
 
 use self::page::{
-    CatalogueView, ConversationDetailView, ConversationFormView, ModelSources, PlanDocumentPage,
+    CatalogueView, ConversationDetailView, ConversationFormView, ConversationLinkView,
+    ModelSources, PlanDocumentPage, PlanReviewView, PresetOption, ProviderOption,
+    ReviewProjectOption,
 };
 
 const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
@@ -50,6 +53,10 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/plans/{document_id}/remove",
             post(remove_plan),
+        )
+        .route(
+            "/conversations/{conversation_id}/plans/{document_id}/review",
+            get(plan_review).post(create_plan_review),
         )
         .route(
             "/conversations/{conversation_id}/messages",
@@ -144,6 +151,26 @@ struct PlanRevisionForm {
 struct PlanAssociationForm {
     revision: String,
     document_revision: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct PlanReviewQuery {
+    revision: String,
+}
+
+#[derive(Deserialize)]
+struct PlanReviewForm {
+    source_revision: String,
+    document_revision: String,
+    brief: String,
+    provider: String,
+    model: String,
+    thinking: String,
+    #[serde(default)]
+    preset: String,
+    #[serde(default)]
+    read_only_project: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -274,6 +301,264 @@ async fn detail(
         PatchStatus::Ok,
         detail_view(&state, session.0, &record, &record.title, ""),
     )
+}
+
+async fn plan_review(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: GraftRequest,
+    Path((conversation_id, document_id)): Path<(String, String)>,
+    Query(query): Query<PlanReviewQuery>,
+) -> AppResult<Response> {
+    let Some(source) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::request_navigation(graft, "/conversations"));
+    };
+    let Some(document_id) = DocumentId::parse(&document_id) else {
+        return Ok(responses::request_navigation(
+            graft,
+            &conversation_path(&source),
+        ));
+    };
+    let Some(document) = state.documents.get(&document_id) else {
+        return Ok(responses::request_navigation(
+            graft,
+            &conversation_path(&source),
+        ));
+    };
+    let revision = if query.revision.is_empty() {
+        document.current_revision()
+    } else {
+        let Some(revision) = parse_revision(&query.revision) else {
+            return render_plan_review(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                &source,
+                &document,
+                document.current_revision(),
+                "",
+                "Choose an available plan revision.",
+                None,
+                &[],
+            );
+        };
+        revision
+    };
+    if document.revision(revision).is_none() {
+        return render_plan_review(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &source,
+            &document,
+            document.current_revision(),
+            "",
+            "Choose an available plan revision.",
+            None,
+            &[],
+        );
+    }
+    if !plan_origin_matches(&document, revision, source.id) {
+        return Ok(responses::request_navigation(
+            graft,
+            &conversation_path(&source),
+        ));
+    }
+    render_plan_review(
+        &state,
+        graft,
+        PatchStatus::Ok,
+        &source,
+        &document,
+        revision,
+        default_review_brief(),
+        "",
+        None,
+        &[],
+    )
+}
+
+async fn create_plan_review(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path((conversation_id, document_id)): Path<(String, String)>,
+    Form(fields): Form<Vec<(String, String)>>,
+) -> AppResult<Response> {
+    let mut projects = Vec::new();
+    let fields = fields.into_iter().filter(|(key, value)| {
+        if key == "read_only_project" {
+            projects.push(value.clone());
+            false
+        } else {
+            true
+        }
+    });
+    let Ok(mut form) = PlanReviewForm::deserialize(serde::de::value::MapDeserializer::<
+        _,
+        serde::de::value::Error,
+    >::new(fields)) else {
+        return Ok(axum::http::StatusCode::UNPROCESSABLE_ENTITY.into_response());
+    };
+    form.read_only_project = projects;
+    let Some(source) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(document_id) = DocumentId::parse(&document_id) else {
+        return Ok(responses::command_navigation(&conversation_path(&source)));
+    };
+    let Some(document) = state.documents.get(&document_id) else {
+        return Ok(responses::command_navigation(&conversation_path(&source)));
+    };
+    if parse_revision(&form.source_revision).is_none() {
+        return render_plan_review(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &source,
+            &document,
+            document.current_revision(),
+            &form.brief,
+            REVISION_MESSAGE,
+            Some(&form),
+            &[],
+        );
+    }
+    let Some(document_revision) = parse_revision(&form.document_revision) else {
+        return render_plan_review(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &source,
+            &document,
+            document.current_revision(),
+            &form.brief,
+            "Choose an available plan revision.",
+            None,
+            &[],
+        );
+    };
+    let Some(selected_revision) = document.revision(document_revision) else {
+        return render_plan_review(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &source,
+            &document,
+            document.current_revision(),
+            &form.brief,
+            "Choose an available plan revision.",
+            None,
+            &[],
+        );
+    };
+    if !plan_origin_matches(&document, document_revision, source.id) {
+        return render_plan_review(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            &source,
+            &document,
+            document_revision,
+            &form.brief,
+            "This plan does not belong to the source conversation.",
+            None,
+            &[],
+        );
+    }
+    let model = match review_model(&state, &form) {
+        Ok(model) => model,
+        Err(error) => {
+            return render_plan_review(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                &source,
+                &document,
+                document_revision,
+                &form.brief,
+                error,
+                Some(&form),
+                &[],
+            );
+        }
+    };
+    let read_only_projects = match review_projects(&state, &source, &form.read_only_project) {
+        Ok(projects) => projects,
+        Err(error) => {
+            return render_plan_review(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                &source,
+                &document,
+                document_revision,
+                &form.brief,
+                error,
+                Some(&form),
+                &[],
+            );
+        }
+    };
+    let title = review_title(&document.title);
+    let plan = PlanRevisionReference {
+        document_id,
+        revision: selected_revision.revision,
+        content_hash: selected_revision.content_hash,
+        object_hash: selected_revision.object_hash,
+        artefact_hash: selected_revision.artefact_hash,
+    };
+    let review = match state.conversations.create_plan_review(PlanReviewCreation {
+        source_id: source.id,
+        source_revision: parse_revision(&form.source_revision).expect("validated source revision"),
+        title,
+        model: model.clone(),
+        plan,
+        task_brief: form.brief.clone(),
+        read_only_projects,
+        source_target: source.execution_target,
+    }) {
+        Ok(review) => review,
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            return Err(AppError::new("store plan review conversation", error));
+        }
+        Err(error) => {
+            return render_plan_review(
+                &state,
+                graft,
+                status_for(error),
+                &source,
+                &document,
+                document_revision,
+                &form.brief,
+                error.message(),
+                Some(&form),
+                &[],
+            );
+        }
+    };
+    match start_message(
+        &state,
+        session.0,
+        review.clone(),
+        review.revision,
+        model,
+        form.brief,
+    )
+    .await
+    {
+        Ok(_) => Ok(responses::command_navigation(&conversation_path(&review))),
+        Err(StartMessageError::Internal(error)) => Err(error),
+        Err(StartMessageError::User(status, error)) => {
+            let review = state.conversations.get(&review.id).unwrap_or(review);
+            let view = detail_view(&state, session.0, &review, &review.title, error);
+            let mut patches = hypergraft::PatchSet::new()
+                .title(&view.document_title)
+                .with_children("chat-main", &view)?;
+            patches.replace_location(conversation_path(&review))?;
+            Ok(patches.respond(status)?)
+        }
+    }
 }
 
 async fn save_plan_message(
@@ -645,19 +930,6 @@ async fn send_message(
             detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
         );
     };
-    if record.active_job.is_some() {
-        return render_detail_command(
-            graft,
-            PatchStatus::Conflict,
-            detail_view(
-                &state,
-                session.0,
-                &record,
-                &record.title,
-                ConversationError::Active.message(),
-            ),
-        );
-    }
     let Some(model) = effective_model(&state, &record) else {
         return render_detail_command(
             graft,
@@ -671,47 +943,74 @@ async fn send_message(
             ),
         );
     };
-    if let Err(error) = valid_selection(&state, &model.selection) {
-        return render_detail_command(
+    match start_message(
+        &state,
+        session.0,
+        record.clone(),
+        revision,
+        model,
+        form.message,
+    )
+    .await
+    {
+        Ok(started) => render_detail_command(
             graft,
-            PatchStatus::UnprocessableEntity,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &started, &started.title, ""),
+        ),
+        Err(StartMessageError::Internal(error)) => Err(error),
+        Err(StartMessageError::User(status, error)) => render_detail_command(
+            graft,
+            status,
             detail_view(&state, session.0, &record, &record.title, error),
-        );
+        ),
+    }
+}
+
+enum StartMessageError {
+    User(PatchStatus, &'static str),
+    Internal(AppError),
+}
+
+async fn start_message(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    record: ConversationRecord,
+    revision: u32,
+    model: ConversationModelConfiguration,
+    text: String,
+) -> Result<ConversationRecord, StartMessageError> {
+    if record.active_job.is_some() {
+        return Err(StartMessageError::User(
+            PatchStatus::Conflict,
+            ConversationError::Active.message(),
+        ));
+    }
+    if let Err(error) = valid_selection(state, &model.selection) {
+        return Err(StartMessageError::User(
+            PatchStatus::UnprocessableEntity,
+            error,
+        ));
     }
     let Some(connection) = state.vault.connection_for(&model.selection) else {
-        return render_detail_command(
-            graft,
+        return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
-            detail_view(
-                &state,
-                session.0,
-                &record,
-                &record.title,
-                "Choose a stored provider.",
-            ),
-        );
+            "Choose a stored provider.",
+        ));
     };
     let authority = match resolve_authority(&record, &state.projects, &state.agents) {
         Ok(authority) => authority.map(|authority| authority.effective),
         Err(error) => {
-            return render_detail_command(
-                graft,
+            return Err(StartMessageError::User(
                 PatchStatus::Conflict,
-                detail_view(&state, session.0, &record, &record.title, error.message()),
-            );
+                error.message(),
+            ));
         }
     };
     let workflow = if let Some(authority) = authority.as_ref() {
-        let environment = match workflows::alpine_git_id(&state.environments) {
-            Ok(environment) => environment,
-            Err(error) => {
-                return render_detail_command(
-                    graft,
-                    PatchStatus::UnprocessableEntity,
-                    detail_view(&state, session.0, &record, &record.title, error.message()),
-                );
-            }
-        };
+        let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
+            StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
+        })?;
         let secondary = authority
             .policy
             .grants()
@@ -722,102 +1021,80 @@ async fn send_message(
                 access: crate::agents::AccessMode::ReadOnly,
             })
             .collect();
-        let pinned = match workflows::pin_quick_task_with_context(
+        let pinned = workflows::pin_quick_task_with_context(
             authority.grant_access,
             &authority.tools,
             &model.instructions,
             environment,
             secondary,
-        ) {
-            Ok(pinned) => pinned,
-            Err(error) => {
-                return render_detail_command(
-                    graft,
-                    PatchStatus::UnprocessableEntity,
-                    detail_view(&state, session.0, &record, &record.title, error.message()),
-                );
-            }
-        };
-        let environments = match workflows::resolve_environments(
+        )
+        .map_err(|error| {
+            StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
+        })?;
+        let environments = workflows::resolve_environments(
             &pinned.definition,
             &state.environments,
             &state.environment_snapshots,
         )
         .await
-        {
-            Ok(environments) => environments,
-            Err(error) => {
-                return render_detail_command(
-                    graft,
-                    PatchStatus::UnprocessableEntity,
-                    detail_view(&state, session.0, &record, &record.title, error.message()),
-                );
-            }
-        };
-        let execution = match state.workflow_execution.acquire() {
-            Ok(execution) => execution,
-            Err(_) => {
-                return render_detail_command(
-                    graft,
-                    PatchStatus::Conflict,
-                    detail_view(
-                        &state,
-                        session.0,
-                        &record,
-                        &record.title,
-                        "Wait until the current workflow finishes.",
-                    ),
-                );
-            }
-        };
-        let run_id = workflows::RunId::generate()
-            .map_err(|error| AppError::new("create workflow run identifier", error))?;
+        .map_err(|error| {
+            StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
+        })?;
+        let execution = state.workflow_execution.acquire().map_err(|_| {
+            StartMessageError::User(
+                PatchStatus::Conflict,
+                "Wait until the current workflow finishes.",
+            )
+        })?;
+        let run_id = workflows::RunId::generate().map_err(|error| {
+            StartMessageError::Internal(AppError::new("create workflow run identifier", error))
+        })?;
         Some((run_id, authority.clone(), pinned, environments, execution))
     } else {
         None
     };
-    let job = match state.sessions.begin_conversation_job(
-        &session.0,
-        record.id,
-        record.messages.len() + 1,
-    ) {
-        Ok(job) => job,
-        Err(_) => {
-            return render_detail_command(
-                graft,
+    let job = state
+        .sessions
+        .begin_conversation_job(&session, record.id, record.messages.len() + 1)
+        .map_err(|_| {
+            StartMessageError::User(
                 PatchStatus::Conflict,
-                detail_view(
-                    &state,
-                    session.0,
-                    &record,
-                    &record.title,
-                    "Another command is active in this browser session.",
-                ),
-            );
-        }
-    };
-    let started = state.conversations.begin_message_with_model(
+                "Another command is active in this browser session.",
+            )
+        })?;
+    let started = match state.conversations.begin_message_with_model(
         &record.id,
         revision,
         model,
         job.id(),
-        form.message,
-    );
-    let started = match started {
+        text,
+    ) {
         Ok(started) => started,
         Err(error) => {
             state
                 .sessions
-                .finish_conversation_job(&session.0, record.id, job.id());
-            let latest = state.conversations.get(&record.id).unwrap_or(record);
-            return render_detail_command(
-                graft,
-                status_for(error),
-                detail_view(&state, session.0, &latest, &latest.title, error.message()),
-            );
+                .finish_conversation_job(&session, record.id, job.id());
+            return Err(StartMessageError::User(status_for(error), error.message()));
         }
     };
-    let view = detail_view(&state, session.0, &started, &started.title, "");
+    let turns = match job::history_with_review(state, &started) {
+        Ok(turns) => turns,
+        Err(error) => {
+            let _ = state.conversations.settle_message(
+                &started.id,
+                job.id(),
+                String::new(),
+                crate::conversations::MessageStatus::Failed,
+            );
+            let _ = state
+                .sessions
+                .finish_conversation_job(&session, started.id, job.id());
+            return Err(StartMessageError::User(
+                PatchStatus::UnprocessableEntity,
+                error,
+            ));
+        }
+    };
     if let Some((run_id, authority, pinned, environments, execution)) = workflow {
         let run = WorkflowRun::create_for_conversation(
             run_id,
@@ -836,8 +1113,11 @@ async fn send_message(
             );
             let _ = state
                 .sessions
-                .finish_conversation_job(&session.0, started.id, job.id());
-            return Err(AppError::new("store workflow run", error));
+                .finish_conversation_job(&session, started.id, job.id());
+            return Err(StartMessageError::Internal(AppError::new(
+                "store workflow run",
+                error,
+            )));
         }
         job.set_workflow_name(run.pinned.definition.name().to_owned());
         job.set_step_label("Source capture".to_owned());
@@ -846,7 +1126,7 @@ async fn send_message(
             state.clone(),
             WorkflowJob {
                 run_id,
-                session_id: session.0,
+                session_id: session,
                 project_id: authority.project_id,
                 agent_id,
                 agent_revision: authority.revision,
@@ -856,7 +1136,7 @@ async fn send_message(
                 grant_access: authority.grant_access,
                 connection,
                 host_policy: authority.policy.clone(),
-                turns: job::history(&started),
+                turns,
                 job: job.clone(),
                 eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
             },
@@ -864,12 +1144,16 @@ async fn send_message(
             execution,
         ));
     } else {
-        let run_state = state.clone();
         tokio::spawn(job::run(
-            run_state, session.0, started.id, started, connection, job,
+            state.clone(),
+            session,
+            started.id,
+            started,
+            connection,
+            job,
         ));
     }
-    render_detail_command(graft, PatchStatus::Ok, view)
+    Ok(state.conversations.get(&record.id).unwrap_or(record))
 }
 
 async fn cancel_message(
@@ -1802,6 +2086,7 @@ fn detail_view(
             run.conversation_id == Some(record.id) && run.kind == workflows::RunKind::QuickTask
         })
         .and_then(|run| page::pending_code_gate(&run, &state.workflow_artefacts));
+    let (source_review, linked_reviews) = conversation_links(state, record);
     ConversationDetailView::from_record_with_gate(
         record,
         ModelSources {
@@ -1816,7 +2101,310 @@ fn detail_view(
         title,
         error,
         pending_gate,
+        source_review,
+        linked_reviews,
     )
+}
+
+fn conversation_links(
+    state: &AppState,
+    record: &ConversationRecord,
+) -> (Option<ConversationLinkView>, Vec<ConversationLinkView>) {
+    let link_view = |link: &PlanReviewLink| {
+        let title = state.conversations.get(&link.conversation_id).map_or_else(
+            || "Conversation unavailable".to_owned(),
+            |conversation| conversation.title,
+        );
+        let plan_title = state
+            .documents
+            .get(&link.plan.document_id)
+            .map_or_else(|| "Plan unavailable".to_owned(), |document| document.title);
+        ConversationLinkView {
+            title,
+            plan_title,
+            href: format!("/conversations/{}", link.conversation_id.as_hex()),
+            plan_href: format!(
+                "/plans/{}?revision={}",
+                link.plan.document_id.as_hex(),
+                link.plan.revision
+            ),
+            plan_revision: link.plan.revision,
+            content_hash: link.plan.content_hash.as_str(),
+        }
+    };
+    let source_review = record.source_review.as_ref().map(link_view);
+    let linked_reviews = record.plan_reviews.iter().map(link_view).collect();
+    (source_review, linked_reviews)
+}
+
+fn default_review_brief() -> &'static str {
+    "Review this plan for correctness, missing work, risks and unclear requirements. Return findings and concrete recommendations. Do not change project files."
+}
+
+fn review_title(document_title: &str) -> String {
+    let mut title = "Review: ".to_owned();
+    let remaining = crate::conversations::MAXIMUM_TITLE_BYTES - title.len();
+    let end = document_title.floor_char_boundary(remaining.min(document_title.len()));
+    title.push_str(&document_title[..end]);
+    title
+}
+
+fn review_model(
+    state: &AppState,
+    form: &PlanReviewForm,
+) -> Result<ConversationModelConfiguration, &'static str> {
+    let selection = if form.preset.trim().is_empty() {
+        submitted_selection(state, form)?
+    } else {
+        let preset = AgentId::parse(form.preset.trim())
+            .and_then(|id| state.agents.get(&id))
+            .ok_or("Choose an available reviewer preset.")?;
+        match preset.selection.clone() {
+            Some(selection) => selection,
+            None => submitted_selection(state, form)?,
+        }
+    };
+    valid_selection(state, &selection)?;
+    if form.preset.trim().is_empty() {
+        Ok(ConversationModelConfiguration::direct(selection))
+    } else {
+        let preset = AgentId::parse(form.preset.trim())
+            .and_then(|id| state.agents.get(&id))
+            .ok_or("Choose an available reviewer preset.")?;
+        Ok(ConversationModelConfiguration::from_preset(
+            &preset, selection,
+        ))
+    }
+}
+
+fn submitted_selection(
+    state: &AppState,
+    form: &PlanReviewForm,
+) -> Result<ModelSelection, &'static str> {
+    let provider = ProviderKind::parse(form.provider.trim()).ok_or("Choose a stored provider.")?;
+    let thinking = if form.thinking.trim().is_empty() {
+        None
+    } else {
+        Some(
+            ThinkingEffort::new(form.thinking.clone())
+                .ok_or("Choose an available thinking effort.")?,
+        )
+    };
+    let selection = ModelSelection::new(provider, form.model.clone(), thinking)
+        .ok_or("Enter a valid model name.")?;
+    valid_selection(state, &selection)?;
+    Ok(selection)
+}
+
+fn review_projects(
+    state: &AppState,
+    source: &ConversationRecord,
+    selected: &[String],
+) -> Result<Vec<(ProjectId, u32)>, &'static str> {
+    let mut projects = Vec::with_capacity(selected.len());
+    for raw in selected {
+        let project_id = ProjectId::parse(raw.trim()).ok_or("Choose a valid read-only project.")?;
+        if projects.iter().any(|(id, _)| *id == project_id) {
+            return Err("Choose each read-only project once.");
+        }
+        let grant = source
+            .grants
+            .iter()
+            .find(|grant| grant.project_id == project_id)
+            .ok_or("Only explicitly granted projects can enter this read-only review.")?;
+        let project = state
+            .projects
+            .get(&project_id)
+            .ok_or("The selected read-only project is unavailable.")?;
+        if project.revision != grant.project_revision || !project.host_path_is_available() {
+            return Err("The selected read-only project changed. Reload this review.");
+        }
+        projects.push((project_id, grant.project_revision));
+    }
+    Ok(projects)
+}
+
+fn review_view_model(
+    state: &AppState,
+    source: &ConversationRecord,
+    form: Option<&PlanReviewForm>,
+) -> (Vec<ProviderOption>, Vec<PresetOption>, String) {
+    let selection = form
+        .and_then(|form| submitted_selection(state, form).ok())
+        .or_else(|| effective_model(state, source).map(|model| model.selection));
+    let providers = state
+        .vault
+        .desk_providers()
+        .into_iter()
+        .map(|provider| ProviderOption {
+            value: provider.kind.as_str(),
+            label: provider.kind.label(),
+            model: selection
+                .as_ref()
+                .filter(|selection| selection.provider == provider.kind)
+                .map_or(provider.model, |selection| selection.model.clone()),
+            thinking: selection
+                .as_ref()
+                .filter(|selection| selection.provider == provider.kind)
+                .and_then(|selection| selection.thinking.as_ref())
+                .map(|value| value.as_str().to_owned())
+                .unwrap_or_default(),
+            selected: selection
+                .as_ref()
+                .is_some_and(|selection| selection.provider == provider.kind),
+        })
+        .collect();
+    let selected_preset = form.map(|form| form.preset.trim()).unwrap_or_default();
+    let presets = state
+        .agents
+        .list()
+        .into_iter()
+        .map(|agent| PresetOption {
+            id: agent.id.as_hex(),
+            name: agent.name.clone(),
+            description: agent.selection.as_ref().map_or_else(
+                || "Keep the selected direct model".to_owned(),
+                |selection| format!("{} · {}", selection.provider.label(), selection.model),
+            ),
+            selected: agent.id.as_hex() == selected_preset,
+        })
+        .collect();
+    let summary = if let Some(form) = form
+        && !form.preset.trim().is_empty()
+    {
+        state
+            .agents
+            .list()
+            .into_iter()
+            .find(|agent| agent.id.as_hex() == form.preset.trim())
+            .map_or_else(
+                || "Reviewer preset is unavailable".to_owned(),
+                |agent| format!("Preset: {}", agent.name),
+            )
+    } else {
+        selection.map_or_else(
+            || "Choose a stored provider and model".to_owned(),
+            |selection| {
+                let effort = selection
+                    .thinking
+                    .as_ref()
+                    .map(|effort| format!(" · Thinking: {}", effort.label()))
+                    .unwrap_or_default();
+                format!(
+                    "Direct model: {} · {}{}",
+                    selection.provider.label(),
+                    selection.model,
+                    effort
+                )
+            },
+        )
+    };
+    (providers, presets, summary)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_plan_review(
+    state: &AppState,
+    graft: impl Into<GraftRequest>,
+    status: PatchStatus,
+    source: &ConversationRecord,
+    document: &PlanDocument,
+    revision: u32,
+    brief: &str,
+    error: &'static str,
+    form: Option<&PlanReviewForm>,
+    _selected_projects: &[(ProjectId, u32)],
+) -> AppResult<Response> {
+    let content = state
+        .documents
+        .content(document, revision)
+        .map_err(|error| AppError::new("read selected plan", error))?;
+    let (providers, presets, reviewer_summary) = review_view_model(state, source, form);
+    let selected_projects: Vec<_> = form
+        .map(|form| form.read_only_project.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let read_only_projects = source
+        .grants
+        .iter()
+        .filter_map(|grant| {
+            let project = state.projects.get(&grant.project_id)?;
+            Some(ReviewProjectOption {
+                id: grant.project_id.as_hex(),
+                name: project.name.clone(),
+                access: if project.revision == grant.project_revision
+                    && project.host_path_is_available()
+                {
+                    "Read-only authority · List, Read and Run"
+                } else {
+                    "Read-only authority needs a fresh project record"
+                },
+                selected: selected_projects
+                    .iter()
+                    .any(|selected| *selected == grant.project_id.as_hex()),
+            })
+        })
+        .collect();
+    let view = PlanReviewView {
+        document_title: format!("Review {} | Power Plant", document.title),
+        source_title: source.title.clone(),
+        source_id: source.id.as_hex(),
+        source_revision: source.revision.to_string(),
+        document_id: document.id.as_hex(),
+        document_revision: revision,
+        content_hash: document
+            .revision(revision)
+            .expect("selected plan revision")
+            .content_hash
+            .as_str(),
+        content_html: page::reply_html(&content),
+        brief: if brief.is_empty() {
+            default_review_brief().to_owned()
+        } else {
+            brief.to_owned()
+        },
+        reviewer_summary,
+        providers,
+        presets,
+        read_only_projects,
+        error,
+    };
+    match graft.into() {
+        GraftRequest::Document => {
+            let mut response = responses::chat_page_response(&view.document_title, state, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(
+            &view.document_title,
+            "chat-main",
+            &view,
+        )?),
+        GraftRequest::Patch => Ok(hypergraft::PatchSet::new()
+            .title(&view.document_title)
+            .with_children("plan-review-detail", &view.contents())?
+            .respond(status)?),
+    }
+}
+
+fn plan_origin_matches(
+    document: &PlanDocument,
+    revision: u32,
+    conversation: ConversationId,
+) -> bool {
+    let Some(revision) = document.revision(revision) else {
+        return false;
+    };
+    match &revision.source {
+        PlanSource::ConversationMessage {
+            conversation_id, ..
+        }
+        | PlanSource::SubmittedText {
+            conversation_id, ..
+        } => *conversation_id == conversation,
+        PlanSource::Correction { previous } => {
+            plan_origin_matches(document, previous.revision, conversation)
+        }
+    }
 }
 
 fn load_conversation(state: &AppState, raw: &str) -> Option<ConversationRecord> {

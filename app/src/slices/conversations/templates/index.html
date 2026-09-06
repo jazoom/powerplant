@@ -191,6 +191,94 @@
             {{ model_summary }}
           </p>
         </section>
+        {% if let Some(review) = source_review %}
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="conversation-review-source-heading"
+          >
+            <div>
+              <h2
+                id="conversation-review-source-heading"
+                class="text-lg font-semibold"
+              >
+                Plan under review
+              </h2>
+              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                This conversation keeps an immutable plan reference. Source
+                messages, thoughts, tool output and write authority are not
+                inherited.
+              </p>
+            </div>
+            <div
+              class="border-base-300 flex flex-wrap items-center gap-3 border-y py-3"
+            >
+              <div class="min-w-0 flex-1">
+                <p class="font-medium break-words">{{ review.plan_title }}</p>
+                <p class="text-quiet mt-1 text-xs">
+                  Revision {{ review.plan_revision }} ·
+                  {{ review.content_hash }}
+                </p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <a
+                  href="{{ review.plan_href }}"
+                  data-graft
+                  class="btn btn-secondary btn-sm"
+                  >Open plan</a
+                >
+                <a
+                  href="{{ review.href }}"
+                  data-graft
+                  class="btn btn-ghost btn-sm"
+                  >Open source conversation: {{ review.title }}</a
+                >
+              </div>
+            </div>
+          </section>
+        {% endif %}
+        {% if !linked_reviews.is_empty() %}
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="conversation-linked-reviews-heading"
+          >
+            <div>
+              <h2
+                id="conversation-linked-reviews-heading"
+                class="text-lg font-semibold"
+              >
+                Linked plan reviews
+              </h2>
+              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                These links identify review conversations. They do not pass
+                discussion history or project authority between conversations.
+              </p>
+            </div>
+            <ul class="record-list" aria-label="Linked plan reviews">
+              {% for review in linked_reviews %}
+                <li class="record-row flex-wrap gap-3">
+                  <div class="min-w-0 flex-1">
+                    <a
+                      href="{{ review.href }}"
+                      data-graft
+                      class="link link-hover font-medium break-words"
+                      >{{ review.title }}</a
+                    >
+                    <p class="text-quiet mt-1 text-xs">
+                      Revision {{ review.plan_revision }} ·
+                      {{ review.content_hash }}
+                    </p>
+                  </div>
+                  <a
+                    href="{{ review.plan_href }}"
+                    data-graft
+                    class="btn btn-ghost btn-sm"
+                    >Open plan</a
+                  >
+                </li>
+              {% endfor %}
+            </ul>
+          </section>
+        {% endif %}
         <section
           class="file-section space-y-4"
           aria-labelledby="conversation-plans-heading"
@@ -231,6 +319,14 @@
                       class="btn btn-ghost btn-sm"
                       >Export</a
                     >
+                    {% if !plan.review_href.is_empty() %}
+                      <a
+                        href="{{ plan.review_href }}"
+                        data-graft
+                        class="btn btn-ghost btn-sm"
+                        >Review in a new conversation</a
+                      >
+                    {% endif %}
                     <form
                       data-graft
                       method="post"
@@ -933,3 +1029,257 @@
     </section>
   </main>
 {% endblock detail_page %}
+
+{% block plan_review_page %}
+  <main
+    data-section="conversations"
+    data-context-detail
+    class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
+  >
+    <section id="plan-review-detail" class="flex min-h-0 flex-1 flex-col gap-6">
+      {% block plan_review_detail %}
+        <div class="page-intro">
+          <div>
+            <h1>Review a plan</h1>
+            <p>
+              Start a fresh linked conversation with the selected plan as its
+              only source context.
+            </p>
+          </div>
+          <a
+            href="/conversations/{{ source_id }}"
+            data-graft
+            class="link link-hover whitespace-nowrap"
+            >Back to source conversation</a
+          >
+        </div>
+        {% if error != "" %}
+          <div class="alert alert-error" role="alert" tabindex="-1">
+            <p>{{ error }}</p>
+          </div>
+        {% endif %}
+        <section
+          class="file-section space-y-4"
+          aria-labelledby="plan-review-source-heading"
+        >
+          <div>
+            <h2 id="plan-review-source-heading" class="text-lg font-semibold">
+              Selected plan
+            </h2>
+            <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+              Revision {{ document_revision }} is immutable. Later source
+              conversation messages or plan revisions cannot change this review.
+            </p>
+          </div>
+          <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+            <dt class="text-quiet">Source conversation</dt>
+            <dd>
+              <a
+                href="/conversations/{{ source_id }}"
+                data-graft
+                class="link link-hover"
+                >{{ source_title }}</a
+              >
+            </dd>
+            <dt class="text-quiet">Source revision</dt>
+            <dd>{{ source_revision }}</dd>
+            <dt class="text-quiet">Plan document</dt>
+            <dd class="font-mono break-all">{{ document_id }}</dd>
+            <dt class="text-quiet">Content hash</dt>
+            <dd class="font-mono break-all">{{ content_hash }}</dd>
+          </dl>
+          <details class="file-disclosure">
+            <summary>Read selected plan content</summary>
+            <div class="prose mt-4 max-w-none">{{ content_html|safe }}</div>
+          </details>
+        </section>
+        <form
+          data-graft
+          method="post"
+          action="/conversations/{{ source_id }}/plans/{{ document_id }}/review"
+          class="flex flex-col gap-6"
+        >
+          <input
+            type="hidden"
+            name="source_revision"
+            value="{{ source_revision }}"
+          />
+          <input
+            type="hidden"
+            name="document_revision"
+            value="{{ document_revision }}"
+          />
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="plan-review-brief-heading"
+          >
+            <div>
+              <h2 id="plan-review-brief-heading" class="text-lg font-semibold">
+                Review brief
+              </h2>
+              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                State what the reviewer must assess. The source discussion and
+                its worker output stay outside the new model context.
+              </p>
+            </div>
+            <label
+              class="flex max-w-3xl flex-col gap-1"
+              for="plan-review-brief"
+            >
+              <span class="text-sm font-semibold">Task brief</span>
+              <textarea
+                id="plan-review-brief"
+                name="brief"
+                class="textarea textarea-bordered min-h-32"
+                required
+                maxlength="32768"
+              >
+{{ brief }}</textarea>
+            </label>
+          </section>
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="plan-review-model-heading"
+          >
+            <div>
+              <h2 id="plan-review-model-heading" class="text-lg font-semibold">
+                Reviewer selection
+              </h2>
+              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                The reviewer uses a new context. The selected model or preset is
+                copied into the linked conversation before the POST.
+              </p>
+            </div>
+            <p class="text-sm">
+              <span class="font-medium">Selected reviewer:</span>
+              {{ reviewer_summary }}
+            </p>
+            {% if !presets.is_empty() %}
+              <label
+                class="flex max-w-xl flex-col gap-1"
+                for="plan-review-preset"
+              >
+                <span class="text-sm">Reviewer preset</span>
+                <select
+                  id="plan-review-preset"
+                  class="select select-bordered"
+                  name="preset"
+                >
+                  <option value="">Use direct model</option>
+                  {% for preset in presets %}
+                    <option
+                      value="{{ preset.id }}"
+                      {% if preset.selected %}selected{% endif %}
+                    >
+                      {{ preset.name }} — {{ preset.description }}
+                    </option>
+                  {% endfor %}
+                </select>
+                <span class="text-quiet text-xs"
+                  >Preset instructions apply to the reviewer only. Its directory
+                  settings never grant project access.</span
+                >
+              </label>
+            {% endif %}
+            <div class="grid gap-4 sm:grid-cols-3">
+              <label class="flex flex-col gap-1" for="plan-review-provider">
+                <span class="text-sm">Provider</span>
+                <select
+                  id="plan-review-provider"
+                  class="select select-bordered"
+                  name="provider"
+                  required
+                >
+                  {% for provider in providers %}
+                    <option
+                      value="{{ provider.value }}"
+                      {% if provider.selected %}selected{% endif %}
+                    >
+                      {{ provider.label }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="flex flex-col gap-1" for="plan-review-model">
+                <span class="text-sm">Model</span>
+                <input
+                  id="plan-review-model"
+                  class="input input-bordered"
+                  name="model"
+                  required
+                  maxlength="256"
+                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.model }}{% endif %}{% endfor %}"
+                />
+              </label>
+              <label class="flex flex-col gap-1" for="plan-review-thinking">
+                <span class="text-sm">Thinking effort</span>
+                <input
+                  id="plan-review-thinking"
+                  class="input input-bordered"
+                  name="thinking"
+                  maxlength="32"
+                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.thinking }}{% endif %}{% endfor %}"
+                />
+              </label>
+            </div>
+          </section>
+          <section
+            class="file-section space-y-4"
+            aria-labelledby="plan-review-authority-heading"
+          >
+            <div>
+              <h2
+                id="plan-review-authority-heading"
+                class="text-lg font-semibold"
+              >
+                Optional read-only project context
+              </h2>
+              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                Confirm each project that the reviewer can inspect. Only these
+                read-only grants copy across. No writable grant or network
+                access copies from the source conversation.
+              </p>
+            </div>
+            {% if read_only_projects.is_empty() %}
+              <p class="text-quiet text-sm">
+                The source conversation has no current read-only project grants.
+              </p>
+            {% else %}
+              <fieldset class="flex flex-col gap-3">
+                <legend class="text-sm font-semibold">Projects to copy</legend>
+                {% for project in read_only_projects %}
+                  <label class="flex items-start gap-3 text-sm">
+                    <input
+                      class="checkbox checkbox-sm mt-0.5"
+                      type="checkbox"
+                      name="read_only_project"
+                      value="{{ project.id }}"
+                      {% if project.selected %}checked{% endif %}
+                    />
+                    <span
+                      ><span class="font-medium">{{ project.name }}</span
+                      ><span class="text-quiet block text-xs"
+                        >{{ project.access }}</span
+                      ></span
+                    >
+                  </label>
+                {% endfor %}
+              </fieldset>
+            {% endif %}
+          </section>
+          <div class="flex flex-wrap items-center gap-3 border-t pt-5">
+            <button class="btn btn-primary" type="submit">
+              Start plan review
+            </button>
+            <a
+              href="/conversations/{{ source_id }}"
+              data-graft
+              class="link link-hover"
+              >Cancel</a
+            >
+          </div>
+        </form>
+      {% endblock plan_review_detail %}
+    </section>
+  </main>
+{% endblock plan_review_page %}

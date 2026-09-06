@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AccessMode, AgentId, AgentRecord};
 use crate::projects::ProjectId;
+use crate::workflows::artefacts::{ArtefactHash, ObjectHash};
 
 use super::access::ConversationGrant;
+use super::documents::{DocumentId, PlanRevisionReference};
 use crate::providers::ModelSelection;
 use crate::sessions::JobId;
 
@@ -24,6 +26,31 @@ pub(crate) const MAXIMUM_MESSAGES: usize = 512;
 pub(crate) const MAXIMUM_MESSAGE_BYTES: usize = 32 * 1024;
 pub(crate) const MAXIMUM_REPLY_BYTES: usize = 128 * 1024;
 pub(crate) const MAXIMUM_PROJECT_ASSOCIATIONS: usize = 8;
+const MAXIMUM_LINKED_REVIEWS: usize = 32;
+const MAXIMUM_REVIEW_BRIEF_BYTES: usize = MAXIMUM_MESSAGE_BYTES;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlanReviewLink {
+    pub(crate) conversation_id: ConversationId,
+    pub(crate) plan: PlanRevisionReference,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlanReviewContext {
+    pub(crate) source: PlanReviewLink,
+    pub(crate) task_brief: String,
+}
+
+pub(crate) struct PlanReviewCreation {
+    pub(crate) source_id: ConversationId,
+    pub(crate) source_revision: u32,
+    pub(crate) title: String,
+    pub(crate) model: ConversationModelConfiguration,
+    pub(crate) plan: PlanRevisionReference,
+    pub(crate) task_brief: String,
+    pub(crate) read_only_projects: Vec<(ProjectId, u32)>,
+    pub(crate) source_target: Option<ProjectId>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConversationRecord {
@@ -35,6 +62,9 @@ pub(crate) struct ConversationRecord {
     pub(crate) execution_target: Option<ProjectId>,
     pub(crate) network: crate::agents::NetworkAccess,
     pub(crate) model: Option<ConversationModelConfiguration>,
+    pub(crate) source_review: Option<PlanReviewLink>,
+    pub(crate) plan_reviews: Vec<PlanReviewLink>,
+    pub(crate) review_context: Option<PlanReviewContext>,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) active_job: Option<JobId>,
     pub(crate) created_at_ms: u64,
@@ -64,7 +94,7 @@ impl ConversationModelConfiguration {
         }
     }
 
-    fn from_preset(record: &AgentRecord, selection: ModelSelection) -> Self {
+    pub(crate) fn from_preset(record: &AgentRecord, selection: ModelSelection) -> Self {
         Self {
             selection,
             instructions: record.instructions.clone(),
@@ -120,6 +150,7 @@ pub(crate) enum ConversationError {
     Target,
     WriteTarget,
     Network,
+    Review,
 }
 
 impl ConversationError {
@@ -148,6 +179,7 @@ impl ConversationError {
                 "Only one project can have writable access in a conversation. Revoke the other writable grant first."
             }
             Self::Network => "Choose valid network access for this conversation.",
+            Self::Review => "That plan review hand-off is no longer available.",
         }
     }
 }
@@ -186,6 +218,11 @@ struct ConversationFile {
     network_domains: Vec<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     model: Option<ConversationModelFile>,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    source_review: Option<ReviewLinkFile>,
+    plan_reviews: Vec<ReviewLinkFile>,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    review_context: Option<ReviewContextFile>,
     messages: Vec<MessageFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     active_job: Option<String>,
@@ -217,6 +254,24 @@ struct AppliedPresetFile {
     id: String,
     revision: u32,
     name: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ReviewLinkFile {
+    conversation: String,
+    document: String,
+    document_revision: u32,
+    content_hash: String,
+    object_hash: String,
+    artefact_hash: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ReviewContextFile {
+    source: ReviewLinkFile,
+    task_brief: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -269,6 +324,9 @@ impl ConversationStore {
             execution_target: None,
             network: crate::agents::NetworkAccess::None,
             model: None,
+            source_review: None,
+            plan_reviews: Vec::new(),
+            review_context: None,
             messages: Vec::new(),
             active_job: None,
             created_at_ms: now,
@@ -280,6 +338,121 @@ impl ConversationStore {
             return Err(error);
         }
         Ok(record)
+    }
+
+    pub(crate) fn create_plan_review(
+        &self,
+        creation: PlanReviewCreation,
+    ) -> Result<ConversationRecord, ConversationError> {
+        let PlanReviewCreation {
+            source_id,
+            source_revision,
+            title,
+            model,
+            plan,
+            task_brief,
+            read_only_projects,
+            source_target,
+        } = creation;
+        let title = normalise_title(&title)?;
+        let task_brief = normalise_message(&task_brief)?;
+        if task_brief.len() > MAXIMUM_REVIEW_BRIEF_BYTES
+            || read_only_projects.len() > MAXIMUM_PROJECT_ASSOCIATIONS
+        {
+            return Err(ConversationError::Review);
+        }
+        let mut conversations = self.lock();
+        let source = conversations
+            .get(&source_id)
+            .cloned()
+            .ok_or(ConversationError::Missing)?;
+        if source.revision != source_revision
+            || source.active_job.is_some()
+            || source.plan_reviews.len() >= MAXIMUM_LINKED_REVIEWS
+        {
+            return Err(if source.revision != source_revision {
+                ConversationError::Conflict
+            } else if source.active_job.is_some() {
+                ConversationError::Active
+            } else {
+                ConversationError::Review
+            });
+        }
+        if conversations.len() >= MAXIMUM_CONVERSATIONS {
+            return Err(ConversationError::Full);
+        }
+        let mut projects = Vec::with_capacity(read_only_projects.len());
+        let mut grants = Vec::with_capacity(read_only_projects.len());
+        for (project_id, project_revision) in read_only_projects {
+            if projects.contains(&project_id) || !source.projects.contains(&project_id) {
+                return Err(ConversationError::Review);
+            }
+            let Some(source_grant) = source
+                .grants
+                .iter()
+                .find(|grant| grant.project_id == project_id)
+            else {
+                return Err(ConversationError::Review);
+            };
+            if source_grant.project_revision != project_revision {
+                return Err(ConversationError::Conflict);
+            }
+            projects.push(project_id);
+            grants.push(ConversationGrant {
+                project_id,
+                project_revision,
+                authority_revision: 1,
+                access: AccessMode::ReadOnly,
+            });
+        }
+        let id = unused_identifier(&conversations)?;
+        let target = source_target
+            .filter(|target| projects.contains(target))
+            .or_else(|| projects.first().copied());
+        let now = now_ms();
+        let source_link = PlanReviewLink {
+            conversation_id: source_id,
+            plan: plan.clone(),
+        };
+        let review_link = PlanReviewLink {
+            conversation_id: id,
+            plan,
+        };
+        let review = ConversationRecord {
+            id,
+            revision: 1,
+            title,
+            projects,
+            grants,
+            execution_target: target,
+            network: crate::agents::NetworkAccess::None,
+            model: Some(model),
+            source_review: Some(source_link.clone()),
+            plan_reviews: Vec::new(),
+            review_context: Some(PlanReviewContext {
+                source: source_link,
+                task_brief,
+            }),
+            messages: Vec::new(),
+            active_job: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        let mut updated_source = source.clone();
+        updated_source.revision = source
+            .revision
+            .checked_add(1)
+            .ok_or(ConversationError::Revision)?;
+        updated_source.updated_at_ms = now.max(source.updated_at_ms);
+        updated_source.plan_reviews.push(review_link);
+        let previous = conversations.clone();
+        conversations.insert(source_id, updated_source);
+        conversations.insert(id, review.clone());
+        if let Err(error) = persist(self.path.as_deref(), &conversations) {
+            *conversations = previous;
+            return Err(error);
+        }
+        Ok(review)
     }
 
     pub(crate) fn rename(
@@ -742,6 +915,31 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     }
     let network = parse_stored_network(&file.network, &file.network_domains)?;
     let model = file.model.map(model_from_file).transpose()?;
+    let source_review = file.source_review.map(review_link_from_file).transpose()?;
+    let plan_reviews = file
+        .plan_reviews
+        .into_iter()
+        .map(review_link_from_file)
+        .collect::<Result<Vec<_>, _>>()?;
+    if plan_reviews.len() > MAXIMUM_LINKED_REVIEWS
+        || plan_reviews.iter().enumerate().any(|(index, link)| {
+            plan_reviews[..index]
+                .iter()
+                .any(|previous| previous == link)
+        })
+    {
+        return Err(ConversationError::Corrupt);
+    }
+    let review_context = file
+        .review_context
+        .map(review_context_from_file)
+        .transpose()?;
+    if review_context
+        .as_ref()
+        .is_some_and(|context| source_review.as_ref() != Some(&context.source))
+    {
+        return Err(ConversationError::Corrupt);
+    }
     let mut projects = Vec::with_capacity(file.projects.len());
     for raw in file.projects {
         let project = ProjectId::parse(&raw).ok_or(ConversationError::Corrupt)?;
@@ -818,6 +1016,9 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         execution_target,
         network,
         model,
+        source_review,
+        plan_reviews,
+        review_context,
         messages,
         active_job,
         created_at_ms: file.created_at_ms,
@@ -875,6 +1076,58 @@ fn model_to_file(model: &ConversationModelConfiguration) -> ConversationModelFil
             revision: preset.revision,
             name: preset.name.clone(),
         }),
+    }
+}
+
+fn review_link_from_file(file: ReviewLinkFile) -> Result<PlanReviewLink, ConversationError> {
+    let conversation_id =
+        ConversationId::parse(&file.conversation).ok_or(ConversationError::Corrupt)?;
+    let document_id = DocumentId::parse(&file.document).ok_or(ConversationError::Corrupt)?;
+    if file.document_revision == 0 {
+        return Err(ConversationError::Corrupt);
+    }
+    Ok(PlanReviewLink {
+        conversation_id,
+        plan: PlanRevisionReference {
+            document_id,
+            revision: file.document_revision,
+            content_hash: ObjectHash::parse(&file.content_hash)
+                .ok_or(ConversationError::Corrupt)?,
+            object_hash: ObjectHash::parse(&file.object_hash).ok_or(ConversationError::Corrupt)?,
+            artefact_hash: ArtefactHash::parse(&file.artefact_hash)
+                .ok_or(ConversationError::Corrupt)?,
+        },
+    })
+}
+
+fn review_link_to_file(link: &PlanReviewLink) -> ReviewLinkFile {
+    ReviewLinkFile {
+        conversation: link.conversation_id.as_hex(),
+        document: link.plan.document_id.as_hex(),
+        document_revision: link.plan.revision,
+        content_hash: link.plan.content_hash.as_str(),
+        object_hash: link.plan.object_hash.as_str(),
+        artefact_hash: link.plan.artefact_hash.as_str(),
+    }
+}
+
+fn review_context_from_file(
+    file: ReviewContextFile,
+) -> Result<PlanReviewContext, ConversationError> {
+    let task_brief = normalise_message(&file.task_brief)?;
+    if task_brief.len() > MAXIMUM_REVIEW_BRIEF_BYTES {
+        return Err(ConversationError::Corrupt);
+    }
+    Ok(PlanReviewContext {
+        source: review_link_from_file(file.source)?,
+        task_brief,
+    })
+}
+
+fn review_context_to_file(context: &PlanReviewContext) -> ReviewContextFile {
+    ReviewContextFile {
+        source: review_link_to_file(&context.source),
+        task_brief: context.task_brief.clone(),
     }
 }
 
@@ -956,6 +1209,13 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         network: record.network.as_str().to_owned(),
         network_domains: record.network.domains().to_vec(),
         model: record.model.as_ref().map(model_to_file),
+        source_review: record.source_review.as_ref().map(review_link_to_file),
+        plan_reviews: record
+            .plan_reviews
+            .iter()
+            .map(review_link_to_file)
+            .collect(),
+        review_context: record.review_context.as_ref().map(review_context_to_file),
         messages: record
             .messages
             .iter()

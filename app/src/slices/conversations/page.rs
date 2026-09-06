@@ -120,6 +120,76 @@ pub(super) struct ConversationFormView {
     pub(super) error: &'static str,
 }
 
+pub(super) struct ReviewProjectOption {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) access: &'static str,
+    pub(super) selected: bool,
+}
+
+#[derive(Template)]
+#[template(
+    path = "conversations/templates/index.html",
+    block = "plan_review_page"
+)]
+pub(super) struct PlanReviewView {
+    pub(super) document_title: String,
+    pub(super) source_title: String,
+    pub(super) source_id: String,
+    pub(super) source_revision: String,
+    pub(super) document_id: String,
+    pub(super) document_revision: u32,
+    pub(super) content_hash: String,
+    pub(super) content_html: String,
+    pub(super) brief: String,
+    pub(super) reviewer_summary: String,
+    pub(super) providers: Vec<ProviderOption>,
+    pub(super) presets: Vec<PresetOption>,
+    pub(super) read_only_projects: Vec<ReviewProjectOption>,
+    pub(super) error: &'static str,
+}
+
+#[derive(Template)]
+#[template(
+    path = "conversations/templates/index.html",
+    block = "plan_review_detail"
+)]
+pub(super) struct PlanReviewContents<'a> {
+    pub(super) source_title: &'a str,
+    pub(super) source_id: &'a str,
+    pub(super) source_revision: &'a str,
+    pub(super) document_id: &'a str,
+    pub(super) document_revision: u32,
+    pub(super) content_hash: &'a str,
+    pub(super) content_html: &'a str,
+    pub(super) brief: &'a str,
+    pub(super) reviewer_summary: &'a str,
+    pub(super) providers: &'a [ProviderOption],
+    pub(super) presets: &'a [PresetOption],
+    pub(super) read_only_projects: &'a [ReviewProjectOption],
+    pub(super) error: &'static str,
+}
+
+impl PlanReviewView {
+    pub(super) fn contents(&self) -> PlanReviewContents<'_> {
+        PlanReviewContents {
+            source_title: &self.source_title,
+            source_id: &self.source_id,
+            source_revision: &self.source_revision,
+            document_id: &self.document_id,
+            document_revision: self.document_revision,
+            content_hash: &self.content_hash,
+            content_html: &self.content_html,
+            brief: &self.brief,
+            reviewer_summary: &self.reviewer_summary,
+            providers: &self.providers,
+            presets: &self.presets,
+            read_only_projects: &self.read_only_projects,
+            error: self.error,
+        }
+    }
+}
+
 impl ConversationFormView {
     pub(super) fn new(title: &str, error: &'static str) -> Self {
         Self {
@@ -155,7 +225,17 @@ pub(super) struct PlanDocumentView {
     pub(super) content_hash: String,
     pub(super) open_href: String,
     pub(super) export_href: String,
+    pub(super) review_href: String,
     pub(super) remove_href: String,
+}
+
+pub(super) struct ConversationLinkView {
+    pub(super) title: String,
+    pub(super) plan_title: String,
+    pub(super) href: String,
+    pub(super) plan_href: String,
+    pub(super) plan_revision: u32,
+    pub(super) content_hash: String,
 }
 
 pub(super) struct ModelSources<'a> {
@@ -215,6 +295,8 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) network_domains: &'a str,
     pub(super) network_summary: &'a str,
     pub(super) plans: &'a [PlanDocumentView],
+    pub(super) source_review: Option<&'a ConversationLinkView>,
+    pub(super) linked_reviews: &'a [ConversationLinkView],
 }
 
 #[derive(Template)]
@@ -244,6 +326,8 @@ pub(super) struct ConversationDetailView {
     pub(super) network_domains: String,
     pub(super) network_summary: String,
     pub(super) plans: Vec<PlanDocumentView>,
+    pub(super) source_review: Option<ConversationLinkView>,
+    pub(super) linked_reviews: Vec<ConversationLinkView>,
 }
 impl ConversationDetailView {
     #[cfg(test)]
@@ -265,6 +349,8 @@ impl ConversationDetailView {
             title,
             error,
             None,
+            None,
+            Vec::new(),
         )
     }
 
@@ -278,6 +364,8 @@ impl ConversationDetailView {
         title: &str,
         error: &'static str,
         pending_gate: Option<PendingCodeGateView>,
+        source_review: Option<ConversationLinkView>,
+        linked_reviews: Vec<ConversationLinkView>,
     ) -> Self {
         let fallback = sources
             .vault
@@ -486,6 +574,8 @@ impl ConversationDetailView {
             network_domains,
             network_summary,
             plans,
+            source_review,
+            linked_reviews,
         }
     }
 
@@ -514,6 +604,8 @@ impl ConversationDetailView {
             network_domains: &self.network_domains,
             network_summary: &self.network_summary,
             plans: &self.plans,
+            source_review: self.source_review.as_ref(),
+            linked_reviews: &self.linked_reviews,
         }
     }
 }
@@ -607,6 +699,15 @@ fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
         content_hash: revision.content_hash.as_str(),
         open_href: format!("/plans/{}", document.id.as_hex()),
         export_href: format!("/plans/{}/export", document.id.as_hex()),
+        review_href: format!(
+            "/conversations/{}/plans/{}/review?revision={}",
+            document
+                .associated_conversation
+                .expect("associated plan document")
+                .as_hex(),
+            document.id.as_hex(),
+            revision.revision
+        ),
         remove_href: format!(
             "/conversations/{}/plans/{}/remove",
             document

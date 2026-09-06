@@ -27,7 +27,6 @@ pub(super) async fn run(
     connection: ProviderConnection,
     job: Arc<Job>,
 ) {
-    let history = history(&record);
     let instructions = instructions(&state, &record);
     let mut reply = String::new();
     let mut event_count = 0usize;
@@ -36,6 +35,7 @@ pub(super) async fn run(
         _ = job.cancelled() => Err(Failure::Cancelled),
         _ = tokio::time::sleep(Duration::from_secs(600)) => Err(Failure::Provider(ProviderError::Unreachable)),
         result = async {
+            let history = history_with_review(&state, &record).map_err(Failure::Context)?;
             let mut stream = state.chat.stream_turn(&connection, &history, &[], &[], &instructions).await.map_err(Failure::Provider)?;
             while let Some(event) = tokio::select! {
                 biased;
@@ -78,6 +78,11 @@ pub(super) async fn run(
             MessageStatus::Failed,
             Some(error.message().to_owned()),
         ),
+        Err(Failure::Context(error)) => (
+            JobStatus::Failed,
+            MessageStatus::Failed,
+            Some(error.to_owned()),
+        ),
         Err(Failure::Store(error)) => (
             JobStatus::Failed,
             MessageStatus::Failed,
@@ -102,6 +107,7 @@ pub(super) async fn run(
 }
 
 enum Failure {
+    Context(&'static str),
     Provider(ProviderError),
     Store(crate::conversations::ConversationError),
     Cancelled,
@@ -144,6 +150,43 @@ fn instructions(state: &AppState, record: &ConversationRecord) -> String {
     }
     text.push_str("These references grant no file access, tools or network access.");
     text
+}
+
+pub(super) fn history_with_review(
+    state: &AppState,
+    record: &ConversationRecord,
+) -> Result<Vec<ChatTurn>, &'static str> {
+    let mut history = history(record);
+    if let Some(context) = &record.review_context {
+        history.insert(0, ChatTurn::user(review_prompt(state, context)?));
+    }
+    Ok(history)
+}
+
+fn review_prompt(
+    state: &AppState,
+    context: &crate::conversations::PlanReviewContext,
+) -> Result<String, &'static str> {
+    let Some(document) = state.documents.get(&context.source.plan.document_id) else {
+        return Err("The selected plan is no longer available.");
+    };
+    let Some(revision) = document.revision(context.source.plan.revision) else {
+        return Err("The selected plan revision is no longer available.");
+    };
+    if revision.content_hash != context.source.plan.content_hash
+        || revision.object_hash != context.source.plan.object_hash
+        || revision.artefact_hash != context.source.plan.artefact_hash
+    {
+        return Err("The selected plan changed. Start the review again.");
+    }
+    let content = state
+        .documents
+        .content(&document, context.source.plan.revision)
+        .map_err(|_| "Power Plant could not read the selected plan.")?;
+    Ok(format!(
+        "Review task:\n{}\n\nSelected plan revision {} (immutable content):\n--- BEGIN SELECTED PLAN ---\n{}\n--- END SELECTED PLAN ---\n\nReturn a review of the selected plan. Do not treat source conversation history or worker output as context.",
+        context.task_brief, context.source.plan.revision, content
+    ))
 }
 
 pub(super) fn history(record: &ConversationRecord) -> Vec<ChatTurn> {

@@ -1215,3 +1215,324 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
         "# First plan\n"
     );
 }
+
+#[tokio::test]
+async fn plan_review_uses_the_selected_revision_without_inheriting_source_history() {
+    let mut state = test_state();
+    let backend = crate::providers::tests::ScriptedBackend::accept();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
+    let token = connected(&state);
+    let source = state
+        .conversations
+        .create("Planning discussion".to_owned())
+        .expect("source");
+    let source_job = state
+        .sessions
+        .begin_conversation_job(&session_id(&token), source.id, 1)
+        .expect("source job");
+    let source = state
+        .conversations
+        .begin_message(
+            &source.id,
+            source.revision,
+            ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+                .expect("source model"),
+            source_job.id(),
+            "Source discussion only".to_owned(),
+        )
+        .expect("source message");
+    state
+        .conversations
+        .settle_message(
+            &source.id,
+            source_job.id(),
+            "Source private thoughts must not cross the link".to_owned(),
+            crate::conversations::MessageStatus::Complete,
+        )
+        .expect("source reply");
+    state
+        .sessions
+        .finish_conversation_job(&session_id(&token), source.id, source_job.id());
+    let source = state.conversations.get(&source.id).expect("settled source");
+    let plan_text = "# Selected plan\n\nKeep this exact revision.\n";
+    let plan = state
+        .documents
+        .create_from_text(source.id, "界".repeat(39), plan_text.to_owned(), None)
+        .expect("plan");
+    let model = "grok-4.6".to_owned();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, &model, None);
+    let thinking = effort.as_ref().map(|effort| effort.as_str()).unwrap_or("");
+    let review_path = format!(
+        "/conversations/{}/plans/{}/review?revision=1",
+        source.id, plan.id
+    );
+    let preview = app(&state)
+        .oneshot(document(&review_path, &token))
+        .await
+        .expect("preview");
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview_body = text(preview).await;
+    assert!(preview_body.contains(&plan.current().content_hash.as_str()));
+
+    let renamed = state
+        .conversations
+        .rename(
+            &source.id,
+            source.revision,
+            "Source changed later".to_owned(),
+        )
+        .expect("rename source after preview");
+    let body = format!(
+        "source_revision={}&document_revision=1&brief={}&provider=xai&model={}&thinking={}&preset=",
+        source.revision,
+        form_value("Check only the selected plan."),
+        form_value(&model),
+        form_value(thinking),
+    );
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+            &token,
+            &body,
+        ))
+        .await
+        .expect("stale review");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(state.conversations.list().len(), 1);
+    state
+        .documents
+        .revise(
+            &plan.id,
+            1,
+            plan.title.clone(),
+            "# Replacement plan\n\nNot selected.\n".to_owned(),
+            None,
+        )
+        .expect("correct plan after preview");
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+            &token,
+            &body.replace(
+                &format!("source_revision={}", source.revision),
+                &format!("source_revision={}", renamed.revision),
+            ),
+        ))
+        .await
+        .expect("create review");
+    assert_eq!(response.status(), StatusCode::OK);
+    let review_id = state
+        .conversations
+        .list()
+        .into_iter()
+        .find(|record| record.id != source.id)
+        .expect("review conversation")
+        .id;
+    assert!(
+        text(response)
+            .await
+            .contains(&format!("navigate=\"/conversations/{review_id}\""))
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&review_id)
+            .expect("review")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("review settlement");
+
+    let review = state.conversations.get(&review_id).expect("review record");
+    assert_eq!(
+        review
+            .source_review
+            .as_ref()
+            .expect("source link")
+            .conversation_id,
+        renamed.id
+    );
+    assert!(review.review_context.is_some());
+    assert_eq!(review.messages[0].text, "Check only the selected plan.");
+    assert_eq!(review.messages[1].text, "Hello from Power Plant.");
+    let source_record = state.conversations.get(&source.id).expect("source record");
+    assert_eq!(source_record.plan_reviews.len(), 1);
+    assert_eq!(source_record.plan_reviews[0].conversation_id, review_id);
+    let history = backend.last_history();
+    assert!(history.iter().any(|turn| turn.text.contains(plan_text)));
+    assert!(
+        history
+            .iter()
+            .all(|turn| !turn.text.contains("Source private thoughts"))
+    );
+    let review_page = app(&state)
+        .oneshot(document(&format!("/conversations/{review_id}"), &token))
+        .await
+        .expect("review page");
+    let review_body = text(review_page).await;
+    assert!(review_body.contains(&format!("href=\"/conversations/{}\"", source.id)));
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{review_id}/messages"),
+            &token,
+            &format!(
+                "revision={}&message=Explain+the+first+step",
+                review.revision
+            ),
+        ))
+        .await
+        .expect("follow-up");
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&review_id)
+            .expect("review")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("follow-up settlement");
+    let history = backend.last_history();
+    assert!(history.iter().any(|turn| turn.text.contains(plan_text)));
+    assert!(
+        history
+            .iter()
+            .any(|turn| turn.text == "Explain the first step")
+    );
+    assert!(
+        history
+            .iter()
+            .all(|turn| !turn.text.contains("Replacement plan")
+                && !turn.text.contains("Source private thoughts"))
+    );
+}
+
+#[tokio::test]
+async fn plan_review_copies_only_confirmed_projects_as_read_only() {
+    let state = test_state();
+    let token = connected(&state);
+    let source = state
+        .conversations
+        .create("Source".to_owned())
+        .expect("source");
+    let first = register_project(&state, "Target");
+    let second = register_project(&state, "Context");
+    let omitted = register_project(&state, "Not confirmed");
+    let mut source = source;
+    for project in [&first, &second, &omitted] {
+        source = state
+            .conversations
+            .attach_project(&source.id, source.revision, project.id)
+            .expect("attach");
+        source = state
+            .conversations
+            .grant_access(
+                &source.id,
+                source.revision,
+                project.id,
+                project.revision,
+                if project.id == first.id {
+                    crate::agents::AccessMode::ReadWrite
+                } else {
+                    crate::agents::AccessMode::ReadOnly
+                },
+            )
+            .expect("grant");
+    }
+    source = state
+        .conversations
+        .set_network(&source.id, source.revision, NetworkAccess::Public)
+        .expect("network");
+    let plan = state
+        .documents
+        .create_from_text(
+            source.id,
+            "Plan".to_owned(),
+            "Selected plan".to_owned(),
+            None,
+        )
+        .expect("plan");
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None);
+    let body = format!(
+        "source_revision={}&document_revision=1&brief=Review&provider=xai&model=grok-4.6&thinking={}&read_only_project={}&read_only_project={}",
+        source.revision,
+        form_value(effort.as_ref().map(|value| value.as_str()).unwrap_or("")),
+        first.id,
+        second.id,
+    );
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+            &token,
+            &body,
+        ))
+        .await
+        .expect("review");
+    let review = state
+        .conversations
+        .list()
+        .into_iter()
+        .find(|record| record.id != source.id)
+        .expect("linked review");
+    assert_eq!(review.projects, vec![first.id, second.id]);
+    assert_eq!(review.network, NetworkAccess::None);
+    assert!(
+        review
+            .grants
+            .iter()
+            .all(|grant| grant.access == crate::agents::AccessMode::ReadOnly)
+    );
+    // Missing execution prerequisites must still produce a patch for the preview's live root.
+    let response = text(response).await;
+    assert!(response.contains("target=\"chat-main\""));
+    assert!(response.contains(&format!("location=\"/conversations/{}\"", review.id)));
+}
+
+#[tokio::test]
+async fn plan_review_rejects_an_oversized_task_brief_without_creating_a_link() {
+    let mut state = test_state();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        crate::providers::tests::ScriptedBackend::accept(),
+    ));
+    let token = connected(&state);
+    let source = state
+        .conversations
+        .create("Planning discussion".to_owned())
+        .expect("source");
+    let plan = state
+        .documents
+        .create_from_text(source.id, "Plan".to_owned(), "Plan text".to_owned(), None)
+        .expect("plan");
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None);
+    let brief = "x".repeat(32 * 1024 + 1);
+    let body = format!(
+        "source_revision={}&document_revision=1&brief={}&provider=xai&model=grok-4.6&thinking={}&preset=",
+        source.revision,
+        form_value(&brief),
+        form_value(effort.as_ref().map(|value| value.as_str()).unwrap_or("")),
+    );
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+            &token,
+            &body,
+        ))
+        .await
+        .expect("oversized review");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(state.conversations.list().len(), 1);
+}

@@ -209,6 +209,9 @@ fn pending_assistant_output_stays_out_of_the_next_request_history() {
         execution_target: None,
         network: crate::agents::NetworkAccess::None,
         model: None,
+        source_review: None,
+        plan_reviews: Vec::new(),
+        review_context: None,
         messages: vec![
             ConversationMessage {
                 role: MessageRole::User,
