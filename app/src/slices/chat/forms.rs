@@ -1,75 +1,6 @@
 use serde::Deserialize;
 
 use crate::providers::{ProviderKind, ThinkingEffort, model_is_bounded, resolve_model};
-use crate::sessions::JobId;
-use crate::workflows::WorkflowSelection;
-
-pub(crate) const MAXIMUM_MESSAGE_BYTES: usize = 32_768;
-pub(crate) const MAXIMUM_CURSOR: u64 = 1_000_000;
-
-#[derive(Deserialize)]
-pub(crate) struct ChatForm {
-    #[serde(default)]
-    pub(crate) message: String,
-    #[serde(default)]
-    pub(crate) mode: String,
-    #[serde(default)]
-    pub(crate) workflow: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeskMode {
-    Quick,
-    Configured,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeskModeError {
-    Absent,
-    Malformed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkflowTokenError {
-    Absent,
-    Malformed,
-}
-
-impl ChatForm {
-    pub(crate) fn is_bounded(&self) -> bool {
-        let message = self.message.trim();
-        !message.is_empty() && message.len() <= MAXIMUM_MESSAGE_BYTES
-    }
-
-    pub(crate) fn mode(&self) -> Result<DeskMode, DeskModeError> {
-        match self.mode.trim() {
-            "" => Err(DeskModeError::Absent),
-            "quick" => Ok(DeskMode::Quick),
-            "configured" => Ok(DeskMode::Configured),
-            _ => Err(DeskModeError::Malformed),
-        }
-    }
-
-    pub(crate) fn workflow_selection(
-        &self,
-        query_workflow: &str,
-    ) -> Result<WorkflowSelection, WorkflowTokenError> {
-        let submitted = self.workflow.trim();
-        let query = query_workflow.trim();
-        if !submitted.is_empty() && !query.is_empty() && submitted != query {
-            return Err(WorkflowTokenError::Malformed);
-        }
-        let token = if submitted.is_empty() {
-            query
-        } else {
-            submitted
-        };
-        if token.is_empty() {
-            return Err(WorkflowTokenError::Absent);
-        }
-        WorkflowSelection::parse(token).ok_or(WorkflowTokenError::Malformed)
-    }
-}
 
 #[derive(Deserialize)]
 pub(crate) struct ModelForm {
@@ -140,52 +71,6 @@ impl ModelForm {
         }
         Ok(kind)
     }
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct ObserveQuery {
-    #[serde(default)]
-    pub(crate) job: String,
-    #[serde(default)]
-    pub(crate) cursor: String,
-    #[serde(default)]
-    pub(crate) workflow: String,
-    #[serde(default)]
-    pub(crate) sandbox: String,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CursorError {
-    Malformed,
-    Excessive,
-}
-
-impl ObserveQuery {
-    pub(crate) fn job_id(&self) -> Option<JobId> {
-        JobId::parse(self.job.trim())
-    }
-
-    pub(crate) fn cursor(&self) -> Result<u64, CursorError> {
-        parse_cursor(&self.cursor)
-    }
-}
-
-pub(crate) fn parse_cursor(raw: &str) -> Result<u64, CursorError> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(0);
-    }
-    if raw.len() > 7 {
-        return Err(CursorError::Excessive);
-    }
-    if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(CursorError::Malformed);
-    }
-    let value: u64 = raw.parse().map_err(|_| CursorError::Malformed)?;
-    if value > MAXIMUM_CURSOR {
-        return Err(CursorError::Excessive);
-    }
-    Ok(value)
 }
 
 #[cfg(test)]

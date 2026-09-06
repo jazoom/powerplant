@@ -10,7 +10,7 @@ web
 
 A developer wants a local agent that can change a project on their machine.
 
-They already have a provider API key or a ChatGPT or SuperGrok plan. They want a local desk, not a cloud agent account.
+They already have a provider API key or a ChatGPT or SuperGrok plan. They want a local conversation workspace, not a cloud agent account.
 
 ## Product Purpose
 
@@ -48,15 +48,15 @@ The user starts the Power Plant process on their machine. The default origin is 
 
 They open that origin in a browser. They add a key or a plan login for a provider that is not stored. Power Plant can store one credential for each provider at the same time. The connect page offers only providers that are not stored.
 
-They choose the provider, model and model-specific thinking effort on the project desk.
+They choose a provider, model and model-specific thinking effort in each conversation.
 
-Projects are the first product object. Each project has a name and one immutable host path. The path must be a supported Git worktree. Users can create projects and rename them. They cannot edit paths or delete project records.
+Conversations are the main work destination. Each project has a name and one immutable host path. The path must be a supported Git worktree. Users can create projects and rename them. They cannot edit paths or delete project records.
 
 The product marks a project unavailable when its stored path no longer resolves. Unavailable records stay visible.
 
-The `/` route uses the project catalogue. An empty catalogue redirects to `/projects/new`. One project redirects to `/projects/{project_id}`. Two or more projects redirect to `/projects`. The `/projects` route also redirects to `/projects/new` when the catalogue is empty.
+The `/` route opens `/conversations`. The conversations route lists local history and offers a New conversation action. A conversation can start without a project or preset.
 
-The project catalogue is not host access authority. An agent directory grant is the only authority for an agent to access a project. An agent is eligible when one stored canonical grant path equals the project path. Prefix matches give no authority. Project registration gives no authority.
+The project catalogue is not host access authority. Explicit conversation grants authorise conversation work. Saved-agent execution uses agent directory grants. An agent is eligible when one stored canonical grant path equals the project path. Prefix matches give no authority. Project registration gives no authority.
 
 They create agents in the local catalogue. Each agent has a name, instructions, tools, a network policy and host directory grants. The selected project grant maps to `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`.
 
@@ -66,11 +66,11 @@ They create environment recipes with an OCI image and an optional setup script. 
 
 They create workflow definitions with a default environment, roles and ordered steps. A new installation includes starter workflow definitions. A step can run an agent, a registered system command or a human gate.
 
-They open a project. If exactly one agent is eligible, the product opens that desk. If two or more agents are eligible, the product prefers the remembered eligible agent. If no remembered agent qualifies, the project page shows canonical desk links. If no agent is eligible, the page shows a starter-agent action. It shows grant actions for other current agents.
+They open a project to see its conversations. The project page lists conversations that reference the project and offers New conversation. The new conversation form carries the project reference without granting file access.
 
-The canonical desk URL is `/projects/{project_id}/agents/{agent_id}`. The project path never appears in route parameters or query values. Agent configuration stays at `/agents` and `/agents/{agent_id}/configuration`.
+The old project-and-agent desk is not a conversation route. Project work starts at a conversation. Agent configuration stays at `/agents` and `/agents/{agent_id}/configuration`.
 
-Quick task is the default send mode on the project desk. Quick task is a system-owned one-agent run. It needs no configured workflow. It uses the pinned starter Git environment. The desk labels that environment Alpine Git. The product does not start a run when that prepared snapshot is absent or unavailable.
+A writable conversation message starts the system-owned Quick task. Quick task is a system-owned one-agent run. It needs no configured workflow. It uses the pinned starter Git environment. The product does not start a run when that prepared snapshot is absent or unavailable.
 
 A read-only project grant produces a one-step Quick task. The step can answer and inspect files. It cannot produce a candidate revision.
 
@@ -80,7 +80,7 @@ An unchanged Quick task completes automatically after the assistant reply. The p
 
 A changed Quick task waits at a human gate. The user must approve the exact candidate. The host worktree does not change before that approval. Approval creates a local Git commit through the current transaction path.
 
-Configured workflows stay an advanced control on the same composer. The user can select a catalogue workflow. The control shows its review policy and environment preview.
+Configured workflows start from Run workflow beside the conversation title. The launch sheet shows its brief, target, access, environment readiness and fresh-context boundary.
 
 Each run records project identity and run kind. Run kinds are Configured and Quick task. A run can belong to an independent conversation.
 
@@ -96,9 +96,9 @@ Forget removes one provider. The connect page stays available so they can add an
 
 Hypergraft updates page fragments. Ordinary links still work without it.
 
-Project records, workflow definitions, agent records, environments, artefacts and run records persist locally. Browser transcripts remain memory-only.
+Conversation history and project configuration persist locally. Browser sessions hold request reservations, not conversation identities.
 
-Theme and thinking visibility preferences persist on the local machine. Thinking visibility applies to every project desk.
+Theme and thinking visibility preferences persist on the local machine.
 
 ## Capabilities and Constraints
 
@@ -107,14 +107,14 @@ Current capabilities:
 - Accept an API key for xAI, OpenAI Codex, Synthetic, OpenRouter or DeepSeek.
 - Sign in with a ChatGPT plan or a SuperGrok plan from the connect page.
 - Store more than one provider on the local machine.
-- Choose the provider, model and model-specific thinking effort on the project desk.
+- Choose the provider, model and model-specific thinking effort in a conversation.
 - Use bundled models.dev metadata when a model advertises adjustable thinking effort.
 - Refresh the models.dev capability catalogue manually from Settings.
 - Create projects in the local catalogue.
 - Rename projects.
-- Open a project desk with an eligible agent.
-- Create a starter agent from a project.
-- Grant a current agent access to a project.
+- Open a project and see its conversations.
+- Create a conversation with a project reference.
+- Grant conversation access to a project.
 - Create agents in the local catalogue.
 - Edit and delete agents.
 - Grant host directories to each agent.
@@ -128,7 +128,7 @@ Current capabilities:
 - Send a Quick task from an independent conversation with no workflow selection.
 - Grant read-only or writable project authority from a conversation.
 - Review a candidate diff and Apply or Discard it from the owning conversation.
-- Send a configured workflow from an advanced control on the project desk.
+- Launch a configured workflow from a conversation.
 - Stream the reply into the transcript as HTML.
 - Run sandbox-backed workflow steps in isolated guests.
 - Expose the selected project at `/project` during sandbox-backed steps.
@@ -146,15 +146,15 @@ Current capabilities:
 - Inspect run records and their artefacts.
 - Show the newest fifty runs in the run list.
 - Show tool traces in the transcript.
-- Choose whether all project desks show model thinking.
+- Choose whether model replies show thinking details.
 - Choose from five colour themes stored on the local machine.
 
 Current constraints:
 
 - The product does not create user accounts.
-- The project desk stays a transcript plus composer.
+- A conversation stays a transcript plus composer with explicit project controls.
 - Agent tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig.
-- Conversation history, project records, run records and artefacts persist locally. Legacy project desk transcripts remain memory-only.
+- Conversation history, project records, run records and artefacts persist locally. The old project desk routes no longer exist.
 - One session command can be active at a time.
 - One unfinished operation can reserve a conversation.
 - One workflow execution can be active process-wide.
@@ -184,6 +184,6 @@ The product has connect, project, agent, workflow, environment and run surfaces.
 
 1. The user runs Power Plant. There is no product account.
 2. A hosted model is a connection the user brings, not a Power Plant service.
-3. A project is the first product object. The desk stays thin. Power Plant is not an IDE and not a cloud workspace.
+3. A conversation is the main work destination. Project access remains explicit. Power Plant is not an IDE or a cloud workspace.
 4. Power Plant stores a key or a plan login on this machine until the user forgets that provider.
 5. Agents work in sandboxes. Success is a project file that an agent changes.

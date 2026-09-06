@@ -17,7 +17,7 @@ use crate::{
     agents::{AgentDraft, AgentError, AgentId, AgentRecord},
     error::{AppError, AppResult},
     local_data::HOST_PATH_RESET_PENDING,
-    projects::{ProjectId, ProjectRecord, desk_path},
+    projects::{ProjectId, ProjectRecord},
     providers::ModelSelection,
     responses,
     sessions::RequiredSession,
@@ -156,7 +156,7 @@ async fn create(
     match state.agents.create(draft) {
         Ok(record) => {
             let destination = match &starter {
-                Some(project) => desk_path(&project.id, &record.id),
+                Some(project) => format!("/conversations/new?project={}", project.id.as_hex()),
                 None => format!("/agents/{}/configuration", record.id.as_hex()),
             };
             Ok(responses::command_navigation(&destination))

@@ -111,6 +111,8 @@ impl CatalogueView {
 )]
 pub(super) struct ConversationFormContents<'a> {
     pub(super) title: &'a str,
+    pub(super) project_id: &'a str,
+    pub(super) project_name: &'a str,
     pub(super) error: &'static str,
 }
 
@@ -118,6 +120,8 @@ pub(super) struct ConversationFormContents<'a> {
 #[template(path = "conversations/templates/index.html", block = "new_page")]
 pub(super) struct ConversationFormView {
     pub(super) title: String,
+    pub(super) project_id: String,
+    pub(super) project_name: String,
     pub(super) error: &'static str,
 }
 
@@ -254,9 +258,11 @@ impl CandidateReviewView {
 }
 
 impl ConversationFormView {
-    pub(super) fn new(title: &str, error: &'static str) -> Self {
+    pub(super) fn new(title: &str, project: Option<&ProjectRecord>, error: &'static str) -> Self {
         Self {
             title: title.to_owned(),
+            project_id: project.map_or_else(String::new, |project| project.id.as_hex()),
+            project_name: project.map_or_else(String::new, |project| project.name.clone()),
             error,
         }
     }
@@ -264,6 +270,8 @@ impl ConversationFormView {
     pub(super) fn contents(&self) -> ConversationFormContents<'_> {
         ConversationFormContents {
             title: &self.title,
+            project_id: &self.project_id,
+            project_name: &self.project_name,
             error: self.error,
         }
     }

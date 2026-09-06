@@ -2,9 +2,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use tokio::sync::mpsc;
-
-use hypergraft::{PatchSet, PatchStatus};
 
 use rig_core::completion::{AssistantContent, Message};
 
@@ -15,15 +12,9 @@ use crate::{
         ProviderError, ToolOutput,
     },
     sandbox::GuestSandbox,
-    sessions::{Job, JobEventKind, JobStatus, SessionId},
+    sessions::Job,
     state::AppState,
     tools,
-};
-
-use super::page::{
-    DeskStatusContents, JobCursorContents, JobObserveContents, ModelContextContents,
-    ModelContextView, TranscriptContents, TurnArticle, TurnBody, TurnView, assistant_reply_turn,
-    user_turn,
 };
 
 #[cfg(test)]
@@ -52,49 +43,10 @@ const THINKING_INITIAL_DELAY: Duration = Duration::from_millis(75);
 const THINKING_PROGRESS_INTERVAL: Duration = Duration::from_millis(75);
 const MAXIMUM_THINKING_PROGRESS_BYTES: usize = 192;
 
-// A long job cannot occupy one HTTP response. Each observation ends first.
-const OBSERVE_FIRST_WAIT: Duration = if cfg!(test) {
-    Duration::ZERO
-} else {
-    Duration::from_secs(15)
-};
-const OBSERVE_IDLE_WAIT: Duration = if cfg!(test) {
-    Duration::ZERO
-} else {
-    Duration::from_millis(400)
-};
-const OBSERVE_SEGMENT_MAX: Duration = if cfg!(test) {
-    Duration::ZERO
-} else {
-    Duration::from_secs(20)
-};
-
 // Stay below the 1 MiB envelope after Markdown HTML and the job-observe patch.
 pub(super) const MAXIMUM_MODEL_REPLY_BYTES: usize = 64 * 1024;
 pub(super) const MAXIMUM_THINKING_BYTES: usize = 64 * 1024;
 const MAXIMUM_VISIBLE_TOOL_BYTES: usize = 64 * 1024;
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ProgressOffer {
-    Sent,
-    Skipped,
-    Exhausted,
-    Closed,
-}
-
-pub(super) fn observe_response(
-    state: AppState,
-    job: Arc<Job>,
-    cursor: u64,
-    desk_href: String,
-) -> axum::response::Response {
-    let (tx, rx) = mpsc::channel::<hypergraft::StreamFrame>(4);
-    tokio::spawn(observe_segment(tx, state, job, cursor, desk_href));
-    let frames = futures_util::stream::unfold(rx, |mut rx| async {
-        rx.recv().await.map(|item| (item, rx))
-    });
-    hypergraft::outcome::stream_response(frames)
-}
 
 const MAXIMUM_TOOL_ROUNDS: usize = 12;
 
@@ -114,7 +66,6 @@ pub(crate) struct AgentActionEnd {
 
 pub(crate) async fn run_agent_action(
     state: &AppState,
-    session_id: SessionId,
     spec: AgentRunSpec,
     turns: Vec<ChatTurn>,
     job: Arc<Job>,
@@ -143,12 +94,12 @@ pub(crate) async fn run_agent_action(
     for _ in 0..MAXIMUM_TOOL_ROUNDS {
         thinking_progress.begin_phase();
         if job.cancel_requested() {
-            return cancel_action(state, &session_id, &agent_id, &job, &reply);
+            return cancel_action(&job, &reply);
         }
         let mut events = tokio::select! {
             biased;
             _ = job.cancelled() => {
-                return cancel_action(state, &session_id, &agent_id, &job, &reply);
+                return cancel_action(&job, &reply);
             }
             result = state.chat.stream_turn(
                 &spec.connection,
@@ -166,7 +117,6 @@ pub(crate) async fn run_agent_action(
                         published_response,
                         thinking_progress.published,
                     );
-                    persist_failure(state, &session_id, &agent_id, &job, &reply);
                     return AgentActionEnd {
                         outcome: AgentOutcome::ProviderFailure,
                         error: Some(error.message().to_owned()),
@@ -189,7 +139,7 @@ pub(crate) async fn run_agent_action(
             let chunk = tokio::select! {
                 biased;
                 _ = job.cancelled() => {
-                    return cancel_action(state, &session_id, &agent_id, &job, &reply);
+                    return cancel_action(&job, &reply);
                 }
                 _ = wait_for_thinking => {
                     thinking_progress.publish_due(&job, &reply.thinking, Instant::now());
@@ -221,7 +171,6 @@ pub(crate) async fn run_agent_action(
                             published_response,
                             thinking_progress.published,
                         );
-                        persist_failure(state, &session_id, &agent_id, &job, &reply);
                         return AgentActionEnd {
                             outcome: AgentOutcome::ProviderFailure,
                             error: Some(ProviderError::ReplyTooLong.message().to_owned()),
@@ -255,7 +204,6 @@ pub(crate) async fn run_agent_action(
                         published_response,
                         thinking_progress.published,
                     );
-                    persist_failure(state, &session_id, &agent_id, &job, &reply);
                     return AgentActionEnd {
                         outcome: AgentOutcome::ProviderFailure,
                         error: Some(error.message().to_owned()),
@@ -266,7 +214,7 @@ pub(crate) async fn run_agent_action(
         }
 
         if job.cancel_requested() {
-            return cancel_action(state, &session_id, &agent_id, &job, &reply);
+            return cancel_action(&job, &reply);
         }
 
         if calls.is_empty() {
@@ -278,20 +226,12 @@ pub(crate) async fn run_agent_action(
                 thinking_progress.published,
             );
             if reply.text.trim().is_empty() {
-                persist_failure(
-                    state,
-                    &session_id,
-                    &agent_id,
-                    &job,
-                    &AssistantReply::default(),
-                );
                 return AgentActionEnd {
                     outcome: AgentOutcome::ProviderFailure,
                     error: Some(ProviderError::EmptyReply.message().to_owned()),
                     reply: reply.clone(),
                 };
             }
-            persist_success(state, &session_id, &agent_id, &job, &reply);
             return AgentActionEnd {
                 outcome: AgentOutcome::Completed,
                 error: None,
@@ -317,7 +257,7 @@ pub(crate) async fn run_agent_action(
         for (id, name, arguments) in calls {
             let trace = tools::invoke(&context, &name, &arguments).await;
             if job.cancel_requested() {
-                return cancel_action(state, &session_id, &agent_id, &job, &reply);
+                return cancel_action(&job, &reply);
             }
             let output = tools::redact(&trace.output, secret);
             if let Some(visible) =
@@ -338,7 +278,6 @@ pub(crate) async fn run_agent_action(
         published_response,
         thinking_progress.published,
     );
-    persist_failure(state, &session_id, &agent_id, &job, &reply);
     AgentActionEnd {
         outcome: AgentOutcome::ToolFailure,
         error: Some(TOOL_LOOP_LIMIT.to_owned()),
@@ -566,33 +505,7 @@ fn truncate_utf8(text: &mut String, maximum: usize) {
     text.truncate(end);
 }
 
-fn persist_success(
-    _state: &AppState,
-    _id: &SessionId,
-    _agent: &Option<AgentId>,
-    _job: &Job,
-    _reply: &AssistantReply,
-) {
-    // Workflow execution settles the active turn after all durable outputs are visible.
-}
-
-fn persist_failure(
-    _state: &AppState,
-    _id: &SessionId,
-    _agent: &Option<AgentId>,
-    _job: &Job,
-    _reply: &AssistantReply,
-) {
-    // Workflow execution owns the single terminal settlement.
-}
-
-fn cancel_action(
-    state: &AppState,
-    id: &SessionId,
-    agent: &Option<AgentId>,
-    job: &Job,
-    reply: &AssistantReply,
-) -> AgentActionEnd {
+fn cancel_action(job: &Job, reply: &AssistantReply) -> AgentActionEnd {
     let published = job.snapshot().output;
     let mut thinking_progress = ThinkingProgress {
         published: published.thinking.len().min(reply.thinking.len()),
@@ -605,7 +518,6 @@ fn cancel_action(
         published.text.len().min(reply.text.len()),
         thinking_progress.published,
     );
-    persist_failure(state, id, agent, job, reply);
     AgentActionEnd {
         outcome: AgentOutcome::Cancelled,
         error: None,
@@ -665,305 +577,4 @@ fn publish_range(job: &Job, text: &str, published: usize, end: usize, channel: O
 
 fn progress_due(output_visible: bool, last_emit: Instant) -> bool {
     !output_visible || last_emit.elapsed() >= MIN_PROGRESS_INTERVAL
-}
-
-async fn observe_segment(
-    tx: mpsc::Sender<hypergraft::StreamFrame>,
-    state: AppState,
-    job: Arc<Job>,
-    cursor: u64,
-    desk_href: String,
-) {
-    let mut budget = hypergraft::StreamBudget::new();
-    let mut sent = cursor;
-    let mut assistant_visible = job.has_output_at_or_before(cursor);
-    let job_id = job.id().as_hex();
-
-    job.wait_after(sent, OBSERVE_FIRST_WAIT).await;
-    let started = Instant::now();
-
-    loop {
-        let events = job.events_after(sent);
-        if events.is_empty() {
-            break;
-        }
-        let mut output = job.output_up_to(sent);
-        let mut exhausted = false;
-        for event in events {
-            let output_changed = match event.kind {
-                JobEventKind::Response { delta } => {
-                    output.text.push_str(&delta);
-                    true
-                }
-                JobEventKind::Thinking { delta } => {
-                    output.push_thinking(&delta);
-                    true
-                }
-                JobEventKind::Tool { output: tool } => {
-                    output.push_tool(tool);
-                    true
-                }
-                JobEventKind::Usage { usage } => {
-                    output.usage = Some(usage);
-                    false
-                }
-                JobEventKind::Completed | JobEventKind::Failed | JobEventKind::Cancelled => false,
-            };
-            if !output_changed {
-                sent = event.seq;
-                continue;
-            }
-            match offer_output_progress(
-                &tx,
-                &mut budget,
-                &job,
-                &job_id,
-                event.seq,
-                &output,
-                assistant_visible,
-            )
-            .await
-            {
-                ProgressOffer::Sent => {
-                    assistant_visible = true;
-                    sent = event.seq;
-                }
-                ProgressOffer::Skipped => sent = event.seq,
-                ProgressOffer::Exhausted => {
-                    exhausted = true;
-                    break;
-                }
-                ProgressOffer::Closed => return,
-            }
-        }
-        if exhausted {
-            break;
-        }
-        if job.latest_seq() > sent {
-            continue;
-        }
-        if !should_keep_open(&job, started) {
-            break;
-        }
-        job.wait_after(sent, OBSERVE_IDLE_WAIT).await;
-        if job.latest_seq() == sent {
-            break;
-        }
-    }
-
-    send_observe_final(
-        &tx,
-        &state,
-        &job,
-        &job_id,
-        sent,
-        assistant_visible,
-        &desk_href,
-    )
-    .await;
-}
-
-fn should_keep_open(job: &Job, started: Instant) -> bool {
-    if !job.is_running() || OBSERVE_SEGMENT_MAX.is_zero() {
-        return false;
-    }
-    started.elapsed() < OBSERVE_SEGMENT_MAX
-}
-
-async fn offer_output_progress(
-    tx: &mpsc::Sender<hypergraft::StreamFrame>,
-    budget: &mut hypergraft::StreamBudget,
-    job: &Job,
-    job_id: &str,
-    cursor: u64,
-    output: &AssistantReply,
-    already_visible: bool,
-) -> ProgressOffer {
-    let turn = assistant_reply_turn(job.assistant_index(), output, true);
-    let frame = encode_output_progress(job_id, cursor, &turn, already_visible);
-    offer_progress(tx, budget, frame, "construct job progress frame").await
-}
-
-fn encode_output_progress(
-    job_id: &str,
-    cursor: u64,
-    turn: &TurnView,
-    already_visible: bool,
-) -> Result<hypergraft::StreamFrame, hypergraft::PatchBuildError> {
-    let mut patches = PatchSet::new();
-    if already_visible {
-        patches.children(&turn.id, &TurnBody { turn })?;
-    } else {
-        patches.append("transcript", &TurnArticle { turn })?;
-    }
-    // Cursor travels with the event so a retry cannot replay an applied seq.
-    patches.children("job-cursor", &JobCursorContents { job_id, cursor })?;
-    patches.encode_progress()
-}
-
-async fn offer_progress(
-    tx: &mpsc::Sender<hypergraft::StreamFrame>,
-    budget: &mut hypergraft::StreamBudget,
-    frame: Result<hypergraft::StreamFrame, hypergraft::PatchBuildError>,
-    operation: &'static str,
-) -> ProgressOffer {
-    let frame = match frame {
-        Ok(frame) => frame,
-        Err(error) => {
-            crate::error::trace_patch_build_failure(operation, &error);
-            return ProgressOffer::Skipped;
-        }
-    };
-    if budget.try_progress(&frame).is_err() {
-        return ProgressOffer::Exhausted;
-    }
-    if tx.send(frame).await.is_ok() {
-        ProgressOffer::Sent
-    } else {
-        ProgressOffer::Closed
-    }
-}
-
-async fn send_observe_final(
-    tx: &mpsc::Sender<hypergraft::StreamFrame>,
-    state: &AppState,
-    job: &Job,
-    job_id: &str,
-    cursor: u64,
-    assistant_visible: bool,
-    desk_href: &str,
-) {
-    match encode_observe_final(state, job, job_id, cursor, assistant_visible, desk_href) {
-        Ok(frame) => {
-            let _ = tx.send(frame).await;
-        }
-        Err(build_error) => {
-            crate::error::trace_patch_build_failure(
-                "construct job observation final",
-                &build_error,
-            );
-            match encode_observe_final(state, job, job_id, cursor, false, desk_href) {
-                Ok(frame) => {
-                    let _ = tx.send(frame).await;
-                }
-                Err(fallback_error) => {
-                    crate::error::trace_patch_build_failure(
-                        "construct fallback job observation final",
-                        &fallback_error,
-                    );
-                }
-            }
-        }
-    }
-}
-
-fn encode_observe_final(
-    state: &AppState,
-    job: &Job,
-    job_id: &str,
-    cursor: u64,
-    assistant_visible: bool,
-    desk_href: &str,
-) -> Result<hypergraft::StreamFrame, hypergraft::PatchBuildError> {
-    let snapshot = job.snapshot();
-    let more = snapshot.latest_seq > cursor || snapshot.status == JobStatus::Running;
-    let mut patches = PatchSet::new();
-    if !snapshot.output.is_empty() {
-        let turn = assistant_reply_turn(snapshot.assistant_index, &snapshot.output, more);
-        if assistant_visible {
-            patches.children(&turn.id, &TurnBody { turn: &turn })?;
-        } else {
-            patches.append("transcript", &TurnArticle { turn: &turn })?;
-        }
-    }
-    let run_id = match snapshot.owner {
-        crate::sessions::JobOwner::Workflow(run_id) => run_id.as_hex(),
-        crate::sessions::JobOwner::Conversation(_) => String::new(),
-    };
-    let run_step = snapshot.step_label.as_str();
-    let workflow_name = snapshot.workflow_name.as_str();
-    if more {
-        let status = if snapshot.cancel_requested {
-            "Stopping"
-        } else if snapshot.step_label.is_empty() {
-            "Working"
-        } else {
-            snapshot.step_label.as_str()
-        };
-        patches.children(
-            "job-observe",
-            &JobObserveContents::observing(
-                job_id,
-                cursor,
-                status,
-                "",
-                desk_href,
-                &run_id,
-                run_step,
-                workflow_name,
-            ),
-        )?;
-        patches.children("desk-status", &DeskStatusContents::active(status))?;
-    } else {
-        let error = snapshot.error.as_deref().unwrap_or("");
-        let review_href = super::review_href_for(state, &snapshot);
-        let quick_task_finished = super::quick_task_finished(state, &snapshot);
-        patches.children(
-            "job-observe",
-            &JobObserveContents::idle(
-                error,
-                desk_href,
-                &run_id,
-                run_step,
-                workflow_name,
-                &review_href,
-                quick_task_finished,
-            ),
-        )?;
-        patches.children(
-            "desk-status",
-            &DeskStatusContents::idle(&review_href, quick_task_finished),
-        )?;
-    }
-    if let Some(usage) = snapshot.output.usage.as_ref() {
-        let context = ModelContextView::from_model(
-            &state.models_dev,
-            usage.provider,
-            &usage.model,
-            Some(usage),
-        );
-        patches.children(
-            "desk-model-context",
-            &ModelContextContents {
-                model_context: &context,
-            },
-        )?;
-    }
-    let status = match snapshot.status {
-        JobStatus::Failed => provider_status_from_message(snapshot.error.as_deref()),
-        _ => PatchStatus::Ok,
-    };
-    patches.encode_final(status)
-}
-
-// Stream settlement cannot carry 429. Rate limits keep the recovery copy and 422.
-fn provider_status_from_message(message: Option<&str>) -> PatchStatus {
-    match message {
-        Some(message) if message == ProviderError::Rejected.message() => PatchStatus::Unauthorized,
-        _ => PatchStatus::UnprocessableEntity,
-    }
-}
-
-pub(super) fn user_transcript_patch(
-    turns: &[ChatTurn],
-) -> Result<PatchSet, hypergraft::PatchBuildError> {
-    let user_index = turns.len() - 1;
-    let user = &turns[user_index];
-    let turn = user_turn(user_index, &user.text);
-    if user_index == 0 {
-        let view = [turn];
-        PatchSet::new().with_children("transcript", &TranscriptContents { turns: &view })
-    } else {
-        PatchSet::new().with_append("transcript", &TurnArticle { turn: &turn })
-    }
 }

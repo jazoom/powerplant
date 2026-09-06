@@ -102,11 +102,6 @@ impl ConnectViewModel {
         Self::new(vault, None, pending, sandbox_missing, Some(error))
     }
 
-    pub(super) fn clear_api_key(mut self) -> Self {
-        self.clear_api_key = true;
-        self
-    }
-
     pub(super) fn card_contents(&self) -> ConnectCardContents<'_> {
         ConnectCardContents {
             providers: &self.providers,

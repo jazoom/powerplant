@@ -659,7 +659,7 @@ fn decision_destination(run: &crate::workflows::WorkflowRun) -> String {
         (RunKind::QuickTask, Some(conversation)) => {
             format!("/conversations/{}", conversation.as_hex())
         }
-        (RunKind::QuickTask, None) => crate::projects::desk_path(&run.project_id, &run.agent_id),
+        (RunKind::QuickTask, None) => format!("/projects/{}", run.project_id.as_hex()),
         (RunKind::Configured, _) => format!("/runs/{}", run.id.as_hex()),
     }
 }

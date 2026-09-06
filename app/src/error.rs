@@ -89,18 +89,6 @@ where
     record_operation_failure(operation, type_name::<E>());
 }
 
-pub(crate) fn trace_patch_build_failure(
-    operation: &'static str,
-    error: &hypergraft::PatchBuildError,
-) {
-    tracing::error!(
-        operation,
-        source = type_name::<hypergraft::PatchBuildError>(),
-        kind = ?error.kind(),
-        "operational request failure"
-    );
-}
-
 fn record_operation_failure(operation: &'static str, source_type: &'static str) {
     tracing::error!(
         operation,

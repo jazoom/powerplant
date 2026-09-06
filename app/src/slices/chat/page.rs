@@ -269,7 +269,6 @@ impl ChatViewModel {
                 latest_usage = job.output.usage.clone();
             }
             run_id = match job.owner {
-                crate::sessions::JobOwner::Workflow(run) => run.as_hex(),
                 crate::sessions::JobOwner::Conversation(_) => String::new(),
             };
             run_step = job.step_label.clone();
@@ -404,12 +403,12 @@ impl ChatViewModel {
         self.project_name = project.name.clone();
         self.project_path = project.host_path.to_string_lossy().into_owned();
         self.project_available = project.host_path_is_available();
-        self.desk_href = crate::projects::desk_path(&project.id, &record.id);
+        self.desk_href = format!("/conversations/new?project={}", project.id);
         self.agent_choices = eligible
             .iter()
             .map(|agent| AgentChoice {
                 name: agent.name.clone(),
-                href: crate::projects::desk_path(&project.id, &agent.id),
+                href: self.desk_href.clone(),
                 selected: agent.id == record.id,
             })
             .collect();
@@ -448,53 +447,6 @@ impl ChatViewModel {
     pub(crate) fn model_context(&self) -> ModelContextContents<'_> {
         ModelContextContents {
             model_context: &self.model_context,
-        }
-    }
-
-    pub(crate) fn sandbox_observe(&self) -> SandboxStatusContents<'_> {
-        SandboxStatusContents {
-            sandbox_status: &self.sandbox_status,
-            desk_href: &self.desk_href,
-            sandbox_cursor: &self.sandbox_cursor,
-            workflow_options: &self.workflow_options,
-        }
-    }
-
-    pub(crate) fn composer(&self) -> ComposerContents<'_> {
-        ComposerContents {
-            error: self.error,
-            session_busy: self.session_busy,
-            project_id: &self.project_id,
-            project_available: self.project_available,
-            desk_href: &self.desk_href,
-            workflow_options: &self.workflow_options,
-            workflow_empty: self.workflow_empty,
-            draft_message: &self.draft_message,
-            environment_preview: &self.environment_preview,
-            environment_preview_error: self.environment_preview_error,
-            preview_ready: self.preview_ready,
-            quick_ready: self.quick_ready,
-        }
-    }
-
-    pub(crate) fn job_observe(&self) -> JobObserveContents<'_> {
-        self.job_observe_with("")
-    }
-
-    pub(crate) fn job_observe_with<'a>(&'a self, job_error: &'a str) -> JobObserveContents<'a> {
-        JobObserveContents {
-            job_error,
-            job_id: &self.job_id,
-            cursor: self.cursor,
-            job_active: self.job_active,
-            job_status: &self.job_status,
-            desk_href: &self.desk_href,
-            run_id: &self.run_id,
-            run_step: &self.run_step,
-            workflow_name: &self.workflow_name,
-            review_href: &self.review_href,
-            quick_task_finished: self.quick_task_finished,
-            host_unchanged: self.host_unchanged,
         }
     }
 }
@@ -600,25 +552,7 @@ pub(crate) struct DeskStatusContents<'a> {
     pub(crate) job_status: &'a str,
 }
 
-impl<'a> DeskStatusContents<'a> {
-    pub(crate) fn active(status: &'a str) -> Self {
-        Self {
-            review_href: "",
-            job_active: true,
-            quick_task_finished: false,
-            job_status: status,
-        }
-    }
-
-    pub(crate) fn idle(review_href: &'a str, quick_task_finished: bool) -> Self {
-        Self {
-            review_href,
-            job_active: false,
-            quick_task_finished,
-            job_status: "",
-        }
-    }
-}
+impl<'a> DeskStatusContents<'a> {}
 
 #[derive(Template)]
 #[template(path = "projects/templates/desk.html", block = "desk_settings")]
@@ -704,59 +638,7 @@ pub(crate) struct JobObserveContents<'a> {
     pub(crate) host_unchanged: &'static str,
 }
 
-impl<'a> JobObserveContents<'a> {
-    pub(crate) fn idle(
-        error: &'a str,
-        desk_href: &'a str,
-        run_id: &'a str,
-        run_step: &'a str,
-        workflow_name: &'a str,
-        review_href: &'a str,
-        quick_task_finished: bool,
-    ) -> Self {
-        Self {
-            job_error: error,
-            job_id: "",
-            cursor: 0,
-            job_active: false,
-            job_status: "",
-            desk_href,
-            run_id,
-            run_step,
-            workflow_name,
-            review_href,
-            quick_task_finished,
-            host_unchanged: crate::workflows::HOST_UNCHANGED,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn observing(
-        job_id: &'a str,
-        cursor: u64,
-        status: &'a str,
-        error: &'a str,
-        desk_href: &'a str,
-        run_id: &'a str,
-        run_step: &'a str,
-        workflow_name: &'a str,
-    ) -> Self {
-        Self {
-            job_error: error,
-            job_id,
-            cursor,
-            job_active: true,
-            job_status: status,
-            desk_href,
-            run_id,
-            run_step,
-            workflow_name,
-            review_href: "",
-            quick_task_finished: false,
-            host_unchanged: crate::workflows::HOST_UNCHANGED,
-        }
-    }
-}
+impl<'a> JobObserveContents<'a> {}
 
 #[derive(Template)]
 #[template(path = "chat/templates/job_cursor.html")]

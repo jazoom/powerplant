@@ -102,12 +102,7 @@ impl super::SandboxFleet {
             hang_command: Mutex::new(false),
         }
     }
-    pub(crate) fn hang_next_command(&self) {
-        *lock_mutex(&self.hang_command) = true;
-        for handle in lock_mutex(&self.attempt_handles).values() {
-            handle.hang_next_command();
-        }
-    }
+
     pub(crate) fn guest_named(&self, attempt: AttemptId) -> bool {
         lock_mutex(&self.attempt_handles).contains_key(&attempt)
     }
@@ -120,12 +115,7 @@ impl super::GuestSandbox {
             AttemptId::generate().expect("attempt"),
         )
     }
-    pub(crate) fn hang_next_command(&self) {
-        match &self.inner {
-            Inner::Microsandbox(_) => {}
-            Inner::Scripted(guest) => *lock_mutex(&guest.hang_command) = true,
-        }
-    }
+
     pub(crate) fn fail_next_command(&self) {
         match &self.inner {
             Inner::Microsandbox(_) => {}

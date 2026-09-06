@@ -152,8 +152,8 @@ async fn the_catalogue_shows_metadata_for_each_exact_grant_match() {
     assert!(text.contains(&quay.host_path.to_string_lossy().into_owned()));
     assert!(!text.contains("Distant"));
     assert!(!text.contains(&unrelated.host_path.to_string_lossy().into_owned()));
-    assert!(!text.contains(&crate::projects::desk_path(&harbour.id, &both.id)));
-    assert!(!text.contains(&crate::projects::desk_path(&quay.id, &both.id)));
+    assert!(!text.contains(&crate::tests::desk_path(&harbour.id, &both.id)));
+    assert!(!text.contains(&crate::tests::desk_path(&quay.id, &both.id)));
     assert!(text.contains("No registered project matches the directory ceiling"));
     assert!(!text.contains("No local directory ceiling"));
     keep_dir(&state, harbour_dir);
@@ -198,7 +198,7 @@ async fn generic_create_redirects_to_the_new_agent_configuration() {
         "navigate=\"/agents/{}/configuration\"",
         agents[0].id.as_hex()
     )));
-    assert!(!text.contains(&crate::projects::desk_path(&project.id, &agents[0].id)));
+    assert!(!text.contains(&crate::tests::desk_path(&project.id, &agents[0].id)));
     state.keep_temp_dir(dir);
 }
 
@@ -756,8 +756,8 @@ async fn starter_create_ignores_a_submitted_host_path() {
     assert_eq!(agents[0].directories.len(), 1);
     assert_eq!(agents[0].directories[0].host_path, project.host_path);
     assert!(text.contains(&format!(
-        "navigate=\"{}\"",
-        crate::projects::desk_path(&project.id, &agents[0].id)
+        "navigate=\"/conversations/new?project={}\"",
+        project.id.as_hex()
     )));
     keep_dir(&state, dir);
     keep_dir(&state, other);

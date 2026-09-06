@@ -568,6 +568,9 @@
         background: var(--powerplant-cover-hover);
     }
 
+    body:has(#chat-main [data-section="conversations"])
+        .app-index-nav-desktop
+        [data-nav="conversations"],
     body:has(#chat-main [data-section="projects"])
         .app-index-nav-desktop
         [data-nav="projects"],
@@ -594,6 +597,9 @@
         border-color: var(--powerplant-cover-deep);
     }
 
+    body:has(#chat-main [data-section="conversations"])
+        .app-index-nav-desktop
+        [data-nav="conversations"]::before,
     body:has(#chat-main [data-section="projects"])
         .app-index-nav-desktop
         [data-nav="projects"]::before,
@@ -2121,7 +2127,7 @@
     .app-index-nav-mobile > a,
     .app-index-more {
         position: relative;
-        flex: 1;
+        flex: 1 0 auto;
         min-width: 0;
     }
 
@@ -2180,6 +2186,9 @@
         text-decoration: none;
     }
 
+    body:has(#chat-main [data-section="conversations"])
+        .app-index-nav-mobile
+        > [data-nav="conversations"],
     body:has(#chat-main [data-section="projects"])
         .app-index-nav-mobile
         > [data-nav="projects"],
@@ -2197,6 +2206,9 @@
         background: var(--powerplant-paper);
     }
 
+    body:has(#chat-main [data-section="conversations"])
+        .app-index-nav-mobile
+        > [data-nav="conversations"]::before,
     body:has(#chat-main [data-section="projects"])
         .app-index-nav-mobile
         > [data-nav="projects"]::before,

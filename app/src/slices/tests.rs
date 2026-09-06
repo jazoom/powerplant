@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::{
     body::{Body, to_bytes},
@@ -19,7 +18,6 @@ use crate::{
     preferences::Preferences,
     projects::ProjectStore,
     providers::{ChatBackend, ProviderKind},
-    sessions::{self, JobStatus},
     state::AppState,
     vault::ProviderVault,
     workflows::{
@@ -60,7 +58,11 @@ fn activation_state() -> AppState {
     .expect("workflows");
     let mut state = crate::tests::test_state(config.runtime);
     state.chat = Arc::new(ChatBackend::Scripted(
-        crate::tests::ScriptedBackend::accept(),
+        crate::tests::ScriptedBackend::tool_then(
+            "list",
+            serde_json::json!({"path": "."}),
+            USEFUL_REPLY,
+        ),
     ));
     state.vault = Arc::new(ProviderVault::open(root.join("providers.json")).expect("providers"));
     state.preferences = Arc::new(Preferences::open(root.join("preferences.json")));
@@ -157,72 +159,6 @@ fn form_value(value: &str) -> String {
     encoded
 }
 
-fn opening_tag_for<'a>(html: &'a str, marker: &str) -> &'a str {
-    let marker_start = html.find(marker).expect("element marker");
-    let tag_start = html[..marker_start].rfind('<').expect("opening tag");
-    let tag_end = html[marker_start..].find('>').expect("opening tag end") + marker_start;
-    &html[tag_start..=tag_end]
-}
-
-fn job_id_from(html: &str) -> String {
-    let marker = "name=\"job\" value=\"";
-    let start = html.find(marker).expect("job field") + marker.len();
-    let end = html[start..].find('"').expect("job field end") + start;
-    html[start..end].to_owned()
-}
-
-fn stream_frames(body: &[u8]) -> Vec<String> {
-    let mut frames = Vec::new();
-    let mut rest = body;
-    while !rest.is_empty() {
-        let newline = rest
-            .iter()
-            .position(|&b| b == b'\n')
-            .expect("length prefix");
-        let len: usize = std::str::from_utf8(&rest[..newline])
-            .expect("length utf8")
-            .parse()
-            .expect("length");
-        let start = newline + 1;
-        let end = start + len;
-        frames.push(String::from_utf8(rest[start..end].to_vec()).expect("frame utf8"));
-        rest = &rest[end..];
-    }
-    frames
-}
-
-fn conversation_key(state: &AppState) -> sessions::ConversationKey {
-    sessions::ConversationKey {
-        project_id: state.projects.list()[0].id,
-        agent_id: state.agents.list()[0].id,
-    }
-}
-
-fn session_id(token: &str) -> sessions::SessionId {
-    sessions::SessionId::from_validated(&sessions::ValidatedToken::parse(token).expect("token"))
-}
-
-fn session_snapshot(state: &AppState, token: &str) -> sessions::SessionSnapshot {
-    state
-        .sessions
-        .snapshot(&session_id(token), &conversation_key(state))
-        .expect("session")
-}
-
-async fn wait_until_job_idle(state: &AppState, token: &str) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let job = session_snapshot(state, token).job.expect("submitted job");
-            if job.status != JobStatus::Running {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("job finished before timeout");
-}
-
 async fn send(state: &AppState, request: Request<Body>) -> (StatusCode, HeaderMap, String) {
     let response = app(state).oneshot(request).await.expect("response");
     let status = response.status();
@@ -251,17 +187,6 @@ fn patch(uri: &str, token: Option<&str>, body: &str) -> Request<Body> {
         builder = builder.header(header::COOKIE, cookie(token));
     }
     builder.body(Body::from(body.to_owned())).unwrap()
-}
-
-fn observe_patch(desk: &str, token: &str, job: &str) -> Request<Body> {
-    Request::builder()
-        .method("GET")
-        .uri(format!("{desk}?job={job}&cursor=0"))
-        .header(header::COOKIE, cookie(token))
-        .header(hypergraft::GRAFT_REQUEST, "patch")
-        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
-        .body(Body::empty())
-        .unwrap()
 }
 
 fn ready_alpine_git(state: &AppState) {
@@ -313,14 +238,14 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("href=\"/\""));
+    assert!(text.contains(r#"navigate="/conversations""#));
     assert!(!text.contains("sk-test-key"));
     assert!(state.vault.contains(ProviderKind::Xai));
     assert!(headers.get(header::SET_COOKIE).is_none());
 
     let (status, headers, _) = send(&state, document("/", None)).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location(&headers), "/projects/new");
+    assert_eq!(location(&headers), "/conversations");
     let token = session_cookie(&headers);
 
     let (status, _, text) = send(&state, document("/projects/new", Some(&token))).await;
@@ -347,70 +272,81 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     let project_path = format!("/projects/{}", project.id.as_hex());
     let (status, _, text) = send(&state, document(&project_path, Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("Create agent and open desk"));
+    assert!(text.contains("New conversation"));
     assert!(text.contains(&format!(
-        "action=\"/projects/{}/agents/starter\"",
+        "href=\"/conversations/new?project={}\"",
         project.id.as_hex()
     )));
 
     let (status, _, text) = send(
         &state,
         patch(
-            &format!("/projects/{}/agents/starter", project.id.as_hex()),
+            "/conversations",
             Some(&token),
-            "",
+            &format!("title=Project+work&project={}", project.id),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(state.agents.list().len(), 1);
-    let desk = crate::projects::desk_path(&project.id, &state.agents.list()[0].id);
-    assert_eq!(navigate_target(&text), desk);
-
-    let (status, _, text) = send(&state, document(&desk, Some(&token))).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("Sandbox preparation is in progress"));
-    assert!(opening_tag_for(&text, "value=\"quick\"").contains(" disabled"));
-    assert!(session_snapshot(&state, &token).job.is_none());
-
+    let conversation = state.conversations.list().pop().expect("conversation");
+    let conversation_path = format!("/conversations/{}", conversation.id);
+    assert_eq!(navigate_target(&text), conversation_path);
+    assert!(state.agents.list().is_empty());
+    assert!(conversation.grants.is_empty());
     ready_alpine_git(&state);
-
-    let (status, _, text) = send(&state, document(&desk, Some(&token))).await;
+    let (status, _, _) = send(
+        &state,
+        patch(
+            &format!("{conversation_path}/access"),
+            Some(&token),
+            &format!(
+                "revision={}&project={}&access=read-write",
+                conversation.revision, project.id
+            ),
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(text.contains("Sandbox is ready"));
-    assert!(!opening_tag_for(&text, "value=\"quick\"").contains(" disabled"));
-    assert!(session_snapshot(&state, &token).job.is_none());
-
-    let send_body = format!("message={}&mode=quick", form_value(EXAMPLE));
-    let (status, _, text) = send(&state, patch(&desk, Some(&token), &send_body)).await;
+    let conversation = state
+        .conversations
+        .get(&conversation.id)
+        .expect("conversation");
+    let (status, _, _) = send(
+        &state,
+        patch(
+            &format!("{conversation_path}/messages"),
+            Some(&token),
+            &format!(
+                "revision={}&message={}",
+                conversation.revision,
+                form_value(EXAMPLE)
+            ),
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    let job = job_id_from(&text);
-    wait_until_job_idle(&state, &token).await;
-    assert_eq!(
-        session_snapshot(&state, &token)
-            .job
-            .as_ref()
-            .map(|job| job.status),
-        Some(JobStatus::Completed)
-    );
-
-    let (status, _, body) = send(&state, observe_patch(&desk, &token, &job)).await;
-    assert_eq!(status, StatusCode::OK);
-    let frames = stream_frames(body.as_bytes());
-    let final_frame = frames.last().expect("final frame");
-    assert!(final_frame.contains("phase=\"final\""));
-    assert!(frames.iter().any(|frame| frame.contains(USEFUL_REPLY)));
-    assert!(final_frame.contains("Task finished."));
-    assert!(opening_tag_for(final_frame, "Task finished.").contains("role=\"status\""));
-
-    let (status, _, text) = send(&state, document(&desk, Some(&token))).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state
+            .conversations
+            .get(&conversation.id)
+            .expect("conversation")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settlement");
+    let (status, _, text) = send(&state, document(&conversation_path, Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains(USEFUL_REPLY));
-    assert!(text.contains("Task finished."));
+    assert!(text.contains(&format!("href=\"{conversation_path}/workflow\"")));
     let run = state
         .workflow_runs
         .get(&state.workflow_runs.summaries()[0].id)
         .expect("run");
     assert_eq!(run.kind, crate::workflows::RunKind::QuickTask);
     assert_eq!(run.pinned.workflow_id, None);
+    assert_eq!(run.conversation_id, Some(conversation.id));
 }

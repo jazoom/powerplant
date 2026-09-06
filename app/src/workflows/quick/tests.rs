@@ -1,6 +1,7 @@
 use super::{
-    AGENT_STEP_KEY, COMMIT_STEP_KEY, COMMITTED_OUTPUT_KEY, DECISION_OUTPUT_KEY, GATE_STEP_KEY,
-    QUICK_TASK_NAME, ROLE_KEY, pin_quick_task,
+    AGENT_STEP_KEY, COMMIT_STEP_KEY, COMMITTED_OUTPUT_KEY, DECISION_OUTPUT_KEY, DefinitionError,
+    EnvironmentId, GATE_STEP_KEY, PinnedWorkflowDefinition, QUICK_TASK_NAME, ROLE_KEY,
+    pin_quick_task_with_context,
 };
 use crate::agents::{AccessMode, ToolId};
 use crate::tests::test_environment_id;
@@ -134,4 +135,13 @@ fn pin_versions_are_stable_for_the_same_inputs() {
     )
     .expect("other instructions");
     assert_ne!(first.version, other_instructions.version);
+}
+
+pub(crate) fn pin_quick_task(
+    access: AccessMode,
+    tools: &[ToolId],
+    instructions: &str,
+    environment: EnvironmentId,
+) -> Result<PinnedWorkflowDefinition, DefinitionError> {
+    pin_quick_task_with_context(access, tools, instructions, environment, Vec::new())
 }

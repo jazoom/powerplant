@@ -1,8 +1,9 @@
 const JOB_ID_LENGTH: usize = 32;
 
-use super::{Job, JobId, JobStatus};
+use super::{ConversationId, Job, JobEvent, JobId, JobStatus};
 use crate::providers::{AssistantActivity, ToolOutput};
 use crate::workflows::RunId;
+use std::sync::Arc;
 
 fn job() -> std::sync::Arc<Job> {
     Job::new(
@@ -72,4 +73,22 @@ fn finish_is_idempotent() {
     assert_eq!(job.finish(JobStatus::Failed, Some("no")), None);
     assert_eq!(job.snapshot().status, JobStatus::Completed);
     assert!(job.push_response("late".to_owned()).is_none());
+}
+
+impl super::Job {
+    pub(crate) fn new(id: JobId, _run_id: RunId, assistant_index: usize) -> Arc<Self> {
+        Self::for_conversation(
+            id,
+            ConversationId::generate().expect("conversation id"),
+            assistant_index,
+        )
+    }
+    pub(crate) fn events_after(&self, cursor: u64) -> Vec<JobEvent> {
+        self.lock()
+            .events
+            .iter()
+            .filter(|event| event.seq > cursor)
+            .cloned()
+            .collect()
+    }
 }

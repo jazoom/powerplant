@@ -6,14 +6,14 @@ use std::time::{Duration, Instant};
 use crate::{
     agents::AgentId,
     conversations::ConversationId,
-    projects::{MAXIMUM_PROJECTS, ProjectId},
+    projects::ProjectId,
     providers::{AssistantReply, ChatTurn},
     sessions::{
         SESSION_LIFETIME,
         job::{Job, JobId, JobSnapshot},
         tokens::SessionId,
     },
-    workflows::{RunId, WorkflowId},
+    workflows::WorkflowId,
 };
 
 #[cfg(test)]
@@ -63,8 +63,6 @@ struct StoredSession {
     conversations: HashMap<ConversationKey, Conversation>,
     // Safe gates release this token without release of conversation ownership.
     active: Option<JobId>,
-    last_agents: HashMap<ProjectId, AgentId>,
-    recent_projects: Vec<ProjectId>,
     expires_at: Instant,
 }
 
@@ -74,11 +72,6 @@ pub(crate) struct SessionSnapshot {
     pub(crate) job: Option<JobSnapshot>,
     pub(crate) session_busy: bool,
     pub(crate) preferred_workflow: Option<WorkflowId>,
-}
-
-pub(crate) struct BegunTurn {
-    pub(crate) job: Arc<Job>,
-    pub(crate) turns: Vec<ChatTurn>,
 }
 
 #[derive(Debug)]
@@ -104,8 +97,6 @@ impl SessionStore {
             StoredSession {
                 conversations: HashMap::new(),
                 active: None,
-                last_agents: HashMap::new(),
-                recent_projects: Vec::new(),
                 expires_at,
             },
         );
@@ -136,96 +127,6 @@ impl SessionStore {
         live(&mut sessions, id, self.clock.now()).map(|session| snapshot_session(key, session))
     }
 
-    pub(crate) fn set_preferred_workflow(
-        &self,
-        id: &SessionId,
-        key: ConversationKey,
-        workflow: WorkflowId,
-    ) {
-        let mut sessions = self.lock();
-        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
-            return;
-        };
-        let conversation = session
-            .conversations
-            .entry(key)
-            .or_insert_with(|| Conversation {
-                turns: Vec::new(),
-                job: None,
-                preferred_workflow: None,
-            });
-        conversation.preferred_workflow = Some(workflow);
-    }
-
-    pub(crate) fn remember_conversation(&self, id: &SessionId, key: ConversationKey) {
-        let mut sessions = self.lock();
-        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
-            return;
-        };
-        session.last_agents.insert(key.project_id, key.agent_id);
-        session
-            .recent_projects
-            .retain(|item| *item != key.project_id);
-        session.recent_projects.insert(0, key.project_id);
-        session.recent_projects.truncate(MAXIMUM_PROJECTS);
-        session
-            .last_agents
-            .retain(|project, _| session.recent_projects.contains(project));
-    }
-
-    pub(crate) fn last_agent(&self, id: &SessionId, project: &ProjectId) -> Option<AgentId> {
-        let mut sessions = self.lock();
-        live(&mut sessions, id, self.clock.now())
-            .and_then(|session| session.last_agents.get(project).copied())
-    }
-
-    pub(crate) fn forget_last_agent(&self, id: &SessionId, project: &ProjectId) {
-        let mut sessions = self.lock();
-        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
-            return;
-        };
-        session.last_agents.remove(project);
-    }
-
-    pub(crate) fn recent_projects(&self, id: &SessionId) -> Vec<ProjectId> {
-        let mut sessions = self.lock();
-        live(&mut sessions, id, self.clock.now())
-            .map(|session| session.recent_projects.clone())
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn begin_turn(
-        &self,
-        id: &SessionId,
-        key: ConversationKey,
-        run_id: RunId,
-        message: String,
-    ) -> Result<BegunTurn, BeginTurnError> {
-        let mut sessions = self.lock();
-        let session =
-            live_mut(&mut sessions, id, self.clock.now()).ok_or(BeginTurnError::MissingSession)?;
-        if session.active.is_some() {
-            return Err(BeginTurnError::Conflict);
-        }
-        let job_id = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
-        let conversation = session
-            .conversations
-            .entry(key)
-            .or_insert_with(|| Conversation {
-                turns: Vec::new(),
-                job: None,
-                preferred_workflow: None,
-            });
-        conversation.turns.push(ChatTurn::user(message));
-        let job = Job::new(job_id, run_id, conversation.turns.len());
-        conversation.job = Some(job.clone());
-        session.active = Some(job_id);
-        Ok(BegunTurn {
-            job,
-            turns: conversation.turns.clone(),
-        })
-    }
-
     pub(crate) fn finish_turn(
         &self,
         id: &SessionId,
@@ -244,33 +145,6 @@ impl SessionStore {
         partial: impl Into<AssistantReply>,
     ) -> bool {
         self.complete_turn(id, key, job_id, partial.into())
-    }
-
-    pub(crate) fn rollback_turn(
-        &self,
-        id: &SessionId,
-        key: &ConversationKey,
-        job_id: &JobId,
-    ) -> bool {
-        let mut sessions = self.lock();
-        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
-            return false;
-        };
-        if session.active != Some(*job_id) {
-            return false;
-        }
-        if let Some(conversation) = session.conversations.get_mut(key) {
-            conversation.turns.pop();
-            if conversation
-                .job
-                .as_ref()
-                .is_some_and(|job| job.id() == *job_id)
-            {
-                conversation.job = None;
-            }
-        }
-        session.active = None;
-        true
     }
 
     pub(crate) fn begin_conversation_job(
@@ -389,23 +263,6 @@ impl SessionStore {
         }
         jobs.remove(&conversation_id);
         true
-    }
-
-    pub(crate) fn job(
-        &self,
-        id: &SessionId,
-        key: &ConversationKey,
-        job_id: &JobId,
-    ) -> Option<Arc<Job>> {
-        let mut sessions = self.lock();
-        live(&mut sessions, id, self.clock.now()).and_then(|session| {
-            session
-                .conversations
-                .get(key)
-                .and_then(|conversation| conversation.job.as_ref())
-                .filter(|job| job.id() == *job_id)
-                .cloned()
-        })
     }
 
     pub(crate) fn remove(&self, id: &SessionId) {

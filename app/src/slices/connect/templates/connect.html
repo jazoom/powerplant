@@ -12,15 +12,18 @@
         <div>
           {% if has_stored_providers %}
             <h1>Providers</h1>
-            <p>Manage the model providers available on every project desk.</p>
+            <p>Manage the model providers available to your conversations.</p>
           {% else %}
             <h1>Connect a provider</h1>
             <p>Use a supported plan login or an API key from your provider.</p>
           {% endif %}
         </div>
         {% if has_stored_providers %}
-          <a href="/" data-graft class="setup-continue btn btn-primary shrink-0"
-            >Continue to projects</a
+          <a
+            href="/conversations"
+            data-graft
+            class="setup-continue btn btn-primary shrink-0"
+            >Continue to conversations</a
           >
         {% endif %}
       </div>
@@ -247,8 +250,11 @@
 
       {% if has_stored_providers %}
         <div class="setup-continue mt-8 flex justify-end">
-          <a href="/" data-graft class="btn btn-primary w-full sm:w-auto"
-            >Continue to projects</a
+          <a
+            href="/conversations"
+            data-graft
+            class="btn btn-primary w-full sm:w-auto"
+            >Continue to conversations</a
           >
         </div>
       {% endif %}

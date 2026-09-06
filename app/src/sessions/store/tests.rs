@@ -25,9 +25,9 @@ impl super::Clock {
 use std::time::Duration;
 
 use crate::agents::AgentId;
-use crate::projects::{MAXIMUM_PROJECTS, ProjectId};
+use crate::projects::ProjectId;
 use crate::providers::ChatTurn;
-use crate::sessions::{self, BeginTurnError, ConversationKey, SESSION_LIFETIME};
+use crate::sessions::{self, ConversationKey, SESSION_LIFETIME};
 use crate::workflows::RunId;
 
 fn conversation() -> ConversationKey {
@@ -308,20 +308,83 @@ fn a_stale_rollback_cannot_remove_a_later_turn() {
     );
 }
 
-#[test]
-fn recent_projects_are_bounded_and_put_the_latest_first() {
-    let store = super::SessionStore::new();
-    let token = sessions::generate_session_token().expect("token");
-    let id = token.id();
-    let conversations: Vec<_> = (0..=MAXIMUM_PROJECTS).map(|_| conversation()).collect();
-    store.insert(id);
-    for key in &conversations {
-        store.remember_conversation(&id, *key);
+impl super::SessionStore {
+    pub(crate) fn begin_turn(
+        &self,
+        id: &SessionId,
+        key: ConversationKey,
+        run_id: RunId,
+        message: String,
+    ) -> Result<BegunTurn, BeginTurnError> {
+        let mut sessions = self.lock();
+        let session =
+            live_mut(&mut sessions, id, self.clock.now()).ok_or(BeginTurnError::MissingSession)?;
+        if session.active.is_some() {
+            return Err(BeginTurnError::Conflict);
+        }
+        let job_id = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
+        let conversation = session
+            .conversations
+            .entry(key)
+            .or_insert_with(|| Conversation {
+                turns: Vec::new(),
+                job: None,
+                preferred_workflow: None,
+            });
+        conversation.turns.push(ChatTurn::user(message));
+        let job = Job::new(job_id, run_id, conversation.turns.len());
+        conversation.job = Some(job.clone());
+        session.active = Some(job_id);
+        Ok(BegunTurn {
+            job,
+            turns: conversation.turns.clone(),
+        })
     }
-    store.remember_conversation(&id, conversations[1]);
+    pub(crate) fn rollback_turn(
+        &self,
+        id: &SessionId,
+        key: &ConversationKey,
+        job_id: &JobId,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = live_mut(&mut sessions, id, self.clock.now()) else {
+            return false;
+        };
+        if session.active != Some(*job_id) {
+            return false;
+        }
+        if let Some(conversation) = session.conversations.get_mut(key) {
+            conversation.turns.pop();
+            if conversation
+                .job
+                .as_ref()
+                .is_some_and(|job| job.id() == *job_id)
+            {
+                conversation.job = None;
+            }
+        }
+        session.active = None;
+        true
+    }
+    pub(crate) fn job(
+        &self,
+        id: &SessionId,
+        key: &ConversationKey,
+        job_id: &JobId,
+    ) -> Option<Arc<Job>> {
+        let mut sessions = self.lock();
+        live(&mut sessions, id, self.clock.now()).and_then(|session| {
+            session
+                .conversations
+                .get(key)
+                .and_then(|conversation| conversation.job.as_ref())
+                .filter(|job| job.id() == *job_id)
+                .cloned()
+        })
+    }
+}
 
-    let recent = store.recent_projects(&id);
-    assert_eq!(recent.len(), MAXIMUM_PROJECTS);
-    assert_eq!(recent[0], conversations[1].project_id);
-    assert!(!recent.contains(&conversations[0].project_id));
+pub(crate) struct BegunTurn {
+    pub(crate) job: Arc<Job>,
+    pub(crate) turns: Vec<ChatTurn>,
 }

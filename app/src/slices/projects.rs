@@ -1,4 +1,3 @@
-mod desk;
 mod forms;
 mod page;
 
@@ -18,8 +17,7 @@ use crate::{
     error::{AppError, AppResult},
     local_data::HOST_PATH_RESET_PENDING,
     projects::{
-        FolderPick, ProjectError, ProjectId, ProjectRecord, desk_path, eligible_agents,
-        submitted_host_path, submitted_name,
+        FolderPick, ProjectError, ProjectId, ProjectRecord, submitted_host_path, submitted_name,
     },
     responses,
     sessions::RequiredSession,
@@ -27,7 +25,7 @@ use crate::{
 };
 
 use self::{
-    forms::{GrantForm, ProjectForm, REVISION_MESSAGE},
+    forms::{ProjectForm, REVISION_MESSAGE},
     page::{CatalogueView, DetailView, ProjectFormView},
 };
 
@@ -47,35 +45,22 @@ pub(super) fn router() -> Router<AppState> {
             "/projects/{project_id}/agents/starter",
             post(create_starter),
         )
-        .route(
-            "/projects/{project_id}/agents/{agent_id}",
-            get(desk::show).post(desk::send),
-        )
-        .route(
-            "/projects/{project_id}/agents/{agent_id}/jobs/{job_id}/cancel",
-            post(desk::cancel),
-        )
 }
 
 async fn root(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     _session: RequiredSession,
     graft: GraftRequest,
 ) -> AppResult<Response> {
-    let destination = match state.projects.list().as_slice() {
-        [] => "/projects/new".to_owned(),
-        [project] => format!("/projects/{}", project.id.as_hex()),
-        _ => "/projects".to_owned(),
-    };
-    Ok(responses::request_navigation(graft, &destination))
+    Ok(responses::request_navigation(graft, "/conversations"))
 }
 
 async fn catalogue(
     State(state): State<AppState>,
-    session: RequiredSession,
+    _session: RequiredSession,
     graft: PageGraft,
 ) -> AppResult<Response> {
-    render_catalogue(&state, session.0, graft)
+    render_catalogue(&state, graft)
 }
 
 async fn new_project(
@@ -194,28 +179,14 @@ async fn create(
 
 async fn detail(
     State(state): State<AppState>,
-    session: RequiredSession,
+    _session: RequiredSession,
     graft: PageGraft,
     Path(project_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(record) = load_project(&state, &project_id) else {
         return Ok(responses::page_redirect(graft, "/projects"));
     };
-    let eligible = eligible_agents(&state.agents.list(), &record);
-    let remembered = state.sessions.last_agent(&session.0, &record.id);
-    let remembered_eligible =
-        remembered.filter(|agent_id| eligible.iter().any(|agent| agent.id == *agent_id));
-    if remembered.is_some() && remembered_eligible.is_none() {
-        state.sessions.forget_last_agent(&session.0, &record.id);
-    }
-    let destination = match eligible.as_slice() {
-        [agent] => Some(desk_path(&record.id, &agent.id)),
-        _ => remembered_eligible.map(|agent_id| desk_path(&record.id, &agent_id)),
-    };
-    if let Some(destination) = destination {
-        return Ok(responses::page_redirect(graft, &destination));
-    }
-    let view = DetailView::from_record(&record, &eligible, &state.agents.list());
+    let view = DetailView::with_conversations(&record, &state.conversations.list());
     render_detail_page(&state, graft, PatchStatus::Ok, &view)
 }
 
@@ -224,7 +195,7 @@ async fn grant_agent(
     _session: RequiredSession,
     graft: PatchGraft,
     Path(project_id): Path<String>,
-    Form(form): Form<GrantForm>,
+    Form(form): Form<forms::GrantForm>,
 ) -> AppResult<Response> {
     let Some(project) = load_project(&state, &project_id) else {
         return Ok(responses::command_navigation("/projects"));
@@ -232,11 +203,10 @@ async fn grant_agent(
     let agent_id = match form.agent_id() {
         Ok(agent_id) => agent_id,
         Err(error) => {
-            return render_grant_error(
+            return render_project_command_error(
                 &state,
                 graft,
                 &project,
-                &form,
                 error,
                 PatchStatus::UnprocessableEntity,
             );
@@ -245,11 +215,10 @@ async fn grant_agent(
     let revision = match form.revision() {
         Ok(revision) => revision,
         Err(error) => {
-            return render_grant_error(
+            return render_project_command_error(
                 &state,
                 graft,
                 &project,
-                &form,
                 error,
                 PatchStatus::UnprocessableEntity,
             );
@@ -258,32 +227,29 @@ async fn grant_agent(
     let access = match form.access() {
         Ok(access) => access,
         Err(error) => {
-            return render_grant_error(
+            return render_project_command_error(
                 &state,
                 graft,
                 &project,
-                &form,
                 error,
                 PatchStatus::UnprocessableEntity,
             );
         }
     };
     let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
-        return render_grant_error(
+        return render_project_command_error(
             &state,
             graft,
             &project,
-            &form,
             HOST_PATH_RESET_PENDING,
             PatchStatus::Conflict,
         );
     };
     let Ok(_lease) = state.agent_leases.acquire(agent_id) else {
-        return render_grant_error(
+        return render_project_command_error(
             &state,
             graft,
             &project,
-            &form,
             "Wait until this reply finishes.",
             PatchStatus::UnprocessableEntity,
         );
@@ -292,21 +258,19 @@ async fn grant_agent(
         return Ok(responses::command_navigation("/projects"));
     };
     let Some(agent) = state.agents.get(&agent_id) else {
-        return render_grant_error(
+        return render_project_command_error(
             &state,
             graft,
             &project,
-            &form,
             AgentError::Missing.message(),
             PatchStatus::UnprocessableEntity,
         );
     };
     if agent.revision != revision {
-        return render_grant_error(
+        return render_project_command_error(
             &state,
             graft,
             &project,
-            &form,
             AgentError::Conflict.message(),
             PatchStatus::Conflict,
         );
@@ -327,9 +291,9 @@ async fn grant_agent(
         primary_directory: agent.primary_directory.clone(),
     };
     match state.agents.update(&agent.id, revision, draft) {
-        Ok(updated) => Ok(responses::command_navigation(&desk_path(
-            &project.id,
-            &updated.id,
+        Ok(_) => Ok(responses::command_navigation(&format!(
+            "/conversations/new?project={}",
+            project.id.as_hex()
         ))),
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
@@ -344,7 +308,7 @@ async fn grant_agent(
             } else {
                 PatchStatus::UnprocessableEntity
             };
-            render_grant_error(&state, graft, &project, &form, error.message(), status)
+            render_project_command_error(&state, graft, &project, error.message(), status)
         }
     }
 }
@@ -352,24 +316,25 @@ async fn grant_agent(
 async fn create_starter(
     State(state): State<AppState>,
     _session: RequiredSession,
-    _graft: PatchGraft,
+    graft: PatchGraft,
     Path(project_id): Path<String>,
 ) -> AppResult<Response> {
     let Some(project) = load_project(&state, &project_id) else {
         return Ok(responses::command_navigation("/projects"));
     };
     let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
-        return render_starter_error(
+        return render_project_command_error(
             &state,
+            graft,
             &project,
             HOST_PATH_RESET_PENDING,
             PatchStatus::Conflict,
         );
     };
     match state.agents.ensure_starter(&project) {
-        Ok(StarterAgent::One(agent) | StarterAgent::Created(agent)) => Ok(
-            responses::command_navigation(&desk_path(&project.id, &agent.id)),
-        ),
+        Ok(StarterAgent::One(_) | StarterAgent::Created(_)) => Ok(responses::command_navigation(
+            &format!("/conversations/new?project={}", project.id.as_hex()),
+        )),
         Ok(StarterAgent::Several) => Ok(responses::command_navigation(&format!(
             "/projects/{}",
             project.id.as_hex()
@@ -377,8 +342,9 @@ async fn create_starter(
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
             Err(AppError::new("store agent", error))
         }
-        Err(error) => render_starter_error(
+        Err(error) => render_project_command_error(
             &state,
+            graft,
             &project,
             error.message(),
             PatchStatus::UnprocessableEntity,
@@ -468,31 +434,10 @@ fn render_detail_page(
     }
 }
 
-fn render_starter_error(
-    state: &AppState,
-    project: &ProjectRecord,
-    error: &'static str,
-    status: PatchStatus,
-) -> AppResult<Response> {
-    let latest = state
-        .projects
-        .get(&project.id)
-        .unwrap_or_else(|| project.clone());
-    let agents = state.agents.list();
-    let eligible = eligible_agents(&agents, &latest);
-    let view = DetailView::with_grant(&latest, &eligible, &agents, "project", "read-write", error);
-    Ok(hypergraft::outcome::children_patch(
-        status,
-        "chat-main",
-        &view,
-    )?)
-}
-
-fn render_grant_error(
+fn render_project_command_error(
     state: &AppState,
     _graft: PatchGraft,
     project: &ProjectRecord,
-    form: &GrantForm,
     error: &'static str,
     status: PatchStatus,
 ) -> AppResult<Response> {
@@ -500,16 +445,7 @@ fn render_grant_error(
         .projects
         .get(&project.id)
         .unwrap_or_else(|| project.clone());
-    let agents = state.agents.list();
-    let eligible = eligible_agents(&agents, &latest);
-    let view = DetailView::with_grant(
-        &latest,
-        &eligible,
-        &agents,
-        &form.alias(),
-        &form.access,
-        error,
-    );
+    let view = DetailView::with_error(&latest, &state.conversations.list(), error);
     Ok(hypergraft::outcome::children_patch(
         status,
         "chat-main",
@@ -558,12 +494,8 @@ fn render_configuration_error(
     )
 }
 
-fn render_catalogue(
-    state: &AppState,
-    session: crate::sessions::SessionId,
-    graft: PageGraft,
-) -> AppResult<Response> {
-    let projects = ordered_projects(state, session);
+fn render_catalogue(state: &AppState, graft: PageGraft) -> AppResult<Response> {
+    let projects = ordered_projects(state);
     if projects.is_empty() {
         return Ok(responses::request_navigation(graft, "/projects/new"));
     }
@@ -630,19 +562,6 @@ fn derived_project_name(path: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
-fn ordered_projects(state: &AppState, session: crate::sessions::SessionId) -> Vec<ProjectRecord> {
-    let recent = state.sessions.recent_projects(&session);
-    let mut listed = state.projects.list();
-    listed.sort_by(|left, right| {
-        match (
-            recent.iter().position(|id| *id == left.id),
-            recent.iter().position(|id| *id == right.id),
-        ) {
-            (Some(left_rank), Some(right_rank)) => left_rank.cmp(&right_rank),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        }
-    });
-    listed
+fn ordered_projects(state: &AppState) -> Vec<ProjectRecord> {
+    state.projects.list()
 }

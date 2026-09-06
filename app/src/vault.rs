@@ -133,11 +133,6 @@ impl ProviderVault {
         self.lock().providers.contains_key(&kind)
     }
 
-    pub(crate) fn selected_connection(&self) -> Option<ProviderConnection> {
-        let state = self.lock();
-        connection_from(self.path.as_deref(), &state, state.selected?)
-    }
-
     pub(crate) fn connection_for(
         &self,
         selection: &crate::providers::ModelSelection,

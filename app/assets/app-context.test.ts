@@ -25,6 +25,20 @@ function fixture(page: string): HTMLElement {
     return root;
 }
 
+test("the context identifies the conversation work section", () => {
+    const root = fixture(`
+        <main data-section="conversations"><h1>Discussion</h1></main>
+    `);
+
+    initAppContext(root);
+
+    expect(root.querySelector("ol")?.textContent).toContain(
+        "WorkConversationsDiscussion",
+    );
+    const links = [...root.querySelectorAll<HTMLAnchorElement>("ol a")];
+    expect(links.map((link) => link.pathname)).toEqual(["/conversations"]);
+});
+
 test("the context identifies a nested project desk", () => {
     const root = fixture(`
         <main

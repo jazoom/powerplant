@@ -740,3 +740,10 @@ fn open_restricts_retained_plan_files_to_owner_read_write() {
         assert_eq!(mode, 0o600);
     }
 }
+
+impl super::ProviderVault {
+    pub(crate) fn selected_connection(&self) -> Option<ProviderConnection> {
+        let state = self.lock();
+        connection_from(self.path.as_deref(), &state, state.selected?)
+    }
+}

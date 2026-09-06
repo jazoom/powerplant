@@ -135,84 +135,23 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
     ));
     let token = connected(&state);
     let id = session_id(&token);
-    let dir = tempfile::tempdir().expect("project");
-    assert!(
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir.path())
-            .status()
-            .expect("git")
-            .success()
-    );
-    let record = state
-        .agents
-        .create(crate::agents::AgentDraft {
-            name: "Test agent".to_owned(),
-            instructions: String::new(),
-            selection: None,
-            tools: crate::agents::ToolId::ALL.to_vec(),
-            network: crate::agents::NetworkAccess::None,
-            directories: vec![crate::agents::DirectoryGrant {
-                alias: "project".to_owned(),
-                host_path: dir.path().to_path_buf(),
-                access: crate::agents::AccessMode::ReadWrite,
-            }],
-            primary_directory: "project".to_owned(),
-        })
-        .expect("agent");
-    state
-        .projects
-        .create(
-            "Connect project".to_owned(),
-            record.directories[0].host_path.clone(),
-        )
-        .expect("project");
-    state.keep_temp_dir(dir);
-    let (environment, preparation) = state
-        .environments
-        .create(crate::environments::EnvironmentDraft {
-            name: "Alpine Git".to_owned(),
-            oci_image: "alpine/git".to_owned(),
-            setup_script: String::new(),
-        })
-        .expect("environment");
-    state.environments.claim_oldest_queued().expect("claim");
-    let snapshot = crate::tests::sample_snapshot(preparation.id);
-    state.environment_snapshots.mark(
-        snapshot.artifact_key.clone(),
-        crate::environments::SnapshotAvailability::Available,
-    );
-    state
-        .environments
-        .finish_ready(&preparation.id, snapshot, preparation.log)
-        .expect("ready");
-    let workflow = state
-        .workflows
-        .create(crate::workflows::seeds::one_agent_definition(
-            environment.id,
-        ))
-        .expect("workflow");
-    let token_value = crate::workflows::WorkflowSelection {
-        workflow_id: workflow.id,
-        definition_version: workflow.definition_version,
-    }
-    .as_token();
+    let conversation = state
+        .conversations
+        .create("Provider cancellation".to_owned())
+        .expect("conversation");
 
     let send = app(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/projects/{}/agents/{}",
-                    state.projects.list()[0].id.as_hex(),
-                    record.id.as_hex()
-                ))
+                .uri(format!("/conversations/{}/messages", conversation.id))
                 .header(header::COOKIE, cookie(&token))
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(hypergraft::GRAFT_REQUEST, "patch")
                 .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
                 .body(Body::from(format!(
-                    "message=Hello&mode=configured&workflow={token_value}"
+                    "message=Hello&revision={}",
+                    conversation.revision
                 )))
                 .unwrap(),
         )
@@ -554,9 +493,8 @@ async fn a_successful_connect_stores_the_provider_without_echoing_the_key() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains(r#"operation="children" target="connect-card""#));
-    assert!(text.contains("Continue to projects"));
-    assert!(text.contains("value=\"\""));
+    assert!(text.contains(r#"navigate="/conversations""#));
+    assert!(!text.contains("Continue to projects"));
     assert!(!text.contains("sk-test-key"));
     assert!(state.vault.contains(ProviderKind::Xai));
 }
@@ -606,7 +544,7 @@ async fn a_new_process_restores_a_session_from_the_vault_file() {
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         response.headers().get(header::LOCATION).unwrap(),
-        "/projects/new"
+        "/conversations"
     );
     let cookies = set_cookies(&response);
     assert!(
@@ -630,7 +568,7 @@ async fn adding_a_second_provider_in_setup_keeps_the_first() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("Continue to projects"));
+    assert!(text.contains(r#"navigate="/conversations""#));
     assert!(state.vault.contains(ProviderKind::Xai));
     assert!(state.vault.contains(ProviderKind::Synthetic));
 }

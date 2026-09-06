@@ -1,6 +1,6 @@
 ---
 name: Power Plant
-description: A local coding agent desk that presents work as an indexed repository case file.
+description: A local conversation workspace that presents project work as an indexed repository case file.
 colors:
     cover: "oklch(26.7% 0.0333 118.41)"
     coverDeep: "oklch(19.34% 0.0197 121.82)"
@@ -140,20 +140,20 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Reset requires an explicit confirmation and records a restart-applied deletion.
 - Project source directories outside the Power Plant data directory remain unchanged.
 - The desktop shell uses a persistent index grouped into Work, Configure and System.
-- Work contains Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
-- The brand mark and the first index link go to `/projects`.
+- Work contains Conversations, Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
+- The brand mark and the first index link go to `/conversations`.
 - Providers uses `/connect` in the app shell after the first provider connects.
 - Before the first provider connects, `/connect` uses the standalone setup introduction.
-- The mobile shell changes the index to a compact masthead and a primary row of Projects, Runs and More.
+- The mobile shell changes the index to a compact masthead and a primary row of Conversations, Projects, Runs and More.
 - More contains Agents, Workflows, Environments, Providers and Settings.
-- The mobile row stays a generic product index. The Projects page is the project switcher.
+- The mobile row stays a generic product index. The Conversations page is the main work switcher. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
-- The project desk puts a compact project title before the provider, model and thinking controls.
-- The context row includes Show thinking. The empty transcript contains no task suggestions.
+- Conversation pages put the discussion and composer before project access and workflow controls.
+- The conversation detail includes model selection, project access and workflow launch controls. The empty transcript contains no task suggestions.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
-- The composer expands with the message and keeps Quick task Send as its primary action.
+- The composer expands with the message. Run workflow stays beside the conversation title.
 - Jump to latest appears when the reader leaves the transcript end. New output does not move a reader away from earlier messages.
-- The Show thinking control sets one local preference for every project desk.
+- Thinking visibility remains a local preference for shared chat controls.
 - The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.
 - The thinking control shows Not available when no adjustable effort exists.
 - First-time connect uses a dark setup introduction beside a pale provider file.
@@ -167,12 +167,12 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 
 ## Hierarchy
 
-- Projects come first in the product index.
+- Conversations come first in the product index.
 - The page title and next action form the first visual level.
-- On the project desk, the project name is the title. The host path is quiet monospace metadata.
+- On project detail, the project name is the title. The host path is quiet monospace metadata.
 - Readiness states appear before task input.
-- Quick task Send is the primary composer action.
-- Configured workflows sit in an advanced disclosure on the same composer.
+- Send is the primary composer action.
+- Run workflow sits beside the conversation title.
 - Yellow identifies actions and the composer.
 - Green identifies ready or connected states.
 - Red identifies destructive actions and errors.
@@ -185,7 +185,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Keep shared shell and material styles in `app/assets/input.css`.
 - Use square corners, thin rules and restrained shadows.
 - Use sky blue for slim file register strips and information.
-- Keep Projects as the first index link and the brand destination.
+- Keep Conversations as the first index link and the brand destination.
 - Put Settings in the System group of the product index.
 - Keep first-time `/connect` navigation as a standalone page.
 - Use app-shell navigation for `/connect` when a provider already exists.
@@ -193,12 +193,12 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Put the local data reset in a separate danger section on Settings.
 - Do not take a deletion path from the browser.
 - Do not stop the server from the reset command.
-- Keep mobile navigation labels generic. Use the Projects page as the project switcher.
+- Keep mobile navigation labels generic. Use the Conversations page as the main work switcher and the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
-- Keep the provider, model and thinking controls visible on the project desk.
-- Do not duplicate the Providers route beside the project desk controls.
-- Keep Quick task Send as the primary composer action.
-- Keep configured workflows inside an advanced disclosure.
+- Keep model selection visible in the conversation detail. Keep project access and workflow launch explicit.
+- Do not duplicate the Providers route beside conversation model controls.
+- Keep Send as the primary conversation action.
+- Keep Run workflow beside the conversation title.
 - Keep native links as navigation fallbacks for Hypergraft routes.
 - Keep focus indicators visible on every interactive control.
 - Keep No network as the default for new agents.

@@ -14,7 +14,6 @@ use tokio::sync::Notify;
 use crate::conversations::ConversationId;
 use crate::hex;
 use crate::providers::{AssistantReply, ModelUsage, ToolOutput};
-use crate::workflows::RunId;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct JobId([u8; 16]);
@@ -66,7 +65,6 @@ impl std::error::Error for JobIdError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JobOwner {
-    Workflow(RunId),
     Conversation(ConversationId),
 }
 
@@ -104,7 +102,6 @@ pub(crate) struct JobSnapshot {
     pub(crate) output: AssistantReply,
     pub(crate) latest_seq: u64,
     pub(crate) assistant_index: usize,
-    pub(crate) error: Option<String>,
     pub(crate) cancel_requested: bool,
     pub(crate) step_label: String,
     pub(crate) workflow_name: String,
@@ -130,10 +127,6 @@ struct JobInner {
 }
 
 impl Job {
-    pub(crate) fn new(id: JobId, run_id: RunId, assistant_index: usize) -> Arc<Self> {
-        Self::with_owner(id, JobOwner::Workflow(run_id), assistant_index)
-    }
-
     pub(crate) fn for_conversation(
         id: JobId,
         conversation: ConversationId,
@@ -163,13 +156,6 @@ impl Job {
 
     pub(crate) fn id(&self) -> JobId {
         self.id
-    }
-
-    pub(crate) fn run_id(&self) -> RunId {
-        match self.owner {
-            JobOwner::Workflow(run_id) => run_id,
-            JobOwner::Conversation(_) => unreachable!("conversation jobs have no workflow run"),
-        }
     }
 
     pub(crate) fn set_step_label(&self, label: String) {
@@ -270,7 +256,6 @@ impl Job {
             output: inner.output.clone(),
             latest_seq: inner.latest_seq,
             assistant_index: self.assistant_index,
-            error: inner.error.clone(),
             cancel_requested: self.cancel.load(Ordering::SeqCst),
             step_label: self.step_label(),
             workflow_name: self.workflow_name(),
@@ -279,15 +264,6 @@ impl Job {
 
     pub(crate) fn latest_seq(&self) -> u64 {
         self.lock().latest_seq
-    }
-
-    pub(crate) fn events_after(&self, cursor: u64) -> Vec<JobEvent> {
-        self.lock()
-            .events
-            .iter()
-            .filter(|event| event.seq > cursor)
-            .cloned()
-            .collect()
     }
 
     pub(crate) fn output_up_to(&self, cursor: u64) -> AssistantReply {
@@ -300,18 +276,6 @@ impl Job {
             apply_output_event(&mut output, &event.kind);
         }
         output
-    }
-
-    pub(crate) fn has_output_at_or_before(&self, cursor: u64) -> bool {
-        self.lock().events.iter().any(|event| {
-            event.seq <= cursor
-                && matches!(
-                    event.kind,
-                    JobEventKind::Response { .. }
-                        | JobEventKind::Thinking { .. }
-                        | JobEventKind::Tool { .. }
-                )
-        })
     }
 
     pub(crate) fn push_response(&self, delta: String) -> Option<u64> {

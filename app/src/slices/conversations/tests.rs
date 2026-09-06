@@ -414,6 +414,44 @@ async fn create_rename_and_delete_use_independent_conversation_identity() {
 }
 
 #[tokio::test]
+async fn project_creation_form_attaches_only_after_an_explicit_post() {
+    let state = test_state();
+    let token = connected(&state);
+    let project = register_project(&state, "Context project");
+    let form_path = format!("/conversations/new?project={}", project.id.as_hex());
+
+    let form = app(&state)
+        .oneshot(document(&form_path, &token))
+        .await
+        .expect("new conversation form");
+    assert_eq!(form.status(), StatusCode::OK);
+    let form_body = text(form).await;
+    assert!(form_body.contains(&format!(
+        "name=\"project\" value=\"{}\"",
+        project.id.as_hex()
+    )));
+    assert!(form_body.contains("This reference does not grant file access"));
+    assert!(state.conversations.list().is_empty());
+
+    let created = app(&state)
+        .oneshot(command(
+            "/conversations",
+            &token,
+            &format!("title=Project+discussion&project={}", project.id.as_hex()),
+        ))
+        .await
+        .expect("create conversation");
+    assert_eq!(created.status(), StatusCode::OK);
+    let record = state.conversations.list().pop().expect("conversation");
+    assert_eq!(record.projects, vec![project.id]);
+    assert!(
+        text(created)
+            .await
+            .contains(&format!("navigate=\"/conversations/{}\"", record.id))
+    );
+}
+
+#[tokio::test]
 async fn send_persists_a_project_free_reply() {
     let state = test_state();
     let token = connected(&state);

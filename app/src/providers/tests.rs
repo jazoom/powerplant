@@ -458,20 +458,6 @@ mod scripted_fixture {
             }
         }
 
-        pub(crate) fn thinking_then(thinking: &str, reply: &str) -> Self {
-            Self {
-                verify_result: Ok(()),
-                script: Ok(Script::Rounds(vec![vec![
-                    Ok(ModelEvent::Thinking(thinking.to_owned())),
-                    Ok(ModelEvent::Text(reply.to_owned())),
-                ]])),
-                round: Arc::new(AtomicUsize::new(0)),
-                last_preamble: Arc::new(Mutex::new(None)),
-                last_tools: Arc::new(Mutex::new(Vec::new())),
-                last_history: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
         pub(crate) fn tool_then(name: &str, arguments: serde_json::Value, reply: &str) -> Self {
             Self {
                 verify_result: Ok(()),
@@ -486,20 +472,6 @@ mod scripted_fixture {
                         .map(|text| Ok(ModelEvent::Text(text)))
                         .collect(),
                 ])),
-                round: Arc::new(AtomicUsize::new(0)),
-                last_preamble: Arc::new(Mutex::new(None)),
-                last_tools: Arc::new(Mutex::new(Vec::new())),
-                last_history: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
-        pub(crate) fn hang() -> Self {
-            Self {
-                verify_result: Ok(()),
-                script: Ok(Script::Hang {
-                    started: None,
-                    dropped: None,
-                }),
                 round: Arc::new(AtomicUsize::new(0)),
                 last_preamble: Arc::new(Mutex::new(None)),
                 last_tools: Arc::new(Mutex::new(Vec::new())),

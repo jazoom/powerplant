@@ -1,7 +1,7 @@
 use askama::Template;
 
-use crate::agents::{AgentRecord, starter_name};
-use crate::projects::{ProjectRecord, desk_path};
+use crate::conversations::ConversationRecord;
+use crate::projects::{ProjectId, ProjectRecord};
 
 pub(super) const INDEX_TITLE: &str = "Projects | Power Plant";
 pub(super) const NEW_TITLE: &str = "New project | Power Plant";
@@ -36,81 +36,68 @@ impl CatalogueView {
     }
 }
 
-pub(super) struct EligibleAgentLink {
-    pub(super) name: String,
-    pub(super) href: String,
-}
-
-pub(super) struct GrantCandidate {
+pub(super) struct ConversationLink {
     pub(super) id: String,
-    pub(super) name: String,
-    pub(super) revision: String,
+    pub(super) title: String,
 }
 
 #[derive(Template)]
 #[template(path = "projects/templates/detail.html")]
 pub(super) struct DetailView {
     pub(super) document_title: String,
+    pub(super) project_id: String,
     pub(super) name: String,
     pub(super) path: String,
     pub(super) available: bool,
-    pub(super) agents: Vec<EligibleAgentLink>,
-    pub(super) starter_name: String,
-    pub(super) starter_action: String,
-    pub(super) starter_href: String,
-    pub(super) grant_action: String,
-    pub(super) grant_candidates: Vec<GrantCandidate>,
-    pub(super) grant_alias: String,
-    pub(super) grant_access: String,
+    pub(super) conversations: Vec<ConversationLink>,
     pub(super) error: &'static str,
 }
 
 impl DetailView {
-    pub(super) fn from_record(
+    pub(super) fn with_conversations(
         record: &ProjectRecord,
-        eligible: &[AgentRecord],
-        catalogue: &[AgentRecord],
+        conversations: &[ConversationRecord],
     ) -> Self {
-        Self::with_grant(record, eligible, catalogue, "project", "read-write", "")
+        Self::base(record, project_conversations(record.id, conversations))
     }
 
-    pub(super) fn with_grant(
+    pub(super) fn with_error(
         record: &ProjectRecord,
-        eligible: &[AgentRecord],
-        catalogue: &[AgentRecord],
-        grant_alias: &str,
-        grant_access: &str,
+        conversations: &[ConversationRecord],
         error: &'static str,
     ) -> Self {
+        let mut view = Self::with_conversations(record, conversations);
+        view.error = error;
+        view
+    }
+
+    fn base(record: &ProjectRecord, conversations: Vec<ConversationLink>) -> Self {
         Self {
             document_title: format!("{} | Power Plant", record.name),
+            project_id: record.id.as_hex(),
             name: record.name.clone(),
             path: record.host_path.to_string_lossy().into_owned(),
             available: record.host_path_is_available(),
-            agents: eligible
-                .iter()
-                .map(|agent| EligibleAgentLink {
-                    name: agent.name.clone(),
-                    href: desk_path(&record.id, &agent.id),
-                })
-                .collect(),
-            starter_name: starter_name(&record.name),
-            starter_action: format!("/projects/{}/agents/starter", record.id.as_hex()),
-            starter_href: format!("/agents/new?project={}", record.id.as_hex()),
-            grant_action: format!("/projects/{}/agents/grant", record.id.as_hex()),
-            grant_candidates: catalogue
-                .iter()
-                .map(|agent| GrantCandidate {
-                    id: agent.id.as_hex(),
-                    name: agent.name.clone(),
-                    revision: agent.revision.to_string(),
-                })
-                .collect(),
-            grant_alias: grant_alias.to_owned(),
-            grant_access: grant_access.to_owned(),
-            error,
+            conversations,
+            error: "",
         }
     }
+}
+
+fn project_conversations(
+    project_id: ProjectId,
+    records: &[ConversationRecord],
+) -> Vec<ConversationLink> {
+    let mut conversations: Vec<_> = records
+        .iter()
+        .filter(|record| record.projects.contains(&project_id))
+        .map(|record| ConversationLink {
+            id: record.id.as_hex(),
+            title: record.title.clone(),
+        })
+        .collect();
+    conversations.sort_by(|left, right| left.title.cmp(&right.title));
+    conversations
 }
 
 #[derive(Clone, Copy)]

@@ -138,7 +138,7 @@ impl GateFixture {
     }
 
     fn desk_path(&self) -> String {
-        crate::projects::desk_path(&self.project_id, &self.agent_id)
+        crate::tests::desk_path(&self.project_id, &self.agent_id)
     }
 
     fn decision_body(&self, candidate: &str) -> String {
@@ -929,7 +929,7 @@ async fn a_quick_task_gate_uses_apply_and_discard_labels() {
     assert!(safety_at < apply_at);
     assert!(text.contains("data-run-kind=\"quick-task\""));
     assert!(text.contains(&format!("data-project=\"{}\"", fixture.project_id.as_hex())));
-    assert!(text.contains(&fixture.desk_path()));
+    assert!(text.contains(&format!("/projects/{}", fixture.project_id.as_hex())));
 
     let navigation = get_gate(&fixture, Some("navigation")).await;
     assert_eq!(navigation.status(), axum::http::StatusCode::OK);
@@ -953,30 +953,7 @@ async fn a_configured_gate_keeps_revision_controls() {
 }
 
 #[tokio::test]
-async fn the_project_desk_links_review_changes_for_a_quick_task_gate() {
-    let fixture = awaiting_gate(RunKind::QuickTask);
-    let response = app(&fixture.state)
-        .oneshot(
-            Request::builder()
-                .uri(fixture.desk_path())
-                .header(header::COOKIE, cookie(&fixture.token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("desk");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let text = body_text(response).await;
-    assert!(text.contains("Review changes"));
-    assert!(text.contains(&fixture.gate_path()));
-    let safety_at = text.find(HOST_UNCHANGED_SAFETY).expect("safety");
-    let review_at = text.find("Review changes").expect("review");
-    assert!(safety_at < review_at);
-    assert!(!text.contains("Task finished."));
-}
-
-#[tokio::test]
-async fn a_quick_task_approval_redirects_to_the_project_desk() {
+async fn a_quick_task_approval_returns_to_project_detail() {
     let fixture = awaiting_gate(RunKind::QuickTask);
     let response = post_decision(
         &fixture,
@@ -987,7 +964,10 @@ async fn a_quick_task_approval_redirects_to_the_project_desk() {
     .await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
+    assert!(text.contains(&format!(
+        "navigate=\"/projects/{}\"",
+        fixture.project_id.as_hex()
+    )));
     let run = fixture
         .state
         .workflow_runs
@@ -1013,7 +993,7 @@ async fn a_quick_task_approval_redirects_to_the_project_desk() {
 }
 
 #[tokio::test]
-async fn an_enhanced_quick_task_approval_navigates_to_the_project_desk() {
+async fn an_enhanced_quick_task_approval_navigates_to_project_detail() {
     let fixture = awaiting_gate(RunKind::QuickTask);
     let response = post_decision(
         &fixture,
@@ -1023,7 +1003,10 @@ async fn an_enhanced_quick_task_approval_navigates_to_the_project_desk() {
     )
     .await;
     let text = body_text(response).await;
-    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
+    assert!(text.contains(&format!(
+        "navigate=\"/projects/{}\"",
+        fixture.project_id.as_hex()
+    )));
 }
 
 #[tokio::test]
@@ -1053,7 +1036,10 @@ async fn a_quick_task_discard_settles_the_transcript() {
     .await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
+    assert!(text.contains(&format!(
+        "navigate=\"/projects/{}\"",
+        fixture.project_id.as_hex()
+    )));
     let run = fixture
         .state
         .workflow_runs
@@ -1185,7 +1171,10 @@ async fn a_stale_agent_revision_interrupts_without_host_mutation() {
     .await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains(&format!("navigate=\"{}\"", fixture.desk_path())));
+    assert!(text.contains(&format!(
+        "navigate=\"/projects/{}\"",
+        fixture.project_id.as_hex()
+    )));
     let run = fixture
         .state
         .workflow_runs

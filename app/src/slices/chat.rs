@@ -5,8 +5,6 @@ mod page;
 #[cfg(test)]
 mod tests;
 
-use std::time::Duration;
-
 use axum::{
     Extension, Form, Router,
     extract::{Query, State, rejection::FormRejection},
@@ -22,27 +20,13 @@ use crate::{
     error::AppResult,
     projects::{ProjectId, ProjectRecord, eligibility, eligible_agents},
     responses,
-    sessions::{
-        ConversationKey, JobSnapshot, JobStatus, OptionalSession, SessionId, SessionSnapshot,
-    },
+    sessions::{ConversationKey, OptionalSession, SessionId, SessionSnapshot},
     state::AppState,
-    workflows::{self, RunKind, WorkflowSelection},
+    workflows::{self, WorkflowSelection},
 };
 
-use self::{
-    forms::{CursorError, ModelForm},
-    job::{observe_response, user_transcript_patch},
-    page::{ChatViewModel, DeskStatusContents, JobObserveContents, TranscriptContents},
-};
-
-pub(crate) use forms::{ChatForm, DeskMode, ObserveQuery};
+use self::{forms::ModelForm, page::ChatViewModel};
 pub(crate) use job::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action};
-
-const SANDBOX_HOLD: Duration = if cfg!(test) {
-    Duration::ZERO
-} else {
-    Duration::from_secs(1)
-};
 
 #[derive(Clone, Copy)]
 pub(crate) struct DeskPage<'a> {
@@ -361,189 +345,6 @@ fn submitted_model(
         .unwrap_or(model)
 }
 
-pub(crate) async fn observe(
-    state: &AppState,
-    session: &SessionId,
-    page: DeskPage<'_>,
-    query: ObserveQuery,
-) -> AppResult<Response> {
-    if !query.sandbox.trim().is_empty() {
-        return observe_sandbox(state, session, page, &query).await;
-    }
-    let key = ConversationKey {
-        project_id: page.project.id,
-        agent_id: page.agent.id,
-    };
-    let cursor = match query.cursor() {
-        Ok(cursor) => cursor,
-        Err(CursorError::Malformed | CursorError::Excessive) => {
-            return Ok(hypergraft::outcome::children_patch(
-                PatchStatus::UnprocessableEntity,
-                "job-observe",
-                &view(state, page, "", "", "")
-                    .await
-                    .job_observe_with("That cursor is not valid."),
-            )?);
-        }
-    };
-    let Some(job_id) = query.job_id() else {
-        if !query.workflow.trim().is_empty() {
-            if let Some(selection) = WorkflowSelection::parse(query.workflow.trim())
-                && state.workflows.resolve(&selection).is_ok()
-            {
-                state
-                    .sessions
-                    .set_preferred_workflow(session, key, selection.workflow_id);
-            }
-            let rendered = view(state, page, "", "", &query.workflow).await;
-            return Ok(hypergraft::outcome::children_patch(
-                PatchStatus::Ok,
-                "composer",
-                &rendered.composer(),
-            )?);
-        }
-        return refresh_composer(state, page).await;
-    };
-    let Some(job) = state.sessions.job(session, &key, &job_id) else {
-        return refresh_composer(state, page).await;
-    };
-    Ok(observe_response(
-        state.clone(),
-        job,
-        cursor,
-        crate::projects::desk_path(&page.project.id, &page.agent.id),
-    ))
-}
-
-async fn observe_sandbox(
-    state: &AppState,
-    session: &SessionId,
-    page: DeskPage<'_>,
-    query: &ObserveQuery,
-) -> AppResult<Response> {
-    let Some(cursor) = EnvironmentCatalogue::parse_refresh_cursor(query.sandbox.trim()) else {
-        let rendered = view(state, page, "", "", &query.workflow).await;
-        return Ok(hypergraft::outcome::children_patch(
-            PatchStatus::UnprocessableEntity,
-            "sandbox-status",
-            &rendered.sandbox_observe(),
-        )?);
-    };
-    if !state.environments.cursor_is_stale(Some(cursor)) {
-        state
-            .environments
-            .wait_while_current(cursor, SANDBOX_HOLD)
-            .await;
-    }
-    let key = ConversationKey {
-        project_id: page.project.id,
-        agent_id: page.agent.id,
-    };
-    let snapshot = state
-        .sessions
-        .snapshot(session, &key)
-        .unwrap_or_else(|| page.snapshot.clone());
-    let rendered = view(
-        state,
-        DeskPage {
-            project: page.project,
-            agent: page.agent,
-            eligible: page.eligible,
-            snapshot: &snapshot,
-        },
-        "",
-        "",
-        &query.workflow,
-    )
-    .await;
-    let mut patches = PatchSet::new();
-    patches.children("sandbox-status", &rendered.sandbox_observe())?;
-    patches.children("composer", &rendered.composer())?;
-    Ok(patches.respond(PatchStatus::Ok)?)
-}
-
-async fn refresh_composer(state: &AppState, page: DeskPage<'_>) -> AppResult<Response> {
-    Ok(hypergraft::outcome::children_patch(
-        PatchStatus::Ok,
-        "job-observe",
-        &view(state, page, "", "", "").await.job_observe(),
-    )?)
-}
-
-pub(crate) fn accept_job_patch(
-    turns: &[crate::providers::ChatTurn],
-    job_id: &str,
-    desk_href: &str,
-    run_id: &str,
-    run_step: &str,
-    workflow_name: &str,
-) -> AppResult<Response> {
-    let mut patches = user_transcript_patch(turns)?;
-    patches.children(
-        "job-observe",
-        &JobObserveContents::observing(
-            job_id,
-            0,
-            run_step,
-            "",
-            desk_href,
-            run_id,
-            run_step,
-            workflow_name,
-        ),
-    )?;
-    patches.children("desk-status", &DeskStatusContents::active(run_step))?;
-    Ok(patches.respond(PatchStatus::Ok)?)
-}
-
-pub(crate) async fn reject_parallel_command(
-    state: &AppState,
-    _graft: PatchGraft,
-    page: DeskPage<'_>,
-) -> AppResult<Response> {
-    const MESSAGE: &str = "Wait until this reply finishes.";
-    let view = view(state, page, "", "", "").await;
-    let mut patches = PatchSet::new();
-    patches.children("transcript", &TranscriptContents { turns: &view.turns })?;
-    patches.children("job-observe", &view.job_observe_with(MESSAGE))?;
-    Ok(patches.respond(PatchStatus::Conflict)?)
-}
-
-pub(crate) async fn reject_chat_input(
-    state: &AppState,
-    graft: PatchGraft,
-    page: DeskPage<'_>,
-    message: &'static str,
-    draft: &str,
-) -> AppResult<Response> {
-    reject_chat_selection(
-        state,
-        graft,
-        page,
-        message,
-        draft,
-        PatchStatus::UnprocessableEntity,
-    )
-    .await
-}
-
-pub(crate) async fn reject_chat_selection(
-    state: &AppState,
-    _graft: PatchGraft,
-    page: DeskPage<'_>,
-    message: &'static str,
-    draft: &str,
-    status: PatchStatus,
-) -> AppResult<Response> {
-    let mut rendered = view(state, page, message, "", "").await;
-    rendered.draft_message = draft.trim().to_owned();
-    Ok(hypergraft::outcome::children_patch(
-        status,
-        "composer",
-        &rendered.composer(),
-    )?)
-}
-
 async fn reject_model_view(
     _state: &AppState,
     _graft: PatchGraft,
@@ -579,46 +380,7 @@ pub(crate) async fn view(
     attach_workflow_ui(state, page.snapshot, &mut rendered, workflow_query);
     attach_environment_preview(state, &mut rendered).await;
     attach_sandbox_status(state, &mut rendered).await;
-    if let Some(job) = page.snapshot.job.as_ref() {
-        rendered.review_href = review_href_for(state, job);
-        rendered.quick_task_finished = quick_task_finished(state, job);
-    }
     rendered
-}
-
-pub(super) fn quick_task_finished(state: &AppState, job: &JobSnapshot) -> bool {
-    let crate::sessions::JobOwner::Workflow(run_id) = job.owner else {
-        return false;
-    };
-    job.status == JobStatus::Completed
-        && state
-            .workflow_runs
-            .get(&run_id)
-            .is_some_and(|run| run.kind == RunKind::QuickTask)
-}
-
-pub(super) fn review_href_for(state: &AppState, job: &JobSnapshot) -> String {
-    if job.status != JobStatus::AwaitingDecision {
-        return String::new();
-    }
-    let crate::sessions::JobOwner::Workflow(run_id) = job.owner else {
-        return String::new();
-    };
-    let Some(run) = state.workflow_runs.get(&run_id) else {
-        return String::new();
-    };
-    if run.kind != RunKind::QuickTask {
-        return String::new();
-    }
-    let Some(gate) = run
-        .gates
-        .iter()
-        .rev()
-        .find(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
-    else {
-        return String::new();
-    };
-    format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex())
 }
 
 async fn attach_sandbox_status(state: &AppState, page: &mut ChatViewModel) {
@@ -837,25 +599,4 @@ fn resolved_desk(
         eligible,
         snapshot,
     })
-}
-
-pub(crate) fn navigate_page(state: &AppState, view: &ChatViewModel) -> AppResult<Response> {
-    match hypergraft::outcome::page_patch(&view.document_title, "chat-main", view) {
-        Ok(response) => Ok(response),
-        Err(error) if error.kind() == hypergraft::PatchBuildErrorKind::ResponseLimit => {
-            crate::error::trace_patch_build_failure("construct chat page navigation patch", &error);
-            responses::chat_page_response(&view.document_title, state, view)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-pub(crate) fn render_document(
-    state: &AppState,
-    status: PatchStatus,
-    view: ChatViewModel,
-) -> AppResult<Response> {
-    let mut response = responses::chat_page_response(&view.document_title, state, &view)?;
-    responses::apply_patch_status(&mut response, status);
-    Ok(response)
 }

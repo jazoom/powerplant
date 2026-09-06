@@ -15,6 +15,11 @@ type Breadcrumb = {
 const breadcrumbSignatures = new WeakMap<HTMLOListElement, string>();
 
 const SECTIONS: Record<string, SectionContext> = {
+    conversations: {
+        group: "Work",
+        label: "Conversations",
+        href: "/conversations",
+    },
     projects: { group: "Work", label: "Projects", href: "/projects" },
     runs: { group: "Work", label: "Runs", href: "/runs" },
     agents: { group: "Configure", label: "Agents", href: "/agents" },

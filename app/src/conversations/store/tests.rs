@@ -64,6 +64,27 @@ fn distinct_opaque_conversations_survive_a_restart() {
 }
 
 #[test]
+fn a_project_reference_is_persisted_without_access_or_model_configuration() {
+    let dir = tempfile::tempdir().expect("directory");
+    let project = ProjectId::parse("0123456789abcdef0123456789abcdef").expect("project id");
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("store");
+    let record = store
+        .create_with_project("Project discussion".to_owned(), project)
+        .expect("conversation");
+
+    assert_eq!(record.projects, vec![project]);
+    assert!(record.grants.is_empty());
+    assert!(record.model.is_none());
+    drop(store);
+
+    let reopened = ConversationStore::open(dir.path().to_path_buf()).expect("reopen");
+    assert_eq!(
+        reopened.get(&record.id).expect("record").projects,
+        vec![project]
+    );
+}
+
+#[test]
 fn private_catalogue_path_rejects_a_symlink_without_replacement() {
     #[cfg(unix)]
     {

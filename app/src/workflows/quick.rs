@@ -22,15 +22,6 @@ const COMMIT_STEP_KEY: &str = "commit";
 const DECISION_OUTPUT_KEY: &str = "decision";
 const COMMITTED_OUTPUT_KEY: &str = "committed-candidate";
 
-pub(crate) fn pin_quick_task(
-    access: AccessMode,
-    tools: &[ToolId],
-    instructions: &str,
-    environment: EnvironmentId,
-) -> Result<PinnedWorkflowDefinition, DefinitionError> {
-    pin_quick_task_with_context(access, tools, instructions, environment, Vec::new())
-}
-
 pub(crate) fn pin_quick_task_with_context(
     access: AccessMode,
     tools: &[ToolId],
@@ -179,4 +170,4 @@ fn step_output(key: &str, kind: ArtefactKind, step: &str, output: &str) -> Requi
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

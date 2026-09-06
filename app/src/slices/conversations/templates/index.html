@@ -112,6 +112,9 @@
           action="/conversations"
           class="flex flex-col gap-5"
         >
+          {% if !project_id.is_empty() %}
+            <input type="hidden" name="project" value="{{ project_id }}" />
+          {% endif %}
           {% if error != "" %}
             <div class="alert alert-error" role="alert" tabindex="-1">
               <p>{{ error }}</p>
@@ -132,6 +135,18 @@
               machine.</span
             ></label
           >
+          {% if !project_id.is_empty() %}
+            <div class="border-base-300 border-y py-3 text-sm">
+              <p>
+                <span class="font-medium">Project context:</span>
+                {{ project_name }}
+              </p>
+              <p class="text-quiet mt-1">
+                This reference does not grant file access. Grant access after
+                you create the conversation.
+              </p>
+            </div>
+          {% endif %}
           <div
             class="border-base-300 flex flex-wrap items-center gap-3 border-t pt-5"
           >

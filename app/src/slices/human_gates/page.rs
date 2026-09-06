@@ -177,13 +177,13 @@ impl GatePage {
             run_kind: run.kind.as_str(),
             project_id: run.project_id.as_hex(),
             back_href: run.conversation_id.map_or_else(
-                || crate::projects::desk_path(&run.project_id, &run.agent_id),
+                || format!("/projects/{}", run.project_id.as_hex()),
                 |conversation| format!("/conversations/{}", conversation.as_hex()),
             ),
             back_label: if run.conversation_id.is_some() {
                 "Back to conversation"
             } else {
-                "Back to project desk"
+                "Back to project"
             },
             quick_task,
             host_unchanged: crate::workflows::HOST_UNCHANGED,

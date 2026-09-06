@@ -5,12 +5,12 @@ primary_target: "route:/projects"
 related_targets:
     [
         "route:/",
+        "route:/conversations",
+        "route:/conversations/new",
         "route:/projects/new",
         "route:/projects/folder",
         "route:/projects/{project_id}",
         "route:/projects/{project_id}/configuration",
-        "route:/projects/{project_id}/agents/starter",
-        "route:/projects/{project_id}/agents/{agent_id}",
         "route:/runs/{run_id}/gates/{gate_id}",
     ]
 ---
@@ -23,220 +23,120 @@ Operate
 
 ## Scope
 
-This surface covers the project catalogue, project detail, the project desk and the Quick task gate.
+This surface covers the project catalogue, project detail and the conversation hand-off.
 
 ## Audience and job
 
-A local developer opens a project and sends work to one eligible agent.
+A local developer opens a project and starts work in an independent conversation.
 
 ## Operate-mode hierarchy
 
 The desktop product index groups routes into Work, Configure and System.
 
-Work contains Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
+Work contains Conversations, Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
 
-Projects remains the first route and the brand destination. Providers uses `/connect` with full-page native navigation.
+Conversations is the main work destination. The brand mark and the first index link go to `/conversations`. Providers uses `/connect` with full-page native navigation.
 
-The desk title is the project name. The host path sits under the title as quiet monospace metadata. The project title and the composer are the strongest page elements.
+The project title and the New conversation action form the first visual level. The host path sits under the title as quiet monospace metadata.
 
-Provider, model and thinking controls stay visible below the compact desk title. Provider defaults stay active.
+The project page lists conversations that reference the project. Each row has a canonical conversation link.
 
-The `#desk-settings` patch target contains these controls. Show thinking sits beside the context summary.
+A New conversation action opens `/conversations/new?project={project_id}`. The form carries the project reference through its explicit POST. A GET never creates a conversation.
 
-The selected agent is a compact control. Each eligible agent choice is a real canonical link.
+The conversation form explains that a project reference does not grant file access. The conversation page supplies explicit read-only and writable access controls.
 
-The transcript sheet is the work record for this project and agent pair. An empty transcript contains no suggestions.
-
-A centred column aligns requests, replies and the composer. Requests use a tinted surface. Replies use the paper surface.
-
-Tool output uses a compact preview with an expandable full result. Code blocks and tables scroll within the reply.
-
-The transcript owns its scroll position. Jump to latest appears when the reader leaves the transcript end.
-
-New output follows the transcript end only when the reader stays there. The composer remains outside that scroll region.
-
-The composer dock is last. Sandbox status sits before the composer. Quick task Send is the primary action.
-
-The message field expands with its content up to a viewport-relative limit. The browser retains manual resize support.
-
-Configured workflow is an advanced disclosure. Its expanded content has a bounded scroll area.
+Project registration does not grant model or filesystem access. The conversation page shows access effects before each grant.
 
 ## Primary action
 
 On the catalogue, the primary action is New project. Each project row has Rename as a secondary action.
 
-Project detail does not repeat the Rename action. A successful rename returns to `/projects`.
+On project detail, the primary action is New conversation.
+
+The project page also offers Start project work. Both actions open the explicit conversation form with the project reference.
 
 On the new project page, the primary action is Add project.
 
 The project folder group always shows the path field and the Choose folder action.
 
-On project detail with no eligible agent, the primary action is Create agent and open desk.
-
-On project detail with two or more eligible agents and no remembered agent, the primary action is the canonical desk link for each agent.
-
-On the project desk, the primary action is Send with Quick task.
-
-On a Quick task gate, the primary action is Apply changes.
-
 ## Readiness states
 
-The desk shows one sandbox status for the Alpine Git seed. The status sits before the composer.
+Project detail shows the saved folder state before the conversation list.
 
-An available ready snapshot has first priority, even when a replacement preparation is active or failed.
+An unavailable folder keeps its project record and shows a warning. The page does not offer an implicit access grant.
 
-Status precedence:
+Conversation detail owns model readiness, project access, sandbox readiness and workflow readiness.
 
-1. Sandbox is ready: the ready snapshot is available. Quick task Send is enabled.
-2. Sandbox preparation is in progress: no available ready snapshot, and the latest preparation is queued or active.
-3. Sandbox preparation failed: no available ready snapshot, and the latest preparation failed or was interrupted.
-4. Sandbox snapshot is invalid: no available ready snapshot, after active and failed states are excluded, and the ready snapshot is corrupt.
-5. Sandbox is unavailable: no prior state applies.
+A configured workflow starts from Run workflow beside the conversation title. The launch sheet shows its task brief, target, access, environment readiness and fresh-context boundary.
 
-Ready, failed, unavailable and invalid are terminal presentation states.
-
-Failed, unavailable and invalid states link to the environment configuration route when the Alpine Git environment record exists. They fall back to `/environments` when the seed identifier or its current environment record is absent.
-
-The canonical project desk GET is the sandbox status projection.
-
-While the status is active, the desk renders an observe island. The island submits a hidden safe GET form to the canonical desk route. The form carries the sandbox refresh cursor. It also carries the selected workflow token.
-
-Sandbox observations run before job observations on that route.
-
-Each observation waits for a catalogue change or one second. Then it patches `sandbox-status` and `composer`.
-
-Quick task Send becomes enabled as soon as the ready snapshot is available.
-
-Observation stops after every terminal sandbox state.
-
-A malformed sandbox cursor returns 422 and patches `sandbox-status`.
-
-The composer stays disabled while the session owns an active command.
-
-The composer stays disabled when the project path is unavailable.
-
-The message field stays available while only the sandbox is not ready.
-
-Quick task Send stays disabled while the sandbox is not ready.
-
-Configured workflow send stays in the advanced disclosure. It uses that workflow environment preview.
+A writable conversation message starts Quick task through the conversation route. It uses the pinned Alpine Git environment.
 
 ## Empty states
 
-No projects: `/projects` opens the new project page. That page chooses an existing Git folder. Manual path entry remains available.
+No projects: `/projects` opens the new project page. That page accepts an existing Git folder.
 
-No agent: the project page asks who will work on the project. It explains the recommended agent permissions and the candidate approval boundary. The primary command is Create agent and open desk. Existing agents appear as familiar alternatives. Set custom permissions remains the advanced route.
+No conversations: project detail explains that the first conversation can start without a preset. New conversation remains the primary action.
 
-Empty transcript: the conversation stays clear. The composer is the first-task control. The desk offers no suggested tasks.
+No provider: the conversation page links to `/connect` before Send can start model work.
 
-Available project folders have no status badge.
-
-Unavailable project folder: detail and desk pages show a warning. Catalogue rows use the Folder unavailable badge.
-
-Sandbox not ready: the desk shows the sandbox status before the composer. Failed, unavailable and invalid states include the relevant environment route.
-
-No configured workflows: the advanced disclosure links to create a workflow.
+No project access: the conversation page labels each attachment as context only. Grant controls show their tool effects.
 
 ## Mobile topology
 
-The mobile shell uses a compact masthead and a primary row of Projects, Runs and More.
+The mobile shell uses a compact masthead and a primary row of Conversations, Projects, Runs and More.
 
 More contains Agents, Workflows, Environments, Providers and Settings.
 
 The More control is a native details disclosure with a DaisyUI menu. Every destination is a real link.
 
-The More summary uses the active treatment when a contained route is current.
-
-The Projects page is the project switcher.
-
-The brand mark still goes to `/projects`.
-
-The Working file label and the connection block are hidden.
+The Conversations page is the main work switcher. The Projects page is the project switcher.
 
 Do not put project names in the permanent mobile row.
 
-The desk title row stacks. The model control spans the full width. Provider and thinking controls share the next row.
-
-The composer dock stays at the end of the sheet. The frame follows the dynamic viewport height.
-
-On short viewports, the document can scroll so that every control remains reachable.
+Project detail actions wrap at narrow widths. New conversation remains visible without a mandatory preset choice.
 
 ## Flow
 
-`/` reads the project catalogue.
+`/` opens `/conversations`.
 
-An empty catalogue redirects to `/projects/new`.
+`/conversations` lists local history and offers New conversation.
 
-One project redirects to `/projects/{project_id}`. Agent selection still occurs there.
+`/conversations/new` presents a title form without creating a record.
 
-Two or more projects redirect to `/projects`.
+`/conversations/new?project={project_id}` presents the same form with one project reference.
 
-`/projects` also redirects to `/projects/new` when the catalogue is empty.
+The form creates the conversation only after an explicit POST. A project reference becomes an attachment without a grant.
 
-The catalogue orders projects by recent session use, then by stable catalogue order.
+`/projects` lists registered projects. It also opens the new project page when the catalogue is empty.
 
-`/projects/new` presents one form for folder selection and manual path entry. `POST /projects/folder` is a patch-only command.
+`/projects/{project_id}` lists conversations that reference the selected project. It does not select an agent or redirect to an old project desk.
 
-The command opens a native dialog on the Power Plant host. It only accepts an existing Git project folder.
+The old project-and-agent desk URL is not a conversation URL. The project page uses canonical conversation links or the explicit creation form.
 
-A selected folder updates the path field with its canonical absolute path. It supplies a default name only when the name field is empty.
+After a project is created, the product opens its project detail page. The user can then create a conversation without choosing a preset.
 
-The folder command does not create or clone a project.
+After a provider connects, the product returns to `/conversations`. The Providers route remains available from the product index.
 
-Cancellation returns the current form without an error. It preserves the name and path values.
-
-A busy chooser returns a conflict patch and leaves the form intact.
-
-The path field and Choose folder action remain visible after each folder command.
-
-The final `/projects` command validates and stores the project.
-
-After a successful create, the product redirects to `/projects/{project_id}`.
-
-The project page offers an explicit starter command when no eligible agent exists. `POST /projects/{project_id}/agents/starter` is a patch-only command. The command loads the current project record, then checks eligibility and creates at most one default agent in one catalogue operation.
-
-The default agent uses the project name and empty instructions. It uses every built-in tool. The alias is `project`. Access is read-write. The sole directory grant is the stored project path. `primary_directory` is `project`.
-
-If one eligible agent exists, the command opens that desk and does not create another record. If several eligible agents exist, the command returns to project detail and does not create another record. After a successful create, the command opens the new desk.
-
-Set custom permissions remains a real link to `/agents/new?project={project_id}`. The custom form keeps project context and links back to the agent choice.
-
-The canonical desk URL is `/projects/{project_id}/agents/{agent_id}`.
-
-Quick task needs no configured workflow. It uses the pinned Alpine Git environment.
-
-An unchanged candidate completes after the assistant reply.
-
-A changed candidate waits at the gate. The desk shows Review changes. That action links to the immutable candidate diff.
-
-Quick task gate labels are Apply changes and Discard changes. The revision form is hidden.
-
-A successful apply creates a local Git commit. Discard cancels the run and returns to the desk.
-
-Configured workflow gates keep Approve candidate, Request revision and Cancel run.
+Human-gate links for conversation-owned runs return to the owning conversation. Legacy run links return to project detail instead of an old desk.
 
 ## Constraints
 
 Keep a real `href` on every ordinary navigation action.
 
-Do not put the project path in route parameters or query values.
+Do not create a conversation during a GET request.
 
-The folder command accepts patch representation only.
+Do not put a host path in conversation route parameters or query values.
 
-The starter command accepts patch representation only. It copies the stored project path. It does not take a host path from the request.
+Do not reinterpret `/projects/{project_id}/agents/{agent_id}` as a conversation.
 
-Do not put project names in the permanent mobile row.
+Do not require a preset to create or open a conversation.
 
-Do not add a model-only chat path, a second executor or durable transcripts.
+Keep configured workflow launch available from conversation detail.
 
-Do not add task suggestions to the empty desk.
-
-Do not require a configured workflow or an onboarding completion record for the first Quick task.
-
-On a machine with a display, make sure that the native folder chooser opens a host dialog.
+Keep project access explicit. Project registration and attachment do not grant filesystem access.
 
 Use the path field on `/projects/new` for automated first-task checks.
 
 ## Unresolved
 
-None. This brief records the shipped flow.
+None. This brief records the conversation-first navigation.

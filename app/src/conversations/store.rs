@@ -366,6 +366,22 @@ impl ConversationStore {
     }
 
     pub(crate) fn create(&self, title: String) -> Result<ConversationRecord, ConversationError> {
+        self.create_record(title, Vec::new())
+    }
+
+    pub(crate) fn create_with_project(
+        &self,
+        title: String,
+        project: ProjectId,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.create_record(title, vec![project])
+    }
+
+    fn create_record(
+        &self,
+        title: String,
+        projects: Vec<ProjectId>,
+    ) -> Result<ConversationRecord, ConversationError> {
         let title = normalise_title(&title)?;
         let mut conversations = self.lock();
         if conversations.len() >= MAXIMUM_CONVERSATIONS {
@@ -377,7 +393,7 @@ impl ConversationStore {
             id,
             revision: 1,
             title,
-            projects: Vec::new(),
+            projects,
             grants: Vec::new(),
             execution_target: None,
             network: crate::agents::NetworkAccess::None,

@@ -111,13 +111,7 @@ async fn submit(
         .vault
         .insert_api_key(connection)
         .map_err(|error| crate::error::AppError::new("store provider", error))?;
-    let view = ConnectViewModel::initial(
-        &state.vault,
-        state.plan_login.snapshot(),
-        sandbox_missing(&state).await,
-    )
-    .clear_api_key();
-    render(&state, graft.into(), PatchStatus::Ok, view)
+    Ok(responses::command_navigation("/conversations"))
 }
 
 async fn start_plan(

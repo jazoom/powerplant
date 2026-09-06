@@ -1,12 +1,27 @@
 <main
   data-section="projects"
   data-context-detail
+  data-context-current-href="/projects/{{ project_id }}"
   class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
 >
   <div class="page-intro">
     <div>
       <h1>{{ name }}</h1>
       <p class="text-quiet font-mono text-xs break-all">{{ path }}</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <a
+        href="/conversations/new?project={{ project_id }}"
+        data-graft
+        class="btn btn-primary btn-sm"
+        >New conversation</a
+      >
+      <a
+        href="/projects/{{ project_id }}/configuration"
+        data-graft
+        class="btn btn-ghost btn-sm"
+        >Rename</a
+      >
     </div>
   </div>
 
@@ -25,147 +40,66 @@
     </div>
   {% endif %}
 
-  {% if agents.is_empty() %}
-    <section class="file-section space-y-6">
-      <div class="max-w-[62ch] space-y-2">
-        <h2 class="text-xl font-semibold">Who will work on this project?</h2>
-        <p class="text-quiet">
-          No agent has access yet. Use the standard setup, or choose the exact
-          permissions yourself.
+  <section
+    class="file-section space-y-4"
+    aria-labelledby="project-conversations"
+  >
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 id="project-conversations" class="text-lg font-semibold">
+          Conversations
+        </h2>
+        <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+          Start discussion here without choosing a preset. A conversation keeps
+          its own history and needs an explicit access grant before it can read
+          or change project files.
         </p>
       </div>
-
-      <div
-        class="border-base-300 bg-base-200 grid gap-5 border p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:p-5"
+      <a
+        href="/conversations/new?project={{ project_id }}"
+        data-graft
+        class="btn btn-secondary btn-sm"
+        >New conversation</a
       >
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <h3 class="text-lg font-semibold">Start with a project agent</h3>
-            <span class="badge badge-info badge-sm">Recommended</span>
-          </div>
-          <p class="text-quiet mt-1 max-w-[58ch]">
-            Power Plant will create an agent named {{ starter_name }} for this
-            project.
-          </p>
-          <ul
-            class="border-base-300 divide-base-300 mt-4 grid divide-y border-y text-sm"
-          >
-            <li class="py-2">They can list, read and write project files.</li>
-            <li class="py-2">
-              They can run commands inside an isolated sandbox.
-            </li>
-            <li class="py-2">Their sandbox has no network access.</li>
-          </ul>
-          <p class="text-quiet mt-3 text-sm">
-            Project files change only after you approve their proposal.
-          </p>
-        </div>
-        <form data-graft method="post" action="{{ starter_action }}">
-          <button class="btn btn-primary" type="submit">
-            Create agent and open desk
-          </button>
-        </form>
-      </div>
-
-      {% if !grant_candidates.is_empty() %}
-        <div class="space-y-3">
-          <div>
-            <h3 class="text-lg font-semibold">Use an agent you already know</h3>
-            <p class="text-quiet mt-1 max-w-[60ch]">
-              Give one of your agents access, then open the project desk.
-            </p>
-          </div>
-          <ul class="border-base-300 border-t">
-            {% for agent in grant_candidates %}
-              <li class="border-base-300 border-b py-4">
-                <form
-                  data-graft
-                  method="post"
-                  action="{{ grant_action }}"
-                  class="grid w-full gap-3 sm:grid-cols-[minmax(8rem,1fr)_minmax(8rem,0.7fr)_minmax(10rem,0.9fr)_auto] sm:items-end"
-                >
-                  <input type="hidden" name="agent_id" value="{{ agent.id }}" />
-                  <input
-                    type="hidden"
-                    name="revision"
-                    value="{{ agent.revision }}"
-                  />
-                  <div class="min-w-0 self-center">
-                    <p class="font-medium">{{ agent.name }}</p>
-                  </div>
-                  <label class="flex flex-col gap-1">
-                    <span class="text-quiet text-xs">Folder alias</span>
-                    <input
-                      class="input input-bordered input-sm w-full font-mono"
-                      name="alias"
-                      required
-                      maxlength="32"
-                      value="{{ grant_alias }}"
-                    />
-                  </label>
-                  <label class="flex flex-col gap-1">
-                    <span class="text-quiet text-xs">Project access</span>
-                    <select
-                      class="select select-bordered select-sm w-full"
-                      name="access"
-                    >
-                      <option
-                        value="read-write"
-                        {% if grant_access == "read-write" %}selected{% endif %}
-                      >
-                        Can read and write
-                      </option>
-                      <option
-                        value="read-only"
-                        {% if grant_access == "read-only" %}selected{% endif %}
-                      >
-                        Read only
-                      </option>
-                    </select>
-                  </label>
-                  <button class="btn btn-outline btn-sm" type="submit">
-                    Give access and open desk
-                  </button>
-                </form>
-              </li>
-            {% endfor %}
-          </ul>
-        </div>
-      {% endif %}
-
-      <div
-        class="border-base-300 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between"
-      >
-        <div>
-          <h3 class="text-base font-semibold">Create a custom agent</h3>
-          <p class="text-quiet mt-1 max-w-[58ch] text-sm">
-            Give a new agent different instructions, tools or network access.
-          </p>
-        </div>
-        <a
-          href="{{ starter_href }}"
-          data-graft
-          class="btn btn-outline btn-sm self-start"
-        >
-          Set custom permissions
-        </a>
-      </div>
-    </section>
-  {% else %}
-    <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">Open with an agent</h2>
-      <ul class="record-list">
-        {% for agent in agents %}
+    </div>
+    {% if conversations.is_empty() %}
+      <p class="text-quiet text-sm">
+        No conversations reference this project yet.
+      </p>
+    {% else %}
+      <ul class="record-list" aria-label="Project conversations">
+        {% for conversation in conversations %}
           <li class="record-row">
             <a
-              href="{{ agent.href }}"
+              href="/conversations/{{ conversation.id }}"
               data-graft
-              class="link link-hover font-medium"
-              >{{ agent.name }}</a
+              class="link link-hover min-w-0 font-medium break-words"
+              >{{ conversation.title }}</a
+            >
+            <a
+              href="/conversations/{{ conversation.id }}"
+              data-graft
+              class="btn btn-ghost btn-sm"
+              >Open</a
             >
           </li>
         {% endfor %}
       </ul>
-    </section>
-  {% endif %}
+    {% endif %}
+  </section>
+
+  <section class="file-section space-y-3" aria-labelledby="project-access">
+    <h2 id="project-access" class="text-lg font-semibold">Project access</h2>
+    <p class="text-quiet max-w-[60ch] text-sm">
+      Project registration does not grant model access to project files. Open a
+      conversation to attach this project, grant read-only or writable access,
+      and choose its execution target.
+    </p>
+    <a
+      href="/conversations/new?project={{ project_id }}"
+      data-graft
+      class="btn btn-outline btn-sm self-start"
+      >Start project work</a
+    >
+  </section>
 </main>

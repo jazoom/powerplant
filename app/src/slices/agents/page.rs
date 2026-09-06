@@ -146,9 +146,9 @@ impl AgentFormView {
         state.assign_project_path(&project.host_path);
         let project_id = project.id.as_hex();
         let mut view = Self::from_state(
-            "New agent",
+            "New preset",
             &format!("/agents?project={project_id}"),
-            "Create agent and open desk",
+            "Create preset",
             state,
             error,
             "",
@@ -160,7 +160,7 @@ impl AgentFormView {
                 .to_owned();
         view.section = "projects";
         view.back_href = format!("/projects/{project_id}");
-        view.back_label = "Back to agent choice";
+        view.back_label = "Back to project";
         if let Some(first) = view.grants.first_mut() {
             first.path_locked = true;
             first.can_remove = false;

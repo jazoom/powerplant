@@ -1717,8 +1717,7 @@ async fn run_agent_step(
         crate::workflows::RunKind::Configured => Vec::new(),
         crate::workflows::RunKind::QuickTask => job.turns.clone(),
     };
-    let ended =
-        crate::slices::run_agent_action(state, job.session_id, spec, turns, job.job.clone()).await;
+    let ended = crate::slices::run_agent_action(state, spec, turns, job.job.clone()).await;
     if ended.outcome == AgentOutcome::Completed {
         *job.eligible_reply
             .lock()

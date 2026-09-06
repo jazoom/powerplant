@@ -8,9 +8,11 @@ mod tokens;
 mod tests;
 
 pub(crate) use cookies::CookieRead;
-pub(crate) use job::{Job, JobEventKind, JobId, JobIdError, JobOwner, JobSnapshot, JobStatus};
+#[cfg(test)]
+pub(crate) use job::JobEventKind;
+pub(crate) use job::{Job, JobId, JobOwner, JobSnapshot, JobStatus};
 pub(crate) use live::LiveSessionGuard;
-pub(crate) use store::{BeginTurnError, ConversationKey, SessionSnapshot, SessionStore};
+pub(crate) use store::{ConversationKey, SessionSnapshot, SessionStore};
 pub(crate) use tokens::{SessionId, ValidatedToken, generate as generate_session_token};
 
 use std::time::Duration;

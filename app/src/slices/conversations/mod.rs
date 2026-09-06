@@ -114,9 +114,17 @@ pub(super) fn router() -> Router<AppState> {
         .route("/plans/{document_id}/revisions", post(revise_plan))
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ConversationQuery {
+    project: String,
+}
+
 #[derive(Deserialize)]
 struct ConversationForm {
     title: String,
+    #[serde(default)]
+    project: String,
 }
 
 #[derive(Deserialize)]
@@ -282,12 +290,23 @@ async fn new_conversation(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: GraftRequest,
+    Query(query): Query<ConversationQuery>,
 ) -> AppResult<Response> {
+    let project = if query.project.trim().is_empty() {
+        None
+    } else {
+        let Some(project) =
+            ProjectId::parse(query.project.trim()).and_then(|id| state.projects.get(&id))
+        else {
+            return Ok(responses::request_navigation(graft, "/projects"));
+        };
+        Some(project)
+    };
     render_form_page(
         &state,
         graft,
         PatchStatus::Ok,
-        ConversationFormView::new("", ""),
+        ConversationFormView::new("", project.as_ref(), ""),
     )
 }
 
@@ -297,7 +316,27 @@ async fn create(
     graft: PatchGraft,
     Form(form): Form<ConversationForm>,
 ) -> AppResult<Response> {
-    match state.conversations.create(form.title.clone()) {
+    let project = if form.project.trim().is_empty() {
+        None
+    } else {
+        let Some(project) =
+            ProjectId::parse(form.project.trim()).and_then(|id| state.projects.get(&id))
+        else {
+            return render_form_command(
+                graft,
+                PatchStatus::UnprocessableEntity,
+                ConversationFormView::new(&form.title, None, "Choose an available project."),
+            );
+        };
+        Some(project)
+    };
+    let result = match project.as_ref() {
+        Some(project) => state
+            .conversations
+            .create_with_project(form.title.clone(), project.id),
+        None => state.conversations.create(form.title.clone()),
+    };
+    match result {
         Ok(record) => Ok(responses::command_navigation(&conversation_path(&record))),
         Err(
             error @ (ConversationError::Random
@@ -307,7 +346,7 @@ async fn create(
         Err(error) => render_form_command(
             graft,
             status_for(error),
-            ConversationFormView::new(&form.title, error.message()),
+            ConversationFormView::new(&form.title, project.as_ref(), error.message()),
         ),
     }
 }
