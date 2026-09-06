@@ -82,6 +82,10 @@ A changed Quick task waits at a human gate. The user must approve the exact cand
 
 Configured workflows start from Run workflow beside the conversation title. The launch sheet shows its brief, target, access, environment readiness and fresh-context boundary.
 
+A workflow can declare a saved plan input. The authoring form offers Implementation from a saved plan without manual input keys or a task list.
+
+The launch sheet selects an immutable plan revision from the conversation. The run retains its own copy and the source reference. Only phases that declare that input receive the plan. Later corrections or association removal cannot change the run copy. The run inspector exposes that copy.
+
 Each run records project identity and run kind. Run kinds are Configured and Quick task. A run can belong to an independent conversation.
 
 The browser session remains a command boundary, not a conversation identity. The session permits one active command while a conversation reservation protects its unfinished operation. A safe approval gate releases the session reservation so another conversation can run a command.

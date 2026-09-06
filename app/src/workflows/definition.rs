@@ -185,10 +185,37 @@ pub(crate) struct RequiredInput {
     pub(crate) source: ArtefactSource,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LaunchInputSource {
+    SavedPlan,
+}
+
+impl LaunchInputSource {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "saved-plan" => Some(Self::SavedPlan),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SavedPlan => "saved-plan",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SavedPlan => "Saved plan",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ArtefactSource {
     RunInitialCandidate,
     RunCurrentCandidate,
+    LaunchInput { source: LaunchInputSource },
     StepOutput { step: StepKey, output: OutputKey },
 }
 
@@ -272,6 +299,7 @@ pub(crate) enum DefinitionError {
     CandidateInput,
     CandidateOutput,
     AssuranceInput,
+    LaunchInput,
     SecondaryWrite,
     UnusedRole,
     UnknownRole,
@@ -320,6 +348,7 @@ impl DefinitionError {
             Self::AssuranceInput => {
                 "A step that uses an assurance artefact also needs a candidate input."
             }
+            Self::LaunchInput => "A saved plan launch input must use the plan artefact kind.",
             Self::SecondaryWrite => "Secondary directory grants must stay read-only.",
             Self::UnusedRole => "Every role must be used by an agent step.",
             Self::UnknownRole => "An agent step names an unknown role.",
@@ -450,6 +479,7 @@ struct InputFile {
 enum InputSourceFile {
     RunInitialCandidate,
     RunCurrentCandidate,
+    LaunchInput { input: String },
     StepOutput { step: String, output: String },
 }
 
@@ -573,6 +603,22 @@ impl WorkflowDefinition {
 
     pub(crate) fn steps(&self) -> &[StepDefinition] {
         &self.steps
+    }
+
+    pub(crate) fn launch_input_sources(&self) -> Vec<LaunchInputSource> {
+        self.steps
+            .iter()
+            .flat_map(|step| step.inputs.iter())
+            .filter_map(|input| match input.source {
+                ArtefactSource::LaunchInput { source } => Some(source),
+                _ => None,
+            })
+            .fold(Vec::new(), |mut sources, source| {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+                sources
+            })
     }
 
     pub(crate) fn step(&self, key: &StepKey) -> Option<&StepDefinition> {
@@ -749,6 +795,9 @@ impl StepDefinition {
                     source: match &input.source {
                         ArtefactSource::RunInitialCandidate => InputSourceFile::RunInitialCandidate,
                         ArtefactSource::RunCurrentCandidate => InputSourceFile::RunCurrentCandidate,
+                        ArtefactSource::LaunchInput { source } => InputSourceFile::LaunchInput {
+                            input: source.as_str().to_owned(),
+                        },
                         ArtefactSource::StepOutput { step, output } => {
                             InputSourceFile::StepOutput {
                                 step: step.as_str().to_owned(),
@@ -1252,6 +1301,9 @@ fn parse_inputs(files: Vec<InputFile>) -> Result<Vec<RequiredInput>, DefinitionE
         let source = match file.source {
             InputSourceFile::RunInitialCandidate => ArtefactSource::RunInitialCandidate,
             InputSourceFile::RunCurrentCandidate => ArtefactSource::RunCurrentCandidate,
+            InputSourceFile::LaunchInput { input } => ArtefactSource::LaunchInput {
+                source: LaunchInputSource::parse(&input).ok_or(DefinitionError::Format)?,
+            },
             InputSourceFile::StepOutput { step, output } => ArtefactSource::StepOutput {
                 step: StepKey::parse(&step)?,
                 output: OutputKey::parse(&output)?,
@@ -1437,6 +1489,9 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
                     }
                 }
                 ArtefactSource::RunCurrentCandidate => {}
+                ArtefactSource::LaunchInput { .. } => {
+                    return Err(DefinitionError::CandidateInput);
+                }
                 ArtefactSource::StepOutput {
                     step: source_step,
                     output,
@@ -1457,6 +1512,11 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
                 ArtefactSource::RunInitialCandidate | ArtefactSource::RunCurrentCandidate => {
                     if input.kind != ArtefactKind::CandidateRevision {
                         return Err(DefinitionError::InputKind);
+                    }
+                }
+                ArtefactSource::LaunchInput { source } => {
+                    if *source != LaunchInputSource::SavedPlan || input.kind != ArtefactKind::Plan {
+                        return Err(DefinitionError::LaunchInput);
                     }
                 }
                 ArtefactSource::StepOutput {

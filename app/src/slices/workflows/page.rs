@@ -58,7 +58,7 @@ impl CatalogueView {
                     name: record.definition.name().to_owned(),
                     summary: summary::process_summary(&record.definition),
                     effects: summary::code_effects(&record.definition),
-                    inputs: summary::REQUIRED_INPUTS.to_owned(),
+                    inputs: summary::required_inputs(&record.definition).to_owned(),
                     approvals: summary::approval_stops(&record.definition),
                     roles: record.definition.roles().len(),
                     steps: record.definition.steps().len(),
@@ -689,6 +689,13 @@ fn draft_process_overview(steps: &[StepDraft]) -> Vec<ProcessPhase> {
 
 fn source_options(earlier: &[StepDraft], kind: &str, current: &str) -> Vec<SourceOption> {
     let mut options = Vec::new();
+    if kind == "plan" {
+        options.push(SourceOption {
+            value: "launch-input:saved-plan".to_owned(),
+            label: "Saved plan selected at launch".to_owned(),
+            selected: current == "launch-input:saved-plan",
+        });
+    }
     if kind == "candidate-revision" {
         options.push(SourceOption {
             value: "run-initial-candidate".to_owned(),

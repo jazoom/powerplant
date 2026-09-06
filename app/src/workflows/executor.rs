@@ -2565,6 +2565,26 @@ fn resolve_inputs(
                 };
                 source.accepted.clone()
             }
+            crate::workflows::definition::ArtefactSource::LaunchInput { source } => run
+                .artefacts
+                .iter()
+                .rev()
+                .find_map(|record| {
+                    matches!(
+                        &record.provenance.producer,
+                        crate::workflows::artefacts::ArtefactProducer::LaunchInput {
+                            source: stored,
+                            conversation_id,
+                            ..
+                        } if stored == source && run.conversation_id == Some(*conversation_id)
+                    )
+                    .then(|| crate::workflows::artefacts::ArtefactReference {
+                        id: record.id,
+                        kind: record.kind,
+                        artefact_hash: record.artefact_hash,
+                    })
+                })
+                .ok_or("The selected launch input is missing.")?,
             crate::workflows::definition::ArtefactSource::StepOutput {
                 step: source_step,
                 output,

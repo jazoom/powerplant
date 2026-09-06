@@ -146,6 +146,16 @@ pub(super) struct StepView {
     pub(super) model: String,
 }
 
+pub(super) struct LaunchInputView {
+    pub(super) href: String,
+    pub(super) source: String,
+    pub(super) conversation_id: String,
+    pub(super) document_id: String,
+    pub(super) revision: String,
+    pub(super) content_hash: String,
+    pub(super) content_bytes: String,
+}
+
 pub(super) struct PinnedEnvironmentView {
     pub(super) name: String,
     pub(super) note: String,
@@ -215,6 +225,7 @@ pub(super) struct RunDetailView {
     pub(super) current_step: String,
     pub(super) steps: Vec<StepView>,
     pub(super) environments: Vec<PinnedEnvironmentView>,
+    pub(super) launch_inputs: Vec<LaunchInputView>,
     pub(super) attempts: Vec<AttemptView>,
     pub(super) artefacts: Vec<ArtefactRow>,
 }
@@ -245,6 +256,7 @@ pub(super) struct RunDetailContents<'a> {
     pub(super) current_step: &'a str,
     pub(super) steps: &'a [StepView],
     pub(super) environments: &'a [PinnedEnvironmentView],
+    pub(super) launch_inputs: &'a [LaunchInputView],
     pub(super) attempts: &'a [AttemptView],
     pub(super) artefacts: &'a [ArtefactRow],
 }
@@ -385,6 +397,7 @@ impl RunDetailView {
                 })
                 .collect(),
             environments: pinned_environments(run, environments),
+            launch_inputs: launch_inputs(run),
             attempts: run
                 .attempts
                 .iter()
@@ -469,6 +482,7 @@ impl RunDetailView {
             current_step: &self.current_step,
             steps: &self.steps,
             environments: &self.environments,
+            launch_inputs: &self.launch_inputs,
             attempts: &self.attempts,
             artefacts: &self.artefacts,
         }
@@ -869,6 +883,7 @@ fn next_candidate_hash(
             crate::workflows::run::RunSource::Captured { source } => &source.accepted,
             crate::workflows::run::RunSource::Pending => return None,
         },
+        crate::workflows::definition::ArtefactSource::LaunchInput { .. } => return None,
         crate::workflows::definition::ArtefactSource::StepOutput { step, output } => {
             &run.attempts
                 .iter()
@@ -903,6 +918,39 @@ fn step_environment_label(
         environment.name,
         environment.snapshot.snapshot_digest.short_hex()
     )
+}
+
+fn launch_inputs(run: &WorkflowRun) -> Vec<LaunchInputView> {
+    run.artefacts
+        .iter()
+        .filter_map(|record| {
+            let crate::workflows::artefacts::ArtefactProducer::LaunchInput {
+                source,
+                conversation_id,
+                document_id,
+                revision,
+                content_hash,
+            } = &record.provenance.producer
+            else {
+                return None;
+            };
+            let content_bytes = match &record.summary {
+                crate::workflows::artefacts::ArtefactSummary::Plan { markdown_bytes } => {
+                    markdown_bytes.to_string()
+                }
+                _ => String::new(),
+            };
+            Some(LaunchInputView {
+                href: format!("/runs/{}/artefacts/{}", run.id.as_hex(), record.id.as_hex()),
+                source: source.label().to_owned(),
+                conversation_id: conversation_id.as_hex(),
+                document_id: document_id.as_hex(),
+                revision: revision.to_string(),
+                content_hash: content_hash.as_str(),
+                content_bytes,
+            })
+        })
+        .collect()
 }
 
 fn pinned_environments(

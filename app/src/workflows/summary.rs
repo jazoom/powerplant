@@ -1,7 +1,13 @@
 use super::commands::SystemCommandId;
 use super::definition::{CandidateAuthority, StepAction, WorkflowDefinition};
 
-pub(crate) const REQUIRED_INPUTS: &str = "Task brief · Target project";
+pub(crate) fn required_inputs(definition: &WorkflowDefinition) -> &'static str {
+    if definition.launch_input_sources().is_empty() {
+        "Task brief · Target project"
+    } else {
+        "Task brief · Target project · Saved plan"
+    }
+}
 
 pub(crate) struct ProcessPhase {
     pub(crate) position: usize,

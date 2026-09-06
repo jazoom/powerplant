@@ -95,6 +95,68 @@
               </fieldset>
             {% endif %}
           </section>
+          {% if requires_plan %}
+            <section
+              class="file-section space-y-4"
+              aria-labelledby="workflow-plan-heading"
+            >
+              <div>
+                <h2 id="workflow-plan-heading" class="text-lg font-semibold">
+                  Saved plan input
+                </h2>
+                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                  This workflow declares a saved plan input. Power Plant copies
+                  the selected immutable revision into the run before execution.
+                  Later plan corrections cannot change this run.
+                </p>
+              </div>
+              {% for plan in plans %}
+                {% if plan.selected %}
+                  <input
+                    type="hidden"
+                    name="preview_plan"
+                    value="{{ plan.value }}"
+                  />
+                {% endif %}
+              {% endfor %}
+              {% if plans.is_empty() %}
+                <p class="text-error text-sm">
+                  Save a plan in this conversation before you launch.
+                </p>
+              {% else %}
+                <label
+                  class="flex max-w-3xl flex-col gap-1"
+                  for="workflow-plan"
+                >
+                  <span class="text-sm font-semibold">Plan revision</span>
+                  <select
+                    id="workflow-plan"
+                    name="plan"
+                    class="select select-bordered"
+                    required
+                  >
+                    <option value="">Choose a saved plan</option>
+                    {% for plan in plans %}
+                      <option
+                        value="{{ plan.value }}"
+                        {% if plan.selected %}selected{% endif %}
+                      >
+                        {{ plan.title }} · Revision {{ plan.revision }} ·
+                        {{ plan.content_bytes }} bytes
+                      </option>
+                    {% endfor %}
+                  </select>
+                  {% for plan in plans %}
+                    {% if plan.selected && plan.content_hash != "" %}
+                      <span class="text-quiet font-mono text-xs break-all">
+                        Content {{ plan.content_hash }}
+                      </span>
+                    {% endif %}
+                  {% endfor %}
+                </label>
+              {% endif %}
+            </section>
+          {% endif %}
           {% if !commit_policies.is_empty() %}
             <section
               class="file-section space-y-4"

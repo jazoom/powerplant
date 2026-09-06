@@ -87,6 +87,28 @@ fn review_pairs() -> Vec<(String, String)> {
 }
 
 #[test]
+fn saved_plan_authoring_derives_keys_and_rejects_a_wrong_input_kind() {
+    let (mut form, _) = WorkflowFormState::parse(valid_pairs()).expect("form");
+    form.apply(FormIntent::AddSavedPlanImplementation)
+        .expect("add phase");
+    let step = form.steps.last().expect("implementation");
+    let plan = step
+        .inputs
+        .iter()
+        .find(|input| input.kind == "plan")
+        .expect("plan");
+    assert_eq!(plan.source, "launch-input:saved-plan");
+    form.to_definition().expect("saved plan definition");
+    let step = form.steps.last_mut().expect("implementation");
+    step.inputs
+        .iter_mut()
+        .find(|input| input.kind == "plan")
+        .expect("plan")
+        .kind = "review-report".to_owned();
+    assert!(form.to_definition().is_err());
+}
+
+#[test]
 fn purpose_phases_build_without_manual_identifiers_or_roles() {
     let (form, intent) = WorkflowFormState::parse(purpose_only_pairs()).expect("purpose form");
     assert_eq!(intent, FormIntent::Save);

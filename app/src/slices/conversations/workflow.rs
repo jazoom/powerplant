@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     agents::{AccessMode, AgentId},
-    conversations::ConversationRecord,
+    conversations::{ConversationRecord, DocumentId, PlanRevisionReference},
     error::{AppError, AppResult},
     projects::ProjectId,
     providers::{ModelSelection, ProviderKind, ThinkingEffort},
@@ -18,7 +18,8 @@ use crate::{
     state::AppState,
     workflows::{
         self, PhaseModelSelection, PinnedPreset, ResolveWorkflowError, WorkflowJob, WorkflowRun,
-        WorkflowSelection, definition::CommitPolicy,
+        WorkflowSelection,
+        definition::{CommitPolicy, LaunchInputSource},
     },
 };
 
@@ -31,6 +32,7 @@ pub(super) struct WorkflowQuery {
     target: String,
     brief: String,
     commit_policy: String,
+    plan: String,
     #[serde(default)]
     phase: Vec<String>,
 }
@@ -42,6 +44,8 @@ pub(super) struct WorkflowLaunchForm {
     brief: String,
     target: String,
     #[serde(default)]
+    plan: String,
+    #[serde(default)]
     commit_policy: String,
     #[serde(default)]
     preview_workflow: String,
@@ -49,6 +53,8 @@ pub(super) struct WorkflowLaunchForm {
     preview_target: String,
     #[serde(default)]
     preview_commit_policy: String,
+    #[serde(default)]
+    preview_plan: String,
     #[serde(default)]
     phase: Vec<String>,
 }
@@ -69,6 +75,30 @@ struct TargetOption {
     name: String,
     access: String,
     selected: bool,
+}
+
+struct PlanOption {
+    value: String,
+    title: String,
+    revision: String,
+    content_hash: String,
+    content_bytes: String,
+    selected: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct PlanChoiceToken {
+    document: String,
+    revision: u32,
+    content_hash: String,
+    object_hash: String,
+    artefact_hash: String,
+}
+
+struct SelectedPlan {
+    reference: PlanRevisionReference,
+    content: String,
 }
 
 struct PhaseChoice {
@@ -110,6 +140,8 @@ struct WorkflowLaunchView {
     brief: String,
     workflows: Vec<WorkflowOption>,
     targets: Vec<TargetOption>,
+    plans: Vec<PlanOption>,
+    requires_plan: bool,
     commit_policies: Vec<CommitPolicyOption>,
     phase_models: Vec<PhaseModelOption>,
     model_summary: String,
@@ -126,6 +158,8 @@ struct WorkflowLaunchContents<'a> {
     brief: &'a str,
     workflows: &'a [WorkflowOption],
     targets: &'a [TargetOption],
+    plans: &'a [PlanOption],
+    requires_plan: bool,
     commit_policies: &'a [CommitPolicyOption],
     phase_models: &'a [PhaseModelOption],
     model_summary: &'a str,
@@ -142,6 +176,8 @@ impl WorkflowLaunchView {
             brief: &self.brief,
             workflows: &self.workflows,
             targets: &self.targets,
+            plans: &self.plans,
+            requires_plan: self.requires_plan,
             commit_policies: &self.commit_policies,
             phase_models: &self.phase_models,
             model_summary: &self.model_summary,
@@ -197,6 +233,7 @@ pub(super) async fn show(
         },
         &query.brief,
         &query.commit_policy,
+        &query.plan,
         &query.phase,
         "",
     )
@@ -225,6 +262,7 @@ pub(super) async fn launch(
         let target = form.target.clone();
         let brief = form.brief.clone();
         let commit_policy = form.commit_policy.clone();
+        let plan = form.plan.clone();
         let phase = form.phase.clone();
         async move {
             let view = launch_view(
@@ -234,6 +272,7 @@ pub(super) async fn launch(
                 Some(target.as_str()),
                 &brief,
                 &commit_policy,
+                &plan,
                 &phase,
                 error,
             )
@@ -306,8 +345,16 @@ pub(super) async fn launch(
         ),
         Err(error) => return error_view(PatchStatus::UnprocessableEntity, error.message()).await,
     };
-    let run_id = workflows::RunId::generate()
-        .map_err(|error| AppError::new("create workflow run identifier", error))?;
+    if form.plan != form.preview_plan {
+        return error_view(
+            PatchStatus::Conflict,
+            "The plan selection changed. Review the selected immutable plan before launch.",
+        )
+        .await;
+    }
+    if let Err(error) = resolve_selected_plan(&state, &record, &form.plan, &pinned.definition) {
+        return error_view(PatchStatus::UnprocessableEntity, error).await;
+    }
     let Some(target) = ProjectId::parse(form.target.trim()) else {
         return error_view(
             PatchStatus::UnprocessableEntity,
@@ -428,6 +475,45 @@ pub(super) async fn launch(
         }
         Err(error) => return error_view(PatchStatus::Conflict, error.message()).await,
     };
+    // Environment resolution awaits external work. Revalidate the document before reservation.
+    let selected_plan =
+        match resolve_selected_plan(&state, &current, &form.plan, &pinned.definition) {
+            Ok(plan) => plan,
+            Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
+        };
+    let run_id = workflows::RunId::generate()
+        .map_err(|error| AppError::new("create workflow run identifier", error))?;
+    let mut run = WorkflowRun::create_configured_for_conversation(
+        run_id,
+        workflows::now_ms(),
+        authority.project_id,
+        current.id,
+        brief.clone(),
+        pinned,
+        environments,
+        phase_models.clone(),
+    );
+    if let Some(plan) = selected_plan {
+        let imported = crate::workflows::artefacts::import_saved_plan(
+            run_id,
+            workflows::now_ms(),
+            current.id,
+            plan.reference.document_id,
+            &plan.reference,
+            &plan.content,
+            &state.workflow_artefacts,
+        );
+        if imported
+            .ok()
+            .is_none_or(|record| run.record_launch_input(record).is_err())
+        {
+            return error_view(
+                PatchStatus::UnprocessableEntity,
+                "The selected plan could not be imported.",
+            )
+            .await;
+        }
+    }
     let job = match state.sessions.begin_conversation_job(
         &session.0,
         current.id,
@@ -457,16 +543,6 @@ pub(super) async fn launch(
             return error_view(super::status_for(error), error.message()).await;
         }
     };
-    let run = WorkflowRun::create_configured_for_conversation(
-        run_id,
-        workflows::now_ms(),
-        authority.project_id,
-        started.id,
-        brief,
-        pinned,
-        environments,
-        phase_models.clone(),
-    );
     if let Err(error) = state.workflow_runs.create(run.clone()) {
         let _ = state.conversations.settle_message(
             &started.id,
@@ -521,6 +597,7 @@ async fn launch_view(
     target_raw: Option<&str>,
     brief: &str,
     commit_policy_raw: &str,
+    plan_raw: &str,
     phase_raw: &[String],
     error: &'static str,
 ) -> WorkflowLaunchView {
@@ -544,7 +621,7 @@ async fn launch_view(
                 name: definition.name().to_owned(),
                 summary: workflows::summary::process_summary(definition),
                 effects: workflows::summary::code_effects(definition),
-                inputs: workflows::summary::REQUIRED_INPUTS.to_owned(),
+                inputs: workflows::summary::required_inputs(definition).to_owned(),
                 approvals: workflows::summary::approval_stops(definition),
                 process_phases: workflows::summary::process_overview(definition),
                 selected,
@@ -586,6 +663,7 @@ async fn launch_view(
         .and_then(|raw| ProjectId::parse(raw.trim()))
         .or(record.execution_target)
         .or_else(|| record.grants.first().map(|grant| grant.project_id));
+    let (plans, requires_plan) = selected_plan_options(state, record, &selected_workflow, plan_raw);
     let targets = record
         .grants
         .iter()
@@ -609,6 +687,8 @@ async fn launch_view(
         brief: brief.to_owned(),
         workflows,
         targets,
+        plans,
+        requires_plan,
         commit_policies,
         phase_models,
         model_summary,
@@ -980,6 +1060,140 @@ fn validate_phase_models(
         }
     }
     Ok(())
+}
+
+fn selected_plan_options(
+    state: &AppState,
+    record: &ConversationRecord,
+    workflow_raw: &str,
+    plan_raw: &str,
+) -> (Vec<PlanOption>, bool) {
+    let requires_plan = WorkflowSelection::parse(workflow_raw)
+        .and_then(|selection| state.workflows.resolve(&selection).ok())
+        .is_some_and(|resolved| {
+            resolved
+                .pinned
+                .definition
+                .launch_input_sources()
+                .contains(&LaunchInputSource::SavedPlan)
+        });
+    if !requires_plan {
+        return (Vec::new(), false);
+    }
+    let mut plans: Vec<_> = state
+        .documents
+        .list_for_conversation(record.id)
+        .into_iter()
+        .map(|document| {
+            let revision = document
+                .revisions
+                .iter()
+                .find(|revision| plan_choice_token(&document.id, revision) == plan_raw)
+                .unwrap_or_else(|| document.current());
+            let title = document.title.clone();
+            PlanOption {
+                value: plan_choice_token(&document.id, revision),
+                title,
+                revision: revision.revision.to_string(),
+                content_hash: revision.content_hash.as_str(),
+                content_bytes: revision.content_bytes.to_string(),
+                selected: false,
+            }
+        })
+        .collect();
+    if let Some(selected) = plans.iter_mut().find(|plan| plan.value == plan_raw) {
+        selected.selected = true;
+    } else if !plan_raw.is_empty() {
+        plans.push(PlanOption {
+            value: plan_raw.to_owned(),
+            title: "Selected plan is unavailable".to_owned(),
+            revision: String::new(),
+            content_hash: String::new(),
+            content_bytes: String::new(),
+            selected: true,
+        });
+    }
+    (plans, true)
+}
+
+fn plan_choice_token(
+    document_id: &DocumentId,
+    revision: &crate::conversations::PlanRevision,
+) -> String {
+    serde_json::to_string(&PlanChoiceToken {
+        document: document_id.as_hex(),
+        revision: revision.revision,
+        content_hash: revision.content_hash.as_str(),
+        object_hash: revision.object_hash.as_str(),
+        artefact_hash: revision.artefact_hash.as_str(),
+    })
+    .expect("plan choice token")
+}
+
+fn resolve_selected_plan(
+    state: &AppState,
+    record: &ConversationRecord,
+    raw: &str,
+    definition: &workflows::definition::WorkflowDefinition,
+) -> Result<Option<SelectedPlan>, &'static str> {
+    let requires_plan = definition
+        .launch_input_sources()
+        .contains(&LaunchInputSource::SavedPlan);
+    if !requires_plan {
+        return if raw.trim().is_empty() {
+            Ok(None)
+        } else {
+            Err("This workflow does not declare a saved plan input.")
+        };
+    }
+    if raw.trim().is_empty() {
+        return Err("Choose a saved plan before launch.");
+    }
+    let token: PlanChoiceToken =
+        serde_json::from_str(raw).map_err(|_| "Choose an available saved plan.")?;
+    let document_id =
+        DocumentId::parse(&token.document).ok_or("Choose an available saved plan.")?;
+    let content_hash = crate::workflows::artefacts::ObjectHash::parse(&token.content_hash)
+        .ok_or("Choose an available saved plan.")?;
+    let object_hash = crate::workflows::artefacts::ObjectHash::parse(&token.object_hash)
+        .ok_or("Choose an available saved plan.")?;
+    let artefact_hash = crate::workflows::artefacts::ArtefactHash::parse(&token.artefact_hash)
+        .ok_or("Choose an available saved plan.")?;
+    let document = state
+        .documents
+        .get(&document_id)
+        .ok_or("That saved plan is no longer available.")?;
+    if document.associated_conversation != Some(record.id) {
+        return Err("That saved plan is not associated with this conversation.");
+    }
+    let revision = document
+        .revision(token.revision)
+        .ok_or("That saved plan revision is no longer available.")?;
+    if revision.content_hash != content_hash
+        || revision.object_hash != object_hash
+        || revision.artefact_hash != artefact_hash
+    {
+        return Err("That saved plan changed. Reload the launch sheet.");
+    }
+    let content = state
+        .documents
+        .content(&document, revision.revision)
+        .map_err(|_| "Power Plant could not read the selected plan.")?;
+    if content.len() > workflows::input_context::MAXIMUM_IMPORTED_TEXT_BYTES
+        || crate::workflows::artefacts::ObjectHash::of(content.as_bytes()) != revision.content_hash
+    {
+        return Err("That saved plan is too large or changed. Reload the launch sheet.");
+    }
+    Ok(Some(SelectedPlan {
+        reference: PlanRevisionReference {
+            document_id,
+            revision: revision.revision,
+            content_hash: revision.content_hash,
+            object_hash: revision.object_hash,
+            artefact_hash: revision.artefact_hash,
+        },
+        content,
+    }))
 }
 
 fn selected_workflow(records: &[workflows::WorkflowRecord], raw: Option<&str>) -> String {

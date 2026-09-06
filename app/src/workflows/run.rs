@@ -16,8 +16,8 @@ use super::capabilities::{
 };
 use super::commit::{CommitResult, CommitTransaction, CommitTransactionState};
 use super::definition::{
-    DefinitionFile, DefinitionVersion, InputKey, OutputKey, PinnedWorkflowDefinition, StepAction,
-    StepDefinition, StepKey, WorkflowDefinition,
+    DefinitionFile, DefinitionVersion, InputKey, LaunchInputSource, OutputKey,
+    PinnedWorkflowDefinition, StepAction, StepDefinition, StepKey, WorkflowDefinition,
 };
 use super::gates::{GateRevision, HumanGateRecord, HumanGateState};
 use super::id::{AttemptId, GateId, RunId, WorkflowId};
@@ -521,6 +521,13 @@ struct ProvenanceFile {
 #[serde(tag = "producer", rename_all = "kebab-case")]
 enum ProducerFile {
     RunSourceCapture,
+    LaunchInput {
+        source: String,
+        conversation_id: String,
+        document_id: String,
+        revision: u32,
+        content_hash: String,
+    },
     StepAttempt {
         attempt_id: String,
         step: String,
@@ -692,6 +699,40 @@ impl WorkflowRun {
         run.launch_brief = launch_brief;
         run.phase_models = phase_models;
         run
+    }
+
+    pub(crate) fn record_launch_input(
+        &mut self,
+        record: crate::workflows::artefacts::ArtefactRecord,
+    ) -> Result<(), TransitionError> {
+        let source = match &record.provenance.producer {
+            crate::workflows::artefacts::ArtefactProducer::LaunchInput {
+                source,
+                conversation_id,
+                revision,
+                ..
+            } if self.conversation_id == Some(*conversation_id) && *revision > 0 => *source,
+            _ => return Err(TransitionError::Invalid),
+        };
+        if record.kind != crate::workflows::definition::ArtefactKind::Plan
+            || record.provenance.run_id != self.id
+            || !record.provenance.inputs.is_empty()
+            || !self
+                .pinned
+                .definition
+                .launch_input_sources()
+                .contains(&source)
+            || !self.attempts.is_empty()
+            || self.artefacts.len() >= crate::workflows::artefacts::MAXIMUM_ARTEFACTS
+            || self.artefacts.iter().any(|item| item.id == record.id || matches!(
+                item.provenance.producer,
+                crate::workflows::artefacts::ArtefactProducer::LaunchInput { source: stored, .. } if stored == source
+            ))
+        {
+            return Err(TransitionError::Invalid);
+        }
+        self.artefacts.push(record);
+        Ok(())
     }
 
     pub(crate) fn record_initial_candidate(
@@ -2545,6 +2586,19 @@ fn producer_to_file(producer: &crate::workflows::artefacts::ArtefactProducer) ->
     use crate::workflows::artefacts::ArtefactProducer;
     match producer {
         ArtefactProducer::RunSourceCapture => ProducerFile::RunSourceCapture,
+        ArtefactProducer::LaunchInput {
+            source,
+            conversation_id,
+            document_id,
+            revision,
+            content_hash,
+        } => ProducerFile::LaunchInput {
+            source: source.as_str().to_owned(),
+            conversation_id: conversation_id.as_hex(),
+            document_id: document_id.as_hex(),
+            revision: *revision,
+            content_hash: content_hash.as_str(),
+        },
         ArtefactProducer::StepAttempt {
             attempt_id,
             step,
@@ -2574,6 +2628,22 @@ fn producer_from_file(
     use crate::workflows::artefacts::{ArtefactProducer, ProductionDisposition};
     Ok(match file {
         ProducerFile::RunSourceCapture => ArtefactProducer::RunSourceCapture,
+        ProducerFile::LaunchInput {
+            source,
+            conversation_id,
+            document_id,
+            revision,
+            content_hash,
+        } => ArtefactProducer::LaunchInput {
+            source: LaunchInputSource::parse(&source).ok_or(RunRecordError::Corrupt)?,
+            conversation_id: crate::conversations::ConversationId::parse(&conversation_id)
+                .ok_or(RunRecordError::Corrupt)?,
+            document_id: crate::conversations::DocumentId::parse(&document_id)
+                .ok_or(RunRecordError::Corrupt)?,
+            revision,
+            content_hash: crate::workflows::artefacts::ObjectHash::parse(&content_hash)
+                .ok_or(RunRecordError::Corrupt)?,
+        },
         ProducerFile::StepAttempt {
             attempt_id,
             step,
@@ -2761,6 +2831,7 @@ fn gate_input_candidate(run: &WorkflowRun, step: &StepDefinition) -> Option<Arte
             };
             source.accepted.clone()
         }
+        crate::workflows::definition::ArtefactSource::LaunchInput { .. } => return None,
         crate::workflows::definition::ArtefactSource::StepOutput {
             step: source_step,
             output,
@@ -3834,6 +3905,31 @@ fn validate_artefacts(run: &WorkflowRun) -> Result<(), RunRecordError> {
                 if record.kind != crate::workflows::definition::ArtefactKind::CandidateRevision
                     || !record.provenance.inputs.is_empty()
                     || !artefact_matches_reference(record, &source.initial)
+                {
+                    return Err(RunRecordError::Corrupt);
+                }
+            }
+            crate::workflows::artefacts::ArtefactProducer::LaunchInput {
+                source,
+                conversation_id,
+                document_id: _,
+                revision,
+                content_hash: _,
+            } => {
+                if *source != LaunchInputSource::SavedPlan
+                    || record.kind != crate::workflows::definition::ArtefactKind::Plan
+                    || !record.provenance.inputs.is_empty()
+                    || !run
+                        .pinned
+                        .definition
+                        .launch_input_sources()
+                        .contains(source)
+                    || run.conversation_id != Some(*conversation_id)
+                    || *revision == 0
+                    || run.artefacts[..index].iter().any(|earlier| matches!(
+                        earlier.provenance.producer,
+                        crate::workflows::artefacts::ArtefactProducer::LaunchInput { source: stored, .. } if stored == *source
+                    ))
                 {
                     return Err(RunRecordError::Corrupt);
                 }

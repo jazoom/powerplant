@@ -13,7 +13,8 @@ use super::artefacts::{
     parse_typed_payload,
 };
 use super::definition::{
-    ArtefactKind, ArtefactSource, InputKey, OutputKey, RequiredInput, StepDefinition, StepKey,
+    ArtefactKind, ArtefactSource, InputKey, LaunchInputSource, OutputKey, RequiredInput,
+    StepDefinition, StepKey,
 };
 use super::run::{AttemptArtefactInput, WorkflowRun};
 
@@ -776,6 +777,9 @@ pub(crate) fn format_agent_context(inputs: &[VerifiedInput], writes_source: bool
                     output.as_str()
                 ));
             }
+            _ if input.kind == ArtefactKind::Plan => {
+                lines.push("Producer: saved plan launch input".to_owned());
+            }
             _ => lines.push("Producer: run initial candidate".to_owned()),
         }
         if let Some(candidate) = input.candidate {
@@ -797,7 +801,13 @@ pub(crate) fn format_agent_context(inputs: &[VerifiedInput], writes_source: bool
         }
         sections.push(lines.join("\n"));
     }
-    let direction = if writes_source {
+    let direction = if writes_source
+        && inputs
+            .iter()
+            .any(|input| input.kind == ArtefactKind::Plan && input.producer_step.is_none())
+    {
+        "The selected saved plan is task direction. Apply it to produce the complete candidate."
+    } else if writes_source {
         "The accepted plan is task direction. Apply it to produce the complete candidate."
     } else if inputs
         .iter()
@@ -847,6 +857,17 @@ fn verify_one(
             if source.accepted != resolved.artefact {
                 return Err(InputContextError::Source);
             }
+        }
+        (
+            ArtefactSource::LaunchInput { source },
+            ArtefactProducer::LaunchInput {
+                source: producer_source,
+                conversation_id,
+                ..
+            },
+        ) if source == producer_source && run.conversation_id == Some(*conversation_id) => {}
+        (ArtefactSource::LaunchInput { .. }, ArtefactProducer::LaunchInput { .. }) => {
+            return Err(InputContextError::Source);
         }
         (
             ArtefactSource::StepOutput { step, output },
@@ -947,6 +968,20 @@ fn verify_one(
     {
         return Err(InputContextError::Changed);
     }
+    if let ArtefactProducer::LaunchInput {
+        source: LaunchInputSource::SavedPlan,
+        conversation_id,
+        content_hash,
+        ..
+    } = &record.provenance.producer
+        && (record.kind != ArtefactKind::Plan
+            || run.conversation_id != Some(*conversation_id)
+            || text
+                .as_deref()
+                .is_none_or(|text| ObjectHash::of(text.as_bytes()) != *content_hash))
+    {
+        return Err(InputContextError::Changed);
+    }
     Ok(VerifiedInput {
         key: declared.key.clone(),
         kind: record.kind,
@@ -956,12 +991,12 @@ fn verify_one(
         producer_step: match &record.provenance.producer {
             ArtefactProducer::StepAttempt { step, .. }
             | ArtefactProducer::HumanGate { step, .. } => Some(step.clone()),
-            ArtefactProducer::RunSourceCapture => None,
+            ArtefactProducer::RunSourceCapture | ArtefactProducer::LaunchInput { .. } => None,
         },
         producer_output: match &record.provenance.producer {
             ArtefactProducer::StepAttempt { output, .. } => output.clone(),
             ArtefactProducer::HumanGate { output, .. } => Some(output.clone()),
-            ArtefactProducer::RunSourceCapture => None,
+            ArtefactProducer::RunSourceCapture | ArtefactProducer::LaunchInput { .. } => None,
         },
         candidate,
         text,

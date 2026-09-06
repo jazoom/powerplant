@@ -18,6 +18,102 @@ fn connected_state() -> AppState {
     state
 }
 
+#[test]
+fn saved_plan_selection_rejects_substitution_and_removal_but_pins_old_revisions() {
+    let state = connected_state();
+    let conversation = state
+        .conversations
+        .create("Workflow".to_owned())
+        .expect("conversation");
+    let plan = state
+        .documents
+        .create_from_text(
+            conversation.id,
+            "Implementation plan".to_owned(),
+            "# Selected plan\n\nKeep this revision.\n".to_owned(),
+            None,
+        )
+        .expect("plan");
+    let base = workflows::seeds::sequential_team_definition(crate::tests::test_environment_id());
+    let mut steps = base.steps().to_vec();
+    let implementer = steps
+        .iter_mut()
+        .find(|step| step.key.as_str() == "implementer")
+        .expect("implementer");
+    let plan_input = implementer
+        .inputs
+        .iter_mut()
+        .find(|input| input.kind == workflows::definition::ArtefactKind::Plan)
+        .expect("plan input");
+    plan_input.source = workflows::definition::ArtefactSource::LaunchInput {
+        source: workflows::definition::LaunchInputSource::SavedPlan,
+    };
+    let definition = workflows::definition::WorkflowDefinition::from_parts(
+        base.name().to_owned(),
+        base.default_environment(),
+        base.roles().to_vec(),
+        steps,
+    )
+    .expect("definition");
+    let token = super::plan_choice_token(&plan.id, plan.current());
+    let resolve = |raw: &str| super::resolve_selected_plan(&state, &conversation, raw, &definition);
+    assert!(resolve("").is_err());
+    let selected = resolve(&token).expect("selection").expect("plan");
+    let mut changed: super::PlanChoiceToken = serde_json::from_str(&token).expect("token");
+    changed.content_hash = workflows::artefacts::ObjectHash::of(b"substitute").as_str();
+    assert!(resolve(&serde_json::to_string(&changed).expect("changed token")).is_err());
+    assert!(super::resolve_selected_plan(&state, &conversation, &token, &base).is_err());
+    let other = state
+        .conversations
+        .create("Other".to_owned())
+        .expect("conversation");
+    assert!(super::resolve_selected_plan(&state, &other, &token, &definition).is_err());
+
+    let corrected = state
+        .documents
+        .revise(
+            &plan.id,
+            1,
+            "Corrected plan".to_owned(),
+            "A different plan.".to_owned(),
+            None,
+        )
+        .expect("correction");
+    assert_eq!(
+        resolve(&token)
+            .expect("old selection")
+            .expect("plan")
+            .content,
+        selected.content
+    );
+    let imported = workflows::artefacts::import_saved_plan(
+        workflows::RunId::generate().expect("run"),
+        workflows::now_ms(),
+        conversation.id,
+        plan.id,
+        &selected.reference,
+        &selected.content,
+        &state.workflow_artefacts,
+    )
+    .expect("import");
+    state
+        .documents
+        .disassociate(&plan.id, corrected.current().revision, conversation.id)
+        .expect("remove association");
+    assert!(resolve(&token).is_err());
+    let bytes = state
+        .workflow_artefacts
+        .get(&imported.object_hash)
+        .expect("run-owned plan");
+    assert_eq!(
+        workflows::artefacts::parse_typed_payload(imported.kind, &bytes).expect("payload"),
+        workflows::artefacts::TypedPayload::Plan(workflows::artefacts::payload::PlanArtefact {
+            format_version: 1,
+            markdown: selected.content,
+        }),
+    );
+}
+
 #[tokio::test]
 async fn launch_rejects_stale_definitions_without_reserving_the_conversation() {
     let state = connected_state();

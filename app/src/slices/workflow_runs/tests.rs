@@ -282,6 +282,7 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
             model: String::new(),
         }],
         environments: Vec::new(),
+        launch_inputs: Vec::new(),
         attempts: Vec::new(),
         artefacts: Vec::new(),
     };

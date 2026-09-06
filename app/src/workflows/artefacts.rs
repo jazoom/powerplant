@@ -24,8 +24,9 @@ pub(crate) use payload::{
 pub(crate) use store::{ArtefactStoreError, WorkflowArtefactRepository};
 
 use super::definition::ArtefactKind;
-use super::definition::{OutputKey, StepKey};
+use super::definition::{LaunchInputSource, OutputKey, StepKey};
 use super::id::{ArtefactId, AttemptId, GateId, RunId};
+use crate::conversations::{ConversationId, DocumentId, PlanRevisionReference};
 
 pub(crate) const MAXIMUM_ARTEFACTS: usize = 256;
 
@@ -61,6 +62,13 @@ pub(crate) enum ArtefactProducer {
         gate_id: GateId,
         step: StepKey,
         output: OutputKey,
+    },
+    LaunchInput {
+        source: LaunchInputSource,
+        conversation_id: ConversationId,
+        document_id: DocumentId,
+        revision: u32,
+        content_hash: ObjectHash,
     },
 }
 
@@ -102,6 +110,61 @@ pub(crate) enum ArtefactSummary {
         diff_base: CandidateHash,
         decision: crate::workflows::gates::HumanDecisionKind,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlanImportError {
+    Payload(payload::PayloadError),
+    Random,
+    Reference,
+}
+
+pub(crate) fn import_saved_plan(
+    run_id: RunId,
+    created_at_ms: u64,
+    conversation_id: ConversationId,
+    document_id: DocumentId,
+    revision: &PlanRevisionReference,
+    markdown: &str,
+    store: &WorkflowArtefactRepository,
+) -> Result<ArtefactRecord, PlanImportError> {
+    if revision.document_id != document_id
+        || revision.revision == 0
+        || revision.content_hash != ObjectHash::of(markdown.as_bytes())
+    {
+        return Err(PlanImportError::Reference);
+    }
+    let (bytes, object_hash, artefact_hash) =
+        payload::encode_plan(markdown, None).map_err(PlanImportError::Payload)?;
+    if object_hash != revision.object_hash || artefact_hash != revision.artefact_hash {
+        return Err(PlanImportError::Reference);
+    }
+    store
+        .publish(&bytes)
+        .map_err(|_| PlanImportError::Reference)?;
+    let id = ArtefactId::generate().map_err(|_| PlanImportError::Random)?;
+    Ok(ArtefactRecord {
+        id,
+        kind: ArtefactKind::Plan,
+        artefact_hash,
+        object_hash,
+        payload_bytes: bytes.len() as u64,
+        created_at_ms,
+        provenance: ArtefactProvenance {
+            run_id,
+            producer: ArtefactProducer::LaunchInput {
+                source: LaunchInputSource::SavedPlan,
+                conversation_id,
+                document_id,
+                revision: revision.revision,
+                content_hash: revision.content_hash,
+            },
+            inputs: Vec::new(),
+        },
+        summary: ArtefactSummary::Plan {
+            markdown_bytes: markdown.len() as u64,
+        },
+    })
 }
 
 impl ArtefactRecord {
@@ -168,6 +231,7 @@ impl ArtefactProducer {
             Self::RunSourceCapture => "Source capture",
             Self::StepAttempt { .. } => "Step attempt",
             Self::HumanGate { .. } => "Human gate",
+            Self::LaunchInput { source, .. } => source.label(),
         }
     }
 }

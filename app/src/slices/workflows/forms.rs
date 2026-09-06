@@ -143,6 +143,7 @@ pub(super) enum FormIntent {
     Save,
     AddRole,
     AddPhase(PhasePurpose),
+    AddSavedPlanImplementation,
     SetPhasePurpose { step: usize, purpose: PhasePurpose },
     RemoveRole(usize),
     MoveRoleUp(usize),
@@ -571,6 +572,17 @@ impl WorkflowFormState {
             FormIntent::MoveRoleUp(index) => move_item(&mut self.roles, index, true),
             FormIntent::MoveRoleDown(index) => move_item(&mut self.roles, index, false),
             FormIntent::AddPhase(purpose) => self.add_phase(purpose),
+            FormIntent::AddSavedPlanImplementation => {
+                self.add_phase(PhasePurpose::Implementation)?;
+                let step = self.steps.last_mut().ok_or(FormError::Index)?;
+                step.name = "Implement a saved plan".to_owned();
+                step.inputs.retain(|input| input.kind != "plan");
+                step.inputs = preserve_inputs(
+                    &step.inputs,
+                    &[(ArtefactKind::Plan, "launch-input:saved-plan".to_owned())],
+                );
+                Ok(())
+            }
             FormIntent::AddStep => self.add_phase(PhasePurpose::Implementation),
             FormIntent::SetPhasePurpose { step, purpose } => {
                 if step >= self.steps.len() {
@@ -1077,6 +1089,7 @@ fn parse_intent(raw: &str) -> Result<FormIntent, FormError> {
         "save" => Ok(FormIntent::Save),
         "add-role" => Ok(FormIntent::AddRole),
         "add-step" => Ok(FormIntent::AddStep),
+        "add-phase:saved-plan-implementation" => Ok(FormIntent::AddSavedPlanImplementation),
         value if value.starts_with("add-phase:") => {
             let purpose = value
                 .strip_prefix("add-phase:")
@@ -1871,6 +1884,9 @@ fn default_input_key(kind: ArtefactKind, occurrence: usize) -> String {
 }
 
 pub(super) fn source_is_valid(raw: &str, kind: ArtefactKind, earlier: &[StepDraft]) -> bool {
+    if raw == "launch-input:saved-plan" {
+        return kind == ArtefactKind::Plan;
+    }
     if raw == "run-current-candidate" {
         return kind == ArtefactKind::CandidateRevision;
     }
@@ -2086,6 +2102,7 @@ fn source_token(source: &ArtefactSource) -> String {
     match source {
         ArtefactSource::RunInitialCandidate => "run-initial-candidate".to_owned(),
         ArtefactSource::RunCurrentCandidate => "run-current-candidate".to_owned(),
+        ArtefactSource::LaunchInput { source } => format!("launch-input:{}", source.as_str()),
         ArtefactSource::StepOutput { step, output } => {
             format!("step-output:{}:{}", step.as_str(), output.as_str())
         }
@@ -2100,6 +2117,12 @@ fn parse_source(
     }
     if raw == "run-current-candidate" {
         return Ok(ArtefactSource::RunCurrentCandidate);
+    }
+    if let Some(source) = raw.strip_prefix("launch-input:") {
+        return Ok(ArtefactSource::LaunchInput {
+            source: crate::workflows::definition::LaunchInputSource::parse(source)
+                .ok_or(crate::workflows::definition::DefinitionError::Format)?,
+        });
     }
     let Some(rest) = raw.strip_prefix("step-output:") else {
         return Err(crate::workflows::definition::DefinitionError::Format);
@@ -2488,7 +2511,8 @@ fn relate_definition_error(
         | DefinitionError::SelfInput
         | DefinitionError::UnknownOutput
         | DefinitionError::InputKind
-        | DefinitionError::AssistantInput => {
+        | DefinitionError::AssistantInput
+        | DefinitionError::LaunchInput => {
             for (index, step) in state.steps.iter().enumerate() {
                 for (input_index, input) in step.inputs.iter().enumerate() {
                     if !ArtefactKind::parse(&input.kind).is_some_and(|kind| {

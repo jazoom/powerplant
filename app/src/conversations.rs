@@ -9,7 +9,8 @@ pub(crate) use access::{
     apply_preset_ceiling, intersect_network, resolve_workflow_authority, secondary_alias,
 };
 pub(crate) use documents::{
-    DocumentError, DocumentId, PlanDocument, PlanDocumentStore, PlanRevisionReference, PlanSource,
+    DocumentError, DocumentId, PlanDocument, PlanDocumentStore, PlanRevision,
+    PlanRevisionReference, PlanSource,
 };
 pub(crate) use id::ConversationId;
 pub(crate) use store::{
