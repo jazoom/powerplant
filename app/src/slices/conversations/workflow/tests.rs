@@ -58,6 +58,16 @@ fn saved_plan_selection_rejects_substitution_and_removal_but_pins_old_revisions(
     let token = super::plan_choice_token(&plan.id, plan.current());
     let resolve = |raw: &str| super::resolve_selected_plan(&state, &conversation, raw, &definition);
     assert!(resolve("").is_err());
+    let tasks = state
+        .documents
+        .create_task_list_from_text(
+            conversation.id,
+            "Tasks".to_owned(),
+            "# Tasks\n- [ ] Implement\n".to_owned(),
+            None,
+        )
+        .expect("tasks");
+    assert!(resolve(&super::plan_choice_token(&tasks.id, tasks.current())).is_err());
     let selected = resolve(&token).expect("selection").expect("plan");
     let mut changed: super::PlanChoiceToken = serde_json::from_str(&token).expect("token");
     changed.content_hash = workflows::artefacts::ObjectHash::of(b"substitute").as_str();

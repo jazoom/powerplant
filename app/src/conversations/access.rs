@@ -113,7 +113,6 @@ fn narrower_domain(left: &str, right: &str) -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn resolve_authority(
     record: &crate::conversations::ConversationRecord,
     projects: &ProjectStore,

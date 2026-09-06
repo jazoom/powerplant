@@ -1084,6 +1084,7 @@ fn selected_plan_options(
         .documents
         .list_for_conversation(record.id)
         .into_iter()
+        .filter(|document| document.kind == crate::conversations::DocumentKind::Plan)
         .map(|document| {
             let revision = document
                 .revisions
@@ -1165,6 +1166,9 @@ fn resolve_selected_plan(
         .ok_or("That saved plan is no longer available.")?;
     if document.associated_conversation != Some(record.id) {
         return Err("That saved plan is not associated with this conversation.");
+    }
+    if document.kind != crate::conversations::DocumentKind::Plan {
+        return Err("Select a plan document, not a task list.");
     }
     let revision = document
         .revision(token.revision)

@@ -82,6 +82,12 @@ A changed Quick task waits at a human gate. The user must approve the exact cand
 
 Configured workflows start from Run workflow beside the conversation title. The launch sheet shows its brief, target, access, environment readiness and fresh-context boundary.
 
+Conversation documents include immutable task lists. Create tasks from this plan sends the selected plan to the conversation model without guest tools. Preparation never executes tasks.
+
+A completed model response or submitted text can become a task list after validation. An explicit import reads one authorised project file through a read-only guest.
+
+Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Pi export use the saved revision.
+
 A workflow can declare a saved plan input. The authoring form offers Implementation from a saved plan without manual input keys or a task list.
 
 The launch sheet selects an immutable plan revision from the conversation. The run retains its own copy and the source reference. Only phases that declare that input receive the plan. Later corrections or association removal cannot change the run copy. The run inspector exposes that copy.

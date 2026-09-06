@@ -74,6 +74,22 @@ impl std::fmt::Display for DocumentIdError {
 
 impl std::error::Error for DocumentIdError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DocumentKind {
+    Plan,
+    TaskList,
+}
+
+impl DocumentKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::TaskList => "task list",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanRevisionReference {
     pub(crate) document_id: DocumentId,
@@ -92,6 +108,12 @@ pub(crate) enum PlanSource {
     },
     SubmittedText {
         conversation_id: ConversationId,
+        source_hash: ObjectHash,
+    },
+    ProjectFile {
+        conversation_id: ConversationId,
+        project_id: crate::projects::ProjectId,
+        path: String,
         source_hash: ObjectHash,
     },
     Correction {
@@ -113,6 +135,7 @@ pub(crate) struct PlanRevision {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanDocument {
     pub(crate) id: DocumentId,
+    pub(crate) kind: DocumentKind,
     pub(crate) title: String,
     pub(crate) associated_conversation: Option<ConversationId>,
     pub(crate) revisions: Vec<PlanRevision>,
@@ -149,6 +172,7 @@ pub(crate) enum DocumentError {
     Full,
     Title,
     Content,
+    TaskList,
     Credential,
     Source,
     Active,
@@ -168,6 +192,9 @@ impl DocumentError {
             }
             Self::Title => "Enter a plan title of 1 to 120 bytes without control characters.",
             Self::Content => "Enter plan text with content within the plan limit.",
+            Self::TaskList => {
+                "Use a heading and at most 256 top-level checkbox tasks within 64 KiB. Put literal checkbox examples inside code fences."
+            }
             Self::Credential => "Do not save provider credentials in a plan.",
             Self::Source => "Select a completed assistant message as the plan source.",
             Self::Active => "This conversation has an active request. Wait for it to finish.",
@@ -200,6 +227,7 @@ struct CatalogueFile {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct DocumentFile {
     id: String,
+    kind: DocumentKind,
     title: String,
     #[serde(deserialize_with = "crate::storage::required_option")]
     associated_conversation: Option<String>,
@@ -230,6 +258,12 @@ enum SourceFile {
     },
     SubmittedText {
         conversation_id: String,
+        source_hash: String,
+    },
+    ProjectFile {
+        conversation_id: String,
+        project_id: String,
+        path: String,
         source_hash: String,
     },
     Correction {
@@ -287,7 +321,11 @@ impl PlanDocumentStore {
         revision: u32,
     ) -> Result<String, DocumentError> {
         let revision = document.revision(revision).ok_or(DocumentError::Missing)?;
-        read_revision(&self.content, revision)
+        let text = read_revision(&self.content, revision)?;
+        if document.kind == DocumentKind::TaskList {
+            crate::workflows::task_list::parse(&text).map_err(|_| DocumentError::Corrupt)?;
+        }
+        Ok(text)
     }
 
     pub(crate) fn create_from_message(
@@ -311,7 +349,59 @@ impl PlanDocumentStore {
             message_index: u32::try_from(message_index).map_err(|_| DocumentError::Source)?,
             source_hash: ObjectHash::of(message.text.as_bytes()),
         };
-        self.create(conversation.id, title, &message.text, source, secret)
+        self.create(
+            DocumentKind::Plan,
+            conversation.id,
+            title,
+            &message.text,
+            source,
+            secret,
+        )
+    }
+
+    pub(crate) fn create_task_list_from_message(
+        &self,
+        conversation: &ConversationRecord,
+        message_index: usize,
+        title: String,
+        secret: Option<&str>,
+    ) -> Result<PlanDocument, DocumentError> {
+        let Some(message) = conversation.messages.get(message_index) else {
+            return Err(DocumentError::Source);
+        };
+        if message.role != MessageRole::Assistant || message.status != MessageStatus::Complete {
+            return Err(DocumentError::Source);
+        }
+        self.create_task_list(
+            conversation.id,
+            title,
+            &message.text,
+            PlanSource::ConversationMessage {
+                conversation_id: conversation.id,
+                message_index: u32::try_from(message_index).map_err(|_| DocumentError::Source)?,
+                source_hash: ObjectHash::of(message.text.as_bytes()),
+            },
+            secret,
+        )
+    }
+
+    pub(crate) fn create_task_list_from_text(
+        &self,
+        conversation_id: ConversationId,
+        title: String,
+        markdown: String,
+        secret: Option<&str>,
+    ) -> Result<PlanDocument, DocumentError> {
+        self.create_task_list(
+            conversation_id,
+            title,
+            &markdown,
+            PlanSource::SubmittedText {
+                conversation_id,
+                source_hash: ObjectHash::of(markdown.as_bytes()),
+            },
+            secret,
+        )
     }
 
     pub(crate) fn create_from_text(
@@ -325,7 +415,32 @@ impl PlanDocumentStore {
             conversation_id,
             source_hash: ObjectHash::of(markdown.as_bytes()),
         };
-        self.create(conversation_id, title, &markdown, source, secret)
+        self.create(
+            DocumentKind::Plan,
+            conversation_id,
+            title,
+            &markdown,
+            source,
+            secret,
+        )
+    }
+
+    pub(crate) fn create_task_list(
+        &self,
+        conversation_id: ConversationId,
+        title: String,
+        markdown: &str,
+        source: PlanSource,
+        secret: Option<&str>,
+    ) -> Result<PlanDocument, DocumentError> {
+        self.create(
+            DocumentKind::TaskList,
+            conversation_id,
+            title,
+            markdown,
+            source,
+            secret,
+        )
     }
 
     pub(crate) fn revise(
@@ -338,11 +453,14 @@ impl PlanDocumentStore {
     ) -> Result<PlanDocument, DocumentError> {
         let title = normalise_title(&title)?;
         encode_document(&title, secret)?;
-        let encoded = encode_document(&markdown, secret)?;
         let mut documents = self.lock();
         let current = documents.get(id).cloned().ok_or(DocumentError::Missing)?;
+        let encoded = encode_document_kind(&markdown, secret, current.kind)?;
         if current.current_revision() != expected_revision {
             return Err(DocumentError::Conflict);
+        }
+        if current.kind == DocumentKind::TaskList {
+            crate::workflows::task_list::parse(&markdown).map_err(|_| DocumentError::TaskList)?;
         }
         if current.revisions.len() >= MAXIMUM_DOCUMENT_REVISIONS {
             return Err(DocumentError::Full);
@@ -435,6 +553,7 @@ impl PlanDocumentStore {
 
     fn create(
         &self,
+        kind: DocumentKind,
         conversation_id: ConversationId,
         title: String,
         markdown: &str,
@@ -443,7 +562,10 @@ impl PlanDocumentStore {
     ) -> Result<PlanDocument, DocumentError> {
         let title = normalise_title(&title)?;
         encode_document(&title, secret)?;
-        let encoded = encode_document(markdown, secret)?;
+        let encoded = encode_document_kind(markdown, secret, kind)?;
+        if kind == DocumentKind::TaskList {
+            crate::workflows::task_list::parse(markdown).map_err(|_| DocumentError::TaskList)?;
+        }
         let mut documents = self.lock();
         if documents.len() >= MAXIMUM_DOCUMENTS {
             return Err(DocumentError::Full);
@@ -461,6 +583,7 @@ impl PlanDocumentStore {
         let now = now_ms();
         let document = PlanDocument {
             id,
+            kind,
             title,
             associated_conversation: Some(conversation_id),
             revisions: vec![PlanRevision {
@@ -499,26 +622,35 @@ struct EncodedDocument {
 }
 
 fn encode_document(markdown: &str, secret: Option<&str>) -> Result<EncodedDocument, DocumentError> {
+    encode_document_kind(markdown, secret, DocumentKind::Plan)
+}
+
+fn encode_document_kind(
+    markdown: &str,
+    secret: Option<&str>,
+    kind: DocumentKind,
+) -> Result<EncodedDocument, DocumentError> {
     if markdown.len() > MAXIMUM_DOCUMENT_CONTENT_BYTES {
         return Err(DocumentError::Full);
     }
     if markdown.trim().is_empty() {
         return Err(DocumentError::Content);
     }
-    let (bytes, object_hash, artefact_hash) =
-        encode_plan(markdown, secret).map_err(|error| match error {
-            crate::workflows::artefacts::payload::PayloadError::Credential => {
-                DocumentError::Credential
-            }
-            crate::workflows::artefacts::payload::PayloadError::Bound => DocumentError::Full,
-            crate::workflows::artefacts::payload::PayloadError::Text
-            | crate::workflows::artefacts::payload::PayloadError::Format => DocumentError::Content,
-            crate::workflows::artefacts::payload::PayloadError::Encoding
-            | crate::workflows::artefacts::payload::PayloadError::DuplicateField
-            | crate::workflows::artefacts::payload::PayloadError::Candidate => {
-                DocumentError::Content
-            }
-        })?;
+    let encoding = match kind {
+        DocumentKind::Plan => encode_plan(markdown, secret),
+        DocumentKind::TaskList => {
+            crate::workflows::artefacts::payload::encode_plan_verbatim(markdown, secret)
+        }
+    };
+    let (bytes, object_hash, artefact_hash) = encoding.map_err(|error| match error {
+        crate::workflows::artefacts::payload::PayloadError::Credential => DocumentError::Credential,
+        crate::workflows::artefacts::payload::PayloadError::Bound => DocumentError::Full,
+        crate::workflows::artefacts::payload::PayloadError::Text
+        | crate::workflows::artefacts::payload::PayloadError::Format => DocumentError::Content,
+        crate::workflows::artefacts::payload::PayloadError::Encoding
+        | crate::workflows::artefacts::payload::PayloadError::DuplicateField
+        | crate::workflows::artefacts::payload::PayloadError::Candidate => DocumentError::Content,
+    })?;
     let TypedPayload::Plan(plan) =
         parse_typed_payload(ArtefactKind::Plan, &bytes).map_err(|_| DocumentError::Content)?
     else {
@@ -588,7 +720,10 @@ fn load_path(
             {
                 return Err(DocumentError::Corrupt);
             }
-            read_revision(content, revision)?;
+            let text = read_revision(content, revision)?;
+            if parsed.kind == DocumentKind::TaskList {
+                crate::workflows::task_list::parse(&text).map_err(|_| DocumentError::Corrupt)?;
+            }
             total = total
                 .checked_add(revision.content_bytes)
                 .filter(|bytes| *bytes <= MAXIMUM_DOCUMENT_BYTES as u64)
@@ -644,6 +779,7 @@ fn document_from_file(file: DocumentFile) -> Result<PlanDocument, DocumentError>
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PlanDocument {
         id,
+        kind: file.kind,
         title,
         associated_conversation,
         revisions,
@@ -684,6 +820,24 @@ fn source_from_file(file: SourceFile) -> Result<PlanSource, DocumentError> {
                 .ok_or(DocumentError::Corrupt)?,
             source_hash: ObjectHash::parse(&source_hash).ok_or(DocumentError::Corrupt)?,
         }),
+        SourceFile::ProjectFile {
+            conversation_id,
+            project_id,
+            path,
+            source_hash,
+        } => {
+            if !crate::workflows::task_list::valid_project_path(&path) {
+                return Err(DocumentError::Corrupt);
+            }
+            Ok(PlanSource::ProjectFile {
+                conversation_id: ConversationId::parse(&conversation_id)
+                    .ok_or(DocumentError::Corrupt)?,
+                project_id: crate::projects::ProjectId::parse(&project_id)
+                    .ok_or(DocumentError::Corrupt)?,
+                path,
+                source_hash: ObjectHash::parse(&source_hash).ok_or(DocumentError::Corrupt)?,
+            })
+        }
         SourceFile::Correction { previous } => Ok(PlanSource::Correction {
             previous: reference_from_file(previous)?,
         }),
@@ -723,6 +877,7 @@ fn persist(
 fn document_to_file(document: &PlanDocument) -> DocumentFile {
     DocumentFile {
         id: document.id.as_hex(),
+        kind: document.kind,
         title: document.title.clone(),
         associated_conversation: document.associated_conversation.map(|id| id.as_hex()),
         revisions: document.revisions.iter().map(revision_to_file).collect(),
@@ -759,6 +914,17 @@ fn source_to_file(source: &PlanSource) -> SourceFile {
             source_hash,
         } => SourceFile::SubmittedText {
             conversation_id: conversation_id.as_hex(),
+            source_hash: source_hash.as_str(),
+        },
+        PlanSource::ProjectFile {
+            conversation_id,
+            project_id,
+            path,
+            source_hash,
+        } => SourceFile::ProjectFile {
+            conversation_id: conversation_id.as_hex(),
+            project_id: project_id.as_hex(),
+            path: path.clone(),
             source_hash: source_hash.as_str(),
         },
         PlanSource::Correction { previous } => SourceFile::Correction {

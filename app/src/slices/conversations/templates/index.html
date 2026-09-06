@@ -430,26 +430,31 @@
         >
           <div>
             <h2 id="conversation-plans-heading" class="text-lg font-semibold">
-              Saved plans
+              Saved plans and tasks
             </h2>
             <p class="text-quiet mt-1 max-w-[60ch] text-sm">
-              Plans are immutable local documents. A correction creates a new
-              revision, so earlier plan content remains available.
+              Documents are immutable local records. A correction creates a new
+              revision. Earlier content remains available.
+            </p>
+            <p class="text-quiet mt-2 max-w-[60ch] text-sm">
+              Task preparation uses {{ model_summary }} without guest tools. The
+              model replies in this conversation. Save as tasks validates its
+              output without execution.
             </p>
           </div>
           {% if plans.is_empty() %}
             <p class="text-quiet text-sm">
-              No plans are associated with this conversation.
+              No documents are associated with this conversation.
             </p>
           {% else %}
-            <ul class="record-list" aria-label="Saved plans">
+            <ul class="record-list" aria-label="Saved plans and tasks">
               {% for plan in plans %}
                 <li class="record-row flex-wrap gap-3">
                   <div class="min-w-0 flex-1">
                     <p class="font-medium break-words">{{ plan.title }}</p>
                     <p class="text-quiet mt-1 text-xs">
-                      Revision {{ plan.revision }} · {{ plan.provenance }} ·
-                      {{ plan.content_hash }}
+                      {{ plan.kind }} · Revision {{ plan.revision }} ·
+                      {{ plan.provenance }} · {{ plan.content_hash }}
                     </p>
                   </div>
                   <div class="flex flex-wrap gap-2">
@@ -457,13 +462,38 @@
                       href="{{ plan.open_href }}"
                       data-graft
                       class="btn btn-secondary btn-sm"
-                      >Open plan</a
+                      >{% if plan.task_list %}Open tasks{% else %}Open plan{% endif %}</a
                     >
                     <a
                       href="{{ plan.export_href }}"
                       class="btn btn-ghost btn-sm"
-                      >Export</a
+                      >{% if plan.task_list %}Export for Pi{% else %}Export{% endif %}</a
                     >
+                    {% if !plan.task_list %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="{{ plan.prepare_href }}"
+                      >
+                        <input
+                          type="hidden"
+                          name="revision"
+                          value="{{ revision }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="document_revision"
+                          value="{{ plan.revision }}"
+                        />
+                        <button
+                          class="btn btn-secondary btn-sm"
+                          type="submit"
+                          {% if job_active || session_busy %}disabled{% endif %}
+                        >
+                          Create tasks from this plan
+                        </button>
+                      </form>
+                    {% endif %}
                     {% if !plan.review_href.is_empty() %}
                       <a
                         href="{{ plan.review_href }}"
@@ -531,6 +561,97 @@
               </label>
               <button class="btn btn-secondary self-start" type="submit">
                 Save as plan
+              </button>
+            </form>
+          </div>
+          <div class="border-base-300 border-t pt-4">
+            <h3 class="text-sm font-semibold">Import tasks from a project</h3>
+            <p class="text-quiet mt-1 text-sm">
+              Import reads one explicitly authorised project file through a
+              read-only guest. It does not call a model or execute tasks.
+            </p>
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ id }}/tasks/import"
+              class="mt-3 flex max-w-3xl flex-col gap-3"
+            >
+              <input type="hidden" name="revision" value="{{ revision }}" />
+              <label class="flex flex-col gap-1"
+                ><span class="text-sm">Authorised project</span>
+                <select
+                  class="select select-bordered"
+                  name="project_id"
+                  required
+                >
+                  <option value="">Select a project</option>
+                  {% for project in attached_projects %}{% if project.access_granted %}
+                    <option value="{{ project.id }}">{{ project.name }}</option>
+                  {% endif %}{% endfor %}
+                </select>
+              </label>
+              <label class="flex flex-col gap-1"
+                ><span class="text-sm">Project-relative file path</span
+                ><input
+                  class="input input-bordered"
+                  name="path"
+                  required
+                  maxlength="4096"
+                  placeholder="tasks/release.md"
+              /></label>
+              <label class="flex flex-col gap-1"
+                ><span class="text-sm">Title</span
+                ><input
+                  class="input input-bordered"
+                  name="title"
+                  required
+                  maxlength="120"
+              /></label>
+              <button
+                class="btn btn-secondary self-start"
+                type="submit"
+                {% if job_active || session_busy %}disabled{% endif %}
+              >
+                Import tasks
+              </button>
+            </form>
+          </div>
+          <div class="border-base-300 border-t pt-4">
+            <h3 class="text-sm font-semibold">Save submitted task list</h3>
+            <p class="text-quiet mt-1 text-sm">
+              Use a heading and top-level checkbox tasks. Checked tasks stay as
+              authored. Power Plant only marks unchecked tasks as eligible.
+            </p>
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ id }}/tasks/text"
+              class="mt-3 flex max-w-3xl flex-col gap-3"
+            >
+              <input type="hidden" name="revision" value="{{ revision }}" />
+              <label class="flex flex-col gap-1" for="submitted-task-title"
+                ><span class="text-sm">Title</span
+                ><input
+                  id="submitted-task-title"
+                  class="input input-bordered"
+                  name="title"
+                  value="{{ task_title }}"
+                  required
+                  maxlength="120"
+              /></label>
+              <label class="flex flex-col gap-1" for="submitted-task-markdown"
+                ><span class="text-sm">Task list text</span
+                ><textarea
+                  id="submitted-task-markdown"
+                  class="textarea textarea-bordered min-h-40"
+                  name="markdown"
+                  required
+                  maxlength="65536"
+                >
+{{ task_text }}</textarea>
+              </label>
+              <button class="btn btn-secondary self-start" type="submit">
+                Save as tasks
               </button>
             </form>
           </div>

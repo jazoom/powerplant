@@ -140,6 +140,32 @@ fn invalid_message_sources_and_secret_text_are_rejected() {
 }
 
 #[test]
+fn task_lists_require_valid_model_or_submitted_output() {
+    let store = memory_store();
+    let conversation = conversation();
+    let document = store
+        .create_task_list_from_text(
+            conversation.id,
+            "Tasks".to_owned(),
+            "# Tasks\n\n- [x] Done\n- [ ] Next\n".to_owned(),
+            None,
+        )
+        .expect("task list");
+    assert_eq!(document.kind, DocumentKind::TaskList);
+    assert_eq!(
+        store
+            .create_task_list_from_text(
+                conversation.id,
+                "Invalid".to_owned(),
+                "# Missing tasks\n".to_owned(),
+                None,
+            )
+            .err(),
+        Some(DocumentError::TaskList)
+    );
+}
+
+#[test]
 fn document_count_is_bounded() {
     let store = memory_store();
     let conversation = conversation();
@@ -253,4 +279,43 @@ fn association_removal_keeps_document_content() {
         "# Plan\n"
     );
     assert!(store.list_for_conversation(conversation.id).is_empty());
+}
+
+#[test]
+fn task_corrections_reject_invalid_structure_without_replacing_the_original() {
+    let store = memory_store();
+    let record = conversation();
+    let source = "# Tasks\r\n\r\n- [x] Done\r\n- [ ] Pending\r\n";
+    let document = store
+        .create_task_list_from_text(record.id, "Tasks".to_owned(), source.to_owned(), None)
+        .expect("tasks");
+    assert_eq!(
+        store
+            .revise(
+                &document.id,
+                1,
+                "Broken".to_owned(),
+                "# No tasks".to_owned(),
+                None
+            )
+            .err(),
+        Some(DocumentError::TaskList)
+    );
+    assert_eq!(store.get(&document.id), Some(document.clone()));
+    let corrected = store
+        .revise(
+            &document.id,
+            1,
+            "Corrected".to_owned(),
+            "# Tasks\n- [ ] Revised\n".to_owned(),
+            None,
+        )
+        .expect("correction");
+    assert_eq!(store.content(&corrected, 1).expect("original"), source);
+    assert_eq!(
+        store
+            .create_task_list_from_message(&record, 0, "Not tasks".to_owned(), None)
+            .err(),
+        Some(DocumentError::TaskList)
+    );
 }

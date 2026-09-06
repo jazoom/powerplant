@@ -284,6 +284,8 @@ pub(super) struct MessageView {
     pub(super) status: &'static str,
     pub(super) streaming: bool,
     pub(super) saveable_plan: bool,
+    pub(super) task_title: String,
+    pub(super) task_action: String,
     pub(super) plan_title: String,
     pub(super) plan_action: String,
     pub(super) conversation_revision: String,
@@ -291,6 +293,9 @@ pub(super) struct MessageView {
 
 pub(super) struct PlanDocumentView {
     pub(super) title: String,
+    pub(super) kind: String,
+    pub(super) task_list: bool,
+    pub(super) prepare_href: String,
     pub(super) revision: u32,
     pub(super) provenance: String,
     pub(super) content_hash: String,
@@ -382,6 +387,8 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) network_domains: &'a str,
     pub(super) network_summary: &'a str,
     pub(super) plans: &'a [PlanDocumentView],
+    pub(super) task_text: &'a str,
+    pub(super) task_title: &'a str,
     pub(super) source_review: Option<&'a ConversationLinkView>,
     pub(super) linked_reviews: &'a [ConversationLinkView],
     pub(super) source_candidate_review: Option<&'a CandidateReviewLinkView>,
@@ -416,6 +423,8 @@ pub(super) struct ConversationDetailView {
     pub(super) network_domains: String,
     pub(super) network_summary: String,
     pub(super) plans: Vec<PlanDocumentView>,
+    pub(super) task_text: String,
+    pub(super) task_title: String,
     pub(super) source_review: Option<ConversationLinkView>,
     pub(super) linked_reviews: Vec<ConversationLinkView>,
     pub(super) source_candidate_review: Option<CandidateReviewLinkView>,
@@ -671,6 +680,8 @@ impl ConversationDetailView {
             network_domains,
             network_summary,
             plans,
+            task_text: String::new(),
+            task_title: String::new(),
             source_review,
             linked_reviews,
             source_candidate_review,
@@ -712,6 +723,8 @@ impl ConversationDetailView {
             network_domains: &self.network_domains,
             network_summary: &self.network_summary,
             plans: &self.plans,
+            task_text: &self.task_text,
+            task_title: &self.task_title,
             source_review: self.source_review.as_ref(),
             linked_reviews: &self.linked_reviews,
             source_candidate_review: self.source_candidate_review.as_ref(),
@@ -798,6 +811,7 @@ fn visible_messages(record: &ConversationRecord, byte_budget: usize) -> Vec<Mess
         let mut view = message_view(index, message);
         if view.saveable_plan {
             view.plan_action = format!("/conversations/{}/plans", record.id.as_hex());
+            view.task_action = format!("/conversations/{}/tasks", record.id.as_hex());
             view.conversation_revision = record.revision.to_string();
         }
         bytes += view.html.len() + 2048;
@@ -830,6 +844,8 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
         saveable_plan: !user
             && message.status == MessageStatus::Complete
             && !message.text.trim().is_empty(),
+        task_title: format!("Tasks from response {}", index + 1),
+        task_action: String::new(),
         plan_title: format!("Plan from response {}", index + 1),
         plan_action: String::new(),
         conversation_revision: String::new(),
@@ -840,6 +856,13 @@ fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
     let revision = document.current();
     PlanDocumentView {
         title: document.title.clone(),
+        prepare_href: document
+            .associated_conversation
+            .map_or_else(String::new, |id| {
+                format!("/conversations/{id}/plans/{}/tasks", document.id)
+            }),
+        kind: document.kind.label().to_owned(),
+        task_list: document.kind == crate::conversations::DocumentKind::TaskList,
         revision: revision.revision,
         provenance: source_label(&revision.source),
         content_hash: revision.content_hash.as_str(),
@@ -870,7 +893,10 @@ fn source_label(source: &PlanSource) -> String {
         PlanSource::ConversationMessage { message_index, .. } => {
             format!("Assistant message {}", message_index + 1)
         }
-        PlanSource::SubmittedText { .. } => "Submitted plan text".to_owned(),
+        PlanSource::SubmittedText { .. } => "Submitted document text".to_owned(),
+        PlanSource::ProjectFile {
+            project_id, path, ..
+        } => format!("Project {project_id}: {path}"),
         PlanSource::Correction { previous } => {
             format!("Correction of revision {}", previous.revision)
         }
@@ -900,6 +926,9 @@ pub(super) struct PlanDocumentPage {
     pub(super) revisions: Vec<PlanPageRevision>,
     pub(super) back_href: String,
     pub(super) associated: bool,
+    pub(super) task_count: usize,
+    pub(super) eligible_task_count: usize,
+    pub(super) tasks: Vec<crate::workflows::task_list::TaskItem>,
     pub(super) error: &'static str,
 }
 
@@ -917,6 +946,9 @@ pub(super) struct PlanDocumentContents<'a> {
     pub(super) revisions: &'a [PlanPageRevision],
     pub(super) back_href: &'a str,
     pub(super) associated: bool,
+    pub(super) task_count: usize,
+    pub(super) eligible_task_count: usize,
+    pub(super) tasks: &'a [crate::workflows::task_list::TaskItem],
     pub(super) error: &'static str,
 }
 
@@ -947,12 +979,23 @@ impl PlanDocumentPage {
             })
             .collect();
         let associated = document.associated_conversation.is_some();
+        let task_list = (document.kind == crate::conversations::DocumentKind::TaskList)
+            .then(|| crate::workflows::task_list::parse(&content).ok())
+            .flatten();
+        let task_count = task_list.as_ref().map_or(0, |list| list.tasks.len());
+        let eligible_task_count = task_list
+            .as_ref()
+            .map_or(0, |list| list.eligible_tasks().count());
         let back_href = document.associated_conversation.map_or_else(
             || "/conversations".to_owned(),
             |id| format!("/conversations/{id}"),
         );
         Self {
-            document_title: format!("{} | Plan | Power Plant", document.title),
+            document_title: format!(
+                "{} | {} | Power Plant",
+                document.title,
+                document.kind.label()
+            ),
             title: document.title.clone(),
             document_id: document.id.as_hex(),
             document_revision: selected.revision,
@@ -960,9 +1003,12 @@ impl PlanDocumentPage {
             provenance: source_label(&selected.source),
             content_hash: selected.content_hash.as_str(),
             content_html: {
-                let html = reply_html(&content);
+                let preview = task_list
+                    .as_ref()
+                    .map_or(content.as_str(), |list| list.preamble.as_str());
+                let html = reply_html(preview);
                 if html.len() > 400 * 1024 {
-                    plain_html(&content)
+                    plain_html(preview)
                 } else {
                     html
                 }
@@ -971,6 +1017,9 @@ impl PlanDocumentPage {
             revisions,
             back_href,
             associated,
+            task_count,
+            eligible_task_count,
+            tasks: task_list.map_or_else(Vec::new, |list| list.tasks),
             error,
         }
     }
@@ -988,6 +1037,9 @@ impl PlanDocumentPage {
             revisions: &self.revisions,
             back_href: &self.back_href,
             associated: self.associated,
+            task_count: self.task_count,
+            eligible_task_count: self.eligible_task_count,
+            tasks: &self.tasks,
             error: self.error,
         }
     }

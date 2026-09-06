@@ -36,4 +36,34 @@
     </label>
     <button class="btn btn-secondary btn-sm" type="submit">Save as plan</button>
   </form>
+  <form
+    data-graft
+    method="post"
+    action="{{ message.task_action }}"
+    class="mt-2 flex flex-wrap items-end gap-2"
+  >
+    <input
+      type="hidden"
+      name="revision"
+      value="{{ message.conversation_revision }}"
+    />
+    <input type="hidden" name="message_index" value="{{ message.index }}" />
+    <label
+      class="flex min-w-56 flex-1 flex-col gap-1"
+      for="task-title-{{ message.index }}"
+    >
+      <span class="sr-only">Task list title</span>
+      <input
+        id="task-title-{{ message.index }}"
+        class="input input-bordered input-sm"
+        name="title"
+        required
+        maxlength="120"
+        value="{{ message.task_title }}"
+      />
+    </label>
+    <button class="btn btn-secondary btn-sm" type="submit">
+      Save as tasks
+    </button>
+  </form>
 {% endif %}

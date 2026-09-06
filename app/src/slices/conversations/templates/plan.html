@@ -9,7 +9,7 @@
         <div class="page-intro">
           <div>
             <h1>{{ title }}</h1>
-            <p>Immutable plan document {{ document_id }}.</p>
+            <p>Immutable document {{ document_id }}.</p>
           </div>
           <a
             href="{{ back_href }}"
@@ -28,9 +28,16 @@
           aria-labelledby="plan-provenance-heading"
         >
           <h2 id="plan-provenance-heading" class="text-lg font-semibold">
-            Plan provenance
+            Document provenance
           </h2>
           <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+            {% if task_count > 0 %}
+              <dt class="text-quiet">Tasks</dt>
+              <dd>
+                {{ task_count }} total. {{ eligible_task_count }} unchecked and
+                eligible.
+              </dd>
+            {% endif %}
             <dt class="text-quiet">Revision</dt>
             <dd>
               {{ document_revision }}{% if document_revision == current_revision %}(current){% endif %}
@@ -42,7 +49,7 @@
           </dl>
           {% if !associated %}
             <p class="text-quiet text-sm">
-              This plan is no longer associated with a conversation.
+              This document is no longer associated with a conversation.
             </p>
           {% endif %}
         </section>
@@ -51,9 +58,32 @@
           aria-labelledby="plan-content-heading"
         >
           <h2 id="plan-content-heading" class="text-lg font-semibold">
-            Plan content
+            Document content
           </h2>
+          {% if task_count > 0 %}
+            <p class="text-quiet text-sm">
+              Unchecked tasks are eligible. Checked tasks remain context. No
+              tasks start from this page.
+            </p>
+          {% endif %}
           <div class="prose max-w-none">{{ content_html|safe }}</div>
+          {% if task_count > 0 %}
+            <ol class="record-list" aria-label="Task eligibility">
+              {% for task in tasks %}
+                <li class="space-y-2 border-t py-4">
+                  <p class="text-sm font-semibold">
+                    Task {{ task.index + 1 }} ·
+                    {% if task.checked %}Checked · Context only{% else %}Unchecked
+                    · Eligible{% endif %}
+                  </p>
+                  <pre
+                    class="overflow-x-auto text-sm break-words whitespace-pre-wrap"
+                  >
+{{ task.markdown }}</pre>
+                </li>
+              {% endfor %}
+            </ol>
+          {% endif %}
         </section>
         <section
           class="file-section space-y-3"
@@ -62,7 +92,7 @@
           <h2 id="plan-revisions-heading" class="text-lg font-semibold">
             Revisions
           </h2>
-          <ul class="record-list" aria-label="Plan revisions">
+          <ul class="record-list" aria-label="Document revisions">
             {% for revision in revisions %}
               <li class="record-row flex-wrap gap-3">
                 <div class="min-w-0 flex-1">
@@ -94,7 +124,7 @@
             aria-labelledby="plan-correction-heading"
           >
             <h2 id="plan-correction-heading" class="text-lg font-semibold">
-              Correct this plan
+              Correct this document
             </h2>
             <p class="text-quiet text-sm">
               Save a correction as a new revision. Earlier revisions remain
@@ -123,7 +153,7 @@
                 />
               </label>
               <label class="flex flex-col gap-1" for="plan-correction-markdown">
-                <span class="text-sm">Plan text</span>
+                <span class="text-sm">Document text</span>
                 <textarea
                   id="plan-correction-markdown"
                   class="textarea textarea-bordered min-h-48"
@@ -143,7 +173,7 @@
           <a
             href="/plans/{{ document_id }}/export?revision={{ document_revision }}"
             class="btn btn-secondary"
-            >Export this revision</a
+            >{% if task_count > 0 %}Export for Pi{% else %}Export this revision{% endif %}</a
           >
           <a href="{{ back_href }}" data-graft class="btn btn-ghost">Back</a>
         </div>

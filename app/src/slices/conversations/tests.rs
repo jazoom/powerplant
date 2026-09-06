@@ -1756,6 +1756,127 @@ async fn plan_review_copies_only_confirmed_projects_as_read_only() {
 }
 
 #[tokio::test]
+async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
+    let mut state = test_state();
+    let backend = crate::providers::tests::ScriptedBackend::accept();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend.clone()));
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Tasks".to_owned())
+        .expect("conversation");
+    let selection = ModelSelection::new(
+        ProviderKind::Xai,
+        "grok-4.6".to_owned(),
+        state
+            .models_dev
+            .effective_effort(ProviderKind::Xai, "grok-4.6", None),
+    )
+    .expect("model");
+    let record = state
+        .conversations
+        .select_model(&record.id, record.revision, selection)
+        .expect("selection");
+    let project = register_project(&state, "Writable project");
+    let record = state
+        .conversations
+        .attach_project(&record.id, record.revision, project.id)
+        .expect("attach");
+    let record = state
+        .conversations
+        .grant_access(
+            &record.id,
+            record.revision,
+            project.id,
+            project.revision,
+            crate::agents::AccessMode::ReadWrite,
+        )
+        .expect("grant");
+    let plan = state
+        .documents
+        .create_from_text(
+            record.id,
+            "Selected plan".to_owned(),
+            "# Exact plan\nPreserve this requirement.".to_owned(),
+            None,
+        )
+        .expect("plan");
+    let path = format!("/conversations/{}/plans/{}/tasks", record.id, plan.id);
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&document_revision=2", record.revision),
+        ))
+        .await
+        .expect("stale preparation");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        state
+            .conversations
+            .get(&record.id)
+            .expect("conversation")
+            .messages
+            .is_empty()
+    );
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&document_revision=1", record.revision),
+        ))
+        .await
+        .expect("prepare");
+    assert_eq!(response.status(), StatusCode::OK);
+    for _ in 0..100 {
+        if state
+            .conversations
+            .get(&record.id)
+            .expect("conversation")
+            .active_job
+            .is_none()
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let history = backend.last_history();
+    assert!(history.iter().any(|turn| {
+        turn.text
+            .contains("# Exact plan\nPreserve this requirement.")
+            && turn.text.contains(&plan.current().content_hash.as_str())
+    }));
+    assert!(backend.last_tools().is_empty());
+    assert_eq!(state.documents.list_for_conversation(record.id).len(), 1);
+}
+
+#[tokio::test]
+async fn task_import_rejects_ungranted_project_and_releases_its_reservation() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Tasks".to_owned())
+        .expect("conversation");
+    let project = register_project(&state, "Not authorised");
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/tasks/import", record.id),
+            &token,
+            &format!(
+                "revision={}&project_id={}&path=tasks.md&title=Tasks",
+                record.revision, project.id
+            ),
+        ))
+        .await
+        .expect("import");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(response).await.contains("Grant read access"));
+    assert!(state.documents.list_for_conversation(record.id).is_empty());
+    assert!(!state.sessions.conversation_reserved(record.id));
+}
+
+#[tokio::test]
 async fn plan_review_rejects_an_oversized_task_brief_without_creating_a_link() {
     let mut state = test_state();
     state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(

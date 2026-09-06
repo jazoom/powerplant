@@ -102,6 +102,25 @@ pub(crate) fn encode_plan(
     encode(ArtefactKind::Plan, PLAN_SCHEMA, &payload)
 }
 
+// Task documents retain authored bytes, including line endings, for immutable source references.
+pub(crate) fn encode_plan_verbatim(
+    markdown: &str,
+    secret: Option<&str>,
+) -> Result<(Vec<u8>, ObjectHash, ArtefactHash), PayloadError> {
+    let _ = normalise_text(markdown, MAXIMUM_PLAN_BYTES, secret)?;
+    if markdown.len() > MAXIMUM_PLAN_BYTES {
+        return Err(PayloadError::Bound);
+    }
+    encode(
+        ArtefactKind::Plan,
+        PLAN_SCHEMA,
+        &PlanArtefact {
+            format_version: PLAN_SCHEMA,
+            markdown: markdown.to_owned(),
+        },
+    )
+}
+
 pub(crate) fn encode_review(
     candidate: CandidateHash,
     verdict: ReviewVerdict,
@@ -352,42 +371,77 @@ fn object_keys(raw: &str) -> Result<Vec<String>, PayloadError> {
     };
     let mut keys = Vec::new();
     let mut chars = body.char_indices().peekable();
-    while let Some((_, character)) = chars.next() {
-        if character == '"' {
-            let mut key = String::new();
-            loop {
-                let Some((_, next)) = chars.next() else {
-                    return Err(PayloadError::Encoding);
-                };
-                if next == '"' {
-                    break;
-                }
-                if next == '\\' {
+    loop {
+        while chars
+            .peek()
+            .is_some_and(|(_, character)| character.is_whitespace() || *character == ',')
+        {
+            chars.next();
+        }
+        let Some((_, '"')) = chars.next() else {
+            return if chars.peek().is_none() {
+                Ok(keys)
+            } else {
+                Err(PayloadError::Encoding)
+            };
+        };
+        let mut key = String::new();
+        loop {
+            let Some((_, character)) = chars.next() else {
+                return Err(PayloadError::Encoding);
+            };
+            match character {
+                '"' => break,
+                '\\' => {
                     let Some((_, escaped)) = chars.next() else {
                         return Err(PayloadError::Encoding);
                     };
                     key.push(escaped);
-                } else {
-                    key.push(next);
                 }
-            }
-            keys.push(key);
-            while let Some((_, next)) = chars.peek().copied() {
-                if next == ',' || next == '{' || next == '[' {
-                    chars.next();
-                    if next != ',' {
-                        skip_value(&mut chars)?;
-                    }
-                    break;
-                }
-                chars.next();
-                if next == '{' || next == '[' {
-                    skip_value(&mut chars)?;
-                }
+                character => key.push(character),
             }
         }
+        keys.push(key);
+        while chars
+            .peek()
+            .is_some_and(|(_, character)| character.is_whitespace())
+        {
+            chars.next();
+        }
+        if chars.next().is_none_or(|(_, character)| character != ':') {
+            return Err(PayloadError::Encoding);
+        }
+        while chars
+            .peek()
+            .is_some_and(|(_, character)| character.is_whitespace())
+        {
+            chars.next();
+        }
+        match chars.next() {
+            Some((_, '"')) => {
+                let mut escaped = false;
+                loop {
+                    let Some((_, character)) = chars.next() else {
+                        return Err(PayloadError::Encoding);
+                    };
+                    if !escaped && character == '"' {
+                        break;
+                    }
+                    escaped = !escaped && character == '\\';
+                    if character != '\\' {
+                        escaped = false;
+                    }
+                }
+            }
+            Some((_, '{' | '[')) => skip_value(&mut chars)?,
+            Some(_) => {
+                while chars.peek().is_some_and(|(_, character)| *character != ',') {
+                    chars.next();
+                }
+            }
+            None => return Err(PayloadError::Encoding),
+        }
     }
-    Ok(keys)
 }
 
 fn skip_value(

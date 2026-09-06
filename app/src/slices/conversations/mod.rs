@@ -1,5 +1,6 @@
 mod job;
 mod page;
+mod task_import;
 mod workflow;
 
 #[cfg(test)]
@@ -54,6 +55,22 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/plans/text",
             post(save_plan_text),
+        )
+        .route(
+            "/conversations/{conversation_id}/tasks",
+            post(save_task_list_message),
+        )
+        .route(
+            "/conversations/{conversation_id}/plans/{document_id}/tasks",
+            post(prepare_tasks),
+        )
+        .route(
+            "/conversations/{conversation_id}/tasks/import",
+            post(task_import::import),
+        )
+        .route(
+            "/conversations/{conversation_id}/tasks/text",
+            post(save_task_list_text),
         )
         .route(
             "/conversations/{conversation_id}/plans/{document_id}/remove",
@@ -159,6 +176,13 @@ struct PlanTextForm {
 
 #[derive(Deserialize)]
 struct PlanRevisionForm {
+    revision: String,
+    title: String,
+    markdown: String,
+}
+
+#[derive(Deserialize)]
+struct TaskListTextForm {
     revision: String,
     title: String,
     markdown: String,
@@ -1255,6 +1279,197 @@ async fn save_plan_text(
     }
 }
 
+async fn prepare_tasks(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path((conversation_id, document_id)): Path<(String, String)>,
+    Form(form): Form<PlanAssociationForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let document = DocumentId::parse(&document_id).and_then(|id| state.documents.get(&id));
+    let Some(document) = document.filter(|document| {
+        document.associated_conversation == Some(record.id)
+            && document.kind == crate::conversations::DocumentKind::Plan
+            && parse_revision(&form.document_revision) == Some(document.current_revision())
+    }) else {
+        return render_detail_document_error(
+            &state,
+            session.0,
+            graft,
+            &record,
+            DocumentError::Conflict,
+        );
+    };
+    if parse_revision(&form.revision) != Some(record.revision) {
+        return render_detail_document_error(
+            &state,
+            session.0,
+            graft,
+            &record,
+            DocumentError::Conflict,
+        );
+    }
+    let content = state
+        .documents
+        .content(&document, document.current_revision())
+        .map_err(|error| AppError::new("read task preparation plan", error))?;
+    let prompt = format!(
+        "Prepare a task list from the following selected plan. Return only Markdown, without an outer code fence. Use a level-one heading, shared context preamble, and ordered top-level '- [ ] Task' entries with indented details. Put literal checkbox examples inside code fences. Preserve the plan requirements. Do not execute tasks or modify project files.\n\nSelected plan: {}\nRevision: {}\nContent hash: {}\n\n{}",
+        document.title,
+        document.current_revision(),
+        document.current().content_hash.as_str(),
+        content
+    );
+    send_preparation(state, session, graft, record, prompt).await
+}
+
+async fn send_preparation(
+    state: AppState,
+    session: RequiredSession,
+    graft: PatchGraft,
+    record: ConversationRecord,
+    prompt: String,
+) -> AppResult<Response> {
+    let Some(model) = effective_model(&state, &record) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                ConversationError::Selection.message(),
+            ),
+        );
+    };
+    // Preparation uses the model without guest tools, even when this conversation has write authority.
+    let mut dispatch = record.clone();
+    dispatch.execution_target = None;
+    match start_message(&state, session.0, dispatch, record.revision, model, prompt).await {
+        Ok(started) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &started, &started.title, ""),
+        ),
+        Err(StartMessageError::Internal(error)) => Err(error),
+        Err(StartMessageError::User(status, error)) => {
+            let current = state.conversations.get(&record.id).unwrap_or(record);
+            render_detail_command(
+                graft,
+                status,
+                detail_view(&state, session.0, &current, &current.title, error),
+            )
+        }
+    }
+}
+
+async fn save_task_list_message(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<PlanMessageForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    if revision != record.revision {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    }
+    let Some(message_index) = form.message_index.parse::<usize>().ok() else {
+        return render_detail_document_error(
+            &state,
+            _session.0,
+            graft,
+            &record,
+            DocumentError::Source,
+        );
+    };
+    let source_text = record
+        .messages
+        .get(message_index)
+        .map_or("", |message| message.text.as_str());
+    let secret = plan_secret(&state, &[&form.title, source_text]);
+    match state.documents.create_task_list_from_message(
+        &record,
+        message_index,
+        form.title,
+        secret.as_deref(),
+    ) {
+        Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
+        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
+            Err(AppError::new("store task list", error))
+        }
+        Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
+    }
+}
+
+async fn save_task_list_text(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<TaskListTextForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    if revision != record.revision {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    }
+    let secret = plan_secret(&state, &[&form.title, &form.markdown]);
+    match state.documents.create_task_list_from_text(
+        record.id,
+        form.title.clone(),
+        form.markdown.clone(),
+        secret.as_deref(),
+    ) {
+        Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
+        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
+            Err(AppError::new("store task list", error))
+        }
+        Err(DocumentError::TaskList) => {
+            let mut view = detail_view(
+                &state,
+                _session.0,
+                &record,
+                &record.title,
+                DocumentError::TaskList.message(),
+            );
+            view.task_title = form.title;
+            view.task_text = form.markdown;
+            render_detail_command(graft, PatchStatus::UnprocessableEntity, view)
+        }
+        Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
+    }
+}
+
 async fn open_plan(
     State(state): State<AppState>,
     _session: RequiredSession,
@@ -1435,6 +1650,23 @@ async fn revise_plan(
         ))),
         Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
             Err(AppError::new("store plan revision", error))
+        }
+        Err(DocumentError::TaskList) => {
+            let content = state
+                .documents
+                .content(&document, document.current_revision())
+                .map_err(|error| AppError::new("read task list revision", error))?;
+            let mut view = PlanDocumentPage::from_document(
+                &document,
+                document.current_revision(),
+                content,
+                DocumentError::TaskList.message(),
+            );
+            view.content = form.markdown;
+            Ok(hypergraft::PatchSet::new()
+                .title(&view.document_title)
+                .with_children("plan-detail", &view.contents())?
+                .respond(PatchStatus::UnprocessableEntity)?)
         }
         Err(error) => {
             let latest = state.documents.get(&document.id).unwrap_or(document);
@@ -2532,6 +2764,15 @@ async fn delete_conversation(
             detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
         );
     };
+    if state.sessions.conversation_reserved(record.id) {
+        return render_detail_document_error(
+            &state,
+            session.0,
+            graft,
+            &record,
+            DocumentError::Active,
+        );
+    }
     match state.conversations.delete(&record.id, revision) {
         Ok(()) | Err(ConversationError::Missing) => {
             state
@@ -3103,6 +3344,9 @@ fn plan_origin_matches(
             conversation_id, ..
         }
         | PlanSource::SubmittedText {
+            conversation_id, ..
+        }
+        | PlanSource::ProjectFile {
             conversation_id, ..
         } => *conversation_id == conversation,
         PlanSource::Correction { previous } => {
