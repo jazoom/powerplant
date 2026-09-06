@@ -7,7 +7,7 @@ use crate::{
     agents::{AgentRecord, NetworkAccess},
     conversations::{
         ConversationMessage, ConversationModelConfiguration, ConversationRecord,
-        MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus,
+        MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus, PlanDocument, PlanSource,
     },
     models::models_dev::ModelsDevCatalogue,
     projects::{ProjectId, ProjectRecord},
@@ -142,12 +142,27 @@ pub(super) struct MessageView {
     pub(super) html: String,
     pub(super) status: &'static str,
     pub(super) streaming: bool,
+    pub(super) saveable_plan: bool,
+    pub(super) plan_title: String,
+    pub(super) plan_action: String,
+    pub(super) conversation_revision: String,
+}
+
+pub(super) struct PlanDocumentView {
+    pub(super) title: String,
+    pub(super) revision: u32,
+    pub(super) provenance: String,
+    pub(super) content_hash: String,
+    pub(super) open_href: String,
+    pub(super) export_href: String,
+    pub(super) remove_href: String,
 }
 
 pub(super) struct ModelSources<'a> {
     pub(super) vault: &'a ProviderVault,
     pub(super) models: &'a ModelsDevCatalogue,
     pub(super) projects: &'a [ProjectRecord],
+    pub(super) documents: &'a [PlanDocument],
 }
 
 pub(super) struct PresetOption {
@@ -199,6 +214,7 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) network_options: &'a [NetworkOption],
     pub(super) network_domains: &'a str,
     pub(super) network_summary: &'a str,
+    pub(super) plans: &'a [PlanDocumentView],
 }
 
 #[derive(Template)]
@@ -227,8 +243,8 @@ pub(super) struct ConversationDetailView {
     pub(super) network_options: Vec<NetworkOption>,
     pub(super) network_domains: String,
     pub(super) network_summary: String,
+    pub(super) plans: Vec<PlanDocumentView>,
 }
-
 impl ConversationDetailView {
     #[cfg(test)]
     pub(super) fn from_record(
@@ -338,6 +354,12 @@ impl ConversationDetailView {
                     .is_some_and(|preset| preset.id == agent.id),
             })
             .collect();
+        let plans: Vec<_> = sources
+            .documents
+            .iter()
+            .filter(|document| document.associated_conversation == Some(record.id))
+            .map(plan_document_view)
+            .collect();
         let attached_projects = record
             .projects
             .iter()
@@ -435,7 +457,9 @@ impl ConversationDetailView {
             }
             _ => (String::new(), 0, false),
         };
-        let messages = visible_messages(record);
+        // Plan controls share the envelope with the transcript.
+        let message_budget = (800_usize * 1024).saturating_sub(plans.len() * 3072);
+        let messages = visible_messages(record, message_budget);
         let omitted_messages = record.messages.len() - messages.len();
         Self {
             heading: record.title.clone(),
@@ -461,6 +485,7 @@ impl ConversationDetailView {
             network_options,
             network_domains,
             network_summary,
+            plans,
         }
     }
 
@@ -488,6 +513,7 @@ impl ConversationDetailView {
             network_options: &self.network_options,
             network_domains: &self.network_domains,
             network_summary: &self.network_summary,
+            plans: &self.plans,
         }
     }
 }
@@ -527,13 +553,17 @@ pub(super) fn pending_code_gate(
 }
 
 // The transcript leaves envelope space for controls and retains stable message indices.
-fn visible_messages(record: &ConversationRecord) -> Vec<MessageView> {
+fn visible_messages(record: &ConversationRecord, byte_budget: usize) -> Vec<MessageView> {
     let mut messages = Vec::new();
     let mut bytes = 0;
     for (index, message) in record.messages.iter().enumerate().rev() {
-        let view = message_view(index, message);
-        bytes += view.html.len() + 1024;
-        if bytes > 800 * 1024 || messages.len() >= 64 {
+        let mut view = message_view(index, message);
+        if view.saveable_plan {
+            view.plan_action = format!("/conversations/{}/plans", record.id.as_hex());
+            view.conversation_revision = record.revision.to_string();
+        }
+        bytes += view.html.len() + 2048;
+        if bytes > byte_budget || messages.len() >= 64 {
             break;
         }
         messages.push(view);
@@ -559,6 +589,160 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
             MessageStatus::Failed => "Failed",
         },
         streaming: message.status == MessageStatus::Pending,
+        saveable_plan: !user
+            && message.status == MessageStatus::Complete
+            && !message.text.trim().is_empty(),
+        plan_title: format!("Plan from response {}", index + 1),
+        plan_action: String::new(),
+        conversation_revision: String::new(),
+    }
+}
+
+fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
+    let revision = document.current();
+    PlanDocumentView {
+        title: document.title.clone(),
+        revision: revision.revision,
+        provenance: source_label(&revision.source),
+        content_hash: revision.content_hash.as_str(),
+        open_href: format!("/plans/{}", document.id.as_hex()),
+        export_href: format!("/plans/{}/export", document.id.as_hex()),
+        remove_href: format!(
+            "/conversations/{}/plans/{}/remove",
+            document
+                .associated_conversation
+                .expect("associated plan document")
+                .as_hex(),
+            document.id.as_hex()
+        ),
+    }
+}
+
+fn source_label(source: &PlanSource) -> String {
+    match source {
+        PlanSource::ConversationMessage { message_index, .. } => {
+            format!("Assistant message {}", message_index + 1)
+        }
+        PlanSource::SubmittedText { .. } => "Submitted plan text".to_owned(),
+        PlanSource::Correction { previous } => {
+            format!("Correction of revision {}", previous.revision)
+        }
+    }
+}
+
+pub(super) struct PlanPageRevision {
+    pub(super) revision: u32,
+    pub(super) provenance: String,
+    pub(super) content_hash: String,
+    pub(super) open_href: String,
+    pub(super) export_href: String,
+}
+
+#[derive(Template)]
+#[template(path = "conversations/templates/plan.html", block = "plan_page")]
+pub(super) struct PlanDocumentPage {
+    pub(super) document_title: String,
+    pub(super) title: String,
+    pub(super) document_id: String,
+    pub(super) document_revision: u32,
+    pub(super) current_revision: u32,
+    pub(super) provenance: String,
+    pub(super) content_hash: String,
+    pub(super) content: String,
+    pub(super) content_html: String,
+    pub(super) revisions: Vec<PlanPageRevision>,
+    pub(super) back_href: String,
+    pub(super) associated: bool,
+    pub(super) error: &'static str,
+}
+
+#[derive(Template)]
+#[template(path = "conversations/templates/plan.html", block = "plan_detail")]
+pub(super) struct PlanDocumentContents<'a> {
+    pub(super) title: &'a str,
+    pub(super) document_id: &'a str,
+    pub(super) document_revision: u32,
+    pub(super) current_revision: u32,
+    pub(super) provenance: &'a str,
+    pub(super) content_hash: &'a str,
+    pub(super) content: &'a str,
+    pub(super) content_html: &'a str,
+    pub(super) revisions: &'a [PlanPageRevision],
+    pub(super) back_href: &'a str,
+    pub(super) associated: bool,
+    pub(super) error: &'static str,
+}
+
+impl PlanDocumentPage {
+    pub(super) fn from_document(
+        document: &PlanDocument,
+        revision: u32,
+        content: String,
+        error: &'static str,
+    ) -> Self {
+        let selected = document
+            .revision(revision)
+            .unwrap_or_else(|| document.current());
+        let revisions = document
+            .revisions
+            .iter()
+            .rev()
+            .map(|item| PlanPageRevision {
+                revision: item.revision,
+                provenance: source_label(&item.source),
+                content_hash: item.content_hash.as_str(),
+                open_href: format!("/plans/{}?revision={}", document.id.as_hex(), item.revision),
+                export_href: format!(
+                    "/plans/{}/export?revision={}",
+                    document.id.as_hex(),
+                    item.revision
+                ),
+            })
+            .collect();
+        let associated = document.associated_conversation.is_some();
+        let back_href = document.associated_conversation.map_or_else(
+            || "/conversations".to_owned(),
+            |id| format!("/conversations/{id}"),
+        );
+        Self {
+            document_title: format!("{} | Plan | Power Plant", document.title),
+            title: document.title.clone(),
+            document_id: document.id.as_hex(),
+            document_revision: selected.revision,
+            current_revision: document.current_revision(),
+            provenance: source_label(&selected.source),
+            content_hash: selected.content_hash.as_str(),
+            content_html: {
+                let html = reply_html(&content);
+                if html.len() > 400 * 1024 {
+                    plain_html(&content)
+                } else {
+                    html
+                }
+            },
+            content,
+            revisions,
+            back_href,
+            associated,
+            error,
+        }
+    }
+
+    pub(super) fn contents(&self) -> PlanDocumentContents<'_> {
+        PlanDocumentContents {
+            title: &self.title,
+            document_id: &self.document_id,
+            document_revision: self.document_revision,
+            current_revision: self.current_revision,
+            provenance: &self.provenance,
+            content_hash: &self.content_hash,
+            content: &self.content,
+            content_html: &self.content_html,
+            revisions: &self.revisions,
+            back_href: &self.back_href,
+            associated: self.associated,
+            error: self.error,
+        }
     }
 }
 

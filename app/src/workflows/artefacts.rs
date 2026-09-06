@@ -21,7 +21,7 @@ pub(crate) use payload::{
     ReviewVerdict, TestOutcome, TypedPayload, artefact_hash_for, encode_human_decision,
     parse_typed_payload,
 };
-pub(crate) use store::WorkflowArtefactRepository;
+pub(crate) use store::{ArtefactStoreError, WorkflowArtefactRepository};
 
 use super::definition::ArtefactKind;
 use super::definition::{OutputKey, StepKey};

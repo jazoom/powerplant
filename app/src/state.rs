@@ -4,7 +4,7 @@ use crate::{
     agents::{AgentLeaseCoordinator, AgentStore},
     assets::AssetPaths,
     config::{RuntimeConfig, StartupConfig},
-    conversations::ConversationStore,
+    conversations::{ConversationStore, PlanDocumentStore},
     environments::{
         EnvironmentCatalogue, EnvironmentPreparationScheduler, EnvironmentSnapshotRepository,
     },
@@ -36,6 +36,7 @@ pub(crate) struct AppState {
     pub(crate) preferences: Arc<Preferences>,
     pub(crate) agents: Arc<AgentStore>,
     pub(crate) conversations: Arc<ConversationStore>,
+    pub(crate) documents: Arc<PlanDocumentStore>,
     pub(crate) projects: Arc<ProjectStore>,
     pub(crate) folder_picker: ProjectFolderPicker,
     pub(crate) local_data: LocalDataReset,
@@ -78,8 +79,15 @@ pub(crate) async fn build(
         .unwrap_or_default();
     let workflows = WorkflowCatalogue::open_with_seeds(data_dir.join("workflows.json"), &seeds)
         .map_err(|error| error.message().to_owned())?;
-    let workflow_artefacts = WorkflowArtefactRepository::open(data_dir.join("workflow-artefacts"))
-        .map_err(|error| error.message().to_owned())?;
+    let workflow_artefacts = Arc::new(
+        WorkflowArtefactRepository::open(data_dir.join("workflow-artefacts"))
+            .map_err(|error| error.message().to_owned())?,
+    );
+    let documents = PlanDocumentStore::open(
+        data_dir.join("conversation-documents"),
+        workflow_artefacts.clone(),
+    )
+    .map_err(|error| error.message().to_owned())?;
     let workflow_runs = WorkflowRunStore::open(data_dir.join("workflow-runs"))
         .map_err(|error| error.message().to_owned())?;
     let environment_snapshots =
@@ -123,6 +131,7 @@ pub(crate) async fn build(
         preferences: Arc::new(preferences),
         agents: Arc::new(agents),
         conversations: Arc::new(conversations),
+        documents: Arc::new(documents),
         projects: Arc::new(projects),
         folder_picker: ProjectFolderPicker::native(),
         local_data,
@@ -130,7 +139,7 @@ pub(crate) async fn build(
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),
         workflows: Arc::new(workflows),
         workflow_runs: Arc::new(workflow_runs),
-        workflow_artefacts: Arc::new(workflow_artefacts),
+        workflow_artefacts,
         workflow_execution: Arc::new(WorkflowExecution::new()),
         gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),
         workflow_workspaces: Arc::new(workflow_workspaces),

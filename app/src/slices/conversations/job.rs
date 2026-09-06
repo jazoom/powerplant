@@ -241,6 +241,10 @@ fn progress_frame(
         html: super::page::reply_html(text),
         status: "Replying",
         streaming: true,
+        saveable_plan: false,
+        plan_title: String::new(),
+        plan_action: String::new(),
+        conversation_revision: String::new(),
     };
     let mut patches = PatchSet::new();
     let target = format!("conversation-message-{}", message.index);
@@ -302,6 +306,10 @@ fn final_frame(
                 MessageStatus::Pending => "Replying",
             },
             streaming: message.status == MessageStatus::Pending,
+            saveable_plan: false,
+            plan_title: String::new(),
+            plan_action: String::new(),
+            conversation_revision: String::new(),
         };
         let target = format!("conversation-message-{index}");
         let _ = patches.children(&target, &MessageBody { message: &message });

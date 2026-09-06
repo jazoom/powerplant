@@ -41,6 +41,24 @@ fn connected(state: &AppState) -> String {
     token.raw().as_str().to_owned()
 }
 
+fn session_id(token: &str) -> sessions::SessionId {
+    sessions::SessionId::from_validated(&sessions::ValidatedToken::parse(token).expect("token"))
+}
+
+fn form_value(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            b' ' => encoded.push('+'),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 fn cookie(token: &str) -> String {
     format!("powerplant_session={token}")
 }
@@ -962,4 +980,238 @@ async fn conversation_network_controls_are_bounded_revisioned_and_reserved() {
         .expect("reserved network");
     assert_eq!(reserved.status(), StatusCode::CONFLICT);
     assert_eq!(state.conversations.get(&conversation.id), Some(updated));
+}
+
+#[tokio::test]
+async fn plan_commands_reject_credentials_without_a_selected_model_or_association() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    for fields in [
+        "title=test-key&markdown=Plan",
+        "title=Plan&markdown=test-key",
+    ] {
+        let response = app(&state)
+            .oneshot(command(
+                &format!("/conversations/{}/plans/text", record.id),
+                &token,
+                &format!("revision={}&{fields}", record.revision),
+            ))
+            .await
+            .expect("save");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    assert!(state.documents.list_for_conversation(record.id).is_empty());
+    let plan = state
+        .documents
+        .create_from_text(record.id, "Plan".to_owned(), "Original".to_owned(), None)
+        .expect("plan");
+    state
+        .documents
+        .disassociate(&plan.id, 1, record.id)
+        .expect("remove");
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/plans/{}/revisions", plan.id),
+            &token,
+            "revision=1&title=Plan&markdown=test-key",
+        ))
+        .await
+        .expect("revision");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        state
+            .documents
+            .get(&plan.id)
+            .expect("plan")
+            .current_revision(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn maximum_plan_text_fits_navigation_after_html_escaping() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let plan = state
+        .documents
+        .create_from_text(record.id, "Plan".to_owned(), "&".repeat(64 * 1024), None)
+        .expect("plan");
+    let response = app(&state)
+        .oneshot(navigation(&format!("/plans/{}", plan.id), &token))
+        .await
+        .expect("navigation");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        hypergraft::MEDIA_TYPE
+    );
+}
+
+#[tokio::test]
+async fn full_plan_catalogue_and_transcript_fit_conversation_navigation() {
+    let state = test_state();
+    let token = connected(&state);
+    let mut record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    for _ in 0..4 {
+        let job = crate::sessions::JobId::generate().expect("job");
+        record = state
+            .conversations
+            .begin_message(
+                &record.id,
+                record.revision,
+                ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model"),
+                job,
+                "Question".to_owned(),
+            )
+            .expect("message");
+        state
+            .conversations
+            .settle_message(
+                &record.id,
+                job,
+                "&".repeat(64 * 1024),
+                crate::conversations::MessageStatus::Complete,
+            )
+            .expect("reply");
+        record = state.conversations.get(&record.id).expect("conversation");
+    }
+    for _ in 0..256 {
+        state
+            .documents
+            .create_from_text(record.id, "&".repeat(120), "Plan".to_owned(), None)
+            .expect("plan");
+    }
+    let response = app(&state)
+        .oneshot(navigation(&format!("/conversations/{}", record.id), &token))
+        .await
+        .expect("navigation");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        hypergraft::MEDIA_TYPE
+    );
+}
+
+#[tokio::test]
+async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let model = ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model");
+    let owner = session_id(&token);
+    let job = state
+        .sessions
+        .begin_conversation_job(&owner, record.id, 1)
+        .expect("job");
+    let record = state
+        .conversations
+        .begin_message(
+            &record.id,
+            record.revision,
+            model,
+            job.id(),
+            "Question".to_owned(),
+        )
+        .expect("message");
+    state
+        .conversations
+        .settle_message(
+            &record.id,
+            job.id(),
+            "# First plan\n".to_owned(),
+            crate::conversations::MessageStatus::Complete,
+        )
+        .expect("reply");
+    state
+        .sessions
+        .finish_conversation_job(&owner, record.id, job.id());
+    let record = state.conversations.get(&record.id).expect("settled");
+
+    let save = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans", record.id.as_hex()),
+            &token,
+            &format!(
+                "revision={}&message_index=1&title=First+plan",
+                record.revision
+            ),
+        ))
+        .await
+        .expect("save");
+    assert_eq!(save.status(), StatusCode::OK);
+    let plans = state.documents.list_for_conversation(record.id);
+    let plan = plans.first().expect("saved plan").clone();
+
+    let open = app(&state)
+        .oneshot(document(&format!("/plans/{}", plan.id), &token))
+        .await
+        .expect("open");
+    assert_eq!(open.status(), StatusCode::OK);
+    assert!(text(open).await.contains("# First plan"));
+
+    let revise = app(&state)
+        .oneshot(command(
+            &format!("/plans/{}/revisions", plan.id),
+            &token,
+            &format!(
+                "revision=1&title=Corrected+plan&markdown={}",
+                form_value("# Corrected plan\n")
+            ),
+        ))
+        .await
+        .expect("revise");
+    assert_eq!(revise.status(), StatusCode::OK);
+    let plan = state.documents.get(&plan.id).expect("corrected plan");
+    assert_eq!(plan.current_revision(), 2);
+
+    let old = app(&state)
+        .oneshot(document(&format!("/plans/{}?revision=1", plan.id), &token))
+        .await
+        .expect("old revision");
+    assert!(text(old).await.contains("First plan"));
+    let export = app(&state)
+        .oneshot(document(
+            &format!("/plans/{}/export?revision=1", plan.id),
+            &token,
+        ))
+        .await
+        .expect("export");
+    assert_eq!(export.status(), StatusCode::OK);
+    assert_eq!(text(export).await, "# First plan\n");
+
+    let remove = app(&state)
+        .oneshot(command(
+            &format!(
+                "/conversations/{}/plans/{}/remove",
+                record.id.as_hex(),
+                plan.id.as_hex()
+            ),
+            &token,
+            &format!("revision={}&document_revision=2", record.revision),
+        ))
+        .await
+        .expect("remove association");
+    assert_eq!(remove.status(), StatusCode::OK);
+    assert!(state.documents.list_for_conversation(record.id).is_empty());
+    assert_eq!(
+        state
+            .documents
+            .content(&state.documents.get(&plan.id).expect("retained"), 1)
+            .expect("old content"),
+        "# First plan\n"
+    );
 }

@@ -7,7 +7,7 @@ mod tests;
 use axum::{
     Form, Router,
     extract::{Path, Query, State},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
@@ -17,7 +17,7 @@ use crate::{
     agents::AgentId,
     conversations::{
         ConversationError, ConversationId, ConversationModelConfiguration, ConversationRecord,
-        resolve_authority,
+        DocumentError, DocumentId, PlanDocument, resolve_authority,
     },
     error::{AppError, AppResult},
     projects::ProjectId,
@@ -28,7 +28,9 @@ use crate::{
     workflows::{self, WorkflowJob, WorkflowRun},
 };
 
-use self::page::{CatalogueView, ConversationDetailView, ConversationFormView, ModelSources};
+use self::page::{
+    CatalogueView, ConversationDetailView, ConversationFormView, ModelSources, PlanDocumentPage,
+};
 
 const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
 
@@ -37,6 +39,18 @@ pub(super) fn router() -> Router<AppState> {
         .route("/conversations", get(catalogue).post(create))
         .route("/conversations/new", get(new_conversation))
         .route("/conversations/{conversation_id}", get(detail))
+        .route(
+            "/conversations/{conversation_id}/plans",
+            post(save_plan_message),
+        )
+        .route(
+            "/conversations/{conversation_id}/plans/text",
+            post(save_plan_text),
+        )
+        .route(
+            "/conversations/{conversation_id}/plans/{document_id}/remove",
+            post(remove_plan),
+        )
         .route(
             "/conversations/{conversation_id}/messages",
             post(send_message),
@@ -78,6 +92,9 @@ pub(super) fn router() -> Router<AppState> {
             "/conversations/{conversation_id}/delete",
             post(delete_conversation),
         )
+        .route("/plans/{document_id}", get(open_plan))
+        .route("/plans/{document_id}/export", get(export_plan))
+        .route("/plans/{document_id}/revisions", post(revise_plan))
 }
 
 #[derive(Deserialize)]
@@ -100,6 +117,33 @@ struct RevisionForm {
 struct MessageForm {
     revision: String,
     message: String,
+}
+
+#[derive(Deserialize)]
+struct PlanMessageForm {
+    revision: String,
+    message_index: String,
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct PlanTextForm {
+    revision: String,
+    title: String,
+    markdown: String,
+}
+
+#[derive(Deserialize)]
+struct PlanRevisionForm {
+    revision: String,
+    title: String,
+    markdown: String,
+}
+
+#[derive(Deserialize)]
+struct PlanAssociationForm {
+    revision: String,
+    document_revision: String,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +193,12 @@ struct CatalogueQuery {
 struct ObserveQuery {
     job: String,
     cursor: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct PlanQuery {
+    revision: String,
 }
 
 async fn catalogue(
@@ -224,6 +274,358 @@ async fn detail(
         PatchStatus::Ok,
         detail_view(&state, session.0, &record, &record.title, ""),
     )
+}
+
+async fn save_plan_message(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<PlanMessageForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    if revision != record.revision {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    }
+    let Some(message_index) = form.message_index.parse::<usize>().ok() else {
+        return render_detail_document_error(
+            &state,
+            _session.0,
+            graft,
+            &record,
+            DocumentError::Source,
+        );
+    };
+    let text = record
+        .messages
+        .get(message_index)
+        .map_or("", |message| message.text.as_str());
+    let secret = plan_secret(&state, &[&form.title, text]);
+    match state.documents.create_from_message(
+        &record,
+        message_index,
+        form.title.clone(),
+        secret.as_deref(),
+    ) {
+        Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
+        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
+            Err(AppError::new("store plan document", error))
+        }
+        Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
+    }
+}
+
+async fn save_plan_text(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<PlanTextForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    if revision != record.revision {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    }
+    let secret = plan_secret(&state, &[&form.title, &form.markdown]);
+    match state.documents.create_from_text(
+        record.id,
+        form.title.clone(),
+        form.markdown.clone(),
+        secret.as_deref(),
+    ) {
+        Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
+        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
+            Err(AppError::new("store plan document", error))
+        }
+        Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
+    }
+}
+
+async fn open_plan(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: GraftRequest,
+    Path(document_id): Path<String>,
+    Query(query): Query<PlanQuery>,
+) -> AppResult<Response> {
+    let Some(document_id) = DocumentId::parse(&document_id) else {
+        return Ok(responses::request_navigation(graft, "/conversations"));
+    };
+    let Some(document) = state.documents.get(&document_id) else {
+        return Ok(responses::request_navigation(graft, "/conversations"));
+    };
+    let revision = if query.revision.is_empty() {
+        document.current_revision()
+    } else {
+        let Some(revision) = parse_revision(&query.revision) else {
+            return render_plan_page(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                &document,
+                document.current_revision(),
+                "Choose an available plan revision.",
+            );
+        };
+        revision
+    };
+    if document.revision(revision).is_none() {
+        return render_plan_page(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &document,
+            document.current_revision(),
+            "Choose an available plan revision.",
+        );
+    }
+    let content = state
+        .documents
+        .content(&document, revision)
+        .map_err(|error| AppError::new("read plan document", error))?;
+    render_plan_page_with_content(
+        &state,
+        graft,
+        PatchStatus::Ok,
+        &document,
+        revision,
+        content,
+        "",
+    )
+}
+
+async fn export_plan(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    Path(document_id): Path<String>,
+    Query(query): Query<PlanQuery>,
+) -> AppResult<Response> {
+    let Some(document_id) = DocumentId::parse(&document_id) else {
+        return Ok(responses::no_store_status_response(
+            axum::http::StatusCode::NOT_FOUND,
+            "Plan not found",
+        ));
+    };
+    let Some(document) = state.documents.get(&document_id) else {
+        return Ok(responses::no_store_status_response(
+            axum::http::StatusCode::NOT_FOUND,
+            "Plan not found",
+        ));
+    };
+    let revision = if query.revision.is_empty() {
+        document.current_revision()
+    } else {
+        let Some(revision) = parse_revision(&query.revision) else {
+            return Ok(responses::no_store_status_response(
+                axum::http::StatusCode::BAD_REQUEST,
+                "Plan revision is invalid",
+            ));
+        };
+        revision
+    };
+    let Some(selected) = document.revision(revision) else {
+        return Ok(responses::no_store_status_response(
+            axum::http::StatusCode::NOT_FOUND,
+            "Plan revision not found",
+        ));
+    };
+    let content = state
+        .documents
+        .content(&document, revision)
+        .map_err(|error| AppError::new("read plan document", error))?;
+    let filename = safe_filename(&document.title);
+    let disposition = format!(
+        "attachment; filename=\"{filename}-r{}.md\"",
+        selected.revision
+    );
+    let mut response = (
+        axum::http::StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/markdown; charset=utf-8"),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                axum::http::HeaderValue::from_str(&disposition).unwrap_or_else(|_| {
+                    axum::http::HeaderValue::from_static("attachment; filename=plan.md")
+                }),
+            ),
+        ],
+        content,
+    )
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn revise_plan(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    graft: PatchGraft,
+    Path(document_id): Path<String>,
+    Form(form): Form<PlanRevisionForm>,
+) -> AppResult<Response> {
+    let Some(document_id) = DocumentId::parse(&document_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(document) = state.documents.get(&document_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    if let Some(conversation_id) = document.associated_conversation
+        && let Some(conversation) = state.conversations.get(&conversation_id)
+        && conversation.active_job.is_some()
+    {
+        let revision = document.current_revision();
+        return render_plan_page_with_content(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            &document,
+            revision,
+            state
+                .documents
+                .content(&document, revision)
+                .map_err(|error| AppError::new("read plan document", error))?,
+            DocumentError::Active.message(),
+        );
+    }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_plan_page_with_content(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &document,
+            document.current_revision(),
+            state
+                .documents
+                .content(&document, document.current_revision())
+                .map_err(|error| AppError::new("read plan document", error))?,
+            DocumentError::Conflict.message(),
+        );
+    };
+    let secret = plan_secret(&state, &[&form.title, &form.markdown]);
+    match state.documents.revise(
+        &document.id,
+        revision,
+        form.title.clone(),
+        form.markdown.clone(),
+        secret.as_deref(),
+    ) {
+        Ok(updated) => Ok(responses::command_navigation(&format!(
+            "/plans/{}",
+            updated.id
+        ))),
+        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
+            Err(AppError::new("store plan revision", error))
+        }
+        Err(error) => {
+            let latest = state.documents.get(&document.id).unwrap_or(document);
+            let selected = latest.current_revision();
+            let content = state
+                .documents
+                .content(&latest, selected)
+                .map_err(|error| AppError::new("read plan document", error))?;
+            render_plan_page_with_content(
+                &state,
+                graft,
+                document_status(error),
+                &latest,
+                selected,
+                content,
+                error.message(),
+            )
+        }
+    }
+}
+
+async fn remove_plan(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path((conversation_id, document_id)): Path<(String, String)>,
+    Form(form): Form<PlanAssociationForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(document_id) = DocumentId::parse(&document_id) else {
+        return render_detail_document_error(
+            &state,
+            session.0,
+            graft,
+            &record,
+            DocumentError::Missing,
+        );
+    };
+    let Some(conversation_revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(document_revision) = parse_revision(&form.document_revision) else {
+        return render_detail_document_error(
+            &state,
+            session.0,
+            graft,
+            &record,
+            DocumentError::Conflict,
+        );
+    };
+    if conversation_revision != record.revision || record.active_job.is_some() {
+        return render_detail_document_error(
+            &state,
+            session.0,
+            graft,
+            &record,
+            if record.active_job.is_some() {
+                DocumentError::Active
+            } else {
+                DocumentError::Conflict
+            },
+        );
+    }
+    match state
+        .documents
+        .disassociate(&document_id, document_revision, record.id)
+    {
+        Ok(()) => Ok(responses::command_navigation(&conversation_path(&record))),
+        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
+            Err(AppError::new("remove plan association", error))
+        }
+        Err(error) => render_detail_document_error(&state, session.0, graft, &record, error),
+    }
 }
 
 async fn send_message(
@@ -1184,6 +1586,10 @@ async fn delete_conversation(
     };
     match state.conversations.delete(&record.id, revision) {
         Ok(()) | Err(ConversationError::Missing) => {
+            state
+                .documents
+                .disassociate_conversation(record.id)
+                .map_err(|error| AppError::new("remove conversation plan associations", error))?;
             Ok(responses::command_navigation("/conversations"))
         }
         Err(
@@ -1210,6 +1616,107 @@ async fn delete_conversation(
             status_for(error),
             detail_view(&state, session.0, &record, &record.title, error.message()),
         ),
+    }
+}
+
+fn render_detail_document_error(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    graft: PatchGraft,
+    record: &ConversationRecord,
+    error: DocumentError,
+) -> AppResult<Response> {
+    render_detail_command(
+        graft,
+        document_status(error),
+        detail_view(state, session, record, &record.title, error.message()),
+    )
+}
+
+fn render_plan_page(
+    state: &AppState,
+    graft: GraftRequest,
+    status: PatchStatus,
+    document: &PlanDocument,
+    revision: u32,
+    error: &'static str,
+) -> AppResult<Response> {
+    let content = state
+        .documents
+        .content(document, revision)
+        .map_err(|error| AppError::new("read plan document", error))?;
+    render_plan_page_with_content(state, graft, status, document, revision, content, error)
+}
+
+fn render_plan_page_with_content(
+    state: &AppState,
+    graft: impl Into<GraftRequest>,
+    status: PatchStatus,
+    document: &PlanDocument,
+    revision: u32,
+    content: String,
+    error: &'static str,
+) -> AppResult<Response> {
+    let view = PlanDocumentPage::from_document(document, revision, content, error);
+    match graft.into() {
+        GraftRequest::Document => {
+            let mut response = responses::chat_page_response(&view.document_title, state, &view)?;
+            responses::apply_patch_status(&mut response, status);
+            Ok(response)
+        }
+        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(
+            &view.document_title,
+            "chat-main",
+            &view,
+        )?),
+        GraftRequest::Patch => Ok(hypergraft::PatchSet::new()
+            .title(&view.document_title)
+            .with_children("plan-detail", &view.contents())?
+            .respond(status)?),
+    }
+}
+
+fn document_status(error: DocumentError) -> PatchStatus {
+    match error {
+        DocumentError::Conflict | DocumentError::Missing | DocumentError::Active => {
+            PatchStatus::Conflict
+        }
+        _ => PatchStatus::UnprocessableEntity,
+    }
+}
+
+fn plan_secret(state: &AppState, fields: &[&str]) -> Option<String> {
+    state
+        .vault
+        .desk_providers()
+        .into_iter()
+        .find_map(|provider| {
+            let connection = state.vault.connection_for(&ModelSelection {
+                provider: provider.kind,
+                model: provider.model,
+                thinking: provider.thinking,
+            })?;
+            let secret = connection.api_key.expose();
+            (!secret.is_empty() && fields.iter().any(|field| field.contains(secret)))
+                .then(|| secret.to_owned())
+        })
+}
+
+fn safe_filename(title: &str) -> String {
+    let filename: String = title
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if filename.is_empty() {
+        "plan".to_owned()
+    } else {
+        filename
     }
 }
 
@@ -1301,6 +1808,7 @@ fn detail_view(
             vault: &state.vault,
             models: &state.models_dev,
             projects: &state.projects.list(),
+            documents: &state.documents.list_for_conversation(record.id),
         },
         &state.agents.list(),
         snapshot.as_ref(),
