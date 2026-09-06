@@ -231,7 +231,7 @@ fn derive_with_ceiling(
                 role: DirectoryRole::PrimarySource,
             }];
             for directory in &action.authority.directories {
-                if directory.alias == policy.primary_alias() {
+                if directory.alias == policy.primary_alias() || directory.access.is_writable() {
                     return Err(CapabilityError::Authority);
                 }
                 let Some(grant) = policy

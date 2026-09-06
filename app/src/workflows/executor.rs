@@ -1912,28 +1912,20 @@ fn intersect_authority(
         else {
             return Err(());
         };
-        if directory.access.is_writable() && !host_grant.access.is_writable() {
+        if directory.access.is_writable() {
             return Err(());
         }
         grants.push(PolicyGrant {
             alias: host_grant.alias.clone(),
             guest_path: host_grant.guest_path.clone(),
             host_path: host_grant.host_path.clone(),
-            access: min_access(directory.access, host_grant.access),
+            access: AccessMode::ReadOnly,
         });
     }
     Ok(DirectoryPolicy::from_grants(
         grants,
         host.primary_alias().to_owned(),
     ))
-}
-
-fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
-    if left.is_writable() && right.is_writable() {
-        AccessMode::ReadWrite
-    } else {
-        AccessMode::ReadOnly
-    }
 }
 
 async fn start_attempt_sandbox(
@@ -2172,8 +2164,11 @@ fn confirm_run_authority(
             }
             crate::agents::AuthorityError::Unavailable
             | crate::agents::AuthorityError::Path
-            | crate::agents::AuthorityError::Stale => {
-                "A granted directory is no longer at the saved path.".to_owned()
+            | crate::agents::AuthorityError::Stale
+            | crate::agents::AuthorityError::Alias
+            | crate::agents::AuthorityError::DuplicatePath
+            | crate::agents::AuthorityError::SecondaryWrite => {
+                "Project authority changed before dispatch. Try again.".to_owned()
             }
         })?;
     if authority.grant_access != job.grant_access || authority.project_id != job.project_id {

@@ -91,10 +91,7 @@ pub(crate) async fn read_project_instructions(
     secret: Option<&str>,
 ) -> Result<ProjectInstructions, InstructionError> {
     let mut command = sandbox
-        .exec_cmd(
-            GuestExec::shell(INSTRUCTION_READ_COMMAND)
-                .in_dir(GUEST_PROJECT),
-        )
+        .exec_cmd(GuestExec::shell(INSTRUCTION_READ_COMMAND).in_dir(GUEST_PROJECT))
         .await
         .map_err(|_| InstructionError::Read)?;
     let deadline = Instant::now() + INSTRUCTION_READ_DEADLINE;

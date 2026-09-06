@@ -21,7 +21,15 @@ fn restricted_network_policy(domains: &[String]) -> microsandbox::NetworkPolicy 
     }
     let mut policy = match microsandbox::NetworkPolicy::builder()
         .default_deny()
-        .egress(|rules| rules.allow_domain_suffixes(domains.iter().map(String::as_str)))
+        .egress(|rules| {
+            rules
+                .deny_private()
+                .deny_loopback()
+                .deny_link_local()
+                .deny_meta()
+                .deny_host()
+                .allow_domain_suffixes(domains.iter().map(String::as_str))
+        })
         .build()
     {
         Ok(policy) => policy,

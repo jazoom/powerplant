@@ -34,7 +34,11 @@ The user registers projects, agents, environments and workflows on this machine.
 
 A conversation does not require a named agent. The user selects a model directly or applies an optional preset. Project attachments provide context references only until the user grants access.
 
-A read-only project grant permits List, Read and Run in an isolated candidate. A writable target grant also permits Write in that candidate. Guest network access remains None.
+A read-only project grant permits List, Read and Run in an isolated candidate. A writable target grant also permits Write in that candidate. Only one project can have writable conversation access.
+
+Other granted projects supply read-only context under stable `/access/<alias>` paths. The sandbox blocks writes to those projects, even when the target permits Write.
+
+Guest network access defaults to None. A separate conversation control permits restricted domains or public internet access. Preset ceilings can narrow this choice. Private and host networks remain excluded. Project attachments and target changes do not expand network access.
 
 A writable conversation message starts the system-owned Quick task. The agent creates an isolated candidate. The user reviews the exact candidate diff before Power Plant applies a local Git commit. Apply and Discard actions belong to the conversation and settle that conversation after the decision.
 

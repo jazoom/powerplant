@@ -67,6 +67,10 @@ pub(super) fn router() -> Router<AppState> {
             post(select_target),
         )
         .route(
+            "/conversations/{conversation_id}/network",
+            post(set_network),
+        )
+        .route(
             "/conversations/{conversation_id}/rename",
             post(rename_conversation),
         )
@@ -124,6 +128,14 @@ struct AccessForm {
     project: String,
     #[serde(default)]
     access: String,
+}
+
+#[derive(Deserialize)]
+struct NetworkForm {
+    revision: String,
+    network: String,
+    #[serde(default)]
+    network_domains: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -298,11 +310,22 @@ async fn send_message(
                 );
             }
         };
-        let pinned = match workflows::pin_quick_task(
+        let secondary = authority
+            .policy
+            .grants()
+            .iter()
+            .filter(|grant| grant.alias != authority.grant_alias)
+            .map(|grant| workflows::definition::GuestDirectoryAccess {
+                alias: grant.alias.clone(),
+                access: crate::agents::AccessMode::ReadOnly,
+            })
+            .collect();
+        let pinned = match workflows::pin_quick_task_with_context(
             authority.grant_access,
             &authority.tools,
             &model.instructions,
             environment,
+            secondary,
         ) {
             Ok(pinned) => pinned,
             Err(error) => {
@@ -811,6 +834,19 @@ async fn grant_access(
             ),
         );
     }
+    if !project.host_path_is_available() {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "The selected project is unavailable.",
+            ),
+        );
+    }
     let access = if form.access.trim().is_empty() {
         crate::agents::AccessMode::ReadOnly
     } else if let Some(access) = crate::agents::AccessMode::parse(&form.access) {
@@ -857,6 +893,70 @@ async fn grant_access(
     }
 }
 
+async fn set_network(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<NetworkForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    if state.sessions.busy(&session.0)
+        || record.active_job.is_some()
+        || state.sessions.conversation_reserved(record.id)
+    {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "This conversation is reserved. Wait until its operation finishes.",
+            ),
+        );
+    }
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let network =
+        match crate::agents::NetworkAccess::parse_form(&form.network, &form.network_domains) {
+            Ok(network) => network,
+            Err(error) => {
+                return render_detail_command(
+                    graft,
+                    PatchStatus::UnprocessableEntity,
+                    detail_view(&state, session.0, &record, &record.title, error.message()),
+                );
+            }
+        };
+    match state
+        .conversations
+        .set_network(&record.id, revision, network)
+    {
+        Ok(updated) => render_detail_command(
+            graft,
+            PatchStatus::Ok,
+            detail_view(&state, session.0, &updated, &updated.title, ""),
+        ),
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
+            Err(AppError::new("store conversation network access", error))
+        }
+        Err(error) => render_detail_command(
+            graft,
+            status_for(error),
+            detail_view(&state, session.0, &record, &record.title, error.message()),
+        ),
+    }
+}
+
 async fn select_target(
     State(state): State<AppState>,
     session: RequiredSession,
@@ -867,6 +967,19 @@ async fn select_target(
     let Some(record) = load_conversation(&state, &conversation_id) else {
         return Ok(responses::command_navigation("/conversations"));
     };
+    if state.sessions.busy(&session.0) {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Another command is active in this browser session.",
+            ),
+        );
+    }
     let Some(revision) = parse_revision(&form.revision) else {
         return render_detail_command(
             graft,
@@ -874,7 +987,8 @@ async fn select_target(
             detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
         );
     };
-    let Some(project) = ProjectId::parse(&form.project) else {
+    let Some(project) = ProjectId::parse(&form.project).and_then(|id| state.projects.get(&id))
+    else {
         return render_detail_command(
             graft,
             PatchStatus::UnprocessableEntity,
@@ -887,9 +1001,22 @@ async fn select_target(
             ),
         );
     };
+    if !project.host_path_is_available() {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "The selected project is unavailable.",
+            ),
+        );
+    }
     match state
         .conversations
-        .select_execution_target(&record.id, revision, project)
+        .select_execution_target(&record.id, revision, project.id)
     {
         Ok(updated) => render_detail_command(
             graft,

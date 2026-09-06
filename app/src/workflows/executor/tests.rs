@@ -10,6 +10,7 @@ use super::{
 use crate::agents::{AccessMode, AgentId, DirectoryPolicy, PolicyGrant};
 use crate::sandbox::GUEST_PROJECT;
 use crate::sessions::JobStatus;
+use crate::workflows::capabilities::{CapabilityDirectory, DirectoryRole};
 
 #[test]
 fn repository_status_uses_the_fixed_guest_command() {
@@ -402,23 +403,33 @@ fn attempt_spec_mounts_isolated_source_and_read_only_git() {
         .expect("workspace");
     let project = tempfile::tempdir().expect("project");
     std::fs::create_dir(project.path().join(".git")).expect("git");
+    let secondary = tempfile::tempdir().expect("secondary");
     let host = DirectoryPolicy::from_grants(
-        vec![PolicyGrant {
-            alias: "project".to_owned(),
-            guest_path: GUEST_PROJECT.to_owned(),
-            host_path: project.path().to_path_buf(),
-            access: AccessMode::ReadWrite,
-        }],
+        vec![
+            PolicyGrant {
+                alias: "project".to_owned(),
+                guest_path: GUEST_PROJECT.to_owned(),
+                host_path: project.path().to_path_buf(),
+                access: AccessMode::ReadWrite,
+            },
+            PolicyGrant {
+                alias: "docs".to_owned(),
+                guest_path: "/access/docs".to_owned(),
+                host_path: secondary.path().to_path_buf(),
+                access: AccessMode::ReadOnly,
+            },
+        ],
         "project".to_owned(),
     );
+    let mut capabilities = crate::tests::test_agent_capabilities();
+    capabilities.directories.push(CapabilityDirectory {
+        alias: "docs".to_owned(),
+        guest_path: "/access/docs".to_owned(),
+        access: AccessMode::ReadOnly,
+        role: DirectoryRole::SecondaryContext,
+    });
 
-    let spec = attempt_spec(
-        &crate::tests::test_agent_capabilities(),
-        &workspace,
-        project.path(),
-        &host,
-    )
-    .expect("spec");
+    let spec = attempt_spec(&capabilities, &workspace, project.path(), &host).expect("spec");
 
     assert_eq!(spec.workdir, GUEST_PROJECT);
     assert_eq!(spec.mounts[0].host, workspace.project);
@@ -426,6 +437,9 @@ fn attempt_spec_mounts_isolated_source_and_read_only_git() {
     assert_eq!(spec.mounts[1].guest, "/project/.git");
     assert_eq!(spec.mounts[1].host, project.path().join(".git"));
     assert!(spec.mounts[1].read_only);
+    assert_eq!(spec.mounts[2].guest, "/access/docs");
+    assert_eq!(spec.mounts[2].host, secondary.path());
+    assert!(spec.mounts[2].read_only);
     workspace.destroy().expect("destroy");
 }
 

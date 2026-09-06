@@ -424,9 +424,15 @@ fn root_instruction_paths_stay_inside_the_target_candidate() {
     std::fs::remove_dir(&path).expect("remove directory");
     std::fs::write(&path, "candidate instructions").expect("write candidate");
     assert_eq!(read().stdout, b"candidate instructions");
-    std::fs::write(&path, "x".repeat(super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 100))
-        .expect("oversized instructions");
-    assert_eq!(read().stdout.len(), super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 1);
+    std::fs::write(
+        &path,
+        "x".repeat(super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 100),
+    )
+    .expect("oversized instructions");
+    assert_eq!(
+        read().stdout.len(),
+        super::MAXIMUM_PROJECT_INSTRUCTION_BYTES + 1
+    );
 }
 
 #[test]

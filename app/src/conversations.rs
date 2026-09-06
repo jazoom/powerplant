@@ -2,7 +2,7 @@ mod access;
 mod id;
 mod store;
 
-pub(crate) use access::resolve_authority;
+pub(crate) use access::{intersect_network, resolve_authority, secondary_alias};
 pub(crate) use id::ConversationId;
 pub(crate) use store::{
     ConversationError, ConversationMessage, ConversationModelConfiguration, ConversationRecord,

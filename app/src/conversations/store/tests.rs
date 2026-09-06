@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use crate::{
+    agents::{AccessMode, NetworkAccess},
+    projects::ProjectId,
     providers::{ModelSelection, ProviderKind},
     sessions::JobId,
 };
@@ -91,6 +93,30 @@ fn corrupt_catalogues_remain_unchanged() {
         Some(ConversationError::Corrupt)
     );
     assert_eq!(std::fs::read(path).expect("unchanged"), original);
+}
+
+#[test]
+fn missing_network_fields_reject_the_catalogue_without_replacement() {
+    for field in ["network", "network-domains"] {
+        let dir = tempfile::tempdir().expect("directory");
+        let store = ConversationStore::open(dir.path().to_path_buf()).expect("store");
+        store.create("Discussion".to_owned()).expect("record");
+        drop(store);
+        let path = dir.path().join("catalogue.json");
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("catalogue")).expect("JSON");
+        file["conversations"][0]
+            .as_object_mut()
+            .expect("record")
+            .remove(field);
+        let bytes = serde_json::to_vec(&file).expect("JSON");
+        std::fs::write(&path, &bytes).expect("catalogue");
+        assert_eq!(
+            ConversationStore::open(dir.path().to_path_buf()).err(),
+            Some(ConversationError::Corrupt)
+        );
+        assert_eq!(std::fs::read(path).expect("unchanged catalogue"), bytes);
+    }
 }
 
 #[test]
@@ -225,6 +251,84 @@ fn project_associations_are_ordered_bounded_and_revisioned() {
             crate::projects::ProjectId::generate().expect("overflow project"),
         ),
         Err(ConversationError::Projects)
+    );
+}
+
+#[test]
+fn only_one_project_can_have_writable_conversation_access() {
+    let store = ConversationStore::in_memory();
+    let conversation = store.create("Discussion".to_owned()).expect("conversation");
+    let first = ProjectId::generate().expect("first project");
+    let second = ProjectId::generate().expect("second project");
+    let first_attached = store
+        .attach_project(&conversation.id, conversation.revision, first)
+        .expect("first attachment");
+    let attached = store
+        .attach_project(&conversation.id, first_attached.revision, second)
+        .expect("second attachment");
+    let writable = store
+        .grant_writable(&attached.id, attached.revision, first, 1)
+        .expect("first writable grant");
+    let second_read_only = store
+        .grant_read_only(&writable.id, writable.revision, second, 1)
+        .expect("second read-only grant");
+    assert_eq!(second_read_only.execution_target, Some(first));
+    assert_eq!(second_read_only.grants[1].access, AccessMode::ReadOnly);
+    assert_eq!(
+        store.grant_writable(&second_read_only.id, second_read_only.revision, second, 1),
+        Err(ConversationError::WriteTarget)
+    );
+    assert_eq!(store.get(&conversation.id), Some(second_read_only));
+}
+
+#[test]
+fn conversation_network_access_survives_restart() {
+    let dir = tempfile::tempdir().expect("directory");
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("store");
+    let record = store.create("Discussion".to_owned()).expect("conversation");
+    let updated = store
+        .set_network(
+            &record.id,
+            record.revision,
+            NetworkAccess::Restricted(vec!["example.com".to_owned()]),
+        )
+        .expect("network");
+    drop(store);
+
+    let store = ConversationStore::open(dir.path().to_path_buf()).expect("reopen");
+    assert_eq!(
+        store.get(&record.id).expect("record").network,
+        updated.network
+    );
+}
+
+#[test]
+fn conversation_network_access_rejects_stale_and_active_changes() {
+    let store = ConversationStore::in_memory();
+    let record = store.create("Discussion".to_owned()).expect("conversation");
+    let updated = store
+        .set_network(&record.id, record.revision, NetworkAccess::Public)
+        .expect("network");
+    assert_eq!(
+        store.set_network(&record.id, record.revision, NetworkAccess::None),
+        Err(ConversationError::Conflict)
+    );
+
+    let request = JobId::generate().expect("request");
+    let selection =
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("selection");
+    store
+        .begin_message(
+            &record.id,
+            updated.revision,
+            selection,
+            request,
+            "Question".to_owned(),
+        )
+        .expect("active message");
+    assert_eq!(
+        store.set_network(&record.id, updated.revision + 1, NetworkAccess::None),
+        Err(ConversationError::Active)
     );
 }
 

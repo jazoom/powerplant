@@ -203,7 +203,8 @@
               Project attachments identify related work. They grant no access
               until you select an access level below. Read-only access permits
               List, Read and Run. Writable target access also permits Write in
-              the candidate workspace. Guest network access stays None.
+              the candidate workspace. Guest network access starts at None and
+              has its own setting below.
             </p>
           </div>
           {% if attached_projects.is_empty() %}
@@ -218,6 +219,11 @@
                   <div class="min-w-0 flex-1">
                     <p class="font-medium break-words">{{ project.name }}</p>
                     <p class="text-quiet mt-1 text-xs">{{ project.status }}</p>
+                    {% if project.secondary_context %}
+                      <p class="text-quiet mt-1 font-mono text-xs">
+                        Guest path: /access/{{ project.alias }}
+                      </p>
+                    {% endif %}
                     {% if project.access_granted %}
                       {% if project.execution_target %}
                         <p class="mt-1 text-xs font-medium">Execution target</p>
@@ -271,7 +277,7 @@
                           />
                           <p class="text-quiet mb-2 text-xs">
                             Grant effect: List, Read, Run and Write in the
-                            candidate workspace. Network: None.
+                            candidate workspace. Network access stays unchanged.
                           </p>
                           <button
                             class="btn btn-secondary btn-xs"
@@ -305,7 +311,8 @@
                             value="read-only"
                           />
                           <p class="text-quiet mb-2 text-xs">
-                            Grant effect: List, Read and Run. Network: None.
+                            Grant effect: List, Read and Run. Network access
+                            stays unchanged.
                           </p>
                           <button
                             class="btn btn-secondary btn-xs"
@@ -337,7 +344,7 @@
                           />
                           <p class="text-quiet mb-2 text-xs">
                             Grant effect: List, Read, Run and Write in the
-                            candidate workspace. Network: None.
+                            candidate workspace. Network access stays unchanged.
                           </p>
                           <button
                             class="btn btn-secondary btn-xs"
@@ -413,6 +420,73 @@
               </button>
             </form>
           {% endif %}
+        </section>
+        <section
+          class="file-section space-y-4"
+          aria-labelledby="conversation-network-heading"
+        >
+          <div>
+            <h2 id="conversation-network-heading" class="text-lg font-semibold">
+              Guest network access
+            </h2>
+            <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+              This setting applies to sandbox work for the execution target. It
+              does not give a project-free model filesystem access. Presets can
+              narrow this choice, and private or host networks stay blocked.
+            </p>
+            <p class="mt-2 text-sm">
+              <span class="font-medium">{{ network_summary }}</span>
+            </p>
+          </div>
+          <form
+            data-graft
+            method="post"
+            action="/conversations/{{ id }}/network"
+            class="flex max-w-xl flex-col gap-4"
+          >
+            <input type="hidden" name="revision" value="{{ revision }}" />
+            <fieldset class="flex flex-col gap-3">
+              <legend class="text-sm font-semibold">Access level</legend>
+              {% for option in network_options %}
+                <label class="flex items-start gap-2 text-sm">
+                  <input
+                    class="radio radio-sm mt-0.5"
+                    type="radio"
+                    name="network"
+                    value="{{ option.value }}"
+                    {% if option.selected %}checked{% endif %}
+                    {% if job_active || session_busy %}disabled{% endif %}
+                  />
+                  <span>{{ option.label }}</span>
+                </label>
+              {% endfor %}
+            </fieldset>
+            <label
+              class="flex flex-col gap-1"
+              for="conversation-network-domains"
+            >
+              <span class="text-sm">Allowed domains</span>
+              <textarea
+                id="conversation-network-domains"
+                class="textarea textarea-bordered min-h-24"
+                name="network_domains"
+                maxlength="8127"
+                {% if job_active || session_busy %}disabled{% endif %}
+              >
+{{ network_domains }}</textarea>
+              <span class="text-quiet text-xs">
+                Use one domain per line. Each entry includes its subdomains and
+                ports. Private and host networks remain excluded.
+              </span>
+            </label>
+            <button
+              class="btn btn-secondary self-start"
+              type="submit"
+              {% if job_active || session_busy %}disabled{% endif %}
+            >
+              Save network access
+            </button>
+          </form>
         </section>
         {% if let Some(gate) = pending_gate %}
           <section

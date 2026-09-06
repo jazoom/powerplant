@@ -21,7 +21,22 @@ fn restricted_policy_allows_only_domain_suffixes_and_dns() {
     assert!(rules.contains("npmjs.org"));
     assert!(rules.contains("github.com"));
     assert!(rules.contains("DomainSuffix"));
-    assert_eq!(policy.rules.len(), 3);
+    let first_domain = policy
+        .rules
+        .iter()
+        .position(|rule| format!("{:?}", rule.destination).contains("DomainSuffix"))
+        .expect("domain allowance");
+    for group in ["Private", "Loopback", "LinkLocal", "Metadata", "Host"] {
+        assert!(
+            policy.rules[..first_domain].iter().any(|rule| {
+                format!("{:?}", rule.destination) == format!("Group({group})")
+                    && rule.action == microsandbox::NetworkAction::Deny
+                    && rule.protocols.is_empty()
+                    && rule.ports.is_empty()
+            }),
+            "{group} must be denied before domain allowances"
+        );
+    }
 }
 
 #[test]

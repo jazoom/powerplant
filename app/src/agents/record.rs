@@ -90,6 +90,10 @@ impl NetworkAccess {
             Self::None | Self::Public => &[],
         }
     }
+
+    pub(crate) fn validate(self) -> Result<Self, AgentError> {
+        normalise_network(self)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

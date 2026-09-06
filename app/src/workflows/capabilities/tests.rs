@@ -38,7 +38,10 @@ pub(crate) fn test_command_capabilities() -> AttemptCapabilities {
 use super::{
     AttemptCapabilities, CapabilityError, DirectoryRole, NetworkCapability, PrimarySourceLocation,
 };
-use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, NetworkAccess, ToolId};
+use crate::agents::{
+    AccessMode, AgentId, AgentRecord, DirectoryGrant, EffectiveAuthority, NetworkAccess,
+    PolicyGrant, ToolId, guest_path_for,
+};
 use crate::tools::SUBMIT_WORKFLOW_OUTPUT;
 use crate::workflows::definition::{
     AgentAuthority, AgentStep, CandidateAuthority, GuestDirectoryAccess, OutputKey, OutputKind,
@@ -385,4 +388,105 @@ fn conversation_authority_rejects_a_write_candidate_and_guest_network() {
     )
     .expect("read authority");
     assert_eq!(read.network, NetworkCapability::None);
+}
+
+#[test]
+fn conversation_secondary_context_is_materialised_at_a_read_only_mount() {
+    let primary_dir = tempfile::tempdir().expect("primary");
+    let secondary_dir = tempfile::tempdir().expect("secondary");
+    let primary = crate::projects::ProjectRecord {
+        id: crate::projects::ProjectId::generate().expect("primary project"),
+        revision: 1,
+        name: "Primary".to_owned(),
+        host_path: primary_dir.path().to_path_buf(),
+        created_at_ms: 1,
+    };
+    let secondary_id = crate::projects::ProjectId::generate().expect("secondary project");
+    let alias = crate::conversations::secondary_alias(secondary_id);
+    let authority = EffectiveAuthority::from_conversation_with_context(
+        crate::conversations::ConversationId::generate().expect("conversation"),
+        1,
+        &primary,
+        primary.revision,
+        AccessMode::ReadWrite,
+        NetworkAccess::None,
+        vec![PolicyGrant {
+            alias: alias.clone(),
+            guest_path: guest_path_for(&alias, "project"),
+            host_path: secondary_dir.path().to_path_buf(),
+            access: AccessMode::ReadOnly,
+        }],
+        None,
+    )
+    .expect("authority");
+    let mut step = agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false);
+    let StepAction::Agent(action) = &mut step.action else {
+        panic!("agent step");
+    };
+    action.authority = AgentAuthority::new(
+        vec![ToolId::List, ToolId::Read, ToolId::Run],
+        vec![GuestDirectoryAccess {
+            alias: alias.clone(),
+            access: AccessMode::ReadOnly,
+        }],
+    )
+    .expect("secondary authority");
+
+    let capabilities =
+        AttemptCapabilities::derive_for_authority(&step, &authority).expect("capabilities");
+    let secondary = capabilities
+        .directories
+        .iter()
+        .find(|directory| directory.alias == alias)
+        .expect("secondary mount");
+    assert_eq!(secondary.guest_path, format!("/access/{alias}"));
+    assert_eq!(secondary.access, AccessMode::ReadOnly);
+    assert_eq!(secondary.role, DirectoryRole::SecondaryContext);
+}
+
+#[test]
+fn secondary_write_authority_is_rejected_before_dispatch() {
+    let primary_dir = tempfile::tempdir().expect("primary");
+    let secondary_dir = tempfile::tempdir().expect("secondary");
+    let primary = crate::projects::ProjectRecord {
+        id: crate::projects::ProjectId::generate().expect("primary project"),
+        revision: 1,
+        name: "Primary".to_owned(),
+        host_path: primary_dir.path().to_path_buf(),
+        created_at_ms: 1,
+    };
+    let secondary_id = crate::projects::ProjectId::generate().expect("secondary project");
+    let alias = crate::conversations::secondary_alias(secondary_id);
+    let authority = EffectiveAuthority::from_conversation_with_context(
+        crate::conversations::ConversationId::generate().expect("conversation"),
+        1,
+        &primary,
+        primary.revision,
+        AccessMode::ReadWrite,
+        NetworkAccess::None,
+        vec![PolicyGrant {
+            alias: alias.clone(),
+            guest_path: guest_path_for(&alias, "project"),
+            host_path: secondary_dir.path().to_path_buf(),
+            access: AccessMode::ReadOnly,
+        }],
+        None,
+    )
+    .expect("authority");
+    let mut step = agent_step(vec![ToolId::List], false);
+    let StepAction::Agent(action) = &mut step.action else {
+        panic!("agent step");
+    };
+    action.authority = AgentAuthority {
+        tools: vec![ToolId::List],
+        directories: vec![GuestDirectoryAccess {
+            alias,
+            access: AccessMode::ReadWrite,
+        }],
+    };
+
+    assert_eq!(
+        AttemptCapabilities::derive_for_authority(&step, &authority),
+        Err(CapabilityError::Authority)
+    );
 }

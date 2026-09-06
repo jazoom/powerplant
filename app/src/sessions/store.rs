@@ -300,6 +300,10 @@ impl SessionStore {
         Ok(job)
     }
 
+    pub(crate) fn conversation_reserved(&self, conversation_id: ConversationId) -> bool {
+        self.conversation_jobs().contains_key(&conversation_id)
+    }
+
     pub(crate) fn conversation_job(
         &self,
         conversation_id: ConversationId,

@@ -5,10 +5,10 @@ use crate::environments::{EnvironmentCatalogue, EnvironmentId};
 use super::commands::SystemCommandId;
 use super::definition::{
     ASSISTANT_REPLY, AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
-    DefinitionError, HumanGateStep, InputKey, OutputKey, OutputKind, PinnedWorkflowDefinition,
-    RequiredInput, RequiredOutput, RoleDefinition, RoleKey, StepAction, StepDefinition,
-    StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition, candidate_revision_output,
-    initial_candidate_input,
+    DefinitionError, GuestDirectoryAccess, HumanGateStep, InputKey, OutputKey, OutputKind,
+    PinnedWorkflowDefinition, RequiredInput, RequiredOutput, RoleDefinition, RoleKey, StepAction,
+    StepDefinition, StepEnvironment, StepKey, SystemCommandStep, WorkflowDefinition,
+    candidate_revision_output, initial_candidate_input,
 };
 use super::resolve::ResolveEnvironmentError;
 
@@ -28,13 +28,23 @@ pub(crate) fn pin_quick_task(
     instructions: &str,
     environment: EnvironmentId,
 ) -> Result<PinnedWorkflowDefinition, DefinitionError> {
+    pin_quick_task_with_context(access, tools, instructions, environment, Vec::new())
+}
+
+pub(crate) fn pin_quick_task_with_context(
+    access: AccessMode,
+    tools: &[ToolId],
+    instructions: &str,
+    environment: EnvironmentId,
+    secondary: Vec<GuestDirectoryAccess>,
+) -> Result<PinnedWorkflowDefinition, DefinitionError> {
     let role = RoleDefinition::new(
         RoleKey::parse(ROLE_KEY).expect("quick task role"),
         "Agent".to_owned(),
         String::new(),
         instructions.to_owned(),
     )?;
-    let work = agent_step(access, tools)?;
+    let work = agent_step(access, tools, secondary)?;
     let mut steps = vec![work];
     if access.is_writable() {
         steps.push(gate_step());
@@ -53,7 +63,11 @@ pub(crate) fn alpine_git_id(
         .ok_or(ResolveEnvironmentError::Missing)
 }
 
-fn agent_step(access: AccessMode, tools: &[ToolId]) -> Result<StepDefinition, DefinitionError> {
+fn agent_step(
+    access: AccessMode,
+    tools: &[ToolId],
+    secondary: Vec<GuestDirectoryAccess>,
+) -> Result<StepDefinition, DefinitionError> {
     let (candidate_authority, required_outputs) = if access.is_writable() {
         (
             CandidateAuthority::Edit,
@@ -70,7 +84,7 @@ fn agent_step(access: AccessMode, tools: &[ToolId]) -> Result<StepDefinition, De
             role: RoleKey::parse(ROLE_KEY).expect("quick task role"),
             environment: StepEnvironment::WorkflowDefault,
             candidate_authority,
-            authority: AgentAuthority::new(tools.to_vec(), Vec::new())?,
+            authority: AgentAuthority::new(tools.to_vec(), secondary)?,
             required_outputs,
         }),
         review: None,

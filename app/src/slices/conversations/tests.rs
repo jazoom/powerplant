@@ -847,7 +847,7 @@ async fn read_only_access_is_explicit_revisioned_and_selects_one_target() {
         .expect("detail");
     let detail_body = text(detail).await;
     assert!(detail_body.contains("Grant effect: List, Read and Run"));
-    assert!(detail_body.contains("Network: None"));
+    assert!(detail_body.contains("Effective network: No network"));
     let path = format!("/conversations/{}/access", conversation.id);
 
     let response = app(&state)
@@ -880,4 +880,86 @@ async fn read_only_access_is_explicit_revisioned_and_selects_one_target() {
         .expect("stale grant");
     assert_eq!(stale.status(), StatusCode::CONFLICT);
     assert_eq!(state.conversations.get(&conversation.id), Some(granted));
+}
+
+#[tokio::test]
+async fn conversation_network_controls_are_bounded_revisioned_and_reserved() {
+    let state = test_state();
+    let token = connected(&state);
+    let conversation = state
+        .conversations
+        .create("Network settings".to_owned())
+        .expect("conversation");
+    let path = format!("/conversations/{}/network", conversation.id);
+
+    let invalid = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&network=restricted&network_domains=",
+                conversation.revision
+            ),
+        ))
+        .await
+        .expect("invalid network");
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        state.conversations.get(&conversation.id),
+        Some(conversation.clone())
+    );
+
+    let public = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&network=public&network_domains=",
+                conversation.revision
+            ),
+        ))
+        .await
+        .expect("public network");
+    assert_eq!(public.status(), StatusCode::OK);
+    let body = text(public).await;
+    assert!(body.contains("Public internet"));
+    let updated = state.conversations.get(&conversation.id).expect("updated");
+    assert_eq!(updated.network, NetworkAccess::Public);
+
+    let stale = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&network=none&network_domains=",
+                conversation.revision
+            ),
+        ))
+        .await
+        .expect("stale network");
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state.conversations.get(&conversation.id),
+        Some(updated.clone())
+    );
+
+    let other = sessions::generate_session_token().expect("other session");
+    state.sessions.insert(other.id());
+    let _job = state
+        .sessions
+        .begin_conversation_job(&other.id(), conversation.id, 1)
+        .expect("reserved conversation");
+    let reserved = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&network=none&network_domains=",
+                updated.revision
+            ),
+        ))
+        .await
+        .expect("reserved network");
+    assert_eq!(reserved.status(), StatusCode::CONFLICT);
+    assert_eq!(state.conversations.get(&conversation.id), Some(updated));
 }

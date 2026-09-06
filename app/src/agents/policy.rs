@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use super::record::{
-    AccessMode, AgentError, AgentRecord, GUEST_PROJECT, NetworkAccess, canonical_directory,
-    guest_path_for,
+    AccessMode, AgentError, AgentRecord, GUEST_PROJECT, MAXIMUM_ALIAS_BYTES, NetworkAccess,
+    canonical_directory, guest_path_for,
 };
 use super::tool_id::ToolId;
 use crate::projects::{ProjectId, ProjectRecord};
@@ -50,6 +50,9 @@ pub(crate) enum AuthorityError {
     Stale,
     Unavailable,
     Path,
+    Alias,
+    DuplicatePath,
+    SecondaryWrite,
 }
 
 impl EffectiveAuthority {
@@ -83,15 +86,21 @@ impl EffectiveAuthority {
         })
     }
 
-    pub(crate) fn from_conversation(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_conversation_with_context(
         conversation_id: crate::conversations::ConversationId,
         conversation_revision: u32,
         project: &ProjectRecord,
         project_revision: u32,
         access: AccessMode,
+        network: NetworkAccess,
+        secondary: Vec<PolicyGrant>,
         preset: Option<&AgentRecord>,
     ) -> Result<Self, AuthorityError> {
-        if project.revision != project_revision || !project.host_path_is_available() {
+        if project.revision != project_revision {
+            return Err(AuthorityError::Stale);
+        }
+        if !project.host_path_is_available() {
             return Err(AuthorityError::Unavailable);
         }
         let mut tools = if access.is_writable() {
@@ -102,26 +111,44 @@ impl EffectiveAuthority {
         let mut grant_access = access;
         if let Some(preset) = preset {
             tools.retain(|tool| preset.tools.contains(tool));
-            if !preset.directories.is_empty() {
-                let Some(directory) = preset
-                    .directories
-                    .iter()
-                    .find(|directory| directory.host_path == project.host_path)
-                else {
-                    return Err(AuthorityError::MissingGrant);
-                };
-                grant_access = min_access(grant_access, directory.access);
+            if let Some(access) = preset_directory_access(preset, &project.host_path)? {
+                grant_access = min_access(grant_access, access);
             }
         }
-        let policy = DirectoryPolicy::from_grants(
-            vec![PolicyGrant {
-                alias: "project".to_owned(),
-                guest_path: GUEST_PROJECT.to_owned(),
-                host_path: project.host_path.clone(),
-                access: grant_access,
-            }],
-            "project".to_owned(),
-        );
+        let mut grants = vec![PolicyGrant {
+            alias: "project".to_owned(),
+            guest_path: GUEST_PROJECT.to_owned(),
+            host_path: project.host_path.clone(),
+            access: grant_access,
+        }];
+        for mut directory in secondary {
+            if !valid_secondary_alias(&directory.alias)
+                || directory.alias == "project"
+                || directory.guest_path != guest_path_for(&directory.alias, "project")
+            {
+                return Err(AuthorityError::Alias);
+            }
+            if directory.access.is_writable() {
+                return Err(AuthorityError::SecondaryWrite);
+            }
+            if grants.iter().any(|grant| grant.alias == directory.alias) {
+                return Err(AuthorityError::Alias);
+            }
+            if grants
+                .iter()
+                .any(|grant| grant.host_path == directory.host_path)
+            {
+                return Err(AuthorityError::DuplicatePath);
+            }
+            if let Some(preset) = preset
+                && let Some(access) = preset_directory_access(preset, &directory.host_path)?
+            {
+                directory.access = min_access(directory.access, access);
+            }
+            directory.access = AccessMode::ReadOnly;
+            grants.push(directory);
+        }
+        let policy = DirectoryPolicy::from_grants(grants, "project".to_owned());
         policy.confirm_hosts().map_err(|_| AuthorityError::Path)?;
         Ok(Self {
             origin: AuthorityOrigin::Conversation { conversation_id },
@@ -131,8 +158,7 @@ impl EffectiveAuthority {
             grant_alias: "project".to_owned(),
             grant_access,
             tools,
-            // Conversation network controls do not exist yet. Keep this ceiling closed.
-            network: NetworkAccess::None,
+            network,
             policy,
         })
     }
@@ -168,6 +194,34 @@ fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
         AccessMode::ReadWrite
     } else {
         AccessMode::ReadOnly
+    }
+}
+
+fn valid_secondary_alias(alias: &str) -> bool {
+    if alias.is_empty() || alias.len() > MAXIMUM_ALIAS_BYTES {
+        return false;
+    }
+    let mut characters = alias.chars();
+    characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic())
+        && characters
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn preset_directory_access(
+    preset: &AgentRecord,
+    host_path: &std::path::Path,
+) -> Result<Option<AccessMode>, AuthorityError> {
+    if preset.directories.is_empty() {
+        Ok(None)
+    } else {
+        preset
+            .directories
+            .iter()
+            .find(|directory| directory.host_path == host_path)
+            .map(|directory| Some(directory.access))
+            .ok_or(AuthorityError::MissingGrant)
     }
 }
 

@@ -33,6 +33,7 @@ pub(crate) struct ConversationRecord {
     pub(crate) projects: Vec<ProjectId>,
     pub(crate) grants: Vec<ConversationGrant>,
     pub(crate) execution_target: Option<ProjectId>,
+    pub(crate) network: crate::agents::NetworkAccess,
     pub(crate) model: Option<ConversationModelConfiguration>,
     pub(crate) messages: Vec<ConversationMessage>,
     pub(crate) active_job: Option<JobId>,
@@ -117,6 +118,8 @@ pub(crate) enum ConversationError {
     DuplicateProject,
     Access,
     Target,
+    WriteTarget,
+    Network,
 }
 
 impl ConversationError {
@@ -141,6 +144,10 @@ impl ConversationError {
                 "Grant project access to an attached project before inspection or changes."
             }
             Self::Target => "Choose a granted project as the execution target.",
+            Self::WriteTarget => {
+                "Only one project can have writable access in a conversation. Revoke the other writable grant first."
+            }
+            Self::Network => "Choose valid network access for this conversation.",
         }
     }
 }
@@ -175,6 +182,8 @@ struct ConversationFile {
     grants: Vec<ConversationGrantFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     execution_target: Option<String>,
+    network: String,
+    network_domains: Vec<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     model: Option<ConversationModelFile>,
     messages: Vec<MessageFile>,
@@ -258,6 +267,7 @@ impl ConversationStore {
             projects: Vec::new(),
             grants: Vec::new(),
             execution_target: None,
+            network: crate::agents::NetworkAccess::None,
             model: None,
             messages: Vec::new(),
             active_job: None,
@@ -324,6 +334,9 @@ impl ConversationStore {
             if current.execution_target == Some(project) {
                 current.execution_target = None;
             }
+            for grant in &mut current.grants {
+                grant.authority_revision = current.revision;
+            }
             Ok(())
         })
     }
@@ -375,6 +388,14 @@ impl ConversationStore {
             if !current.projects.contains(&project) {
                 return Err(ConversationError::Access);
             }
+            if access.is_writable()
+                && current
+                    .grants
+                    .iter()
+                    .any(|grant| grant.project_id != project && grant.access.is_writable())
+            {
+                return Err(ConversationError::WriteTarget);
+            }
             if let Some(grant) = current
                 .grants
                 .iter_mut()
@@ -391,7 +412,12 @@ impl ConversationStore {
                     access,
                 });
             }
-            current.execution_target = Some(project);
+            if access.is_writable() || current.execution_target.is_none() {
+                current.execution_target = Some(project);
+            }
+            for grant in &mut current.grants {
+                grant.authority_revision = current.revision;
+            }
             Ok(())
         })
     }
@@ -414,6 +440,28 @@ impl ConversationStore {
                 return Err(ConversationError::Target);
             }
             current.execution_target = Some(project);
+            for grant in &mut current.grants {
+                grant.authority_revision = current.revision;
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn set_network(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        network: crate::agents::NetworkAccess,
+    ) -> Result<ConversationRecord, ConversationError> {
+        let network = network.validate().map_err(|_| ConversationError::Network)?;
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            current.network = network;
+            for grant in &mut current.grants {
+                grant.authority_revision = current.revision;
+            }
             Ok(())
         })
     }
@@ -692,6 +740,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     if title != file.title {
         return Err(ConversationError::Corrupt);
     }
+    let network = parse_stored_network(&file.network, &file.network_domains)?;
     let model = file.model.map(model_from_file).transpose()?;
     let mut projects = Vec::with_capacity(file.projects.len());
     for raw in file.projects {
@@ -752,6 +801,14 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     } {
         return Err(ConversationError::Corrupt);
     }
+    if grants
+        .iter()
+        .filter(|grant| grant.access.is_writable())
+        .count()
+        > 1
+    {
+        return Err(ConversationError::Corrupt);
+    }
     Ok(ConversationRecord {
         id,
         revision: file.revision,
@@ -759,6 +816,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         projects,
         grants,
         execution_target,
+        network,
         model,
         messages,
         active_job,
@@ -895,6 +953,8 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
             })
             .collect(),
         execution_target: record.execution_target.map(|project| project.as_hex()),
+        network: record.network.as_str().to_owned(),
+        network_domains: record.network.domains().to_vec(),
         model: record.model.as_ref().map(model_to_file),
         messages: record
             .messages
@@ -909,6 +969,19 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         active_job: record.active_job.map(|request| request.as_hex()),
         created_at_ms: record.created_at_ms,
         updated_at_ms: record.updated_at_ms,
+    }
+}
+
+fn parse_stored_network(
+    mode: &str,
+    domains: &[String],
+) -> Result<crate::agents::NetworkAccess, ConversationError> {
+    match mode {
+        "none" if domains.is_empty() => Ok(crate::agents::NetworkAccess::None),
+        "restricted" => crate::agents::NetworkAccess::parse_form(mode, &domains.join("\n"))
+            .map_err(|_| ConversationError::Corrupt),
+        "public" if domains.is_empty() => Ok(crate::agents::NetworkAccess::Public),
+        _ => Err(ConversationError::Corrupt),
     }
 }
 

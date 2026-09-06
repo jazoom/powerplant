@@ -4,7 +4,7 @@ use askama::Template;
 mod tests;
 
 use crate::{
-    agents::AgentRecord,
+    agents::{AgentRecord, NetworkAccess},
     conversations::{
         ConversationMessage, ConversationModelConfiguration, ConversationRecord,
         MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus,
@@ -34,10 +34,12 @@ pub(super) struct CatalogueProjectOption {
 pub(super) struct ProjectContextView {
     pub(super) id: String,
     pub(super) name: String,
+    pub(super) alias: String,
     pub(super) status: &'static str,
     pub(super) access_granted: bool,
     pub(super) writable: bool,
     pub(super) execution_target: bool,
+    pub(super) secondary_context: bool,
 }
 
 pub(super) struct CandidateChangeView {
@@ -163,6 +165,12 @@ pub(super) struct ProviderOption {
     pub(super) selected: bool,
 }
 
+pub(super) struct NetworkOption {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+    pub(super) selected: bool,
+}
+
 #[derive(Template)]
 #[template(
     path = "conversations/templates/index.html",
@@ -188,6 +196,9 @@ pub(super) struct ConversationDetailContents<'a> {
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
     pub(super) pending_gate: Option<&'a PendingCodeGateView>,
+    pub(super) network_options: &'a [NetworkOption],
+    pub(super) network_domains: &'a str,
+    pub(super) network_summary: &'a str,
 }
 
 #[derive(Template)]
@@ -213,6 +224,9 @@ pub(super) struct ConversationDetailView {
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
     pub(super) pending_gate: Option<PendingCodeGateView>,
+    pub(super) network_options: Vec<NetworkOption>,
+    pub(super) network_domains: String,
+    pub(super) network_summary: String,
 }
 
 impl ConversationDetailView {
@@ -267,6 +281,31 @@ impl ConversationDetailView {
             });
         let configuration = record.model.as_ref().or(fallback.as_ref());
         let selection = configuration.map(|configuration| &configuration.selection);
+        let network_options = vec![
+            NetworkOption {
+                value: "none",
+                label: "No network",
+                selected: record.network == NetworkAccess::None,
+            },
+            NetworkOption {
+                value: "restricted",
+                label: "Restricted domains",
+                selected: matches!(record.network, NetworkAccess::Restricted(_)),
+            },
+            NetworkOption {
+                value: "public",
+                label: "Public internet",
+                selected: record.network == NetworkAccess::Public,
+            },
+        ];
+        let network_domains = record.network.domains().join("\n");
+        let preset_network = configuration
+            .and_then(|configuration| configuration.preset.as_ref())
+            .and_then(|selected| agents.iter().find(|agent| agent.id == selected.id))
+            .map(|agent| &agent.network);
+        let effective_network =
+            crate::conversations::intersect_network(&record.network, preset_network);
+        let network_summary = format_network_summary(&record.network, &effective_network);
         let providers = sources
             .vault
             .desk_providers()
@@ -311,36 +350,50 @@ impl ConversationDetailView {
                 let access_granted = access.is_some();
                 let writable = access == Some(crate::agents::AccessMode::ReadWrite);
                 let execution_target = record.execution_target == Some(*id);
+                let secondary_context = access_granted && !execution_target;
+                let alias = if secondary_context {
+                    crate::conversations::secondary_alias(*id)
+                } else {
+                    String::new()
+                };
                 match sources.projects.iter().find(|project| project.id == *id) {
                     Some(project) if project.host_path_is_available() => ProjectContextView {
                         id: id.as_hex(),
                         name: project.name.clone(),
-                        status: if writable {
-                            "Writable access granted. Tools: List, Read, Run and Write in the candidate workspace. Network: None."
+                        alias: alias.clone(),
+                        status: if execution_target && writable {
+                            "Writable access granted. This is the execution target. Tools: List, Read, Run and Write in the candidate workspace. Network: None by default."
+                        } else if secondary_context {
+                            "Read-only context. Tools: List, Read and Run. Writes are blocked. Network: None by default."
                         } else if access_granted {
-                            "Read-only access granted. Tools: List, Read and Run. Network: None."
+                            "Read-only access granted. This is the execution target. Tools: List, Read and Run. Network: None by default."
                         } else {
                             "Context reference only. File access is not granted."
                         },
                         access_granted,
                         writable,
                         execution_target,
+                        secondary_context,
                     },
                     Some(project) => ProjectContextView {
                         id: id.as_hex(),
                         name: project.name.clone(),
+                        alias: String::new(),
                         status: "Project unavailable. It remains a context reference without file access.",
                         access_granted: false,
                         writable: false,
                         execution_target: false,
+                        secondary_context: false,
                     },
                     None => ProjectContextView {
                         id: id.as_hex(),
                         name: "Project record unavailable".to_owned(),
+                        alias: String::new(),
                         status: "This context reference has no file access.",
                         access_granted: false,
                         writable: false,
                         execution_target: false,
+                        secondary_context: false,
                     },
                 }
             })
@@ -405,6 +458,9 @@ impl ConversationDetailView {
             job_active,
             session_busy,
             pending_gate,
+            network_options,
+            network_domains,
+            network_summary,
         }
     }
 
@@ -429,6 +485,9 @@ impl ConversationDetailView {
             job_active: self.job_active,
             session_busy: self.session_busy,
             pending_gate: self.pending_gate.as_ref(),
+            network_options: &self.network_options,
+            network_domains: &self.network_domains,
+            network_summary: &self.network_summary,
         }
     }
 }
@@ -514,6 +573,28 @@ pub(super) fn reply_html(text: &str) -> String {
         plain_html(text)
     } else {
         html
+    }
+}
+
+fn format_network_summary(selected: &NetworkAccess, effective: &NetworkAccess) -> String {
+    if selected == effective {
+        format!("Effective network: {}", network_label(effective))
+    } else {
+        format!(
+            "Selected network: {} · Effective with preset ceiling: {}",
+            network_label(selected),
+            network_label(effective)
+        )
+    }
+}
+
+fn network_label(access: &NetworkAccess) -> String {
+    match access {
+        NetworkAccess::None => "No network".to_owned(),
+        NetworkAccess::Restricted(domains) => {
+            format!("Restricted domains: {}", domains.join(", "))
+        }
+        NetworkAccess::Public => "Public internet".to_owned(),
     }
 }
 
