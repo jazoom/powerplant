@@ -39,13 +39,27 @@ Projects remains the first route and the brand destination. Providers uses `/con
 
 The desk title is the project name. The host path sits under the title as quiet monospace metadata. The project title and the composer are the strongest page elements.
 
-Provider, model and thinking controls stay visible above the desk title. Provider defaults stay active. The `#desk-settings` patch target contains these controls.
+Provider, model and thinking controls stay visible below the compact desk title. Provider defaults stay active.
+
+The `#desk-settings` patch target contains these controls. Show thinking sits beside the context summary.
 
 The selected agent is a compact control. Each eligible agent choice is a real canonical link.
 
-The transcript sheet is the work record for this project and agent pair. An empty transcript leads with a first task.
+The transcript sheet is the work record for this project and agent pair. An empty transcript contains no suggestions.
 
-The composer dock is last. Sandbox status sits before the composer. Quick task Send is the primary action. Configured workflow is an advanced disclosure.
+A centred column aligns requests, replies and the composer. Requests use a tinted surface. Replies use the paper surface.
+
+Tool output uses a compact preview with an expandable full result. Code blocks and tables scroll within the reply.
+
+The transcript owns its scroll position. Jump to latest appears when the reader leaves the transcript end.
+
+New output follows the transcript end only when the reader stays there. The composer remains outside that scroll region.
+
+The composer dock is last. Sandbox status sits before the composer. Quick task Send is the primary action.
+
+The message field expands with its content up to a viewport-relative limit. The browser retains manual resize support.
+
+Configured workflow is an advanced disclosure. Its expanded content has a bounded scroll area.
 
 ## Primary action
 
@@ -113,13 +127,7 @@ No projects: `/projects` opens the new project page. That page chooses an existi
 
 No agent: the project page asks who will work on the project. It explains the recommended agent permissions and the candidate approval boundary. The primary command is Create agent and open desk. Existing agents appear as familiar alternatives. Set custom permissions remains the advanced route.
 
-Empty transcript: the desk leads with Start with a task. Three example controls fill the composer and move focus to it:
-
-- Explain how this project is structured.
-- Review the current code and identify one concern.
-- Find one small improvement and make it.
-
-The examples use `button type="button"`. They read a bounded server-authored `data-task-example` value. They never submit a task and they do not change the composer disabled state. The examples leave after the first transcript turn.
+Empty transcript: the conversation stays clear. The composer is the first-task control. The desk offers no suggested tasks.
 
 Available project folders have no status badge.
 
@@ -147,7 +155,11 @@ The Working file label and the connection block are hidden.
 
 Do not put project names in the permanent mobile row.
 
-The desk title row stacks. The composer dock stays at the end of the sheet.
+The desk title row stacks. The model control spans the full width. Provider and thinking controls share the next row.
+
+The composer dock stays at the end of the sheet. The frame follows the dynamic viewport height.
+
+On short viewports, the document can scroll so that every control remains reachable.
 
 ## Flow
 
@@ -217,7 +229,7 @@ Do not put project names in the permanent mobile row.
 
 Do not add a model-only chat path, a second executor or durable transcripts.
 
-Do not submit a task from an empty-desk example control.
+Do not add task suggestions to the empty desk.
 
 Do not require a configured workflow or an onboarding completion record for the first Quick task.
 

@@ -13,8 +13,12 @@ function sendShortcutHint(): string {
     return `${key} + Enter to send.`;
 }
 
-export function initShortcutHint(root: HTMLElement): void {
-    root.textContent = sendShortcutHint();
+export function initShortcutHint(root: HTMLElement): IslandInstance {
+    const sync = () => {
+        root.textContent = sendShortcutHint();
+    };
+    sync();
+    return { reconcile: sync, destroy() {} };
 }
 
 function messageField(root: HTMLElement): HTMLTextAreaElement | null {

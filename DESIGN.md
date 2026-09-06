@@ -54,6 +54,10 @@ typography:
         fontWeight: 600
         lineHeight: 1.08
         letterSpacing: "-0.035em"
+    deskTitle:
+        fontSize: "1.5rem"
+    sectionTitle:
+        fontSize: "1.25rem"
     title:
         fontFamily: "IBM Plex Sans, ui-sans-serif, system-ui, sans-serif"
         fontSize: "1.125rem"
@@ -144,7 +148,11 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - More contains Agents, Workflows, Environments, Providers and Settings.
 - The mobile row stays a generic product index. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
-- The project desk uses visible provider, model and thinking controls, a readiness route, a transcript sheet and an attached yellow composer.
+- The project desk puts a compact project title before the provider, model and thinking controls.
+- The context row includes Show thinking. The empty transcript contains no task suggestions.
+- A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
+- The composer expands with the message and keeps Quick task Send as its primary action.
+- Jump to latest appears when the reader leaves the transcript end. New output does not move a reader away from earlier messages.
 - The Show thinking control sets one local preference for every project desk.
 - The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.
 - The thinking control shows Not available when no adjustable effort exists.

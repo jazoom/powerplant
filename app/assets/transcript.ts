@@ -44,25 +44,6 @@ export function revealBatchSize(backlog: number): number {
     );
 }
 
-function scrollMetrics(root: HTMLElement): {
-    scrollHeight: number;
-    scrollY: number;
-    viewportHeight: number;
-} {
-    if (root.scrollHeight > root.clientHeight + 1) {
-        return {
-            scrollHeight: root.scrollHeight,
-            scrollY: root.scrollTop,
-            viewportHeight: root.clientHeight,
-        };
-    }
-    return {
-        scrollHeight: document.documentElement.scrollHeight,
-        scrollY: window.scrollY,
-        viewportHeight: window.innerHeight,
-    };
-}
-
 function streamId(element: HTMLElement): string | null {
     return element.closest<HTMLElement>(".chat-turn")?.id ?? null;
 }
@@ -111,17 +92,39 @@ export function initTranscript(root: HTMLElement): () => void {
     const motionSkipped = new Set<string>();
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-    const measure = () => leftoverPx(scrollMetrics(root));
+    const jump = root
+        .closest(".chat-sheet")
+        ?.querySelector<HTMLButtonElement>("[data-jump-latest]");
+    const measure = () =>
+        leftoverPx({
+            scrollHeight: root.scrollHeight,
+            scrollY: root.scrollTop,
+            viewportHeight: root.clientHeight,
+        });
+    const updateJump = () => {
+        if (jump) {
+            jump.hidden =
+                !root.querySelector(".chat-turn") || isPinned(measure());
+        }
+    };
 
     const onScroll = () => {
         pinned = isPinned(measure());
+        updateJump();
     };
 
     const stick = () => {
-        if (!pinned || !root.querySelector(".chat-turn")) {
-            return;
+        if (pinned && root.querySelector(".chat-turn")) {
+            // Scroll the transcript, not its ancestors or the composer.
+            root.scrollTop = root.scrollHeight;
         }
-        root.lastElementChild?.scrollIntoView({ block: "end" });
+        updateJump();
+    };
+
+    const jumpToLatest = () => {
+        pinned = true;
+        stick();
+        root.focus({ preventScroll: true });
     };
 
     const observeOptions: MutationObserverInit = {
@@ -275,8 +278,11 @@ export function initTranscript(root: HTMLElement): () => void {
     observer = new MutationObserver(onMutations);
     observer.observe(root, observeOptions);
     root.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("scroll", onScroll, { passive: true });
     reducedMotion.addEventListener("change", onMotionChange);
+    jump?.addEventListener("click", jumpToLatest);
+    const resize = new ResizeObserver(stick);
+    resize.observe(root);
+    root.addEventListener("toggle", stick, true);
     reconcile();
     const initialScroll = requestAnimationFrame(stick);
 
@@ -291,8 +297,10 @@ export function initTranscript(root: HTMLElement): () => void {
         }
         streams.clear();
         observer.disconnect();
+        resize.disconnect();
+        jump?.removeEventListener("click", jumpToLatest);
+        root.removeEventListener("toggle", stick, true);
         root.removeEventListener("scroll", onScroll);
-        window.removeEventListener("scroll", onScroll);
         reducedMotion.removeEventListener("change", onMotionChange);
     };
 }

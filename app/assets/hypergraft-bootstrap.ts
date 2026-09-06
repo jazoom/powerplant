@@ -10,7 +10,6 @@ import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initNavigationMore } from "./navigation-more";
 import { initObserve } from "./observe";
-import { initTaskExamples } from "./task-examples";
 import { initThemeSelector } from "./theme";
 import { initThinkingVisibility } from "./thinking-visibility";
 import { initTranscript } from "./transcript";
@@ -35,7 +34,6 @@ export function startApp(): void {
             "navigation-more": initNavigationMore,
             observe: initObserve,
             "shortcut-hint": initShortcutHint,
-            "task-examples": initTaskExamples,
             "theme-selector": initThemeSelector,
             "thinking-visibility": initThinkingVisibility,
             transcript: initTranscript,

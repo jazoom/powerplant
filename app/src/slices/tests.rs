@@ -371,11 +371,6 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains("Sandbox preparation is in progress"));
     assert!(opening_tag_for(&text, "value=\"quick\"").contains(" disabled"));
-    assert!(
-        opening_tag_for(&text, &format!("data-task-example=\"{EXAMPLE}\""))
-            .contains("type=\"button\"")
-    );
-    assert!(text.contains("data-island=\"task-examples\""));
     assert!(session_snapshot(&state, &token).job.is_none());
 
     ready_alpine_git(&state);
@@ -384,7 +379,6 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains("Sandbox is ready"));
     assert!(!opening_tag_for(&text, "value=\"quick\"").contains(" disabled"));
-    assert!(text.contains("data-island=\"task-examples\""));
     assert!(session_snapshot(&state, &token).job.is_none());
 
     let send_body = format!("message={}&mode=quick", form_value(EXAMPLE));
@@ -413,7 +407,6 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains(USEFUL_REPLY));
     assert!(text.contains("Task finished."));
-    assert!(!text.contains("data-island=\"task-examples\""));
     let run = state
         .workflow_runs
         .get(&state.workflow_runs.summaries()[0].id)
