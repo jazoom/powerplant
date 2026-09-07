@@ -1382,7 +1382,7 @@ async fn writable_access_is_explicit_and_adds_write_without_network_access() {
 
     let granted = state.conversations.get(&conversation.id).expect("granted");
     let authority =
-        crate::conversations::resolve_authority(&granted, &state.projects, &state.agents)
+        crate::conversations::resolve_workflow_authority(&granted, &state.projects, &state.agents)
             .expect("authority")
             .expect("writable authority")
             .effective;
@@ -1554,6 +1554,7 @@ async fn plan_commands_reject_credentials_without_a_selected_model_or_associatio
             .await
             .expect("save");
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!text(response).await.contains("test-key"));
     }
     assert!(state.documents.list_for_conversation(record.id).is_empty());
     let plan = state
@@ -1581,6 +1582,33 @@ async fn plan_commands_reject_credentials_without_a_selected_model_or_associatio
             .current_revision(),
         1
     );
+}
+
+#[tokio::test]
+async fn rejected_plan_text_retains_escaped_input_without_creating_a_document() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state.conversations.create("Discussion".to_owned()).unwrap();
+    for (revision, title, status) in [
+        (record.revision, "", StatusCode::UNPROCESSABLE_ENTITY),
+        (record.revision + 1, "Draft", StatusCode::CONFLICT),
+    ] {
+        let response = app(&state)
+            .oneshot(command(
+                &format!("/conversations/{}/plans/text", record.id),
+                &token,
+                &format!(
+                    "revision={revision}&title={title}&markdown=%3Cscript%3Eunsaved%3C%2Fscript%3E"
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let patch = text(response).await;
+        assert!(patch.contains("&#60;script&#62;unsaved&#60;/script&#62;"));
+        assert!(!patch.contains("<script>unsaved</script>"));
+        assert!(state.documents.list_for_conversation(record.id).is_empty());
+    }
 }
 
 #[tokio::test]
@@ -2095,6 +2123,17 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
             crate::agents::AccessMode::ReadWrite,
         )
         .expect("grant");
+    let mut settings = record.model.as_ref().unwrap().settings.clone();
+    settings.tools = vec![ToolId::Run, ToolId::Read];
+    let directory_root = tempfile::tempdir().unwrap();
+    let mut directory =
+        crate::execution::DirectoryGrant::from_selected(directory_root.path(), &[]).unwrap();
+    directory.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    settings.directories = vec![directory];
+    let record = state
+        .conversations
+        .update_execution_settings(&record.id, record.revision, settings.clone())
+        .unwrap();
     let plan = state
         .documents
         .create_from_text(
@@ -2114,6 +2153,16 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
         .await
         .expect("stale preparation");
     assert_eq!(response.status(), StatusCode::CONFLICT);
+    state
+        .documents
+        .revise(
+            &plan.id,
+            1,
+            "Corrected plan".to_owned(),
+            "# Replacement\nDo not use this newer revision.".to_owned(),
+            None,
+        )
+        .unwrap();
     assert!(
         state
             .conversations
@@ -2131,6 +2180,9 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
         .await
         .expect("prepare");
     assert_eq!(response.status(), StatusCode::OK);
+    let patch = text(response).await;
+    assert!(patch.contains("target=\"chat-main\""));
+    assert!(patch.contains(&format!("location=\"/conversations/{}\"", record.id)));
     for _ in 0..100 {
         if state
             .conversations
@@ -2148,33 +2200,60 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
         turn.text
             .contains("# Exact plan\nPreserve this requirement.")
             && turn.text.contains(&plan.current().content_hash.as_str())
+            && !turn.text.contains("Do not use this newer revision")
     }));
     assert!(backend.last_tools().is_empty());
+    assert_eq!(
+        state
+            .conversations
+            .get(&record.id)
+            .unwrap()
+            .model
+            .unwrap()
+            .settings,
+        settings
+    );
     assert_eq!(state.documents.list_for_conversation(record.id).len(), 1);
 }
 
 #[tokio::test]
-async fn task_import_rejects_ungranted_project_and_releases_its_reservation() {
+async fn task_import_rejects_ungranted_directory_and_releases_its_reservation() {
     let state = test_state();
     let token = connected(&state);
     let record = state
         .conversations
         .create("Tasks".to_owned())
         .expect("conversation");
-    let project = register_project(&state, "Not authorised");
+    let record = state
+        .conversations
+        .select_model(
+            &record.id,
+            record.revision,
+            ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).expect("model"),
+            crate::tests::test_environment_id(),
+        )
+        .expect("settings");
+    let directory = tempfile::tempdir().expect("directory");
+    let grant =
+        crate::execution::DirectoryGrant::from_selected(directory.path(), &[]).expect("grant");
     let response = app(&state)
         .oneshot(command(
             &format!("/conversations/{}/tasks/import", record.id),
             &token,
             &format!(
-                "revision={}&project_id={}&path=tasks.md&title=Tasks",
-                record.revision, project.id
+                "revision={}&directory_id={}&path=tasks.md&title=Tasks",
+                record.revision,
+                grant.id.as_hex()
             ),
         ))
         .await
         .expect("import");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(text(response).await.contains("Grant read access"));
+    assert!(
+        text(response)
+            .await
+            .contains("Grant access to the selected directory")
+    );
     assert!(state.documents.list_for_conversation(record.id).is_empty());
     assert!(!state.sessions.conversation_reserved(record.id));
 }

@@ -9,7 +9,11 @@
         <div class="page-intro">
           <div>
             <h1>{{ title }}</h1>
-            <p>Immutable document {{ document_id }}.</p>
+            <p>
+              {% if task_count > 0 %}A saved task list for a repeatable
+              workflow.{% else %}A saved plan for reuse, task preparation or
+              independent review.{% endif %}
+            </p>
           </div>
           <a
             href="{{ back_href }}"
@@ -23,36 +27,78 @@
             <p>{{ error }}</p>
           </div>
         {% endif %}
-        <section
-          class="file-section space-y-3"
-          aria-labelledby="plan-provenance-heading"
-        >
-          <h2 id="plan-provenance-heading" class="text-lg font-semibold">
-            Document provenance
-          </h2>
-          <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+        {% if associated %}
+          <div class="flex flex-wrap items-center gap-3">
             {% if task_count > 0 %}
-              <dt class="text-quiet">Tasks</dt>
-              <dd>
-                {{ task_count }} total. {{ eligible_task_count }} unchecked and
-                eligible.
-              </dd>
+              {% if eligible_task_count > 0 %}<a
+                href="{{ action_href }}"
+                data-graft
+                class="btn btn-primary"
+                >Run tasks</a
+              >{% endif %}
+              <p class="text-quiet text-sm">
+                Run tasks opens workflow setup. No task starts before explicit
+                confirmation.
+              </p>
+            {% else %}
+              <form data-graft method="post" action="{{ action_href }}">
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ conversation_revision }}"
+                />
+                <input
+                  type="hidden"
+                  name="document_revision"
+                  value="{{ document_revision }}"
+                />
+                <button type="submit" class="btn btn-primary">
+                  Create task list
+                </button>
+              </form>
+              <p class="text-quiet text-sm">
+                Preparation calls the conversation model without tools. It
+                executes no tasks.
+              </p>
             {% endif %}
-            <dt class="text-quiet">Revision</dt>
-            <dd>
-              {{ document_revision }}{% if document_revision == current_revision %}(current){% endif %}
-            </dd>
-            <dt class="text-quiet">Source</dt>
-            <dd>{{ provenance }}</dd>
-            <dt class="text-quiet">Content hash</dt>
-            <dd class="font-mono break-all">{{ content_hash }}</dd>
-          </dl>
-          {% if !associated %}
-            <p class="text-quiet text-sm">
-              This document is no longer associated with a conversation.
-            </p>
-          {% endif %}
-        </section>
+            <a href="{{ review_href }}" data-graft class="btn btn-secondary"
+              >Review in a new conversation</a
+            >
+          </div>
+        {% endif %}
+        <details class="file-disclosure">
+          <summary>Document provenance</summary>
+          <section
+            class="space-y-3 pt-3"
+            aria-labelledby="plan-provenance-heading"
+          >
+            <h2 id="plan-provenance-heading" class="text-lg font-semibold">
+              Document provenance
+            </h2>
+            <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+              {% if task_count > 0 %}
+                <dt class="text-quiet">Tasks</dt>
+                <dd>
+                  {{ task_count }} total. {{ eligible_task_count }} unchecked
+                  and eligible.
+                </dd>
+              {% endif %}
+              <dt class="text-quiet">Revision</dt>
+              <dd>
+                {{ document_revision }}{% if document_revision == current_revision %}(current){% endif %}
+              </dd>
+              <dt class="text-quiet">Source</dt>
+              <dd>{{ provenance }}</dd>
+              <dt class="text-quiet">Content hash</dt>
+              <dd class="font-mono break-all">{{ content_hash }}</dd>
+            </dl>
+            {% if !associated %}
+              <p class="text-quiet text-sm">
+                This document is no longer associated with a conversation.
+              </p>
+            {% endif %}
+          </section>
+        </details>
         <section
           class="file-section space-y-3"
           aria-labelledby="plan-content-heading"

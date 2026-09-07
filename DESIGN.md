@@ -165,7 +165,12 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Environment switches stay inline in Settings. Active work offers Stop task and switch, while reviewed work offers review or exact-candidate discard.
 - Environment switch warnings name temporary attempt loss. They state that conversation history and existing host files remain.
 - New conversation settings remain draft values until a valid first message creates the conversation.
-- Conversation options contains rename and delete controls, plus access to plans, tasks and guest network settings.
+- Conversation options contains rename and delete controls.
+- Saved documents uses a stable inline disclosure above the transcript, with a count when documents exist.
+- The open document section occupies the transcript area. Its summary and the composer remain visible.
+- Completed responses expose Save as plan and Save as tasks beside their content. Both actions execute nothing.
+- Document views put Create task list or Run tasks before provenance. Export, revision history and independent review stay within the document view.
+- Document import names the authorised directory and selected environment. It reads one file without model calls or task execution.
 - Project access remains explicit. The composer shows each attached project and its access level.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
 - The composer expands with the message. Run workflow stays beside the conversation title.

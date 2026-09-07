@@ -126,6 +126,231 @@
           <p>{{ error }}</p>
         </div>
       {% endif %}
+      {% if let Some(saved) = self.saved() %}
+        <details
+          id="conversation-documents"
+          class="file-disclosure mx-auto min-h-0 w-full max-w-3xl shrink-0 overflow-y-auto px-5 open:flex-1 [&[open]~#transcript]:hidden"
+          {% if !saved.task_text.is_empty() || saved.plan_text_error %}open{% endif %}
+        >
+          <summary class="bg-base-100 sticky top-0 z-10 min-h-11 py-3">
+            Saved
+            documents{% if !saved.plans.is_empty() %}· {{ saved.plans.len() }}{% endif %}
+          </summary>
+          <div class="space-y-4 pb-4">
+            <div>
+              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                Save plans for reuse or prepare task lists for a workflow. These
+                actions save documents and execute no tasks.
+              </p>
+            </div>
+            {% if saved.plans.is_empty() %}
+              <p class="text-quiet text-sm">
+                No documents are associated with this conversation.
+              </p>
+            {% else %}
+              <ul class="record-list" aria-label="Saved documents">
+                {% for plan in saved.plans %}
+                  <li class="record-row flex-wrap gap-3">
+                    <div class="min-w-0 flex-1">
+                      <p class="font-medium break-words">{{ plan.title }}</p>
+                      <p class="text-quiet mt-1 text-xs">
+                        {{ plan.kind }} · Revision {{ plan.revision }} ·
+                        {{ plan.provenance }}
+                      </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                      <a
+                        href="{{ plan.open_href }}"
+                        data-graft
+                        class="btn btn-secondary btn-sm"
+                        >{% if plan.task_list %}Open tasks{% else %}Open plan{% endif %}</a
+                      >
+                      <form
+                        data-graft
+                        method="post"
+                        action="{{ plan.remove_href }}"
+                      >
+                        <input
+                          type="hidden"
+                          name="revision"
+                          value="{{ saved.revision }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="document_revision"
+                          value="{{ plan.revision }}"
+                        />
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          {% if job_active || session_busy %}disabled{% endif %}
+                        >
+                          Remove
+                        </button>
+                      </form>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+            <details
+              class="file-disclosure"
+              {% if saved.plan_text_error %}open{% endif %}
+            >
+              <summary>Save plan text</summary>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/plans/text"
+                class="mt-3 flex max-w-3xl flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+                <label class="flex flex-col gap-1" for="submitted-plan-title">
+                  <span class="text-sm">Title</span>
+                  <input
+                    id="submitted-plan-title"
+                    class="input input-bordered"
+                    name="title"
+                    value="{{ saved.plan_title }}"
+                    required
+                    maxlength="120"
+                  />
+                </label>
+                <label
+                  class="flex flex-col gap-1"
+                  for="submitted-plan-markdown"
+                >
+                  <span class="text-sm">Plan text</span>
+                  <textarea
+                    id="submitted-plan-markdown"
+                    class="textarea textarea-bordered min-h-40"
+                    name="markdown"
+                    required
+                    maxlength="65536"
+                  >
+{{ saved.plan_text }}</textarea>
+                </label>
+                <button class="btn btn-secondary self-start" type="submit">
+                  Save as plan
+                </button>
+              </form>
+            </details>
+            <details class="file-disclosure">
+              <summary>Import tasks from a directory</summary>
+              <p class="text-quiet mt-1 text-sm">
+                Import reads one authorised directory file through a read-only
+                sandbox with {{ environment_summary }}. It calls no model and
+                executes no tasks.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/tasks/import"
+                class="mt-3 flex max-w-3xl flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+                <label class="flex flex-col gap-1"
+                  ><span class="text-sm">Authorised directory</span>
+                  <select
+                    class="select select-bordered"
+                    name="directory_id"
+                    required
+                  >
+                    <option value="">Select a directory</option>
+                    {% for directory in directories %}
+                      <option value="{{ directory.id }}">
+                        {{ directory.host_path }}{% if !directory.available %}
+                          · Unavailable
+                        {% else if directory.pending_approval %}
+                          · Pending approval
+                        {% endif %}
+                      </option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label class="flex flex-col gap-1"
+                  ><span class="text-sm">Directory-relative file path</span
+                  ><input
+                    class="input input-bordered"
+                    name="path"
+                    required
+                    maxlength="4096"
+                    placeholder="tasks/release.md"
+                /></label>
+                <label class="flex flex-col gap-1"
+                  ><span class="text-sm">Title</span
+                  ><input
+                    class="input input-bordered"
+                    name="title"
+                    required
+                    maxlength="120"
+                /></label>
+                <button
+                  class="btn btn-secondary self-start"
+                  type="submit"
+                  {% if job_active || session_busy %}disabled{% endif %}
+                >
+                  Import tasks
+                </button>
+              </form>
+            </details>
+            <details
+              class="file-disclosure"
+              {% if !saved.task_text.is_empty() %}open{% endif %}
+            >
+              <summary>Save task list text</summary>
+              <p class="text-quiet mt-1 text-sm">
+                Use a heading and top-level checkbox tasks. Checked tasks stay
+                as authored. Power Plant only marks unchecked tasks as eligible.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/tasks/text"
+                class="mt-3 flex max-w-3xl flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+                <label class="flex flex-col gap-1" for="submitted-task-title"
+                  ><span class="text-sm">Title</span
+                  ><input
+                    id="submitted-task-title"
+                    class="input input-bordered"
+                    name="title"
+                    value="{{ saved.task_title }}"
+                    required
+                    maxlength="120"
+                /></label>
+                <label class="flex flex-col gap-1" for="submitted-task-markdown"
+                  ><span class="text-sm">Task list text</span
+                  ><textarea
+                    id="submitted-task-markdown"
+                    class="textarea textarea-bordered min-h-40"
+                    name="markdown"
+                    required
+                    maxlength="65536"
+                  >
+{{ saved.task_text }}</textarea>
+                </label>
+                <button class="btn btn-secondary self-start" type="submit">
+                  Save as tasks
+                </button>
+              </form>
+            </details>
+          </div>
+        </details>
+      {% endif %}
       <section
         id="transcript"
         data-island="transcript"
@@ -479,273 +704,6 @@
               </ul>
             </section>
           {% endif %}
-          <section
-            id="conversation-documents"
-            popover
-            class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] space-y-4 overflow-y-auto p-5 md:inset-x-auto md:top-28 md:right-8 md:w-[min(40rem,calc(100vw-18rem))]"
-            aria-labelledby="conversation-plans-heading"
-          >
-            <div>
-              <div class="flex items-center justify-between gap-3">
-                <h2
-                  id="conversation-plans-heading"
-                  class="text-lg font-semibold"
-                >
-                  Plans and tasks
-                </h2>
-                <button
-                  type="button"
-                  class="btn btn-ghost btn-sm min-h-11"
-                  popovertarget="conversation-documents"
-                  popovertargetaction="hide"
-                >
-                  Close
-                </button>
-              </div>
-              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
-                Documents are immutable local records. A correction creates a
-                new revision. Earlier content remains available.
-              </p>
-              <p class="text-quiet mt-2 max-w-[60ch] text-sm">
-                Task preparation uses {{ model_summary }} without guest tools.
-                The model replies in this conversation. Save as tasks validates
-                its output without execution.
-              </p>
-            </div>
-            {% if saved.plans.is_empty() %}
-              <p class="text-quiet text-sm">
-                No documents are associated with this conversation.
-              </p>
-            {% else %}
-              <ul class="record-list" aria-label="Saved plans and tasks">
-                {% for plan in saved.plans %}
-                  <li class="record-row flex-wrap gap-3">
-                    <div class="min-w-0 flex-1">
-                      <p class="font-medium break-words">{{ plan.title }}</p>
-                      <p class="text-quiet mt-1 text-xs">
-                        {{ plan.kind }} · Revision {{ plan.revision }} ·
-                        {{ plan.provenance }} · {{ plan.content_hash }}
-                      </p>
-                    </div>
-                    <div class="flex flex-wrap gap-2">
-                      <a
-                        href="{{ plan.open_href }}"
-                        data-graft
-                        class="btn btn-secondary btn-sm"
-                        >{% if plan.task_list %}Open tasks{% else %}Open plan{% endif %}</a
-                      >
-                      <a
-                        href="{{ plan.export_href }}"
-                        class="btn btn-ghost btn-sm"
-                        >{% if plan.task_list %}Export for Pi{% else %}Export{% endif %}</a
-                      >
-                      {% if !plan.task_list %}
-                        <form
-                          data-graft
-                          method="post"
-                          action="{{ plan.prepare_href }}"
-                        >
-                          <input
-                            type="hidden"
-                            name="revision"
-                            value="{{ saved.revision }}"
-                          />
-                          <input
-                            type="hidden"
-                            name="document_revision"
-                            value="{{ plan.revision }}"
-                          />
-                          <button
-                            class="btn btn-secondary btn-sm"
-                            type="submit"
-                            {% if job_active || session_busy %}disabled{% endif %}
-                          >
-                            Create tasks from this plan
-                          </button>
-                        </form>
-                      {% endif %}
-                      {% if !plan.review_href.is_empty() %}
-                        <a
-                          href="{{ plan.review_href }}"
-                          data-graft
-                          class="btn btn-ghost btn-sm"
-                          >Review in a new conversation</a
-                        >
-                      {% endif %}
-                      <form
-                        data-graft
-                        method="post"
-                        action="{{ plan.remove_href }}"
-                      >
-                        <input
-                          type="hidden"
-                          name="revision"
-                          value="{{ saved.revision }}"
-                        />
-                        <input
-                          type="hidden"
-                          name="document_revision"
-                          value="{{ plan.revision }}"
-                        />
-                        <button
-                          class="btn btn-ghost btn-sm"
-                          type="submit"
-                          {% if job_active || session_busy %}disabled{% endif %}
-                        >
-                          Remove
-                        </button>
-                      </form>
-                    </div>
-                  </li>
-                {% endfor %}
-              </ul>
-            {% endif %}
-            <details class="file-disclosure">
-              <summary>Save plan text</summary>
-              <form
-                data-graft
-                method="post"
-                action="/conversations/{{ saved.id }}/plans/text"
-                class="mt-3 flex max-w-3xl flex-col gap-3"
-              >
-                <input
-                  type="hidden"
-                  name="revision"
-                  value="{{ saved.revision }}"
-                />
-                <label class="flex flex-col gap-1" for="submitted-plan-title">
-                  <span class="text-sm">Title</span>
-                  <input
-                    id="submitted-plan-title"
-                    class="input input-bordered"
-                    name="title"
-                    required
-                    maxlength="120"
-                  />
-                </label>
-                <label
-                  class="flex flex-col gap-1"
-                  for="submitted-plan-markdown"
-                >
-                  <span class="text-sm">Plan text</span>
-                  <textarea
-                    id="submitted-plan-markdown"
-                    class="textarea textarea-bordered min-h-40"
-                    name="markdown"
-                    required
-                    maxlength="65536"
-                  ></textarea>
-                </label>
-                <button class="btn btn-secondary self-start" type="submit">
-                  Save as plan
-                </button>
-              </form>
-            </details>
-            <details class="file-disclosure">
-              <summary>Import tasks from a project</summary>
-              <p class="text-quiet mt-1 text-sm">
-                Import reads one explicitly authorised project file through a
-                read-only guest. It does not call a model or execute tasks.
-              </p>
-              <form
-                data-graft
-                method="post"
-                action="/conversations/{{ saved.id }}/tasks/import"
-                class="mt-3 flex max-w-3xl flex-col gap-3"
-              >
-                <input
-                  type="hidden"
-                  name="revision"
-                  value="{{ saved.revision }}"
-                />
-                <label class="flex flex-col gap-1"
-                  ><span class="text-sm">Authorised project</span>
-                  <select
-                    class="select select-bordered"
-                    name="project_id"
-                    required
-                  >
-                    <option value="">Select a project</option>
-                    {% for project in attached_projects %}{% if project.access_granted %}
-                      <option value="{{ project.id }}">
-                        {{ project.name }}
-                      </option>
-                    {% endif %}{% endfor %}
-                  </select>
-                </label>
-                <label class="flex flex-col gap-1"
-                  ><span class="text-sm">Project-relative file path</span
-                  ><input
-                    class="input input-bordered"
-                    name="path"
-                    required
-                    maxlength="4096"
-                    placeholder="tasks/release.md"
-                /></label>
-                <label class="flex flex-col gap-1"
-                  ><span class="text-sm">Title</span
-                  ><input
-                    class="input input-bordered"
-                    name="title"
-                    required
-                    maxlength="120"
-                /></label>
-                <button
-                  class="btn btn-secondary self-start"
-                  type="submit"
-                  {% if job_active || session_busy %}disabled{% endif %}
-                >
-                  Import tasks
-                </button>
-              </form>
-            </details>
-            <details
-              class="file-disclosure"
-              {% if !saved.task_text.is_empty() %}open{% endif %}
-            >
-              <summary>Save task list text</summary>
-              <p class="text-quiet mt-1 text-sm">
-                Use a heading and top-level checkbox tasks. Checked tasks stay
-                as authored. Power Plant only marks unchecked tasks as eligible.
-              </p>
-              <form
-                data-graft
-                method="post"
-                action="/conversations/{{ saved.id }}/tasks/text"
-                class="mt-3 flex max-w-3xl flex-col gap-3"
-              >
-                <input
-                  type="hidden"
-                  name="revision"
-                  value="{{ saved.revision }}"
-                />
-                <label class="flex flex-col gap-1" for="submitted-task-title"
-                  ><span class="text-sm">Title</span
-                  ><input
-                    id="submitted-task-title"
-                    class="input input-bordered"
-                    name="title"
-                    value="{{ saved.task_title }}"
-                    required
-                    maxlength="120"
-                /></label>
-                <label class="flex flex-col gap-1" for="submitted-task-markdown"
-                  ><span class="text-sm">Task list text</span
-                  ><textarea
-                    id="submitted-task-markdown"
-                    class="textarea textarea-bordered min-h-40"
-                    name="markdown"
-                    required
-                    maxlength="65536"
-                  >
-{{ saved.task_text }}</textarea>
-                </label>
-                <button class="btn btn-secondary self-start" type="submit">
-                  Save as tasks
-                </button>
-              </form>
-            </details>
-          </section>
 
           {% if let Some(gate) = saved.pending_gate %}
             <section
@@ -2271,16 +2229,6 @@
             controls.
           </p>
         {% else if let Some(saved) = self.saved() %}
-          <div class="flex flex-wrap gap-2">
-            <button
-              type="button"
-              class="btn btn-secondary btn-sm min-h-11"
-              popovertarget="conversation-documents"
-            >
-              Plans and
-              tasks{% if !saved.plans.is_empty() %}· {{ saved.plans.len() }}{% endif %}
-            </button>
-          </div>
           <section
             class="file-section space-y-3"
             aria-labelledby="conversation-name-heading"

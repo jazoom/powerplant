@@ -487,10 +487,11 @@ fn resolving_a_conversation_materialises_each_secondary_project_by_id() {
         updated_at_ms: 1,
     };
 
-    let authority = resolve_authority(&record, &projects, &crate::agents::AgentStore::in_memory())
-        .expect("authority")
-        .expect("target authority")
-        .effective;
+    let authority =
+        resolve_workflow_authority(&record, &projects, &crate::agents::AgentStore::in_memory())
+            .expect("authority")
+            .expect("target authority")
+            .effective;
     let alias = secondary_alias(secondary.id);
     assert_eq!(authority.grant_access, AccessMode::ReadOnly);
     assert_eq!(authority.policy.primary_guest(), "/project");
@@ -502,7 +503,8 @@ fn resolving_a_conversation_materialises_each_secondary_project_by_id() {
     let mut stale = record;
     stale.grants[1].project_revision += 1;
     assert_eq!(
-        resolve_authority(&stale, &projects, &crate::agents::AgentStore::in_memory()).err(),
+        resolve_workflow_authority(&stale, &projects, &crate::agents::AgentStore::in_memory())
+            .err(),
         Some(ConversationAccessError::Stale)
     );
 }

@@ -16,8 +16,11 @@
     <p class="text-quiet mt-2 text-xs" role="status">{{ message.status }}</p>
   {% endif %}
   {% if message.saveable_plan %}
-    <details class="mt-3">
-      <summary class="btn btn-ghost btn-sm min-h-11">Save response</summary>
+    <div class="mt-3 border-t pt-3">
+      <p class="text-quiet text-sm">
+        Save this response as a reusable document. Neither action executes
+        tasks.
+      </p>
       <form
         data-graft
         method="post"
@@ -78,6 +81,6 @@
           Save as tasks
         </button>
       </form>
-    </details>
+    </div>
   {% endif %}
 </div>

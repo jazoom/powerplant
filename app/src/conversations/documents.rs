@@ -110,9 +110,9 @@ pub(crate) enum PlanSource {
         conversation_id: ConversationId,
         source_hash: ObjectHash,
     },
-    ProjectFile {
+    DirectoryFile {
         conversation_id: ConversationId,
-        project_id: crate::projects::ProjectId,
+        directory_id: crate::execution::DirectoryGrantId,
         path: String,
         source_hash: ObjectHash,
     },
@@ -260,9 +260,9 @@ enum SourceFile {
         conversation_id: String,
         source_hash: String,
     },
-    ProjectFile {
+    DirectoryFile {
         conversation_id: String,
-        project_id: String,
+        directory_id: String,
         path: String,
         source_hash: String,
     },
@@ -820,19 +820,19 @@ fn source_from_file(file: SourceFile) -> Result<PlanSource, DocumentError> {
                 .ok_or(DocumentError::Corrupt)?,
             source_hash: ObjectHash::parse(&source_hash).ok_or(DocumentError::Corrupt)?,
         }),
-        SourceFile::ProjectFile {
+        SourceFile::DirectoryFile {
             conversation_id,
-            project_id,
+            directory_id,
             path,
             source_hash,
         } => {
             if !crate::workflows::task_list::valid_project_path(&path) {
                 return Err(DocumentError::Corrupt);
             }
-            Ok(PlanSource::ProjectFile {
+            Ok(PlanSource::DirectoryFile {
                 conversation_id: ConversationId::parse(&conversation_id)
                     .ok_or(DocumentError::Corrupt)?,
-                project_id: crate::projects::ProjectId::parse(&project_id)
+                directory_id: crate::execution::DirectoryGrantId::parse(&directory_id)
                     .ok_or(DocumentError::Corrupt)?,
                 path,
                 source_hash: ObjectHash::parse(&source_hash).ok_or(DocumentError::Corrupt)?,
@@ -916,14 +916,14 @@ fn source_to_file(source: &PlanSource) -> SourceFile {
             conversation_id: conversation_id.as_hex(),
             source_hash: source_hash.as_str(),
         },
-        PlanSource::ProjectFile {
+        PlanSource::DirectoryFile {
             conversation_id,
-            project_id,
+            directory_id,
             path,
             source_hash,
-        } => SourceFile::ProjectFile {
+        } => SourceFile::DirectoryFile {
             conversation_id: conversation_id.as_hex(),
-            project_id: project_id.as_hex(),
+            directory_id: directory_id.as_hex(),
             path: path.clone(),
             source_hash: source_hash.as_str(),
         },

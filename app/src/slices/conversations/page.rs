@@ -284,13 +284,9 @@ pub(super) struct PlanDocumentView {
     pub(super) title: String,
     pub(super) kind: String,
     pub(super) task_list: bool,
-    pub(super) prepare_href: String,
     pub(super) revision: u32,
     pub(super) provenance: String,
-    pub(super) content_hash: String,
     pub(super) open_href: String,
-    pub(super) export_href: String,
-    pub(super) review_href: String,
     pub(super) remove_href: String,
 }
 
@@ -464,6 +460,9 @@ pub(super) struct SavedConversationState {
     pub(super) plans: Vec<PlanDocumentView>,
     pub(super) task_text: String,
     pub(super) task_title: String,
+    pub(super) plan_text: String,
+    pub(super) plan_title: String,
+    pub(super) plan_text_error: bool,
     pub(super) source_review: Option<ConversationLinkView>,
     pub(super) linked_reviews: Vec<ConversationLinkView>,
     pub(super) source_candidate_review: Option<CandidateReviewLinkView>,
@@ -970,6 +969,9 @@ impl ConversationDetailView {
                 plans,
                 task_text: String::new(),
                 task_title: String::new(),
+                plan_text: String::new(),
+                plan_title: String::new(),
+                plan_text_error: false,
                 source_review,
                 linked_reviews,
                 source_candidate_review,
@@ -1466,24 +1468,12 @@ fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
     let revision = document.current();
     PlanDocumentView {
         title: document.title.clone(),
-        prepare_href: document
-            .associated_conversation
-            .map_or_else(String::new, |id| {
-                format!("/conversations/{id}/plans/{}/tasks", document.id)
-            }),
         kind: document.kind.label().to_owned(),
         task_list: document.kind == crate::conversations::DocumentKind::TaskList,
         revision: revision.revision,
         provenance: source_label(&revision.source),
-        content_hash: revision.content_hash.as_str(),
-        open_href: format!("/plans/{}", document.id.as_hex()),
-        export_href: format!("/plans/{}/export", document.id.as_hex()),
-        review_href: format!(
-            "/conversations/{}/plans/{}/review?revision={}",
-            document
-                .associated_conversation
-                .expect("associated plan document")
-                .as_hex(),
+        open_href: format!(
+            "/plans/{}?revision={}",
             document.id.as_hex(),
             revision.revision
         ),
@@ -1504,9 +1494,7 @@ fn source_label(source: &PlanSource) -> String {
             format!("Assistant message {}", message_index + 1)
         }
         PlanSource::SubmittedText { .. } => "Submitted document text".to_owned(),
-        PlanSource::ProjectFile {
-            project_id, path, ..
-        } => format!("Project {project_id}: {path}"),
+        PlanSource::DirectoryFile { path, .. } => format!("Imported file: {path}"),
         PlanSource::Correction { previous } => {
             format!("Correction of revision {}", previous.revision)
         }
@@ -1531,6 +1519,9 @@ pub(super) struct PlanPageRevision {
 #[derive(Template)]
 #[template(path = "conversations/templates/plan.html", block = "plan_page")]
 pub(super) struct PlanDocumentPage {
+    pub(super) conversation_revision: u32,
+    pub(super) action_href: String,
+    pub(super) review_href: String,
     pub(super) document_title: String,
     pub(super) title: String,
     pub(super) document_id: String,
@@ -1552,6 +1543,9 @@ pub(super) struct PlanDocumentPage {
 #[derive(Template)]
 #[template(path = "conversations/templates/plan.html", block = "plan_detail")]
 pub(super) struct PlanDocumentContents<'a> {
+    pub(super) conversation_revision: u32,
+    pub(super) action_href: &'a str,
+    pub(super) review_href: &'a str,
     pub(super) title: &'a str,
     pub(super) document_id: &'a str,
     pub(super) document_revision: u32,
@@ -1608,6 +1602,15 @@ impl PlanDocumentPage {
             |id| format!("/conversations/{id}"),
         );
         Self {
+            conversation_revision: 0,
+            action_href: document.associated_conversation.map_or_else(String::new, |id| {
+                if document.kind == crate::conversations::DocumentKind::TaskList {
+                    format!("/conversations/{id}/workflow?task_document={}&task_revision={}&task_hash={}", document.id, selected.revision, selected.content_hash.as_str())
+                } else {
+                    format!("/conversations/{id}/plans/{}/tasks", document.id)
+                }
+            }),
+            review_href: document.associated_conversation.map_or_else(String::new, |id| format!("/conversations/{id}/plans/{}/review?revision={}", document.id, selected.revision)),
             document_title: format!(
                 "{} | {} | Power Plant",
                 document.title,
@@ -1656,6 +1659,9 @@ impl PlanDocumentPage {
 
     pub(super) fn contents(&self) -> PlanDocumentContents<'_> {
         PlanDocumentContents {
+            conversation_revision: self.conversation_revision,
+            action_href: &self.action_href,
+            review_href: &self.review_href,
             title: &self.title,
             document_id: &self.document_id,
             document_revision: self.document_revision,

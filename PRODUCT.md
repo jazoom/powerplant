@@ -161,9 +161,17 @@ A changed Quick task waits at a human gate. The user must approve the exact cand
 
 Configured workflows start from Run workflow beside the conversation title. The launch sheet shows its brief, target, access, environment readiness and fresh-context boundary.
 
-Conversation documents include immutable task lists. Create tasks from this plan sends the selected plan to the conversation model without guest tools. Preparation never executes tasks.
+Saved documents sits in a stable inline section above the transcript. Its summary shows the document count when documents exist.
 
-A completed model response or submitted text can become a task list after validation. An explicit import reads one authorised project file through a read-only guest.
+Completed responses offer Save as plan and Save as tasks. The user can also paste plan or task-list text. These actions execute nothing.
+
+Plans offer Create task list. Preparation sends the selected plan to the conversation model without tools, directory access or a sandbox requirement. Conversation settings remain unchanged.
+
+Task lists offer Run tasks, which opens workflow setup without execution. Document views retain export, immutable revision history and independent review.
+
+An explicit import reads one file from an authorised directory through a read-only sandbox with the selected environment and no network. Import calls no model and executes no tasks.
+
+Import rejects parent paths and symlinks. It revalidates directory identity and applicable session-bound consent before access and publication. Missing environments receive no substitution.
 
 Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Pi export use the saved revision.
 

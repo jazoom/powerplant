@@ -104,3 +104,38 @@ fn dense_markup_uses_escaped_text_with_bounded_nodes() {
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
 }
+
+#[test]
+fn document_actions_keep_the_selected_revision_identity_after_a_correction() {
+    let state = crate::tests::test_state(RuntimeConfig::development());
+    let record = state.conversations.create("Documents".to_owned()).unwrap();
+    let content = "# Tasks\n- [ ] First task\n";
+    let document = state
+        .documents
+        .create_task_list_from_text(record.id, "Tasks".to_owned(), content.to_owned(), None)
+        .unwrap();
+    let hash = document.current().content_hash.as_str();
+    let document = state
+        .documents
+        .revise(
+            &document.id,
+            1,
+            "Tasks".to_owned(),
+            "# Tasks\n- [ ] Replacement\n".to_owned(),
+            None,
+        )
+        .unwrap();
+    let view = PlanDocumentPage::from_document(&document, 1, content.to_owned(), "");
+    assert_eq!(view.document_revision, 1);
+    assert_eq!(view.current_revision, 2);
+    assert!(view.action_href.contains(&format!(
+        "task_document={}&task_revision=1&task_hash={hash}",
+        document.id
+    )));
+    assert!(view.review_href.ends_with("?revision=1"));
+    assert!(
+        view.tasks[0]
+            .run_href
+            .contains(&format!("task_revision=1&task_hash={hash}&task_index=0"))
+    );
+}

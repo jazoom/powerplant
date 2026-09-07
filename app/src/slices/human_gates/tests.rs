@@ -668,7 +668,7 @@ fn conversation_awaiting_gate() -> GateFixture {
         .workflow_runs
         .get(&fixture.run_id)
         .expect("run");
-    let authority = crate::conversations::resolve_authority(
+    let authority = crate::conversations::resolve_workflow_authority(
         &granted,
         &fixture.state.projects,
         &fixture.state.agents,

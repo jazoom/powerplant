@@ -113,15 +113,6 @@ fn narrower_domain(left: &str, right: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn resolve_authority(
-    record: &crate::conversations::ConversationRecord,
-    projects: &ProjectStore,
-    agents: &AgentStore,
-) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
-    let _ = agents;
-    resolve_authority_inner(record, projects)
-}
-
 pub(crate) fn resolve_workflow_authority(
     record: &crate::conversations::ConversationRecord,
     projects: &ProjectStore,

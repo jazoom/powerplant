@@ -1313,21 +1313,26 @@ async fn save_plan_text(
     let Some(record) = load_conversation(&state, &conversation_id) else {
         return Ok(responses::command_navigation("/conversations"));
     };
+    let secret = plan_secret(&state, &[&form.title, &form.markdown]);
+    let error_view = |error| {
+        let mut view = detail_view(&state, _session.0, &record, &record.title, error);
+        if let page::ConversationPageState::Saved(saved) = &mut view.state {
+            saved.plan_title = crate::tools::redact(&form.title, secret.as_deref());
+            saved.plan_text = crate::tools::redact(&form.markdown, secret.as_deref());
+            saved.plan_text_error = true;
+        }
+        view
+    };
     let Some(revision) = parse_revision(&form.revision) else {
         return render_detail_command(
             graft,
             PatchStatus::UnprocessableEntity,
-            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
+            error_view(REVISION_MESSAGE),
         );
     };
     if revision != record.revision {
-        return render_detail_command(
-            graft,
-            PatchStatus::Conflict,
-            detail_view(&state, _session.0, &record, &record.title, REVISION_MESSAGE),
-        );
+        return render_detail_command(graft, PatchStatus::Conflict, error_view(REVISION_MESSAGE));
     }
-    let secret = plan_secret(&state, &[&form.title, &form.markdown]);
     match state.documents.create_from_text(
         record.id,
         form.title.clone(),
@@ -1338,7 +1343,9 @@ async fn save_plan_text(
         Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
             Err(AppError::new("store plan document", error))
         }
-        Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
+        Err(error) => {
+            render_detail_command(graft, document_status(error), error_view(error.message()))
+        }
     }
 }
 
@@ -1356,9 +1363,11 @@ async fn prepare_tasks(
     let Some(document) = document.filter(|document| {
         document.associated_conversation == Some(record.id)
             && document.kind == crate::conversations::DocumentKind::Plan
-            && parse_revision(&form.document_revision) == Some(document.current_revision())
+            && parse_revision(&form.document_revision)
+                .and_then(|revision| document.revision(revision))
+                .is_some()
     }) else {
-        return render_detail_document_error(
+        return render_preparation_document_error(
             &state,
             session.0,
             graft,
@@ -1367,7 +1376,7 @@ async fn prepare_tasks(
         );
     };
     if parse_revision(&form.revision) != Some(record.revision) {
-        return render_detail_document_error(
+        return render_preparation_document_error(
             &state,
             session.0,
             graft,
@@ -1375,15 +1384,18 @@ async fn prepare_tasks(
             DocumentError::Conflict,
         );
     }
+    let selected = document
+        .revision(parse_revision(&form.document_revision).expect("validated revision"))
+        .expect("selected plan revision");
     let content = state
         .documents
-        .content(&document, document.current_revision())
+        .content(&document, selected.revision)
         .map_err(|error| AppError::new("read task preparation plan", error))?;
     let prompt = format!(
         "Prepare a task list from the following selected plan. Return only Markdown, without an outer code fence. Use a level-one heading, shared context preamble, and ordered top-level '- [ ] Task' entries with indented details. Put literal checkbox examples inside code fences. Preserve the plan requirements. Do not execute tasks or modify project files.\n\nSelected plan: {}\nRevision: {}\nContent hash: {}\n\n{}",
         document.title,
-        document.current_revision(),
-        document.current().content_hash.as_str(),
+        selected.revision,
+        selected.content_hash.as_str(),
         content
     );
     send_preparation(state, session, graft, record, prompt).await
@@ -1397,7 +1409,7 @@ async fn send_preparation(
     prompt: String,
 ) -> AppResult<Response> {
     let Some(model) = effective_model(&state, &record) else {
-        return render_detail_command(
+        return render_preparation_command(
             graft,
             PatchStatus::UnprocessableEntity,
             detail_view(
@@ -1412,8 +1424,18 @@ async fn send_preparation(
     // Preparation uses the model without guest tools, even when this conversation has write authority.
     let mut dispatch = record.clone();
     dispatch.execution_target = None;
-    match start_message(&state, session.0, dispatch, record.revision, model, prompt).await {
-        Ok(started) => render_detail_command(
+    match start_message_mode(
+        &state,
+        session.0,
+        dispatch,
+        record.revision,
+        model,
+        prompt,
+        false,
+    )
+    .await
+    {
+        Ok(started) => render_preparation_command(
             graft,
             PatchStatus::Ok,
             detail_view(&state, session.0, &started, &started.title, ""),
@@ -1421,13 +1443,40 @@ async fn send_preparation(
         Err(StartMessageError::Internal(error)) => Err(error),
         Err(StartMessageError::User(status, error)) => {
             let current = state.conversations.get(&record.id).unwrap_or(record);
-            render_detail_command(
+            render_preparation_command(
                 graft,
                 status,
                 detail_view(&state, session.0, &current, &current.title, error),
             )
         }
     }
+}
+
+fn render_preparation_document_error(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    graft: PatchGraft,
+    record: &ConversationRecord,
+    error: DocumentError,
+) -> AppResult<Response> {
+    render_preparation_command(
+        graft,
+        PatchStatus::Conflict,
+        detail_view(state, session, record, &record.title, error.message()),
+    )
+}
+
+fn render_preparation_command(
+    _graft: PatchGraft,
+    status: PatchStatus,
+    view: ConversationDetailView,
+) -> AppResult<Response> {
+    let id = &view.saved().expect("saved preparation conversation").id;
+    Ok(hypergraft::PatchSet::new()
+        .title(&view.document_title)
+        .with_replace_location(format!("/conversations/{id}"))?
+        .with_children("chat-main", &view)?
+        .respond(status)?)
 }
 
 async fn save_task_list_message(
@@ -1724,6 +1773,10 @@ async fn revise_plan(
                 content,
                 DocumentError::TaskList.message(),
             );
+            view.conversation_revision = document
+                .associated_conversation
+                .and_then(|id| state.conversations.get(&id))
+                .map_or(0, |record| record.revision);
             view.content = form.markdown;
             Ok(hypergraft::PatchSet::new()
                 .title(&view.document_title)
@@ -1947,6 +2000,23 @@ pub(super) async fn start_message(
     model: ConversationModelConfiguration,
     text: String,
 ) -> Result<ConversationRecord, StartMessageError> {
+    start_message_mode(state, session, record, revision, model, text, true).await
+}
+
+async fn start_message_mode(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    record: ConversationRecord,
+    revision: u32,
+    mut model: ConversationModelConfiguration,
+    text: String,
+    tools: bool,
+) -> Result<ConversationRecord, StartMessageError> {
+    let persisted_model = model.clone();
+    if !tools {
+        model.settings.tools.clear();
+        model.settings.directories.clear();
+    }
     preflight_execution(state, session, Some(record.id), &model).await?;
     if record.active_job.is_some() {
         return Err(StartMessageError::User(
@@ -2085,7 +2155,7 @@ pub(super) async fn start_message(
     let started = match state.conversations.begin_message_with_model(
         &record.id,
         revision,
-        Some(model),
+        Some(persisted_model),
         job.id(),
         text,
     ) {
@@ -2978,7 +3048,11 @@ fn render_plan_page_with_content(
     content: String,
     error: &'static str,
 ) -> AppResult<Response> {
-    let view = PlanDocumentPage::from_document(document, revision, content, error);
+    let mut view = PlanDocumentPage::from_document(document, revision, content, error);
+    view.conversation_revision = document
+        .associated_conversation
+        .and_then(|id| state.conversations.get(&id))
+        .map_or(0, |record| record.revision);
     match graft.into() {
         GraftRequest::Document => {
             let mut response = responses::chat_page_response(&view.document_title, state, &view)?;
@@ -3581,7 +3655,7 @@ fn plan_origin_matches(
         | PlanSource::SubmittedText {
             conversation_id, ..
         }
-        | PlanSource::ProjectFile {
+        | PlanSource::DirectoryFile {
             conversation_id, ..
         } => *conversation_id == conversation,
         PlanSource::Correction { previous } => {
