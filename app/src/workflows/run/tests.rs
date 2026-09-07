@@ -1230,10 +1230,11 @@ fn project_identity_and_run_kind_round_trip() {
 #[test]
 fn source_free_records_reject_source_and_identity_substitution() {
     let environment = crate::environments::EnvironmentId::generate().expect("environment");
-    let pinned = crate::workflows::pin_project_free_quick_task(
+    let pinned = crate::workflows::pin_project_free_quick_task_with_directories(
         &[crate::agents::ToolId::Run],
         "Use private scratch files.",
         environment,
+        Vec::new(),
     )
     .expect("source-free quick task");
     let run = WorkflowRun::create_source_free_for_conversation(

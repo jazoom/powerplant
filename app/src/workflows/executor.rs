@@ -2479,10 +2479,7 @@ async fn start_attempt_sandbox(
         .iter()
         .find(|grant| grant.alias == job.host_policy.primary_alias());
     let spec = if private_workspace {
-        crate::sandbox::SandboxSpec::private_workspace(
-            workspace.project.clone(),
-            capabilities.sandbox_network(),
-        )
+        project_free_attempt_spec(capabilities, workspace, &job.host_policy)?
     } else if capabilities.source_location
         == crate::workflows::capabilities::PrimarySourceLocation::UserProject
     {
@@ -2502,6 +2499,10 @@ async fn start_attempt_sandbox(
     };
     if job.job.cancel_requested() {
         return Err("The task was cancelled.");
+    }
+    if job.project_free_authority.is_some() {
+        confirm_run_authority(state, job)
+            .map_err(|_| "The conversation directory authority changed before execution.")?;
     }
     sandbox
         .start_from_snapshot(&path, environment.snapshot.snapshot_digest.as_str(), spec)
@@ -2561,6 +2562,43 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
     } else {
         format!("{action} · {position}")
     }
+}
+
+fn project_free_attempt_spec(
+    capabilities: &crate::workflows::capabilities::AttemptCapabilities,
+    workspace: &crate::workflows::workspace::AttemptWorkspace,
+    host: &DirectoryPolicy,
+) -> Result<crate::sandbox::SandboxSpec, &'static str> {
+    let mut mounts = vec![crate::sandbox::MountSpec {
+        guest: crate::execution::GUEST_WORKSPACE.to_owned(),
+        host: workspace.project.clone(),
+        read_only: false,
+    }];
+    for directory in &capabilities.directories {
+        if directory.guest_path == crate::execution::GUEST_WORKSPACE {
+            continue;
+        }
+        let grant = host
+            .grants()
+            .iter()
+            .find(|grant| {
+                grant.alias == directory.alias && grant.guest_path == directory.guest_path
+            })
+            .ok_or("The pinned step authority exceeds the current directory policy.")?;
+        mounts.push(crate::sandbox::MountSpec {
+            guest: grant.guest_path.clone(),
+            host: grant.host_path.clone(),
+            read_only: true,
+        });
+    }
+    Ok(crate::sandbox::SandboxSpec {
+        mounts,
+        workdir: capabilities
+            .primary()
+            .map(|directory| directory.guest_path.clone())
+            .unwrap_or_else(|| crate::execution::GUEST_WORKSPACE.to_owned()),
+        network: capabilities.sandbox_network(),
+    })
 }
 
 fn commit_attempt_spec(
@@ -2654,10 +2692,21 @@ fn confirm_run_authority(
         let Some(record) = state.conversations.get(&conversation_id) else {
             return Err("That conversation is not in the catalogue.".to_owned());
         };
+        if record.model.as_ref().is_some_and(|model| {
+            model.settings.directories.iter().any(|grant| {
+                crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
+                )
+            })
+        }) {
+            return Err("Sensitive directory access needs explicit approval.".to_owned());
+        }
         let current = crate::conversations::resolve_project_free_authority(&record, &state.agents)
             .map_err(|error| error.message().to_owned())?;
         if current.tools != authority.tools
             || current.network != authority.network
+            || current.policy != authority.policy
             || !authority.policy.is_private_workspace()
             || job.project_id.is_some()
             || job.agent_id.is_some()

@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 
 use super::{Inner, Source};
 
-impl super::ProjectFolderPicker {
+impl super::FolderPicker {
     pub(crate) fn scripted() -> Self {
         Self {
             inner: Arc::new(Inner {

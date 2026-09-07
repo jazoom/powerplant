@@ -15,6 +15,14 @@ pub(super) struct NewForm {
     pub(super) tool_run: String,
     pub(super) network: String,
     pub(super) network_domains: String,
+    pub(super) directory_0: String,
+    pub(super) directory_1: String,
+    pub(super) directory_2: String,
+    pub(super) directory_3: String,
+    pub(super) directory_4: String,
+    pub(super) directory_5: String,
+    pub(super) directory_6: String,
+    pub(super) directory_7: String,
     pub(super) title: String,
     pub(super) message: String,
     action: String,
@@ -67,6 +75,55 @@ impl NewForm {
         .filter(|value| !value.is_empty())
         .cloned()
         .collect()
+    }
+
+    pub(super) fn directories(
+        &self,
+    ) -> Result<Vec<crate::execution::DirectoryGrant>, &'static str> {
+        let directories = self
+            .directory_values()
+            .into_iter()
+            .map(|value| {
+                crate::execution::DirectoryGrant::parse_form(value)
+                    .ok_or("A directory grant is not valid.")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::execution::validate_directories(&directories)
+            .map_err(|_| "Choose valid non-overlapping directories.")?;
+        Ok(directories)
+    }
+
+    fn directory_values(&self) -> Vec<&str> {
+        [
+            &self.directory_0,
+            &self.directory_1,
+            &self.directory_2,
+            &self.directory_3,
+            &self.directory_4,
+            &self.directory_5,
+            &self.directory_6,
+            &self.directory_7,
+        ]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .map(String::as_str)
+        .collect()
+    }
+
+    pub(super) fn set_directories(&mut self, directories: &[crate::execution::DirectoryGrant]) {
+        let mut values = directories.iter().map(|grant| grant.form_value());
+        for field in [
+            &mut self.directory_0,
+            &mut self.directory_1,
+            &mut self.directory_2,
+            &mut self.directory_3,
+            &mut self.directory_4,
+            &mut self.directory_5,
+            &mut self.directory_6,
+            &mut self.directory_7,
+        ] {
+            *field = values.next().unwrap_or_default();
+        }
     }
 }
 
@@ -135,6 +192,10 @@ fn model(
         .and_then(|settings| settings.with_network(network))
         .ok_or("Enter instructions within 32 KiB without unsupported control characters.")?;
     }
+    configuration.settings = configuration
+        .settings
+        .with_directories(form.directories()?)
+        .ok_or("Choose valid non-overlapping directories.")?;
     Ok(Some(configuration))
 }
 
@@ -250,6 +311,13 @@ pub(super) async fn save(
     }
     let id = ConversationId::generate()
         .map_err(|error| AppError::new("create conversation identifier", error))?;
+    let Ok(permit) = state.local_data.begin_host_path_mutation().await else {
+        return reject(
+            PatchStatus::Conflict,
+            crate::local_data::HOST_PATH_RESET_PENDING,
+            form,
+        );
+    };
     let record = match state.conversations.create_saved(
         id,
         project,
@@ -260,6 +328,7 @@ pub(super) async fn save(
         Ok(record) => record,
         Err(error) => return reject(status_for(error), error.message(), form),
     };
+    drop(permit);
     let record =
         match super::start_message(&state, session.0, record, 1, model, form.message.clone()).await
         {

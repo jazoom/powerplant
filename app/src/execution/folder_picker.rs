@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 #[derive(Clone)]
-pub(crate) struct ProjectFolderPicker {
+pub(crate) struct FolderPicker {
     inner: Arc<Inner>,
 }
 
@@ -31,7 +31,7 @@ pub(crate) enum FolderPick {
     Busy,
 }
 
-impl ProjectFolderPicker {
+impl FolderPicker {
     pub(crate) fn native() -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -48,7 +48,7 @@ impl ProjectFolderPicker {
         };
         match &self.inner.source {
             Source::Native => match rfd::AsyncFileDialog::new()
-                .set_title("Choose project folder")
+                .set_title("Choose a directory")
                 .pick_folder()
                 .await
             {

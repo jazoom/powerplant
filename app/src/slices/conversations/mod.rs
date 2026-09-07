@@ -1,3 +1,4 @@
+mod directories;
 mod job;
 mod new;
 mod title;
@@ -48,6 +49,14 @@ pub(super) fn router() -> Router<AppState> {
         .route("/conversations", get(catalogue).post(create))
         .route("/conversations/new", get(new::show).post(new::save))
         .route("/conversations/new/model", post(new::remember_model))
+        .route(
+            "/conversations/new/directories/pick",
+            post(directories::pick_new),
+        )
+        .route(
+            "/conversations/new/directories/{grant_id}/remove",
+            post(directories::remove_new),
+        )
         .route("/conversations/{conversation_id}", get(detail))
         .route(
             "/conversations/{conversation_id}/workflow",
@@ -100,6 +109,14 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/settings",
             post(settings::update),
+        )
+        .route(
+            "/conversations/{conversation_id}/directories/pick",
+            post(directories::pick_saved),
+        )
+        .route(
+            "/conversations/{conversation_id}/directories/{grant_id}/remove",
+            post(directories::remove_saved),
         )
         .route("/conversations/{conversation_id}/model", post(select_model))
         .route(
@@ -1795,9 +1812,19 @@ pub(super) async fn preflight_execution(
     state: &AppState,
     model: &ConversationModelConfiguration,
 ) -> Result<(), StartMessageError> {
+    if model.settings.directories.iter().any(|grant| {
+        crate::execution::authority::sensitive_directory(&grant.host_path, state.local_data.root())
+    }) {
+        return Err(StartMessageError::User(
+            PatchStatus::UnprocessableEntity,
+            crate::execution::DirectoryGrantError::Sensitive.message(),
+        ));
+    }
     if model.settings.tools.is_empty() {
         return Ok(());
     }
+    crate::execution::ProjectFreeAuthority::from_settings(1, &model.settings)
+        .map_err(|error| StartMessageError::User(PatchStatus::Conflict, error.message()))?;
     if let Some(missing) = state.sandboxes.missing() {
         return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
@@ -1807,10 +1834,20 @@ pub(super) async fn preflight_execution(
     let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
         StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
     })?;
-    let pinned = workflows::pin_project_free_quick_task(
+    let directories = model
+        .settings
+        .directories
+        .iter()
+        .map(|grant| workflows::definition::GuestDirectoryAccess {
+            alias: grant.alias.clone(),
+            access: crate::agents::AccessMode::ReadOnly,
+        })
+        .collect();
+    let pinned = workflows::pin_project_free_quick_task_with_directories(
         &model.settings.tools,
         &model.settings.instructions,
         environment,
+        directories,
     )
     .map_err(|error| StartMessageError::User(PatchStatus::UnprocessableEntity, error.message()))?;
     workflows::resolve_environments(
@@ -1870,6 +1907,12 @@ pub(super) async fn start_message(
         }
     };
     let workflow = if !model.settings.tools.is_empty() {
+        if authority.is_some() && !model.settings.directories.is_empty() {
+            return Err(StartMessageError::User(
+                PatchStatus::Conflict,
+                "Remove legacy project access before tools use conversation directories.",
+            ));
+        }
         let project_free = authority
             .is_none()
             .then(|| crate::conversations::resolve_project_free_authority(&record, &state.agents))
@@ -1921,13 +1964,23 @@ pub(super) async fn start_message(
                 secondary,
             )
         } else {
-            workflows::pin_project_free_quick_task(
-                &project_free
-                    .as_ref()
-                    .expect("private workspace authority")
-                    .tools,
+            let project_free = project_free
+                .as_ref()
+                .expect("project-free conversation authority");
+            let directories = project_free
+                .policy
+                .grants()
+                .iter()
+                .map(|grant| workflows::definition::GuestDirectoryAccess {
+                    alias: grant.alias.clone(),
+                    access: crate::agents::AccessMode::ReadOnly,
+                })
+                .collect();
+            workflows::pin_project_free_quick_task_with_directories(
+                &project_free.tools,
                 &model.settings.instructions,
                 environment,
+                directories,
             )
         }
         .map_err(|error| {

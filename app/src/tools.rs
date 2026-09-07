@@ -28,7 +28,7 @@ impl ToolId {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path inside a granted guest directory. Defaults to /project."
+                        "description": "Path inside a granted guest directory. Defaults to the first authorised directory or /workspace."
                     }
                 },
                 "additionalProperties": false

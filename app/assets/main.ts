@@ -14,30 +14,26 @@ listenForRequestSettled((detail) => {
     ) {
         return;
     }
+    const requestedPanel = document.querySelector<HTMLElement>(
+        '.conversation-panel[data-settings-open="true"], .conversation-panel[data-directories-open="true"]',
+    );
     // A top-layer panel must not conceal command or transport errors.
     document
         .querySelectorAll<HTMLElement>(".conversation-panel:popover-open")
         .forEach((panel) => {
-            if (
-                detail.outcome !== "applied-patch" ||
-                panel.id !== "conversation-settings" ||
-                panel.dataset.settingsOpen !== "true"
-            )
+            if (detail.outcome !== "applied-patch" || panel !== requestedPanel)
                 panel.hidePopover();
         });
-    const settings = document.querySelector<HTMLElement>(
-        '#conversation-settings[data-settings-open="true"]',
-    );
     if (
         detail.outcome === "applied-patch" &&
-        settings &&
-        !settings.matches(":popover-open")
+        requestedPanel &&
+        !requestedPanel.matches(":popover-open")
     )
-        settings.showPopover();
+        requestedPanel.showPopover();
     if (detail.outcome === "applied-patch" && detail.status !== 200) {
         (
             document.querySelector<HTMLElement>("#conversation-error") ??
-            settings
+            requestedPanel
         )?.focus();
     }
 });

@@ -67,7 +67,7 @@ pub(super) fn session_id(token: &str) -> sessions::SessionId {
     sessions::SessionId::from_validated(&sessions::ValidatedToken::parse(token).expect("token"))
 }
 
-fn form_value(value: &str) -> String {
+pub(super) fn form_value(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         match byte {

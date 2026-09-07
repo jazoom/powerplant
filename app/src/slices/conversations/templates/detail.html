@@ -85,16 +85,23 @@
         </button>
         <button
           type="button"
-          class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-project]"
-          popovertarget="conversation-project-settings"
+          class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-directories]"
+          popovertarget="conversation-directory-settings"
         >
-          Project
-          access{% if !attached_projects.is_empty() %}
-            · {{ attached_projects.len() }}
-          {% endif %}
+          Directories
+          {% if !directories.is_empty() %}· {{ directories.len() }}{% endif %}
         </button>
+        {% if !attached_projects.is_empty() || !self.draft_project().is_empty() %}
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-project]"
+            popovertarget="conversation-project-settings"
+          >
+            Project access
+          </button>
+        {% endif %}
       </div>
-      {% if error != "" && !settings_open %}
+      {% if error != "" && !settings_open && !directories_open %}
         <div
           id="conversation-error"
           class="alert alert-error mx-5 w-auto shrink-0 sm:mx-8"
@@ -866,6 +873,24 @@
               {% endif %}{% endfor %}
             </p>
           {% endif %}
+          {% if !directories.is_empty() %}
+            <div
+              class="text-composer-quiet mb-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs"
+              aria-label="Directory access"
+            >
+              {% for directory in directories %}
+                <span class="inline-flex min-w-0 items-center gap-1">
+                  <span class="max-w-36 truncate font-medium sm:max-w-56"
+                    >{{ directory.name }}</span
+                  >
+                  <span aria-hidden="true">·</span>
+                  <span
+                    >{% if directory.available %}Read only{% else %}Unavailable{% endif %}</span
+                  >
+                </span>
+              {% endfor %}
+            </div>
+          {% endif %}
           {% if !attached_projects.is_empty() %}
             <p class="text-composer-quiet mb-2 text-xs">
               {% for project in attached_projects %}
@@ -896,6 +921,14 @@
                 name="revision"
                 value="{{ saved.revision }}"
               />
+            {% else %}
+              {% for directory in directories %}
+                <input
+                  type="hidden"
+                  name="directory_{{ loop.index0 }}"
+                  value="{{ directory.form_value }}"
+                />
+              {% endfor %}
             {% endif %}
             <label class="sr-only" for="composer-message">Message</label>
             <textarea
@@ -964,6 +997,156 @@
           {% endif %}{% endif %}
         </div>
       </div>
+      <section
+        id="conversation-directory-settings"
+        popover
+        data-directories-open="{% if directories_open %}true{% else %}false{% endif %}"
+        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[70dvh] w-auto min-w-0 space-y-4 overflow-y-auto p-5 [position-anchor:--conversation-directories] supports-[position-area:bottom]:top-2 supports-[position-area:bottom]:max-h-[min(70dvh,calc(100%-1.5rem))] supports-[position-area:bottom]:[position-area:bottom_span-all] md:left-72 md:max-w-[44rem] md:supports-[left:anchor(left)]:left-[anchor(left)]"
+        aria-labelledby="conversation-directory-heading"
+        tabindex="-1"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2
+              id="conversation-directory-heading"
+              class="text-lg font-semibold"
+            >
+              Directories
+            </h2>
+            <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+              Add only the folders that tools can inspect. Each folder mounts
+              read only at its guest path.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-11"
+            popovertarget="conversation-directory-settings"
+            popovertargetaction="hide"
+          >
+            Close
+          </button>
+        </div>
+        {% if error != "" && directories_open %}
+          <div
+            id="conversation-error"
+            class="alert alert-error"
+            role="alert"
+            tabindex="-1"
+          >
+            <p>{{ error }}</p>
+          </div>
+        {% endif %}
+        {% if directories.is_empty() %}
+          <p class="text-quiet text-sm">
+            No host directory access. Tools use private scratch storage at
+            <code>/workspace</code>.
+          </p>
+        {% else %}
+          <ul class="record-list" aria-label="Authorised directories">
+            {% for directory in directories %}
+              <li
+                class="record-row flex-col items-stretch gap-3 sm:flex-row sm:items-start"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p class="font-medium break-words">{{ directory.name }}</p>
+                    {% if directory.available %}
+                      <span class="badge badge-success badge-sm"
+                        >Read only</span
+                      >
+                    {% else %}
+                      <span class="badge badge-error badge-sm"
+                        >Unavailable</span
+                      >
+                    {% endif %}
+                  </div>
+                  <dl
+                    class="mt-2 grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]"
+                  >
+                    <dt class="text-quiet">Host path</dt>
+                    <dd class="min-w-0 font-mono break-all">
+                      {{ directory.host_path }}
+                    </dd>
+                    <dt class="text-quiet">Guest path</dt>
+                    <dd class="min-w-0 font-mono break-all">
+                      {{ directory.guest_path }}
+                    </dd>
+                    <dt class="text-quiet">Alias</dt>
+                    <dd class="min-w-0 font-mono break-all">
+                      {{ directory.alias }}
+                    </dd>
+                  </dl>
+                </div>
+                {% if self.is_new() %}
+                  <button
+                    form="conversation-composer"
+                    formaction="/conversations/new/directories/{{ directory.id }}/remove"
+                    formmethod="post"
+                    class="btn btn-ghost btn-sm min-h-11 self-start"
+                    type="submit"
+                  >
+                    Remove
+                  </button>
+                {% else if let Some(saved) = self.saved() %}
+                  <form
+                    data-graft
+                    method="post"
+                    action="/conversations/{{ saved.id }}/directories/{{ directory.id }}/remove"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ saved.revision }}"
+                    />
+                    <button
+                      class="btn btn-ghost btn-sm min-h-11"
+                      type="submit"
+                      {% if job_active || session_busy %}disabled{% endif %}
+                    >
+                      Remove
+                    </button>
+                  </form>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if directories.len() >= 8 %}
+          <p class="text-quiet text-sm">
+            This conversation has the maximum of eight directories.
+          </p>
+        {% else if self.is_new() %}
+          <button
+            form="conversation-composer"
+            formaction="/conversations/new/directories/pick"
+            formmethod="post"
+            class="btn btn-secondary min-h-11"
+            type="submit"
+          >
+            Choose directory
+          </button>
+        {% else if let Some(saved) = self.saved() %}
+          <form
+            data-graft
+            method="post"
+            action="/conversations/{{ saved.id }}/directories/pick"
+          >
+            <input type="hidden" name="revision" value="{{ saved.revision }}" />
+            <button
+              class="btn btn-secondary min-h-11"
+              type="submit"
+              {% if job_active || session_busy %}disabled{% endif %}
+            >
+              Choose directory
+            </button>
+          </form>
+        {% endif %}
+        <p class="text-quiet text-xs">
+          The first directory is the command directory. This choice grants no
+          write access. Sandbox network access remains separate.
+        </p>
+      </section>
       <section
         id="conversation-project-settings"
         popover

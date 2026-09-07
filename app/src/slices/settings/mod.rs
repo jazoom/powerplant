@@ -133,7 +133,12 @@ async fn reset_local_data(
     }
     match state
         .local_data
-        .request_reset(&state.workflow_execution, &state.projects, &state.agents)
+        .request_reset(
+            &state.workflow_execution,
+            &state.projects,
+            &state.agents,
+            &state.conversations,
+        )
         .await
     {
         Ok(ResetRequest::Recorded | ResetRequest::Pending) => reset_status_patch(),

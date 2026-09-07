@@ -189,6 +189,7 @@ pub(crate) enum ConversationError {
     Target,
     WriteTarget,
     Network,
+    Directories,
     Review,
 }
 
@@ -218,6 +219,7 @@ impl ConversationError {
                 "Only one project can have writable access in a conversation. Revoke the other writable grant first."
             }
             Self::Network => "Choose valid network access for this conversation.",
+            Self::Directories => "Choose valid non-overlapping directories for this conversation.",
             Self::Review => "That plan review hand-off is no longer available.",
         }
     }
@@ -292,8 +294,20 @@ struct ConversationModelFile {
     selection: ModelSelection,
     instructions: String,
     tools: Vec<String>,
+    directories: Vec<DirectoryGrantFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     preset: Option<AppliedPresetFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct DirectoryGrantFile {
+    id: String,
+    host_path: PathBuf,
+    device: u64,
+    inode: u64,
+    alias: String,
+    access: AccessMode,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -934,12 +948,17 @@ impl ConversationStore {
         &self,
         id: &ConversationId,
         expected_revision: u32,
-        model: ConversationModelConfiguration,
+        mut model: ConversationModelConfiguration,
     ) -> Result<ConversationRecord, ConversationError> {
         self.replace(id, expected_revision, |current| {
             if current.active_job.is_some() {
                 return Err(ConversationError::Active);
             }
+            model.settings.directories = current
+                .model
+                .as_ref()
+                .map(|current| current.settings.directories.clone())
+                .unwrap_or_default();
             current.network = model.settings.network.clone();
             current.model = Some(model);
             Ok(())
@@ -961,6 +980,52 @@ impl ConversationStore {
                 settings,
                 preset: None,
             });
+            Ok(())
+        })
+    }
+
+    pub(crate) fn add_directory(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        grant: crate::execution::DirectoryGrant,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            let model = current.model.as_mut().ok_or(ConversationError::Selection)?;
+            let mut directories = model.settings.directories.clone();
+            directories.push(grant.clone());
+            model.settings = model
+                .settings
+                .clone()
+                .with_directories(directories)
+                .ok_or(ConversationError::Directories)?;
+            model.preset = None;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn remove_directory(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        grant_id: crate::execution::DirectoryGrantId,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            let model = current.model.as_mut().ok_or(ConversationError::Selection)?;
+            let index = model
+                .settings
+                .directories
+                .iter()
+                .position(|grant| grant.id == grant_id)
+                .ok_or(ConversationError::Directories)?;
+            model.settings.directories.remove(index);
+            model.preset = None;
             Ok(())
         })
     }
@@ -1440,7 +1505,25 @@ fn model_from_file(
         .iter()
         .map(|name| ToolId::parse(name).ok_or(ConversationError::Corrupt))
         .collect::<Result<Vec<_>, _>>()?;
+    let directories = file
+        .directories
+        .into_iter()
+        .map(|grant| {
+            Some(crate::execution::DirectoryGrant {
+                id: crate::execution::DirectoryGrantId::parse(&grant.id)?,
+                host_path: grant.host_path,
+                identity: crate::execution::CanonicalDirectoryIdentity {
+                    device: grant.device,
+                    inode: grant.inode,
+                },
+                alias: grant.alias,
+                access: grant.access,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(ConversationError::Corrupt)?;
     let settings = crate::execution::ExecutionSettings::new(selection, file.instructions, tools)
+        .and_then(|settings| settings.with_directories(directories))
         .ok_or(ConversationError::Corrupt)?;
     let preset = match file.preset {
         Some(preset)
@@ -1470,6 +1553,19 @@ fn model_to_file(model: &ConversationModelConfiguration) -> ConversationModelFil
             .tools
             .iter()
             .map(|tool| tool.as_str().to_owned())
+            .collect(),
+        directories: model
+            .settings
+            .directories
+            .iter()
+            .map(|grant| DirectoryGrantFile {
+                id: grant.id.as_hex(),
+                host_path: grant.host_path.clone(),
+                device: grant.identity.device,
+                inode: grant.identity.inode,
+                alias: grant.alias.clone(),
+                access: grant.access,
+            })
             .collect(),
         preset: model.preset.as_ref().map(|preset| AppliedPresetFile {
             id: preset.id.as_hex(),

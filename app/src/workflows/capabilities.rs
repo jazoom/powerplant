@@ -70,25 +70,53 @@ impl AttemptCapabilities {
             return Err(CapabilityError::Authority);
         };
         if action.candidate_authority != crate::workflows::definition::CandidateAuthority::ReadOnly
-            || !action.authority.directories.is_empty()
             || !action
                 .authority
                 .tools
                 .iter()
                 .all(|tool| authority.tools.contains(tool))
+            || action.authority.directories.len() != authority.policy.grants().len()
+            || action.authority.directories.iter().any(|directory| {
+                directory.access != AccessMode::ReadOnly
+                    || !authority
+                        .policy
+                        .grants()
+                        .iter()
+                        .any(|grant| grant.alias == directory.alias)
+            })
         {
             return Err(CapabilityError::Authority);
         }
-        Ok(Self {
-            schema: CAPABILITY_SCHEMA,
-            agent_revision: authority.revision,
-            tools: action.authority.tools.clone(),
-            directories: vec![CapabilityDirectory {
+        let directories = if authority.policy.grants().is_empty() {
+            vec![CapabilityDirectory {
                 alias: "workspace".to_owned(),
                 guest_path: crate::execution::GUEST_WORKSPACE.to_owned(),
                 access: AccessMode::ReadWrite,
                 role: DirectoryRole::PrimarySource,
-            }],
+            }]
+        } else {
+            authority
+                .policy
+                .grants()
+                .iter()
+                .enumerate()
+                .map(|(index, grant)| CapabilityDirectory {
+                    alias: grant.alias.clone(),
+                    guest_path: grant.guest_path.clone(),
+                    access: AccessMode::ReadOnly,
+                    role: if index == 0 {
+                        DirectoryRole::PrimarySource
+                    } else {
+                        DirectoryRole::SecondaryContext
+                    },
+                })
+                .collect()
+        };
+        Ok(Self {
+            schema: CAPABILITY_SCHEMA,
+            agent_revision: authority.revision,
+            tools: action.authority.tools.clone(),
+            directories,
             source_location: PrimarySourceLocation::PrivateWorkspace,
             git_admin: AccessMode::ReadOnly,
             network: NetworkCapability::from_agent(&authority.network),

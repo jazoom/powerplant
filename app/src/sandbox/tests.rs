@@ -291,25 +291,6 @@ fn writable_user_project_mounts_are_rejected() {
 }
 
 #[test]
-fn private_workspace_spec_exposes_no_user_directory_guest_path() {
-    let host = tempfile::tempdir().unwrap();
-    let spec = SandboxSpec::private_workspace(
-        host.path().to_path_buf(),
-        NetworkAccess::Restricted(vec!["example.com".to_owned()]),
-    );
-
-    assert_eq!(spec.workdir, "/workspace");
-    assert_eq!(spec.mounts.len(), 1);
-    assert_eq!(spec.mounts[0].guest, "/workspace");
-    assert!(!spec.mounts[0].read_only);
-    assert_eq!(spec.mounts[0].host, host.path());
-    assert_eq!(
-        spec.network,
-        NetworkAccess::Restricted(vec!["example.com".to_owned()])
-    );
-}
-
-#[test]
 fn stale_mounts_are_rejected() {
     let sandbox_spec = SandboxSpec {
         mounts: vec![MountSpec {

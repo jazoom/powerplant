@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::agents::{AgentRecord, AgentStore};
 use crate::config::StartupConfig;
+use crate::conversations::{ConversationRecord, ConversationStore};
 use crate::projects::{ProjectRecord, ProjectStore};
 use crate::storage::{self, PersistError};
 use crate::workflows::{ExecutionGuard, WorkflowExecution};
@@ -29,6 +30,7 @@ pub(crate) enum ResetRequest {
 pub(crate) enum CatalogueResetConflict {
     Project,
     AgentGrant,
+    ConversationGrant,
 }
 
 #[derive(Debug)]
@@ -43,6 +45,9 @@ impl CatalogueResetConflict {
         match self {
             Self::Project => "A project path is inside the Power Plant data directory.",
             Self::AgentGrant => "An agent grant is inside the Power Plant data directory.",
+            Self::ConversationGrant => {
+                "A conversation grant is inside the Power Plant data directory."
+            }
         }
     }
 }
@@ -137,6 +142,7 @@ impl LocalDataReset {
         workflow_execution: &Arc<WorkflowExecution>,
         projects: &ProjectStore,
         agents: &AgentStore,
+        conversations: &ConversationStore,
     ) -> Result<ResetRequest, ResetError> {
         if self.is_pending() {
             return Ok(ResetRequest::Pending);
@@ -150,7 +156,9 @@ impl LocalDataReset {
         if self.is_pending() {
             return Ok(ResetRequest::Pending);
         }
-        if let Some(conflict) = self.catalogue_conflict(&projects.list(), &agents.list()) {
+        if let Some(conflict) =
+            self.catalogue_conflict(&projects.list(), &agents.list(), &conversations.list())
+        {
             return Err(ResetError::Catalogue(conflict));
         }
         let mut inner = lock(&self.inner);
@@ -163,6 +171,7 @@ impl LocalDataReset {
         &self,
         projects: &[ProjectRecord],
         agents: &[AgentRecord],
+        conversations: &[ConversationRecord],
     ) -> Option<CatalogueResetConflict> {
         if projects
             .iter()
@@ -177,6 +186,17 @@ impl LocalDataReset {
                 .any(|grant| path_under_root(&self.root, &grant.host_path))
         }) {
             return Some(CatalogueResetConflict::AgentGrant);
+        }
+        if conversations.iter().any(|conversation| {
+            conversation.model.as_ref().is_some_and(|model| {
+                model
+                    .settings
+                    .directories
+                    .iter()
+                    .any(|grant| path_under_root(&self.root, &grant.host_path))
+            })
+        }) {
+            return Some(CatalogueResetConflict::ConversationGrant);
         }
         None
     }

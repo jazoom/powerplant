@@ -46,10 +46,11 @@ pub(crate) fn pin_quick_task_with_context(
     Ok(PinnedWorkflowDefinition::pin(None, definition))
 }
 
-pub(crate) fn pin_project_free_quick_task(
+pub(crate) fn pin_project_free_quick_task_with_directories(
     tools: &[ToolId],
     instructions: &str,
     environment: EnvironmentId,
+    directories: Vec<GuestDirectoryAccess>,
 ) -> Result<PinnedWorkflowDefinition, DefinitionError> {
     let role = RoleDefinition::new(
         RoleKey::parse(ROLE_KEY).expect("quick task role"),
@@ -65,7 +66,7 @@ pub(crate) fn pin_project_free_quick_task(
             role: RoleKey::parse(ROLE_KEY).expect("quick task role"),
             environment: StepEnvironment::WorkflowDefault,
             candidate_authority: CandidateAuthority::ReadOnly,
-            authority: AgentAuthority::new(tools.to_vec(), Vec::new())?,
+            authority: AgentAuthority::new(tools.to_vec(), directories)?,
             required_outputs: vec![assistant_output()],
         }),
         review: None,

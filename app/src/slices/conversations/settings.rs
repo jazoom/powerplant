@@ -123,7 +123,16 @@ pub(super) async fn update(
                 .with_settings_fields(&state, form.submitted_fields()),
         );
     };
-    let settings = match validate(&state, &form) {
+    let settings = match validate(&state, &form).and_then(|settings| {
+        let directories = record
+            .model
+            .as_ref()
+            .map(|model| model.settings.directories.clone())
+            .unwrap_or_default();
+        settings
+            .with_directories(directories)
+            .ok_or("The saved directory grants are not valid.")
+    }) {
         Ok(settings) => settings,
         Err(error) => {
             return render_detail_command(

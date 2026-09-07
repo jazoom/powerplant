@@ -72,20 +72,6 @@ pub(crate) struct SandboxSpec {
     pub(crate) network: crate::agents::NetworkAccess,
 }
 
-impl SandboxSpec {
-    pub(crate) fn private_workspace(host: PathBuf, network: crate::agents::NetworkAccess) -> Self {
-        Self {
-            mounts: vec![MountSpec {
-                guest: crate::execution::GUEST_WORKSPACE.to_owned(),
-                host,
-                read_only: false,
-            }],
-            workdir: crate::execution::GUEST_WORKSPACE.to_owned(),
-            network,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OrphanSandbox {
     pub(crate) name: String,

@@ -14,7 +14,7 @@ use super::artefacts::{
 };
 use super::definition::{
     ArtefactKind, ArtefactSource, InputKey, LaunchInputSource, OutputKey, RequiredInput,
-    StepDefinition, StepKey,
+    StepAction, StepDefinition, StepKey,
 };
 use super::run::{AttemptArtefactInput, WorkflowRun};
 
@@ -475,7 +475,23 @@ pub(crate) fn build_attempt_packet_for_request(
     let project_instructions =
         ProjectInstructionSnapshot::from_verified(&verified, &project_instructions);
     let source_available = if matches!(run.source, super::run::RunSource::None) {
-        "Private scratch storage is available at /workspace through the listed tools. No host directory is mounted.".to_owned()
+        let directories = match &step.action {
+            StepAction::Agent(action) => action
+                .authority
+                .directories
+                .iter()
+                .map(|directory| format!("- /access/{}: Read only", directory.alias))
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        if directories.is_empty() {
+            "Private scratch storage is available at /workspace through the listed tools. No host directory is mounted.".to_owned()
+        } else {
+            format!(
+                "Private scratch storage is available at /workspace through the listed tools. The first authorised directory is the default command directory. Host directories are mounted read only:\n{}",
+                directories.join("\n")
+            )
+        }
     } else if tools.iter().any(|tool| {
         matches!(
             ToolId::parse(&tool.name),
@@ -503,7 +519,7 @@ pub(crate) fn build_attempt_packet_for_request(
     };
     let instructions = match &project_instructions.state {
         ProjectInstructionState::Absent if matches!(run.source, super::run::RunSource::None) => {
-            "# Directory context\n\nNo host directory or project instructions are available."
+            "# Directory context\n\nNo project instructions are supplied automatically. Use authorised tools to inspect the listed directories."
                 .to_owned()
         }
         ProjectInstructionState::Absent => {

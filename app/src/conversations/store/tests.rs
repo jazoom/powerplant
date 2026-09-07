@@ -136,6 +136,47 @@ fn restart_preserves_explicit_saves_with_or_without_a_manual_title() {
 }
 
 #[test]
+fn restart_preserves_directory_identity_and_guest_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let granted = tempfile::tempdir().unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(granted.path(), &[]).unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
+        String::new(),
+        Vec::new(),
+    )
+    .unwrap()
+    .with_directories(vec![grant.clone()])
+    .unwrap();
+    let store = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    let record = store
+        .create_saved(
+            super::ConversationId::generate().unwrap(),
+            None,
+            Some("Directory".to_owned()),
+            Some(super::ConversationModelConfiguration {
+                settings,
+                preset: None,
+            }),
+            None,
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    assert_eq!(
+        reopened
+            .get(&record.id)
+            .unwrap()
+            .model
+            .unwrap()
+            .settings
+            .directories,
+        vec![grant]
+    );
+}
+
+#[test]
 fn capacity_never_evicts_saved_conversations() {
     let store = ConversationStore::in_memory();
     for _ in 0..super::MAXIMUM_CONVERSATIONS {

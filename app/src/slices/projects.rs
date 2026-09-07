@@ -15,10 +15,9 @@ use hypergraft::{GraftRequest, PageGraft, PatchGraft, PatchStatus};
 use crate::{
     agents::{AgentDraft, AgentError, DirectoryGrant, StarterAgent},
     error::{AppError, AppResult},
+    execution::FolderPick,
     local_data::HOST_PATH_RESET_PENDING,
-    projects::{
-        FolderPick, ProjectError, ProjectId, ProjectRecord, submitted_host_path, submitted_name,
-    },
+    projects::{ProjectError, ProjectId, ProjectRecord, submitted_host_path, submitted_name},
     responses,
     sessions::RequiredSession,
     state::AppState,

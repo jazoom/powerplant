@@ -8,9 +8,10 @@ use super::{
 };
 use crate::agents::{AccessMode, AgentId, AgentRecord, AgentStore, DirectoryGrant};
 use crate::config::{RuntimeConfig, StartupConfig};
+use crate::conversations::ConversationStore;
 use crate::preferences::{Preferences, Theme};
 use crate::projects::{ProjectId, ProjectRecord, ProjectStore};
-use crate::providers::{ProviderConnection, ProviderKind};
+use crate::providers::{ModelSelection, ProviderConnection, ProviderKind};
 use crate::vault::ProviderVault;
 use crate::workflows::{WorkflowExecution, WorkflowRunStore};
 
@@ -503,19 +504,55 @@ fn catalogue_conflict_uses_path_components_at_the_owned_root_boundary() {
     let prefix_sibling = root.with_file_name("data-copy");
 
     assert_eq!(
-        local_data.catalogue_conflict(&[project_record(root.clone())], &[]),
+        local_data.catalogue_conflict(&[project_record(root.clone())], &[], &[]),
         Some(CatalogueResetConflict::Project)
     );
     assert_eq!(
-        local_data.catalogue_conflict(&[], &[agent_record(root.join("grant"))]),
+        local_data.catalogue_conflict(&[], &[agent_record(root.join("grant"))], &[]),
         Some(CatalogueResetConflict::AgentGrant)
     );
     assert_eq!(
         local_data.catalogue_conflict(
             &[project_record(prefix_sibling.clone())],
-            &[agent_record(prefix_sibling.join("grant")),]
+            &[agent_record(prefix_sibling.join("grant")),],
+            &[]
         ),
         None
+    );
+}
+
+#[test]
+fn catalogue_conflict_includes_conversation_directory_grants() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (_, local_data) = prepare(dir.path().join("data"));
+    let granted = local_data.root().join("conversation-source");
+    std::fs::create_dir(&granted).unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(&granted, &[]).unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
+        String::new(),
+        Vec::new(),
+    )
+    .unwrap()
+    .with_directories(vec![grant])
+    .unwrap();
+    let store = ConversationStore::in_memory();
+    let record = store
+        .create_saved(
+            crate::conversations::ConversationId::generate().unwrap(),
+            None,
+            Some("Granted".to_owned()),
+            Some(crate::conversations::ConversationModelConfiguration {
+                settings,
+                preset: None,
+            }),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        local_data.catalogue_conflict(&[], &[], &[record]),
+        Some(CatalogueResetConflict::ConversationGrant)
     );
 }
 
@@ -526,10 +563,11 @@ async fn reset_request_retains_execution_until_process_exit() {
     let execution = Arc::new(WorkflowExecution::new());
     let projects = ProjectStore::in_memory();
     let agents = AgentStore::in_memory();
+    let conversations = ConversationStore::in_memory();
 
     assert_eq!(
         local_data
-            .request_reset(&execution, &projects, &agents)
+            .request_reset(&execution, &projects, &agents, &conversations)
             .await
             .expect("record"),
         ResetRequest::Recorded
@@ -537,7 +575,7 @@ async fn reset_request_retains_execution_until_process_exit() {
     assert!(execution.acquire().is_err());
     assert_eq!(
         local_data
-            .request_reset(&execution, &projects, &agents)
+            .request_reset(&execution, &projects, &agents, &conversations)
             .await
             .expect("repeat"),
         ResetRequest::Pending
@@ -559,9 +597,10 @@ async fn failed_marker_write_releases_both_process_permits() {
     let execution = Arc::new(WorkflowExecution::new());
     let projects = ProjectStore::in_memory();
     let agents = AgentStore::in_memory();
+    let conversations = ConversationStore::in_memory();
 
     let failed = local_data
-        .request_reset(&execution, &projects, &agents)
+        .request_reset(&execution, &projects, &agents, &conversations)
         .await;
     let mut restore = fs::metadata(root).expect("meta").permissions();
     restore.set_mode(0o700);

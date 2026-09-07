@@ -13,6 +13,75 @@ use crate::sessions::JobStatus;
 use crate::workflows::capabilities::{CapabilityDirectory, DirectoryRole};
 
 #[test]
+fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("project");
+    std::fs::create_dir(&host).unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(&host, &[]).unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "test".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        vec![crate::agents::ToolId::Write],
+    )
+    .unwrap();
+    let workspace = crate::workflows::workspace::AttemptWorkspace {
+        root: root.path().join("attempt"),
+        project: root.path().join("attempt/workspace"),
+    };
+    for grants in [Vec::new(), vec![grant.clone()]] {
+        let settings = settings.clone().with_directories(grants.clone()).unwrap();
+        let authority =
+            crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+        let pinned = crate::workflows::pin_project_free_quick_task_with_directories(
+            &settings.tools,
+            "",
+            crate::tests::test_environment_id(),
+            grants
+                .iter()
+                .map(|grant| GuestDirectoryAccess {
+                    alias: grant.alias.clone(),
+                    access: grant.access,
+                })
+                .collect(),
+        )
+        .unwrap();
+        let capabilities =
+            crate::workflows::capabilities::AttemptCapabilities::derive_project_free(
+                &pinned.definition.steps()[0],
+                &authority,
+            )
+            .unwrap();
+        let spec =
+            super::project_free_attempt_spec(&capabilities, &workspace, &authority.policy).unwrap();
+        assert_eq!(spec.mounts.len(), grants.len() + 1);
+        assert_eq!(spec.mounts[0].host, workspace.project);
+        assert_eq!(spec.mounts[0].guest, "/workspace");
+        assert!(!spec.mounts[0].read_only);
+        assert_eq!(
+            authority.policy.resolve("/workspace/output").unwrap().1,
+            AccessMode::ReadWrite
+        );
+        if !grants.is_empty() {
+            assert_eq!(spec.mounts[1].host, host);
+            assert_eq!(spec.mounts[1].guest, grant.guest_path());
+            assert!(spec.mounts[1].read_only);
+            assert_eq!(spec.workdir, grant.guest_path());
+            assert_eq!(
+                authority.policy.resolve("file").unwrap().1,
+                AccessMode::ReadOnly
+            );
+        } else {
+            assert_eq!(spec.workdir, "/workspace");
+        }
+    }
+}
+
+#[test]
 fn repository_status_uses_the_fixed_guest_command() {
     let exec = guest_command(SystemCommandId::RepositoryStatus);
     assert_eq!(exec.program, "git");

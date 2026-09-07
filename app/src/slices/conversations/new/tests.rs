@@ -298,6 +298,106 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
 }
 
 #[tokio::test]
+async fn first_message_waits_for_the_host_path_permit_before_it_stores_grants() {
+    let state = test_state();
+    let token = connected(&state);
+    let directory = tempfile::tempdir().unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(directory.path(), &[]).unwrap();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let permit = state.local_data.begin_host_path_mutation().await.unwrap();
+    let request = command(
+        "/conversations/new",
+        &token,
+        &format!(
+            "action=send&provider=xai&model=grok-4.6&thinking={}&message=Hello&directory_0={}",
+            effort.as_str(),
+            form_value(&grant.form_value()),
+        ),
+    );
+    let mut response = tokio::spawn(app(&state).oneshot(request));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut response)
+            .await
+            .is_err()
+    );
+    assert!(state.conversations.list().is_empty());
+    drop(permit);
+    assert_eq!(response.await.unwrap().unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        state.conversations.list()[0]
+            .model
+            .as_ref()
+            .unwrap()
+            .settings
+            .directories,
+        vec![grant]
+    );
+}
+
+#[tokio::test]
+async fn first_message_persists_an_independent_directory_grant() {
+    let state = test_state();
+    ready_starter_environment(&state).await;
+    let token = connected(&state);
+    let directory = tempfile::tempdir().unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(directory.path(), &[]).unwrap();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
+            &format!(
+                "action=send&provider=xai&model=grok-4.6&thinking={}&message=Remember%20this&tool_list=list&directory_0={}",
+                effort.as_str(),
+                form_value(&grant.form_value())
+            ),
+        ))
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = text(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let record = state.conversations.list().pop().unwrap();
+    assert_eq!(
+        record.model.as_ref().unwrap().settings.directories,
+        vec![grant.clone()]
+    );
+    assert!(record.projects.is_empty());
+    assert!(record.grants.is_empty());
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&record.id)
+            .unwrap()
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("directory-backed reply");
+    let run_id = state.workflow_runs.summaries().pop().unwrap().id;
+    let run = state.workflow_runs.get(&run_id).unwrap();
+    assert!(run.project_id.is_none());
+    assert_eq!(
+        run.attempts[0].capabilities.primary().unwrap().guest_path,
+        grant.guest_path()
+    );
+    assert_eq!(
+        run.attempts[0].capabilities.primary().unwrap().access,
+        crate::agents::AccessMode::ReadOnly
+    );
+}
+
+#[tokio::test]
 async fn network_tool_reply_uses_private_workspace_without_catalogue_identity() {
     let mut state = test_state();
     let run_dir = tempfile::tempdir().unwrap();

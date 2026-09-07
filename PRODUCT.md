@@ -20,7 +20,7 @@ The Power Plant process stays on the host. It owns model calls, credentials, and
 
 The product stays local and account-free. The user brings a key or a plan login.
 
-Independent conversations are first-class work destinations. A conversation can discuss a general topic or receive explicit project authority.
+Independent conversations are first-class work destinations. A conversation can discuss a general topic or receive explicit directory authority.
 
 Success is a project file that an agent changes.
 
@@ -34,13 +34,17 @@ The user registers projects, agents, environments and workflows on this machine.
 
 A conversation does not require a named agent or project. The user selects a model directly or applies an optional preset. Project attachments provide context references only until the user grants access.
 
-A read-only project grant permits List, Read and Run in an isolated candidate. A writable target grant also permits Write in that candidate. Only one project can have writable conversation access.
+A conversation can grant ad hoc Read only access to as many as eight host directories. A directory needs no project or Git registration.
 
-Other granted projects supply read-only context under stable `/access/<alias>` paths. The sandbox blocks writes to those projects, even when the target permits Write.
+Each grant stores the canonical directory identity and a stable `/access/<alias>` guest path. Duplicate and overlapping roots are invalid.
+
+The first authorised root is the default command directory. Without a grant, tools use private scratch storage at `/workspace`.
+
+Power Plant revalidates the device and inode before execution. A missing or replaced root remains visible as unavailable and does not retarget.
 
 Sandbox network access defaults to Off. Conversation settings permit restricted domains or public internet access. Private and host networks remain excluded. Provider traffic remains separate and leaves the host for model inference.
 
-A tool-enabled conversation message starts the system-owned Quick task. Without project access, tools use private scratch storage at `/workspace`. Power Plant mounts no user directory for this work.
+A tool-enabled conversation message starts the system-owned Quick task. Without directory grants, tools use private scratch storage at `/workspace`. Power Plant mounts granted directories read only beside that scratch storage.
 
 Scratch storage belongs to one attempt, not the conversation. Source-free tools create no Git candidate, code approval gate or commit.
 
@@ -62,7 +66,9 @@ The `/` route opens `/conversations`. The conversations route lists local histor
 
 The new-conversation page has no record or conversation identity. Navigation and invalid submissions create nothing in memory or local storage.
 
-Only a valid first message creates the record and replaces the page URL with its canonical address. Model, effort, preset, project and title choices remain unsaved page state before that message.
+Only a valid first message creates the record and replaces the page URL with its canonical address. Model, effort, preset, directory and title choices remain unsaved page state before that message.
+
+The folder chooser can add grants before that message. Chooser cancellation creates no grant or conversation record.
 
 Provider choices contain connected providers only. Model and thinking effort dropdowns use the models.dev snapshot. A model without adjustable effort shows Not available.
 
@@ -177,7 +183,9 @@ Current capabilities:
 - Send a Quick task from an independent conversation with no workflow selection.
 - Use sandbox tools with private scratch storage and no project.
 - Set sandbox network access to Off, restricted domains or public internet.
-- Grant read-only or writable project authority from a conversation.
+- Grant ad hoc Read only access to directories without project registration.
+- Preserve stable guest aliases and canonical host identity for conversation directories.
+- Grant read-only or writable project authority from a conversation through the legacy project flow.
 - Review a candidate diff and Apply or Discard it from the owning conversation.
 - Launch a configured workflow from a conversation.
 - Stream the reply into the transcript as HTML.
@@ -209,7 +217,9 @@ Current constraints:
 - One session command can be active at a time.
 - One unfinished operation can reserve a conversation.
 - One workflow execution can be active process-wide.
-- The project catalogue grants no file access. Explicit conversation grants or saved-agent directory grants supply execution authority.
+- The project catalogue grants no file access. Conversation directory grants and saved-agent grants supply execution authority.
+- New directory grants are Read only. Sensitive home or Power Plant data grants remain unavailable until explicit consent exists.
+- Tools cannot combine legacy project access with conversation directory grants.
 - Project paths cannot change. Project records cannot be deleted in this release.
 - Sandbox-backed Quick task needs the ready Alpine Git seed snapshot. The product does not fall back to another environment.
 - Tool-free chat needs no sandbox runtime or prepared environment.

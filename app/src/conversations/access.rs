@@ -237,7 +237,8 @@ pub(crate) fn resolve_project_free_authority(
         .as_ref()
         .ok_or(ConversationAccessError::Preset)?;
     let mut authority =
-        crate::execution::ProjectFreeAuthority::from_settings(record.revision, &model.settings);
+        crate::execution::ProjectFreeAuthority::from_settings(record.revision, &model.settings)
+            .map_err(|_| ConversationAccessError::Path)?;
     if let Some(applied) = &model.preset {
         let preset = agents
             .get(&applied.id)

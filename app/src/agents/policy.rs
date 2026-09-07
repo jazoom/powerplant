@@ -20,6 +20,7 @@ pub(crate) struct PolicyGrant {
 pub(crate) struct DirectoryPolicy {
     grants: Vec<PolicyGrant>,
     primary_alias: String,
+    private_workspace: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -227,15 +228,8 @@ fn preset_directory_access(
 }
 
 impl DirectoryPolicy {
-    pub(crate) fn private_workspace() -> Self {
-        Self {
-            grants: Vec::new(),
-            primary_alias: String::new(),
-        }
-    }
-
     pub(crate) fn is_private_workspace(&self) -> bool {
-        self.grants.is_empty()
+        self.private_workspace
     }
 
     // The selected project grant is /project even when another grant is the saved primary.
@@ -253,6 +247,7 @@ impl DirectoryPolicy {
         Self {
             grants,
             primary_alias: primary_alias.to_owned(),
+            private_workspace: false,
         }
     }
 
@@ -260,6 +255,18 @@ impl DirectoryPolicy {
         Self {
             grants,
             primary_alias,
+            private_workspace: false,
+        }
+    }
+
+    pub(crate) fn from_grants_with_workspace(
+        grants: Vec<PolicyGrant>,
+        primary_alias: String,
+    ) -> Self {
+        Self {
+            grants,
+            primary_alias,
+            private_workspace: true,
         }
     }
 
@@ -309,36 +316,44 @@ impl DirectoryPolicy {
             format!("{}/{raw}", self.primary_guest())
         };
         let normalised = normalise_absolute(&joined)?;
-        if self.grants.is_empty() {
-            return (normalised == GUEST_WORKSPACE
+        if self.private_workspace
+            && (normalised == GUEST_WORKSPACE
                 || normalised.starts_with(&format!("{GUEST_WORKSPACE}/")))
-            .then_some((normalised, AccessMode::ReadWrite))
-            .ok_or("Stay inside the private workspace.");
+        {
+            return Ok((normalised, AccessMode::ReadWrite));
         }
         self.grant_for(&normalised)
             .map(|grant| (normalised, grant.access))
-            .ok_or("Stay inside a granted directory.")
+            .ok_or(if self.grants.is_empty() {
+                "Stay inside the private workspace."
+            } else {
+                "Stay inside a granted directory."
+            })
     }
 
     pub(crate) fn guest_roots(&self) -> Vec<String> {
-        if self.grants.is_empty() {
-            return vec![GUEST_WORKSPACE.to_owned()];
-        }
-        self.grants
-            .iter()
-            .map(|grant| grant.guest_path.clone())
-            .collect()
+        let mut roots = self
+            .private_workspace
+            .then(|| GUEST_WORKSPACE.to_owned())
+            .into_iter()
+            .collect::<Vec<_>>();
+        roots.extend(self.grants.iter().map(|grant| grant.guest_path.clone()));
+        roots
     }
 
     pub(crate) fn writable_roots(&self) -> Vec<String> {
-        if self.grants.is_empty() {
-            return vec![GUEST_WORKSPACE.to_owned()];
-        }
-        self.grants
-            .iter()
-            .filter(|grant| grant.access.is_writable())
-            .map(|grant| grant.guest_path.clone())
-            .collect()
+        let mut roots = self
+            .private_workspace
+            .then(|| GUEST_WORKSPACE.to_owned())
+            .into_iter()
+            .collect::<Vec<_>>();
+        roots.extend(
+            self.grants
+                .iter()
+                .filter(|grant| grant.access.is_writable())
+                .map(|grant| grant.guest_path.clone()),
+        );
+        roots
     }
 
     pub(crate) fn confirm_hosts(&self) -> Result<(), AgentError> {

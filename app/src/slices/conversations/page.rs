@@ -39,6 +39,16 @@ pub(super) struct CatalogueProjectOption {
     pub(super) selected: bool,
 }
 
+pub(super) struct DirectoryView {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) alias: String,
+    pub(super) host_path: String,
+    pub(super) guest_path: String,
+    pub(super) form_value: String,
+    pub(super) available: bool,
+}
+
 pub(super) struct ProjectContextView {
     pub(super) id: String,
     pub(super) name: String,
@@ -374,6 +384,7 @@ pub(super) struct ConversationDetailView {
     pub(super) presets: Vec<PresetOption>,
     pub(super) attached_projects: Vec<ProjectContextView>,
     pub(super) attachable_projects: Vec<CatalogueProjectOption>,
+    pub(super) directories: Vec<DirectoryView>,
     pub(super) model_summary: String,
     pub(super) instructions: String,
     pub(super) tool_options: Vec<ToolOption>,
@@ -382,6 +393,7 @@ pub(super) struct ConversationDetailView {
     pub(super) network_summary: String,
     pub(super) network_detail: String,
     pub(super) settings_open: bool,
+    pub(super) directories_open: bool,
     pub(super) model_available: bool,
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
@@ -410,6 +422,8 @@ impl ConversationDetailView {
         error: &'static str,
     ) -> Self {
         let selected_tools = form.tool_values();
+        let draft_directories = form.directories().unwrap_or_default();
+        let directories = directory_views(&draft_directories);
         Self {
             heading: "New conversation".to_owned(),
             document_title: "New conversation | Power Plant".to_owned(),
@@ -451,6 +465,7 @@ impl ConversationDetailView {
             messages: Vec::new(),
             omitted_messages: 0,
             attached_projects: Vec::new(),
+            directories,
             model_summary: String::new(),
             instructions: form.instructions.clone(),
             tool_options: tool_options(&selected_tools),
@@ -459,6 +474,7 @@ impl ConversationDetailView {
             network_summary: network_summary_from_form(&form.network),
             network_detail: String::new(),
             settings_open: false,
+            directories_open: false,
             model_available: !form.model.is_empty(),
             job_active: false,
             session_busy: false,
@@ -741,6 +757,9 @@ impl ConversationDetailView {
             presets,
             attached_projects,
             attachable_projects,
+            directories: configuration
+                .map(|configuration| directory_views(&configuration.settings.directories))
+                .unwrap_or_default(),
             model_summary,
             instructions: configuration
                 .map(|configuration| configuration.settings.instructions.clone())
@@ -762,6 +781,7 @@ impl ConversationDetailView {
             network_summary,
             network_detail,
             settings_open: false,
+            directories_open: false,
             job_active,
             session_busy,
             state: ConversationPageState::Saved(Box::new(SavedConversationState {
@@ -785,6 +805,11 @@ impl ConversationDetailView {
 
     pub(super) fn open_settings(mut self) -> Self {
         self.settings_open = true;
+        self
+    }
+
+    pub(super) fn open_directories(mut self) -> Self {
+        self.directories_open = true;
         self
     }
 
@@ -822,6 +847,40 @@ impl ConversationDetailView {
 
     pub(super) fn contents(&self) -> impl Template + '_ {
         self.as_conversation_detail()
+    }
+}
+
+fn directory_views(grants: &[crate::execution::DirectoryGrant]) -> Vec<DirectoryView> {
+    let mut views = grants.iter().map(directory_view).collect::<Vec<_>>();
+    let names = views
+        .iter()
+        .map(|view| view.name.clone())
+        .collect::<Vec<_>>();
+    for (index, view) in views.iter_mut().enumerate() {
+        if names
+            .iter()
+            .enumerate()
+            .any(|(other, name)| other != index && name == &names[index])
+        {
+            view.name = format!("{} ({})", view.name, view.alias);
+        }
+    }
+    views
+}
+
+fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
+    DirectoryView {
+        id: grant.id.as_hex(),
+        name: grant
+            .host_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| grant.host_path.to_string_lossy().into_owned()),
+        alias: grant.alias.clone(),
+        host_path: grant.host_path.to_string_lossy().into_owned(),
+        guest_path: grant.guest_path(),
+        form_value: grant.form_value(),
+        available: grant.is_available(),
     }
 }
 

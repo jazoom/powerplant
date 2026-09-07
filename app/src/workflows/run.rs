@@ -3815,10 +3815,21 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                 == PrimarySourceLocation::PrivateWorkspace
                 && action.candidate_authority
                     == crate::workflows::definition::CandidateAuthority::ReadOnly
-                && action.authority.directories.is_empty()
                 && primary.len() == 1
-                && primary[0].guest_path == crate::execution::GUEST_WORKSPACE
-                && primary[0].access == AccessMode::ReadWrite;
+                && if action.authority.directories.is_empty() {
+                    primary[0].guest_path == crate::execution::GUEST_WORKSPACE
+                        && primary[0].access == AccessMode::ReadWrite
+                        && secondary.is_empty()
+                } else {
+                    primary[0].access == AccessMode::ReadOnly
+                        && valid_guest_path(&primary[0].guest_path)
+                        && action
+                            .authority
+                            .directories
+                            .iter()
+                            .any(|item| item.alias == primary[0].alias)
+                        && capabilities.directories.len() == action.authority.directories.len()
+                };
             let candidate_workspace = capabilities.source_location
                 == PrimarySourceLocation::AttemptWorkspace
                 && primary.len() == 1
@@ -3829,7 +3840,7 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                     .tools
                     .iter()
                     .all(|tool| action.authority.tools.contains(tool))
-                && secondary.len() == action.authority.directories.len()
+                && (private_workspace || secondary.len() == action.authority.directories.len())
                 && secondary.iter().all(|directory| {
                     valid_guest_path(&directory.guest_path)
                         && directory.access == AccessMode::ReadOnly
