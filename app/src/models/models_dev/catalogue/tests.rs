@@ -163,7 +163,7 @@ fn source_filter_uses_fallback_identifiers_and_deduplicates_efforts() {
         .iter()
         .find(|model| model.id == "title-only")
         .unwrap();
-    assert!(title_only.background_only);
+    assert!(!title_only.supports_tools);
     assert!(title_only.background.is_some());
 
     let stored = serde_json::to_value(&snapshot).expect("stored snapshot");

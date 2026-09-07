@@ -43,8 +43,7 @@ pub(super) struct Model {
     pub(super) reasoning: bool,
     pub(super) efforts: Vec<String>,
     pub(super) attachment: bool,
-    #[serde(default)]
-    pub(super) background_only: bool,
+    pub(super) supports_tools: bool,
     pub(super) limit: ModelLimit,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) background: Option<super::background::BackgroundMetadata>,
@@ -188,7 +187,7 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
                 reasoning: model.reasoning,
                 efforts,
                 attachment: model.attachment,
-                background_only: !model.tool_call,
+                supports_tools: model.tool_call,
                 limit: ModelLimit {
                     context: model.limit.context,
                 },
@@ -197,7 +196,7 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
         }
         if !models
             .iter()
-            .any(|model| model.id == kind.default_model() && !model.background_only)
+            .any(|model| model.id == kind.default_model() && model.supports_tools)
         {
             return Err(());
         }
@@ -279,7 +278,7 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<(), ()> {
             || !provider
                 .models
                 .iter()
-                .any(|model| model.id == kind.default_model() && !model.background_only)
+                .any(|model| model.id == kind.default_model() && model.supports_tools)
         {
             return Err(());
         }
@@ -287,7 +286,7 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<(), ()> {
         for model in &provider.models {
             let mut efforts = HashSet::new();
             if !bounded(&model.id, MAXIMUM_MODEL_BYTES)
-                || (model.background_only && model.background.is_none())
+                || (!model.supports_tools && model.background.is_none())
                 || model.background.as_ref().is_some_and(|metadata| {
                     !metadata.valid() || super::background::unsuitable(&model.id)
                 })

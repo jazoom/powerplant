@@ -7,7 +7,7 @@ fn model(id: &str, date: &str, input: f64) -> Model {
         reasoning: false,
         efforts: Vec::new(),
         attachment: false,
-        background_only: false,
+        supports_tools: true,
         limit: ModelLimit { context: 4096 },
         background: Some(BackgroundMetadata {
             release_date: date.to_owned(),

@@ -136,7 +136,7 @@ impl ModelsDevCatalogue {
                 provider
                     .models
                     .iter()
-                    .filter(|model| !model.background_only)
+                    .filter(|model| model.supports_tools)
                     .map(model_metadata)
                     .collect()
             })
@@ -153,7 +153,7 @@ impl ModelsDevCatalogue {
                 provider
                     .models
                     .iter()
-                    .find(|model| model.id == id && !model.background_only)
+                    .find(|model| model.id == id && model.supports_tools)
             })
             .map(model_metadata)
     }

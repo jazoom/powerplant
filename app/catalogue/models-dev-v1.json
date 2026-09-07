@@ -18,7 +18,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -34,7 +34,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     }
@@ -44,7 +44,7 @@
                     "reasoning": true,
                     "efforts": ["high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -66,7 +66,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1047576
                     },
@@ -82,7 +82,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1047576
                     },
@@ -98,7 +98,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -114,7 +114,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -130,7 +130,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -146,7 +146,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -162,7 +162,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -178,7 +178,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -194,7 +194,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -210,7 +210,7 @@
                     "reasoning": true,
                     "efforts": ["high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -226,7 +226,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -242,7 +242,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -258,7 +258,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -274,7 +274,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -290,7 +290,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -306,7 +306,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -322,7 +322,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -338,7 +338,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -354,7 +354,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -370,7 +370,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -386,7 +386,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -409,7 +409,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -432,7 +432,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -455,7 +455,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -478,7 +478,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -494,7 +494,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -510,7 +510,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -526,7 +526,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -548,7 +548,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -564,7 +564,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -580,7 +580,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -596,7 +596,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 32768
                     },
@@ -612,7 +612,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -628,7 +628,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 300000
                     },
@@ -644,7 +644,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -660,7 +660,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -676,7 +676,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 300000
                     },
@@ -692,7 +692,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 32768
                     },
@@ -708,7 +708,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -724,7 +724,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -740,7 +740,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -756,7 +756,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -772,7 +772,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -788,7 +788,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -804,7 +804,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -820,7 +820,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -836,7 +836,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -852,7 +852,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -868,7 +868,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -884,7 +884,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -900,7 +900,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -916,7 +916,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -932,7 +932,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -948,7 +948,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -964,7 +964,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 123000
                     },
@@ -980,7 +980,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -996,7 +996,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1012,7 +1012,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1028,7 +1028,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1044,7 +1044,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1060,7 +1060,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1076,7 +1076,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 128000
                     },
@@ -1092,7 +1092,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 128000
                     },
@@ -1108,7 +1108,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 256000
                     },
@@ -1124,7 +1124,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -1140,7 +1140,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -1156,7 +1156,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 128000
                     },
@@ -1172,7 +1172,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 256000
                     }
@@ -1182,7 +1182,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1198,7 +1198,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1214,7 +1214,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1230,7 +1230,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 64000
                     },
@@ -1246,7 +1246,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1262,7 +1262,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -1278,7 +1278,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1294,7 +1294,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1310,7 +1310,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 163840
                     },
@@ -1326,7 +1326,7 @@
                     "reasoning": true,
                     "efforts": ["high", "xhigh"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1342,7 +1342,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -1358,7 +1358,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1374,7 +1374,7 @@
                     "reasoning": true,
                     "efforts": ["high", "xhigh"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1390,7 +1390,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1406,7 +1406,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 512000
                     }
@@ -1416,7 +1416,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1432,7 +1432,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1448,7 +1448,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1464,7 +1464,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -1474,7 +1474,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -1484,7 +1484,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -1494,7 +1494,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1510,7 +1510,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -1520,7 +1520,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -1530,7 +1530,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -1540,7 +1540,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1556,7 +1556,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1572,7 +1572,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1588,7 +1588,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1604,7 +1604,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -1620,7 +1620,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -1636,7 +1636,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -1652,7 +1652,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -1668,7 +1668,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -1684,7 +1684,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1700,7 +1700,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -1710,7 +1710,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1726,7 +1726,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -1736,7 +1736,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -1752,7 +1752,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131000
                     },
@@ -1768,7 +1768,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -1784,7 +1784,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -1800,7 +1800,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 260000
                     }
@@ -1810,7 +1810,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1826,7 +1826,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1842,7 +1842,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -1852,7 +1852,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -1862,7 +1862,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1878,7 +1878,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -1894,7 +1894,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 65536
                     }
@@ -1904,7 +1904,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8000
                     },
@@ -1920,7 +1920,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048756
                     },
@@ -1936,7 +1936,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -1952,7 +1952,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -1968,7 +1968,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 60000
                     },
@@ -1984,7 +1984,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -2000,7 +2000,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2016,7 +2016,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2032,7 +2032,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -2048,7 +2048,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2064,7 +2064,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2080,7 +2080,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2096,7 +2096,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2119,7 +2119,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2142,7 +2142,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2158,7 +2158,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 16384
                     },
@@ -2174,7 +2174,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 65535
                     },
@@ -2190,7 +2190,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 1000192
                     },
@@ -2206,7 +2206,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -2222,7 +2222,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -2238,7 +2238,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 65536
                     },
@@ -2254,7 +2254,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -2270,7 +2270,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -2286,7 +2286,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -2302,7 +2302,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 196608
                     }
@@ -2312,7 +2312,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2328,7 +2328,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -2338,7 +2338,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 256000
                     },
@@ -2354,7 +2354,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2370,7 +2370,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2386,7 +2386,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2402,7 +2402,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2418,7 +2418,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -2434,7 +2434,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2450,7 +2450,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2466,7 +2466,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2482,7 +2482,7 @@
                     "reasoning": true,
                     "efforts": ["none", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2498,7 +2498,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2514,7 +2514,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2530,7 +2530,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 32768
                     },
@@ -2546,7 +2546,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 32768
                     },
@@ -2562,7 +2562,7 @@
                     "reasoning": true,
                     "efforts": ["none", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2578,7 +2578,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 128000
                     },
@@ -2594,7 +2594,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2610,7 +2610,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 65536
                     },
@@ -2626,7 +2626,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 32768
                     },
@@ -2642,7 +2642,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -2658,7 +2658,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2674,7 +2674,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2690,7 +2690,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2706,7 +2706,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2722,7 +2722,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2738,7 +2738,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -2754,7 +2754,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 81920
                     },
@@ -2770,7 +2770,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 262144
                     },
@@ -2786,7 +2786,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2802,7 +2802,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2818,7 +2818,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -2834,7 +2834,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -2850,7 +2850,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -2866,7 +2866,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -2882,7 +2882,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2898,7 +2898,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 256000
                     }
@@ -2908,7 +2908,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -2924,7 +2924,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -2934,7 +2934,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2950,7 +2950,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     }
@@ -2960,7 +2960,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -2976,7 +2976,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -2992,7 +2992,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     }
@@ -3002,7 +3002,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 16385
                     },
@@ -3018,7 +3018,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 4095
                     },
@@ -3034,7 +3034,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 16385
                     },
@@ -3050,7 +3050,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 4095
                     },
@@ -3066,7 +3066,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 8191
                     },
@@ -3082,7 +3082,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3098,7 +3098,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     }
@@ -3108,7 +3108,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1047576
                     },
@@ -3124,7 +3124,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1047576
                     },
@@ -3140,7 +3140,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1047576
                     },
@@ -3156,7 +3156,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3172,7 +3172,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3188,7 +3188,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3204,7 +3204,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3220,7 +3220,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3236,7 +3236,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3252,7 +3252,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3268,7 +3268,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3284,7 +3284,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3300,7 +3300,7 @@
                     "reasoning": true,
                     "efforts": ["high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3316,7 +3316,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3332,7 +3332,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3348,7 +3348,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3364,7 +3364,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3380,7 +3380,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3396,7 +3396,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 128000
                     },
@@ -3412,7 +3412,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3428,7 +3428,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3444,7 +3444,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3460,7 +3460,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3476,7 +3476,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3492,7 +3492,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3508,7 +3508,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3524,7 +3524,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3540,7 +3540,7 @@
                     "reasoning": true,
                     "efforts": ["medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3563,7 +3563,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3586,7 +3586,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3609,7 +3609,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3632,7 +3632,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3655,7 +3655,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3678,7 +3678,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3694,7 +3694,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3710,7 +3710,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -3726,7 +3726,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -3742,7 +3742,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -3758,7 +3758,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -3774,7 +3774,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     }
@@ -3784,7 +3784,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3800,7 +3800,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 200000
                     },
@@ -3816,7 +3816,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3832,7 +3832,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3848,7 +3848,7 @@
                     "reasoning": true,
                     "efforts": ["high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3864,7 +3864,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3880,7 +3880,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3896,7 +3896,7 @@
                     "reasoning": true,
                     "efforts": ["high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -3912,7 +3912,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     }
@@ -3922,7 +3922,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 32768
                     },
@@ -3938,7 +3938,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 127072
                     },
@@ -3954,7 +3954,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 200000
                     },
@@ -3970,7 +3970,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 200000
                     },
@@ -3986,7 +3986,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 128000
                     },
@@ -4002,7 +4002,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -4018,7 +4018,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -4028,7 +4028,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4044,7 +4044,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -4054,7 +4054,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 32768
                     },
@@ -4070,7 +4070,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 32768
                     },
@@ -4086,7 +4086,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 32768
                     },
@@ -4102,7 +4102,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4118,7 +4118,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4134,7 +4134,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 128000
                     },
@@ -4150,7 +4150,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4166,7 +4166,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4182,7 +4182,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4198,7 +4198,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4214,7 +4214,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4230,7 +4230,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4246,7 +4246,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 81920
                     },
@@ -4262,7 +4262,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4278,7 +4278,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4294,7 +4294,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4310,7 +4310,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4326,7 +4326,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4342,7 +4342,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4358,7 +4358,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4374,7 +4374,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4390,7 +4390,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4406,7 +4406,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4422,7 +4422,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4438,7 +4438,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4454,7 +4454,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4470,7 +4470,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4486,7 +4486,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4502,7 +4502,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4518,7 +4518,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4534,7 +4534,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4550,7 +4550,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4566,7 +4566,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4582,7 +4582,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4598,7 +4598,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4614,7 +4614,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4630,7 +4630,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4646,7 +4646,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4662,7 +4662,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4678,7 +4678,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4694,7 +4694,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4710,7 +4710,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4726,7 +4726,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -4736,7 +4736,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4752,7 +4752,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4768,7 +4768,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4784,7 +4784,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4800,7 +4800,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "xhigh"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -4816,7 +4816,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4832,7 +4832,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4848,7 +4848,7 @@
                     "reasoning": true,
                     "efforts": ["minimal", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4864,7 +4864,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 16384
                     },
@@ -4880,7 +4880,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 65536
                     },
@@ -4896,7 +4896,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 256000
                     },
@@ -4912,7 +4912,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 256000
                     },
@@ -4928,7 +4928,7 @@
                     "reasoning": true,
                     "efforts": ["high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -4944,7 +4944,7 @@
                     "reasoning": true,
                     "efforts": ["none", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -4960,7 +4960,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -4976,7 +4976,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -4992,7 +4992,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -5008,7 +5008,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -5024,7 +5024,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -5040,7 +5040,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -5056,7 +5056,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -5072,7 +5072,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -5088,7 +5088,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 8192
                     },
@@ -5104,7 +5104,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -5120,7 +5120,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     }
@@ -5130,7 +5130,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -5140,7 +5140,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 131072
                     },
@@ -5156,7 +5156,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 32768
                     },
@@ -5172,7 +5172,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1024000
                     },
@@ -5195,7 +5195,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -5218,7 +5218,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -5241,7 +5241,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -5258,7 +5258,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     }
@@ -5268,7 +5268,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 6144
                     },
@@ -5284,7 +5284,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -5300,7 +5300,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 524288
                     },
@@ -5316,7 +5316,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": true,
+                    "supports_tools": false,
                     "limit": {
                         "context": 1040000
                     },
@@ -5332,7 +5332,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 2000000
                     },
@@ -5348,7 +5348,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -5364,7 +5364,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 500000
                     },
@@ -5380,7 +5380,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 500000
                     },
@@ -5396,7 +5396,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 256000
                     },
@@ -5412,7 +5412,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -5428,7 +5428,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -5444,7 +5444,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -5460,7 +5460,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -5476,7 +5476,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 65536
                     },
@@ -5492,7 +5492,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -5508,7 +5508,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -5524,7 +5524,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -5540,7 +5540,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 202752
                     },
@@ -5556,7 +5556,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -5572,7 +5572,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 202752
                     },
@@ -5588,7 +5588,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 204800
                     },
@@ -5604,7 +5604,7 @@
                     "reasoning": true,
                     "efforts": ["high", "xhigh"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -5620,7 +5620,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -5636,7 +5636,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -5652,7 +5652,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 202752
                     },
@@ -5668,7 +5668,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -5684,7 +5684,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 200000
                     },
@@ -5700,7 +5700,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -5716,7 +5716,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -5732,7 +5732,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -5748,7 +5748,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -5764,7 +5764,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -5780,7 +5780,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1048576
                     },
@@ -5803,7 +5803,7 @@
                         "max"
                     ],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1050000
                     },
@@ -5819,7 +5819,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 400000
                     },
@@ -5835,7 +5835,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 500000
                     },
@@ -5851,7 +5851,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -5867,7 +5867,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1310720
                     },
@@ -5889,7 +5889,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 524288
                     },
@@ -5905,7 +5905,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -5921,7 +5921,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -5937,7 +5937,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 524288
                     },
@@ -5953,7 +5953,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 262144
                     },
@@ -5969,7 +5969,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 131072
                     },
@@ -5985,7 +5985,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 196608
                     },
@@ -6001,7 +6001,7 @@
                     "reasoning": true,
                     "efforts": ["none", "high", "xhigh"],
                     "attachment": false,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 524288
                     },
@@ -6017,7 +6017,7 @@
                     "reasoning": true,
                     "efforts": ["low", "high", "max"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 524288
                     },
@@ -6039,7 +6039,7 @@
                     "reasoning": false,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -6055,7 +6055,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -6071,7 +6071,7 @@
                     "reasoning": true,
                     "efforts": ["none", "low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 1000000
                     },
@@ -6087,7 +6087,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 500000
                     },
@@ -6103,7 +6103,7 @@
                     "reasoning": true,
                     "efforts": ["low", "medium", "high", "xhigh"],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 500000
                     },
@@ -6119,7 +6119,7 @@
                     "reasoning": true,
                     "efforts": [],
                     "attachment": true,
-                    "background_only": false,
+                    "supports_tools": true,
                     "limit": {
                         "context": 256000
                     },
