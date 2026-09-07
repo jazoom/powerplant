@@ -64,7 +64,20 @@ An agent network policy permits no network, selected domain suffixes or the publ
 
 They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. A workflow can use only a ready snapshot.
 
-They create workflow definitions with a default environment, roles and ordered steps. A new installation includes selectable starter processes for planning, code review, implementation with approval and implementation with review. Each process preview shows its required inputs, candidate effects and approval stops. A step can run an agent, a registered system command or a human gate.
+They create workflow definitions with a default environment, roles and ordered steps. A definition can run once or repeat one group of phases for each remaining task. A task list is not required for a one-shot definition. Ordinary chat still needs no workflow.
+
+A new installation includes six starter processes.
+
+The starters are:
+
+- Plan a change
+- Review current code
+- Implement with approval
+- Implement and review
+- Plan then implement
+- Ralph task loop
+
+Each process preview shows its required inputs, candidate effects and approval stops. Independent review appears only when that process contains a separate read-only review phase. Ralph repeats implementation and optional review-and-fix. It does not add an extra independent review. A step can run an agent, a registered system command or a human gate.
 
 They open a project to see its conversations. The project page lists conversations that reference the project and offers New conversation. The new conversation form carries the project reference without granting file access.
 
@@ -88,7 +101,7 @@ A completed model response or submitted text can become a task list after valida
 
 Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Pi export use the saved revision.
 
-The Ralph task loop starter runs each remaining task in order. It pins the task list, workflow body and phase selections at launch. Each task receives fresh implementation and review-and-fix contexts. The complete task file remains context, but each worker receives only one assigned task. Human approval precedes each task commit by default.
+The Ralph task loop starter runs each remaining task in order. It pins the task list, workflow body and phase selections at launch. Each task receives fresh implementation and optional review-and-fix contexts. The complete task file remains context, but each worker receives only one assigned task. Human approval precedes each task commit by default. An extra independent review is present only when the selected definition includes that phase.
 
 One parent record shows task progress and links to child evidence. A successful commit or explicit no-change result permits the next task. The next task starts from the completed code, not an earlier worker transcript. A child approval gate retains the parent conversation reservation but releases execution reservations for another conversation. Earlier commits remain if a later task fails.
 
@@ -145,7 +158,7 @@ Current capabilities:
 - Create environment recipes from an OCI image and a setup script.
 - Edit and delete environment recipes.
 - Prepare environment snapshots for workflow use.
-- Create workflow definitions.
+- Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
 - Send a Quick task from an independent conversation with no workflow selection.
 - Grant read-only or writable project authority from a conversation.

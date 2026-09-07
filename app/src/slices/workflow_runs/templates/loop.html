@@ -44,11 +44,9 @@
       {% include "workflow_runs/templates/loop_controls.html" %}
     </section>
   {% endif %}
-  <p class="mt-4 max-w-[65ch] text-sm">
-    Each task is a child run with its own source, artefacts and approvals. The
-    parent conversation stays reserved until this loop reaches a terminal state.
-    Worker transcripts from earlier tasks stay out of later task context.
-  </p>
+  <p class="mt-4 max-w-[65ch] text-sm">{{ hierarchy }}</p>
+  <p class="text-quiet mt-2 max-w-[65ch] text-sm">{{ context_boundaries }}</p>
+  {% include "workflows/templates/process.html" %}
   <section class="mt-6 space-y-3" aria-labelledby="loop-tasks-heading">
     <h2 id="loop-tasks-heading" class="text-lg font-semibold">Tasks</h2>
     <ol class="record-list">

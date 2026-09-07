@@ -1,5 +1,11 @@
 <ol class="workflow-process mt-4" aria-label="Ordered workflow phases">
   {% for phase in process_phases %}
+    {% if phase.group_start %}
+      <li class="workflow-process-group">
+        <h3 class="font-semibold">{{ phase.group }}</h3>
+        <p class="text-quiet mt-1 text-sm">{{ phase.group_detail }}</p>
+      </li>
+    {% endif %}
     <li class="workflow-process-item">
       <div class="workflow-process-marker" aria-hidden="true">
         {{ phase.position }}

@@ -286,6 +286,10 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
         launch_inputs: Vec::new(),
         attempts: Vec::new(),
         artefacts: Vec::new(),
+        parent_href: String::new(),
+        hierarchy: String::new(),
+        context_boundaries: String::new(),
+        process_phases: Vec::new(),
     };
 
     let rendered = view.render().expect("render timeline");

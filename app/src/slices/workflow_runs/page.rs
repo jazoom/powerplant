@@ -5,7 +5,8 @@ use time::format_description::well_known::Rfc3339;
 use crate::environments::EnvironmentCatalogue;
 use crate::projects::ProjectStore;
 use crate::state::AppState;
-use crate::workflows::{LoopSummary, RunSummary, WorkflowCatalogue, WorkflowRun};
+use crate::workflows::summary::ProcessPhase;
+use crate::workflows::{LoopSummary, RunSummary, TaskLoop, WorkflowCatalogue, WorkflowRun};
 
 pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
 pub(super) const DETAIL_TITLE: &str = "Run | Power Plant";
@@ -212,6 +213,38 @@ impl RunIndexView {
     }
 }
 
+fn run_hierarchy(
+    run: &WorkflowRun,
+    parent: Option<&TaskLoop>,
+    current_step: &str,
+) -> (String, String, String) {
+    let context = if run.kind == crate::workflows::run::RunKind::QuickTask {
+        "Ordinary project messages retain conversation history. A requested revision starts with the original brief and explicit feedback, without the earlier transcript. Each attempt uses authorised root project instructions from its selected candidate."
+    } else {
+        "Each model phase and retry starts with the brief, declared artefacts and authorised root project instructions from its selected candidate. Explicit revision feedback can enter a fresh attempt. Conversation history and earlier worker transcripts stay excluded."
+    };
+    let Some(parent) = parent else {
+        return (String::new(), String::new(), context.to_owned());
+    };
+    let task = run
+        .task_selection
+        .as_ref()
+        .map(|task| format!("Task {}", task.index + 1))
+        .unwrap_or_else(|| "Task".to_owned());
+    let phase = if current_step.is_empty() {
+        "Phase".to_owned()
+    } else {
+        current_step.to_owned()
+    };
+    (
+        format!("/runs/loops/{}", parent.id.as_hex()),
+        format!("Parent task loop · {task} · {phase}"),
+        format!(
+            "This child is {task} of the parent loop. Each worker receives the complete task file but works only on its assigned task. {context} Completed code, not worker transcripts, reaches the next task."
+        ),
+    )
+}
+
 fn index_row_from_run(summary: &RunSummary, projects: &ProjectStore) -> IndexRow {
     let (_, project_name) = project_presentation(summary.project_id, projects);
     IndexRow {
@@ -269,6 +302,9 @@ pub(super) struct LoopDetailView {
     pub(super) awaiting_gate: bool,
     pub(super) command_error: &'static str,
     pub(super) conversation_surface: bool,
+    pub(super) process_phases: Vec<ProcessPhase>,
+    pub(super) hierarchy: String,
+    pub(super) context_boundaries: String,
 }
 
 pub(super) struct LoopTaskView {
@@ -314,6 +350,9 @@ impl LoopDetailView {
             awaiting_gate: controls.awaiting_gate,
             command_error: "",
             conversation_surface: false,
+            process_phases: crate::workflows::summary::process_overview(&record.pinned.definition),
+            hierarchy: "Parent run · Task · Phase".to_owned(),
+            context_boundaries: "Each child receives the complete task file but works only on its assigned task. Each phase and retry uses a fresh context with declared artefacts and authorised root instructions from its selected candidate. Explicit revision feedback can enter a fresh attempt. The parent conversation and earlier worker transcripts stay excluded. Completed code reaches the next task.".to_owned(),
             tasks: record
                 .tasks
                 .iter()
@@ -389,6 +428,10 @@ pub(super) struct RunDetailView {
     pub(super) launch_inputs: Vec<LaunchInputView>,
     pub(super) attempts: Vec<AttemptView>,
     pub(super) artefacts: Vec<ArtefactRow>,
+    pub(super) parent_href: String,
+    pub(super) hierarchy: String,
+    pub(super) context_boundaries: String,
+    pub(super) process_phases: Vec<ProcessPhase>,
 }
 
 pub(super) struct ArtefactRow {
@@ -421,6 +464,10 @@ pub(super) struct RunDetailContents<'a> {
     pub(super) launch_inputs: &'a [LaunchInputView],
     pub(super) attempts: &'a [AttemptView],
     pub(super) artefacts: &'a [ArtefactRow],
+    pub(super) parent_href: &'a str,
+    pub(super) hierarchy: &'a str,
+    pub(super) context_boundaries: &'a str,
+    pub(super) process_phases: &'a [ProcessPhase],
 }
 
 impl RunDetailView {
@@ -430,9 +477,13 @@ impl RunDetailView {
         environments: &EnvironmentCatalogue,
         projects: &ProjectStore,
         evidence: &crate::workflows::WorkflowEvidenceStore,
+        parent: Option<&TaskLoop>,
     ) -> Self {
         let (name_href, catalogue_note) = catalogue_presentation(run, workflows);
         let (project_href, project_name) = project_presentation(run.project_id, projects);
+        let current_step = run.current_step_name().unwrap_or("").to_owned();
+        let (parent_href, hierarchy, context_boundaries) =
+            run_hierarchy(run, parent, &current_step);
         Self {
             run_id: run.id.as_hex(),
             project_href,
@@ -454,7 +505,7 @@ impl RunDetailView {
                 _ => String::new(),
             },
             created: format_time(run.created_at_ms),
-            current_step: run.current_step_name().unwrap_or("").to_owned(),
+            current_step,
             task_selection: run.task_selection.as_ref().map(|task| TaskSelectionView {
                 document_id: task.document_id.as_hex(),
                 revision: task.revision.to_string(),
@@ -635,6 +686,14 @@ impl RunDetailView {
                 })
                 .collect(),
             artefacts: artefact_rows(run),
+            parent_href,
+            hierarchy,
+            context_boundaries,
+            process_phases: if run.kind == crate::workflows::run::RunKind::Configured {
+                crate::workflows::summary::process_overview(&run.pinned.definition)
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -658,6 +717,10 @@ impl RunDetailView {
             launch_inputs: &self.launch_inputs,
             attempts: &self.attempts,
             artefacts: &self.artefacts,
+            parent_href: &self.parent_href,
+            hierarchy: &self.hierarchy,
+            context_boundaries: &self.context_boundaries,
+            process_phases: &self.process_phases,
         }
     }
 }

@@ -149,9 +149,10 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The mobile row stays a generic product index. The Conversations page is the main work switcher. The Projects page is the project switcher.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
 - Workflow catalogue entries and configuration pages show the ordered process before edit fields.
+- Workflow authoring offers Run once and For each task. A repeated group shows the per-task phases once. It does not duplicate them for every task.
 - Workflow phase settings use a keyboard-accessible selector. Unselected panels stay in the form so unsaved values remain.
 - Invalid controls reveal their phase before browser validation moves focus. Server errors reveal the first affected phase and its advanced settings.
-- Workflow overviews show each phase purpose, candidate effect, fresh model context and approval route. Environment overrides and technical mappings stay under Advanced settings.
+- Workflow overviews show each phase purpose, candidate effect, fresh model context and approval route. Independent review is labelled only when that phase exists. Environment overrides and technical mappings stay under Advanced settings.
 - Conversation workflow launch uses the same ordered process presentation as workflow configuration.
 - Conversation pages put the discussion and composer before project access and workflow controls.
 - The conversation detail includes model selection, project access and workflow launch controls. The empty transcript contains no task suggestions.
@@ -203,6 +204,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Do not put project names in the permanent mobile row.
 - Keep model selection visible in the conversation detail. Keep project access and workflow launch explicit.
 - Show workflow process structure before model, environment and technical settings.
+- Show a parent, task and phase hierarchy on task-loop runs and child runs.
+- Keep Run once available without a task list. Keep ordinary chat free of a required workflow.
 - Keep phase selection transient. Do not submit a phase switch or discard fields from unselected phases.
 - Keep environment overrides and technical mappings inside Advanced settings.
 - Reuse the workflow process presentation in the conversation launch sheet.

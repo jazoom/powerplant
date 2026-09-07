@@ -409,7 +409,7 @@ impl DefinitionError {
             Self::AttemptLimit => "Set the review attempt limit from one through eight.",
             Self::CommitPolicy => "Choose a commit policy that matches this workflow.",
             Self::ExecutionMode => {
-                "A task-list workflow needs implementation, optional review, code approval and commit."
+                "A task-list workflow needs implementation, optional reviews and a final commit. Commit requires human approval or an approved review. Saved plan launch inputs are unsupported."
             }
             Self::RunBound => "This workflow can create too many attempts or artefacts.",
         }
@@ -1309,7 +1309,13 @@ fn assemble(
     reject_plan_decision_inputs(&steps)?;
     let commit_policy = requested_policy.unwrap_or_else(|| derive_commit_policy(&steps));
     reject_commit_policy(&steps, commit_policy)?;
-    if execution_mode == ExecutionMode::TaskList && !supports_task_execution(&steps, execution_mode)
+    if execution_mode == ExecutionMode::TaskList
+        && (!supports_task_execution(&steps, execution_mode)
+            || steps.iter().any(|step| {
+                step.inputs
+                    .iter()
+                    .any(|input| matches!(input.source, ArtefactSource::LaunchInput { .. }))
+            }))
     {
         return Err(DefinitionError::ExecutionMode);
     }

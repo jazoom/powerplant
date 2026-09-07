@@ -183,6 +183,8 @@ struct WorkflowLaunchView {
     model_summary: String,
     access_summary: String,
     environment_summary: String,
+    input_summary: String,
+    launch_blocked: bool,
     error: &'static str,
 }
 
@@ -208,6 +210,8 @@ struct WorkflowLaunchContents<'a> {
     model_summary: &'a str,
     access_summary: &'a str,
     environment_summary: &'a str,
+    input_summary: &'a str,
+    launch_blocked: bool,
     error: &'static str,
 }
 
@@ -233,6 +237,8 @@ impl WorkflowLaunchView {
             model_summary: &self.model_summary,
             access_summary: &self.access_summary,
             environment_summary: &self.environment_summary,
+            input_summary: &self.input_summary,
+            launch_blocked: self.launch_blocked,
             error: self.error,
         }
     }
@@ -983,7 +989,7 @@ async fn launch_view(
         error
     };
     let task_preview = preview.unwrap_or_default();
-    let workflows = records
+    let workflows: Vec<WorkflowOption> = records
         .iter()
         .map(|record| {
             let selection = WorkflowSelection {
@@ -1047,7 +1053,7 @@ async fn launch_view(
     let (plans, requires_plan) = selected_plan_options(state, record, &selected_workflow, plan_raw);
     let (task_lists, requires_task_list) =
         selected_task_list_options(state, record, &selected_workflow, task_document);
-    let targets = record
+    let targets: Vec<TargetOption> = record
         .grants
         .iter()
         .filter_map(|grant| {
@@ -1063,6 +1069,39 @@ async fn launch_view(
     let (model_summary, access_summary, environment_summary) =
         launch_readiness(state, record, selected_target, &selected_workflow).await;
     let phase_models = selected_phase_model_options(state, record, &selected_workflow, phase_raw);
+    let available_plans = plans.iter().any(|plan| !plan.content_hash.is_empty());
+    let available_task_lists = task_lists.iter().any(|list| !list.content_hash.is_empty());
+    let selected_plan = plans
+        .iter()
+        .any(|plan| plan.selected && !plan.content_hash.is_empty());
+    let selected_task_list = task_lists
+        .iter()
+        .any(|list| list.selected && !list.content_hash.is_empty());
+    let input_summary = match mode {
+        ExecutionMode::TaskList if !available_task_lists => {
+            "This process needs a task list. Save one in this conversation first.".to_owned()
+        }
+        ExecutionMode::TaskList if !selected_task_list => {
+            "Select a task list before launch.".to_owned()
+        }
+        ExecutionMode::TaskList => {
+            "Task list selected. Each remaining task runs the pinned process once.".to_owned()
+        }
+        ExecutionMode::Once if requires_plan && !available_plans => {
+            "This process needs a saved plan. Save one in this conversation first.".to_owned()
+        }
+        ExecutionMode::Once if requires_plan && !selected_plan => {
+            "Select a saved plan before launch.".to_owned()
+        }
+        ExecutionMode::Once if requires_plan => {
+            "Saved plan selected. This process runs once.".to_owned()
+        }
+        ExecutionMode::Once => "This process runs once. It does not need a task list.".to_owned(),
+    };
+    let launch_blocked = workflows.is_empty()
+        || targets.is_empty()
+        || (requires_task_list && !available_task_lists)
+        || (requires_plan && !available_plans);
     WorkflowLaunchView {
         document_title: format!("Run workflow · {}{}", record.title, TITLE_SUFFIX),
         conversation_id: record.id.as_hex(),
@@ -1088,6 +1127,8 @@ async fn launch_view(
         model_summary,
         access_summary,
         environment_summary,
+        input_summary,
+        launch_blocked,
         error,
     }
 }

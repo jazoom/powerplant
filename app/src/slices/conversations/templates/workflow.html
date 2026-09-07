@@ -455,6 +455,8 @@
               <dd>{{ access_summary }}</dd>
               <dt class="text-quiet">Environment readiness</dt>
               <dd>{{ environment_summary }}</dd>
+              <dt class="text-quiet">Selected process</dt>
+              <dd>{{ input_summary }}</dd>
             </dl>
           </section>
           <div
@@ -463,7 +465,7 @@
             <button
               class="btn btn-primary"
               type="submit"
-              {% if workflows.is_empty() || targets.is_empty() %}disabled{% endif %}
+              {% if launch_blocked %}disabled{% endif %}
             >
               Run workflow
             </button>

@@ -1,7 +1,7 @@
 use super::{
     FormError, FormIntent, PhasePurpose, WorkflowFormState, can_move_step, can_remove_step,
 };
-use crate::workflows::definition::MAXIMUM_DIRECTORIES;
+use crate::workflows::definition::{CommitPolicy, ExecutionMode, MAXIMUM_DIRECTORIES};
 
 fn pair(key: &str, value: &str) -> (String, String) {
     (key.to_owned(), value.to_owned())
@@ -320,6 +320,78 @@ fn commit_contract_excludes_reviews_before_the_final_candidate_producer() {
         super::source_token(&reviews[0].source),
         "step-output:phase-3:review"
     );
+}
+
+#[test]
+fn unknown_execution_mode_is_rejected() {
+    let mut pairs = valid_pairs();
+    pairs.push(pair("execution-mode", "graph"));
+    assert_eq!(
+        WorkflowFormState::parse(pairs).err(),
+        Some(FormError::ExecutionMode)
+    );
+}
+
+#[test]
+fn task_list_mode_rejects_a_non_repeating_process() {
+    let mut pairs = purpose_only_pairs();
+    pairs.push(pair("execution-mode", "task-list"));
+    let (form, _) = WorkflowFormState::parse(pairs).expect("form");
+    let errors = form.to_definition().expect_err("mode");
+    assert!(!errors.execution_mode.is_empty());
+}
+
+#[test]
+fn task_list_mode_requires_human_approval_without_a_review() {
+    let (mut form, _) = WorkflowFormState::parse(valid_pairs()).expect("form");
+    form.execution_mode = ExecutionMode::TaskList;
+    form.apply(FormIntent::AddPhase(PhasePurpose::CodeApproval))
+        .expect("approval");
+    form.apply(FormIntent::AddPhase(PhasePurpose::Commit))
+        .expect("commit");
+    let definition = form
+        .to_definition()
+        .expect("task list without review-and-fix");
+    assert_eq!(definition.execution_mode(), ExecutionMode::TaskList);
+    assert_eq!(definition.commit_policy(), CommitPolicy::HumanApproval);
+    assert!(
+        definition
+            .with_commit_policy(CommitPolicy::AutomaticAfterReview)
+            .is_err()
+    );
+}
+
+#[test]
+fn task_list_mode_accepts_automatic_commit_with_review_and_fix() {
+    let (mut form, _) = WorkflowFormState::parse(valid_pairs()).expect("form");
+    form.execution_mode = ExecutionMode::TaskList;
+    form.apply(FormIntent::AddPhase(PhasePurpose::ReviewAndFix))
+        .expect("review");
+    form.apply(FormIntent::AddPhase(PhasePurpose::Commit))
+        .expect("commit");
+    let definition = form.to_definition().expect("reviewed loop");
+    assert_eq!(
+        definition.commit_policy(),
+        CommitPolicy::AutomaticAfterReview
+    );
+}
+
+#[test]
+fn task_list_mode_rejects_a_saved_plan_input() {
+    let (mut form, _) = WorkflowFormState::parse(valid_pairs()).expect("form");
+    form.apply(FormIntent::AddPhase(PhasePurpose::CodeApproval))
+        .expect("approval");
+    form.apply(FormIntent::AddPhase(PhasePurpose::Commit))
+        .expect("commit");
+    form.execution_mode = ExecutionMode::TaskList;
+    form.to_definition().expect("loop");
+    form.steps[0].inputs.push(super::InputDraft {
+        key: "plan".to_owned(),
+        kind: "plan".to_owned(),
+        source: "launch-input:saved-plan".to_owned(),
+    });
+    let errors = form.to_definition().expect_err("saved plan");
+    assert!(!errors.execution_mode.is_empty());
 }
 
 #[test]

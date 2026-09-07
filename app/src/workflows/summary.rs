@@ -1,5 +1,10 @@
 use super::commands::SystemCommandId;
-use super::definition::{CandidateAuthority, ExecutionMode, StepAction, WorkflowDefinition};
+use super::definition::{
+    CandidateAuthority, ExecutionMode, OutputKind, StepAction, StepDefinition, WorkflowDefinition,
+};
+
+pub(crate) const REPEATED_GROUP: &str = "Repeated for each remaining task";
+pub(crate) const REPEATED_GROUP_DETAIL: &str = "These phases run once for each remaining task. Power Plant does not copy them for every task. Conversation history and earlier worker transcripts stay out of each attempt.";
 
 pub(crate) fn required_inputs(definition: &WorkflowDefinition) -> &'static str {
     if definition.execution_mode() == ExecutionMode::TaskList {
@@ -19,6 +24,9 @@ pub(crate) struct ProcessPhase {
     pub(crate) effects: String,
     pub(crate) context: String,
     pub(crate) approval: String,
+    pub(crate) group: String,
+    pub(crate) group_start: bool,
+    pub(crate) group_detail: String,
 }
 
 pub(crate) enum ProcessAction {
@@ -99,7 +107,34 @@ impl ProcessPhase {
                 "No approval stop."
             }
             .to_owned(),
+            group: String::new(),
+            group_start: false,
+            group_detail: String::new(),
         }
+    }
+
+    pub(crate) fn annotate_review(&mut self, independent_review: bool, review_and_fix: bool) {
+        if independent_review {
+            self.kind = "Independent review".to_owned();
+            self.purpose = "A separate reviewer inspects this exact candidate. It does not change the candidate.".to_owned();
+            self.effects = "Reads the candidate. Does not change project files.".to_owned();
+        } else if review_and_fix {
+            self.kind = "Review and fix".to_owned();
+            self.purpose = "A reviewer inspects the candidate and can fix safe issues.".to_owned();
+            self.effects =
+                "Can edit an isolated candidate. Does not change the project yet.".to_owned();
+        }
+    }
+}
+
+pub(crate) fn mark_repeated_group(phases: &mut [ProcessPhase]) {
+    if let Some(first) = phases.first_mut() {
+        first.group = REPEATED_GROUP.to_owned();
+        first.group_start = true;
+        first.group_detail = REPEATED_GROUP_DETAIL.to_owned();
+    }
+    for phase in phases.iter_mut().skip(1) {
+        phase.group = REPEATED_GROUP.to_owned();
     }
 }
 
@@ -113,7 +148,7 @@ pub(crate) fn revision_summary(human: bool, target: &str, attempt_limit: &str) -
 }
 
 pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPhase> {
-    definition
+    let mut phases: Vec<_> = definition
         .steps()
         .iter()
         .enumerate()
@@ -127,6 +162,10 @@ pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPh
                 StepAction::HumanGate(_) => ProcessAction::Approval,
             };
             let mut phase = ProcessPhase::new(index + 1, step.name.clone(), action);
+            phase.annotate_review(
+                is_independent_review(definition.steps(), index),
+                is_review_and_fix(step),
+            );
             phase.approval = match &step.action {
                 StepAction::HumanGate(action) if action.is_plan_checkpoint() => {
                     match &action.revision {
@@ -161,7 +200,38 @@ pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPh
             };
             phase
         })
-        .collect()
+        .collect();
+    if definition.execution_mode() == ExecutionMode::TaskList {
+        mark_repeated_group(&mut phases);
+    }
+    phases
+}
+
+fn produces_review(step: &StepDefinition) -> bool {
+    step.required_outputs()
+        .iter()
+        .any(|output| output.kind == OutputKind::ReviewReport)
+}
+
+fn is_independent_review(steps: &[StepDefinition], index: usize) -> bool {
+    let Some(step) = steps.get(index) else {
+        return false;
+    };
+    let StepAction::Agent(agent) = &step.action else {
+        return false;
+    };
+    agent.candidate_authority == CandidateAuthority::ReadOnly
+        && produces_review(step)
+        && steps[..index]
+            .iter()
+            .any(StepDefinition::writes_primary_source)
+}
+
+fn is_review_and_fix(step: &StepDefinition) -> bool {
+    let StepAction::Agent(agent) = &step.action else {
+        return false;
+    };
+    agent.candidate_authority == CandidateAuthority::Edit && produces_review(step)
 }
 
 fn format_plan_revision(

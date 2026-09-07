@@ -1,6 +1,6 @@
 use crate::agents::{AccessMode, ToolId};
 use crate::workflows::definition::{
-    AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority,
+    AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority, ExecutionMode,
     GuestDirectoryAccess, HumanGateStep, HumanRevisionPolicy, InputKey, MAXIMUM_DIRECTORIES,
     MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind,
     RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction,
@@ -26,6 +26,7 @@ pub(super) enum FormError {
     HumanRevisionPolicy,
     Purpose,
     Connection,
+    ExecutionMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,6 +160,7 @@ impl PhasePurpose {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FormIntent {
     Save,
+    UpdateMode,
     AddRole,
     AddPhase(PhasePurpose),
     AddSavedPlanImplementation,
@@ -246,6 +248,7 @@ pub(super) struct WorkflowFormState {
     pub(super) name: String,
     pub(super) default_environment: String,
     pub(super) revision: Option<u64>,
+    pub(super) execution_mode: ExecutionMode,
     pub(super) roles: Vec<RoleDraft>,
     pub(super) steps: Vec<StepDraft>,
 }
@@ -305,6 +308,7 @@ pub(super) struct FormErrors {
     pub(super) summary: &'static str,
     pub(super) name: &'static str,
     pub(super) default_environment: &'static str,
+    pub(super) execution_mode: &'static str,
     pub(super) roles: Vec<RoleErrors>,
     pub(super) steps: Vec<StepErrors>,
 }
@@ -325,6 +329,7 @@ impl FormError {
             Self::ReviewTarget => "That action would invalidate a review revision target.",
             Self::Purpose => "Choose a supported phase purpose.",
             Self::Connection => "That action would break a phase connection.",
+            Self::ExecutionMode => "Choose Run once or For each task.",
         }
     }
 }
@@ -346,6 +351,7 @@ impl FormErrors {
             summary: "",
             name: "",
             default_environment: "",
+            execution_mode: "",
             roles: vec![RoleErrors::default(); roles],
             steps: steps
                 .iter()
@@ -362,6 +368,7 @@ impl FormErrors {
     fn has_field_error(&self) -> bool {
         !self.name.is_empty()
             || !self.default_environment.is_empty()
+            || !self.execution_mode.is_empty()
             || self.roles.iter().any(|role| {
                 !role.key.is_empty()
                     || !role.name.is_empty()
@@ -412,6 +419,7 @@ impl WorkflowFormState {
             name: String::new(),
             default_environment: String::new(),
             revision: None,
+            execution_mode: ExecutionMode::Once,
             roles: Vec::new(),
             steps: vec![phase_draft("phase-1", PhasePurpose::Implementation, "")],
         }
@@ -444,6 +452,7 @@ impl WorkflowFormState {
             name: record.definition.name().to_owned(),
             default_environment: record.definition.default_environment().as_hex(),
             revision: Some(record.revision),
+            execution_mode: record.definition.execution_mode(),
             roles,
             steps,
         }
@@ -507,6 +516,7 @@ impl WorkflowFormState {
         let mut name = String::new();
         let mut default_environment = String::new();
         let mut revision = None;
+        let mut execution_mode = ExecutionMode::Once;
         let mut intent = None;
         let mut role_fields: Vec<(usize, RolePart, String)> = Vec::new();
         let mut step_fields: Vec<(usize, StepPart, String)> = Vec::new();
@@ -518,6 +528,10 @@ impl WorkflowFormState {
             match parse_field(&key)? {
                 Field::Name => name = value,
                 Field::DefaultEnvironment => default_environment = value,
+                Field::ExecutionMode => {
+                    execution_mode =
+                        ExecutionMode::parse(value.trim()).ok_or(FormError::ExecutionMode)?;
+                }
                 Field::Revision => {
                     if !value.trim().is_empty() {
                         revision = Some(parse_revision(&value)?);
@@ -542,6 +556,7 @@ impl WorkflowFormState {
                 name,
                 default_environment,
                 revision,
+                execution_mode,
                 roles,
                 steps,
             },
@@ -551,7 +566,7 @@ impl WorkflowFormState {
 
     pub(super) fn apply(&mut self, intent: FormIntent) -> Result<(), FormError> {
         match intent {
-            FormIntent::Save => Ok(()),
+            FormIntent::Save | FormIntent::UpdateMode => Ok(()),
             FormIntent::AddRole => {
                 if self.roles.len() >= MAXIMUM_ROLES {
                     return Err(FormError::Excessive);
@@ -860,7 +875,13 @@ impl WorkflowFormState {
                     return Err(errors);
                 }
             };
-        match WorkflowDefinition::from_parts(self.name.clone(), default_environment, roles, steps) {
+        match WorkflowDefinition::from_parts_with_mode(
+            self.name.clone(),
+            default_environment,
+            roles,
+            steps,
+            self.execution_mode,
+        ) {
             Ok(definition) => Ok(definition),
             Err(error) => {
                 relate_definition_error(self, error, &mut errors);
@@ -887,6 +908,7 @@ impl From<CatalogueError> for FormErrors {
 enum Field {
     Name,
     DefaultEnvironment,
+    ExecutionMode,
     Revision,
     Intent,
     Role { index: usize, part: RolePart },
@@ -949,6 +971,7 @@ fn parse_field(name: &str) -> Result<Field, FormError> {
     match name {
         "name" => Ok(Field::Name),
         "default-environment" => Ok(Field::DefaultEnvironment),
+        "execution-mode" => Ok(Field::ExecutionMode),
         "revision" => Ok(Field::Revision),
         "intent" => Ok(Field::Intent),
         _ => parse_row_field(name),
@@ -1105,6 +1128,7 @@ fn parse_human_revision_policy(raw: &str) -> Result<bool, FormError> {
 fn parse_intent(raw: &str) -> Result<FormIntent, FormError> {
     match raw {
         "save" => Ok(FormIntent::Save),
+        "update-mode" => Ok(FormIntent::UpdateMode),
         "add-role" => Ok(FormIntent::AddRole),
         "add-step" => Ok(FormIntent::AddStep),
         "add-phase:saved-plan-implementation" => Ok(FormIntent::AddSavedPlanImplementation),
@@ -2617,6 +2641,7 @@ fn relate_definition_error(
     errors.summary = error.message();
     match error {
         DefinitionError::Name => errors.name = error.message(),
+        DefinitionError::ExecutionMode => errors.execution_mode = error.message(),
         DefinitionError::DuplicateRole => {
             for role in &mut errors.roles {
                 if role.key.is_empty() {

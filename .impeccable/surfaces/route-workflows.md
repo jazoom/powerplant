@@ -28,7 +28,9 @@ A local developer chooses or edits a repeatable process before a model run start
 
 The ordered process appears before configuration fields.
 
-Each phase shows its purpose, candidate effect, model context boundary and approval route.
+Run once and For each task appear before phase settings. A repeated group shows per-task phases once.
+
+Each phase shows its purpose, candidate effect, model context boundary and approval route. Independent review is named only when that phase exists.
 
 Configuration uses a phase selector. The selector does not submit the form. Hidden phase panels retain their values.
 

@@ -115,12 +115,14 @@ async fn detail(
     let Some(run) = state.workflow_runs.get(&id) else {
         return Ok(responses::request_navigation(graft, "/runs"));
     };
+    let parent = run.parent_loop.and_then(|id| state.task_loops.get(&id));
     let view = RunDetailView::from_run(
         &run,
         &state.workflows,
         &state.environments,
         &state.projects,
         &state.workflow_evidence,
+        parent.as_ref(),
     );
     match graft {
         GraftRequest::Document => {
