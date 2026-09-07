@@ -7,7 +7,7 @@ use hypergraft::{PatchGraft, PatchStatus};
 use serde::Deserialize;
 
 use crate::{
-    agents::ToolId,
+    agents::{NetworkAccess, ToolId},
     conversations::ConversationError,
     error::{AppError, AppResult},
     execution::ExecutionSettings,
@@ -34,6 +34,8 @@ pub(super) struct SettingsForm {
     pub(super) tool_read: String,
     pub(super) tool_write: String,
     pub(super) tool_run: String,
+    pub(super) network: String,
+    pub(super) network_domains: String,
 }
 
 pub(super) fn parse_tools(values: &[String]) -> Result<Vec<ToolId>, &'static str> {
@@ -61,6 +63,18 @@ impl SettingsForm {
         .cloned()
         .collect()
     }
+
+    fn submitted_fields(&self) -> super::page::SubmittedSettingsFields<'_> {
+        super::page::SubmittedSettingsFields {
+            provider: &self.provider,
+            model: &self.model,
+            thinking: &self.thinking,
+            instructions: self.instructions.clone(),
+            tools: self.tool_values(),
+            network: &self.network,
+            network_domains: &self.network_domains,
+        }
+    }
 }
 
 fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, &'static str> {
@@ -75,11 +89,19 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
     let selection = ModelSelection::new(provider, form.model.clone(), thinking)
         .ok_or("Enter a valid model name.")?;
     valid_selection(state, &selection)?;
+    let network_mode = if form.network.trim().is_empty() {
+        "none"
+    } else {
+        form.network.as_str()
+    };
+    let network = NetworkAccess::parse_form(network_mode, &form.network_domains)
+        .map_err(|_| "Choose valid network access. Restricted access needs 1 to 32 domains.")?;
     ExecutionSettings::new(
         selection,
         form.instructions.clone(),
         parse_tools(&form.tool_values())?,
     )
+    .and_then(|settings| settings.with_network(network))
     .ok_or("Enter instructions within 32 KiB without unsupported control characters.")
 }
 
@@ -98,14 +120,7 @@ pub(super) async fn update(
             graft,
             PatchStatus::UnprocessableEntity,
             detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE)
-                .with_settings_fields(
-                    &state,
-                    &form.provider,
-                    &form.model,
-                    &form.thinking,
-                    form.instructions.clone(),
-                    &form.tool_values(),
-                ),
+                .with_settings_fields(&state, form.submitted_fields()),
         );
     };
     let settings = match validate(&state, &form) {
@@ -114,14 +129,8 @@ pub(super) async fn update(
             return render_detail_command(
                 graft,
                 PatchStatus::UnprocessableEntity,
-                detail_view(&state, session.0, &record, &record.title, error).with_settings_fields(
-                    &state,
-                    &form.provider,
-                    &form.model,
-                    &form.thinking,
-                    form.instructions.clone(),
-                    &form.tool_values(),
-                ),
+                detail_view(&state, session.0, &record, &record.title, error)
+                    .with_settings_fields(&state, form.submitted_fields()),
             );
         }
     };
@@ -145,14 +154,7 @@ pub(super) async fn update(
             graft,
             status_for(error),
             detail_view(&state, session.0, &record, &record.title, error.message())
-                .with_settings_fields(
-                    &state,
-                    &form.provider,
-                    &form.model,
-                    &form.thinking,
-                    form.instructions.clone(),
-                    &form.tool_values(),
-                ),
+                .with_settings_fields(&state, form.submitted_fields()),
         ),
     }
 }

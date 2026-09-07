@@ -209,9 +209,14 @@ impl GatePage {
             awaiting: gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision,
             error,
             run_kind: run.kind.as_str(),
-            project_id: run.project_id.as_hex(),
+            project_id: run.project_id.expect("project-backed gate").as_hex(),
             back_href: run.conversation_id.map_or_else(
-                || format!("/projects/{}", run.project_id.as_hex()),
+                || {
+                    format!(
+                        "/projects/{}",
+                        run.project_id.expect("project-backed gate").as_hex()
+                    )
+                },
                 |conversation| format!("/conversations/{}", conversation.as_hex()),
             ),
             back_label: if run.conversation_id.is_some() {

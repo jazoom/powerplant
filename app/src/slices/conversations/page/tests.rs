@@ -84,7 +84,7 @@ fn network_form_preserves_domains_and_shows_the_narrower_preset_ceiling() {
         "",
     );
     assert_eq!(
-        NetworkAccess::parse_form("restricted", &view.saved().unwrap().network_domains)
+        NetworkAccess::parse_form("restricted", &view.network_domains)
             .expect("resubmitted domains"),
         record.network
     );

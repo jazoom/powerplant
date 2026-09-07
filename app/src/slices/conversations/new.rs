@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct NewForm {
     pub(super) project: String,
@@ -13,6 +13,8 @@ pub(super) struct NewForm {
     pub(super) tool_read: String,
     pub(super) tool_write: String,
     pub(super) tool_run: String,
+    pub(super) network: String,
+    pub(super) network_domains: String,
     pub(super) title: String,
     pub(super) message: String,
     action: String,
@@ -26,6 +28,7 @@ pub(super) async fn show(
 ) -> AppResult<Response> {
     let mut form = NewForm {
         project: query.project,
+        network: "none".to_owned(),
         ..NewForm::default()
     };
     if let Some(provider) = state
@@ -117,11 +120,19 @@ fn model(
     };
     if configuration.preset.is_none() {
         let tools = super::settings::parse_tools(&form.tool_values())?;
+        let network_mode = if form.network.trim().is_empty() {
+            "none"
+        } else {
+            form.network.as_str()
+        };
+        let network = crate::agents::NetworkAccess::parse_form(network_mode, &form.network_domains)
+            .map_err(|_| "Choose valid network access. Restricted access needs 1 to 32 domains.")?;
         configuration.settings = crate::execution::ExecutionSettings::new(
             configuration.settings.model,
             form.instructions.clone(),
             tools,
         )
+        .and_then(|settings| settings.with_network(network))
         .ok_or("Enter instructions within 32 KiB without unsupported control characters.")?;
     }
     Ok(Some(configuration))
@@ -193,10 +204,11 @@ pub(super) async fn save(
             return reject_settings(PatchStatus::UnprocessableEntity, error, form);
         }
     };
-    let Some(connection) = model
+    if model
         .as_ref()
         .and_then(|model| state.vault.connection_for(&model.settings.model))
-    else {
+        .is_none()
+    {
         return reject_settings(
             PatchStatus::UnprocessableEntity,
             "Choose a stored provider.",
@@ -220,33 +232,44 @@ pub(super) async fn save(
             form,
         );
     }
+    let Some(model) = model else {
+        return reject_settings(
+            PatchStatus::UnprocessableEntity,
+            "Choose a stored provider.",
+            form,
+        );
+    };
+    if let Err(error) = super::preflight_execution(&state, &model).await {
+        let super::StartMessageError::User(status, message) = error else {
+            return Err(AppError::new(
+                "preflight first conversation message",
+                std::io::Error::other("unexpected internal preflight error"),
+            ));
+        };
+        return reject_settings(status, message, form);
+    }
     let id = ConversationId::generate()
         .map_err(|error| AppError::new("create conversation identifier", error))?;
-    let job = match state.sessions.begin_conversation_job(&session.0, id, 1) {
-        Ok(job) => job,
-        Err(_) => {
-            return reject(
-                PatchStatus::Conflict,
-                "Another command is active in this browser session.",
-                form,
-            );
-        }
-    };
     let record = match state.conversations.create_saved(
         id,
         project,
         (!form.title.is_empty()).then(|| form.title.clone()),
-        model,
-        Some((job.id(), form.message.clone())),
+        Some(model.clone()),
+        None,
     ) {
         Ok(record) => record,
-        Err(error) => {
-            state
-                .sessions
-                .finish_conversation_job(&session.0, id, job.id());
-            return reject(status_for(error), error.message(), form);
-        }
+        Err(error) => return reject(status_for(error), error.message(), form),
     };
+    let record =
+        match super::start_message(&state, session.0, record, 1, model, form.message.clone()).await
+        {
+            Ok(record) => record,
+            Err(super::StartMessageError::Internal(error)) => return Err(error),
+            Err(super::StartMessageError::User(status, error)) => {
+                let _ = state.conversations.delete(&id, 1);
+                return reject(status, error, form);
+            }
+        };
     let warning = record
         .model
         .as_ref()
@@ -261,15 +284,6 @@ pub(super) async fn save(
         .replace_location(conversation_path(&record))
         .map_err(|error| AppError::new("locate first conversation save", error))?;
     patches = patches.title(&view.document_title);
-    // New project context grants no authority. The first reply uses no guest tools.
-    tokio::spawn(job::run(
-        state.clone(),
-        session.0,
-        id,
-        record,
-        connection,
-        job,
-    ));
     patches
         .respond(PatchStatus::Ok)
         .map_err(|error| AppError::new("respond to first conversation save", error))

@@ -24,6 +24,8 @@ export function initConversation(
         "tool_read",
         "tool_write",
         "tool_run",
+        "network",
+        "network_domains",
         "preset",
     ];
     let unsavedSettings:
@@ -35,6 +37,14 @@ export function initConversation(
         unsavedSettings = new Map();
         for (const name of [...settingsNames, "revision"]) {
             const field = form.elements.namedItem(name);
+            if (field instanceof RadioNodeList) {
+                unsavedSettings.set(name, {
+                    value: field.value,
+                    checked: false,
+                    disabled: false,
+                });
+                continue;
+            }
             if (
                 field instanceof HTMLInputElement ||
                 field instanceof HTMLSelectElement ||
@@ -151,6 +161,20 @@ export function initConversation(
             model.textContent = preset?.value
                 ? `Preset: ${preset.selectedOptions[0].text}`
                 : field("model")?.value || "Choose a model";
+        }
+        const networkSummary = root.querySelector(
+            "[data-conversation-network-summary]",
+        );
+        if (networkSummary) {
+            const network = form.elements.namedItem("network");
+            const value =
+                network instanceof RadioNodeList ? network.value : "none";
+            networkSummary.textContent =
+                value === "restricted"
+                    ? "Restricted domains"
+                    : value === "public"
+                      ? "Public internet"
+                      : "Network off";
         }
         const project = field("project") as HTMLSelectElement | null;
         const context = root.querySelector<HTMLElement>(
@@ -466,6 +490,13 @@ export function initConversation(
                 const form = modelForm();
                 for (const [name, saved] of unsavedSettings) {
                     const field = form?.elements.namedItem(name);
+                    if (field instanceof RadioNodeList) {
+                        for (const radio of field) {
+                            if (radio instanceof HTMLInputElement)
+                                radio.checked = radio.value === saved.value;
+                        }
+                        continue;
+                    }
                     if (!(
                         field instanceof HTMLInputElement ||
                         field instanceof HTMLSelectElement ||

@@ -381,7 +381,7 @@ impl TaskLoop {
             self.environments.clone(),
             self.phase_models.clone(),
         );
-        run.agent_id = self.agent_id;
+        run.agent_id = Some(self.agent_id);
         run.set_parent_loop(self.id)
             .map_err(|_| TaskLoopError::Conflict)?;
         run.set_task_selection(TaskSelection {
@@ -862,7 +862,7 @@ impl TaskLoopStore {
                 return Err(TaskLoopError::DuplicateDispatch);
             }
             if child.conversation_id != Some(record.conversation_id)
-                || child.project_id != record.project_id
+                || child.project_id != Some(record.project_id)
                 || child.pinned != record.pinned
                 || child.phase_models != record.phase_models
             {
@@ -1083,7 +1083,7 @@ fn reconcile_record(
         if created.as_ref().is_some_and(|child| {
             child.parent_loop != Some(record.id)
                 || child.conversation_id != Some(record.conversation_id)
-                || child.project_id != record.project_id
+                || child.project_id != Some(record.project_id)
                 || child.pinned != record.pinned
                 || child.phase_models != record.phase_models
                 || child.task_selection.as_ref().is_none_or(|selection| {

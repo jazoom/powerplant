@@ -13,7 +13,7 @@ pub(crate) const BROWSER_SUMMARY_LIMIT: usize = 50;
 #[derive(Clone, Debug)]
 pub(crate) struct RunSummary {
     pub(crate) id: RunId,
-    pub(crate) project_id: ProjectId,
+    pub(crate) project_id: Option<ProjectId>,
     pub(crate) name: String,
     pub(crate) state: String,
     pub(crate) created_at_ms: u64,

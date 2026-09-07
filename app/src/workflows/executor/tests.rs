@@ -378,11 +378,12 @@ fn fixing_publication_fixture() -> (
     let job = crate::workflows::WorkflowJob {
         run_id,
         session_id: token.id(),
-        project_id: crate::projects::ProjectId::generate().expect("project"),
-        agent_id: AgentId::generate().expect("agent"),
+        project_id: Some(crate::projects::ProjectId::generate().expect("project")),
+        agent_id: Some(AgentId::generate().expect("agent")),
         agent_revision: 1,
         conversation_id: None,
         authority: None,
+        project_free_authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
@@ -574,11 +575,12 @@ fn interruption_failure_restores_current_and_unprocessed_jobs() {
         let job = crate::workflows::WorkflowJob {
             run_id,
             session_id: session,
-            project_id: crate::projects::ProjectId::generate().expect("project"),
-            agent_id: AgentId::generate().expect("agent"),
+            project_id: Some(crate::projects::ProjectId::generate().expect("project")),
+            agent_id: Some(AgentId::generate().expect("agent")),
             agent_revision: 1,
             conversation_id: None,
             authority: None,
+            project_free_authority: None,
             grant_alias: "project".to_owned(),
             grant_access: AccessMode::ReadWrite,
             connection: crate::providers::ProviderConnection::with_key(provider, "key", "model"),
@@ -623,11 +625,12 @@ fn final_gate_completion_settles_the_session_job_successfully() {
     let workflow = crate::workflows::WorkflowJob {
         run_id,
         session_id,
-        project_id,
-        agent_id,
+        project_id: Some(project_id),
+        agent_id: Some(agent_id),
         agent_revision: 1,
         conversation_id: None,
         authority: None,
+        project_free_authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
@@ -1155,7 +1158,7 @@ fn commit_recovery_restores_before_the_reference_and_finalises_after_it() {
             crate::workflows::RunId::generate().expect("run"),
             1,
             project_record.id,
-            agent.id,
+            Some(agent.id),
             crate::workflows::RunKind::Configured,
             crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
             environments,
@@ -1527,11 +1530,12 @@ fn test_job(
         session_id: crate::sessions::generate_session_token()
             .expect("session")
             .id(),
-        project_id,
-        agent_id: agent.id,
+        project_id: Some(project_id),
+        agent_id: Some(agent.id),
         agent_revision: agent.revision,
         conversation_id: None,
         authority: None,
+        project_free_authority: None,
         grant_alias: agent.directories[0].alias.clone(),
         grant_access: agent.directories[0].access,
         connection: crate::providers::ProviderConnection::with_key(
@@ -1627,7 +1631,7 @@ fn commit_recovery_requires_an_exact_grant_and_a_supported_worktree() {
         crate::workflows::RunId::generate().expect("run"),
         1,
         project.id,
-        agent.id,
+        Some(agent.id),
         crate::workflows::RunKind::Configured,
         crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
         environments,
@@ -1766,7 +1770,7 @@ fn gate_ready_fixture(
         crate::workflows::RunId::generate().expect("run"),
         1,
         crate::projects::ProjectId::generate().expect("project"),
-        AgentId::generate().expect("agent"),
+        Some(AgentId::generate().expect("agent")),
         kind,
         pinned,
         environments,
@@ -1844,8 +1848,8 @@ fn gate_ready_fixture(
     .expect("cleanup");
     run.complete_attempt(attempt, 3).expect("complete work");
     let run_id = run.id;
-    let project_id = run.project_id;
-    let agent_id = run.agent_id;
+    let project_id = run.project_id.expect("project");
+    let agent_id = run.agent_id.expect("agent");
     state.workflow_runs.create(run).expect("store run");
     state.keep_temp_dir(project);
     let token = crate::sessions::generate_session_token().expect("token");
@@ -1862,11 +1866,12 @@ fn gate_ready_fixture(
     let job = crate::workflows::WorkflowJob {
         run_id,
         session_id,
-        project_id,
-        agent_id,
+        project_id: Some(project_id),
+        agent_id: Some(agent_id),
         agent_revision: 1,
         conversation_id: None,
         authority: None,
+        project_free_authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: crate::providers::ProviderConnection::with_key(
@@ -1886,7 +1891,10 @@ fn gate_ready_fixture(
 }
 
 async fn execute_gate_run(state: crate::state::AppState, job: crate::workflows::WorkflowJob) {
-    let lease = state.agent_leases.acquire(job.agent_id).expect("lease");
+    let lease = state
+        .agent_leases
+        .acquire(job.agent_id.expect("agent"))
+        .expect("lease");
     let execution = state.workflow_execution.acquire().expect("execution");
     super::execute_run(state, job, Some(lease), execution).await;
 }
@@ -1937,8 +1945,8 @@ fn child_settlement_retains_parent_ownership_until_the_last_task() {
     workflow.task_loop = Some(parent.id);
     workflow.conversation_id = Some(conversation.id);
     workflow.session_id = token.id();
-    workflow.project_id = parent.project_id;
-    workflow.agent_id = parent.agent_id;
+    workflow.project_id = Some(parent.project_id);
+    workflow.agent_id = Some(parent.agent_id);
     workflow.job = job;
     let lease = state.workflow_execution.acquire().expect("execution");
     assert!(!super::finish_driven_job(
@@ -1995,7 +2003,7 @@ fn uncertain_commit_protection_is_not_a_resumable_gate() {
         gate_ready_fixture(crate::workflows::RunKind::QuickTask, GateCandidate::Changed);
     let agent = state
         .agent_leases
-        .acquire(workflow.agent_id)
+        .acquire(workflow.agent_id.expect("agent"))
         .expect("agent lease");
     let execution = state.workflow_execution.acquire().expect("execution lease");
     state
@@ -2003,7 +2011,12 @@ fn uncertain_commit_protection_is_not_a_resumable_gate() {
         .protect_commit_recovery(&workflow.job, Some(agent), execution);
 
     assert!(state.workflow_execution.acquire().is_err());
-    assert!(state.agent_leases.acquire(workflow.agent_id).is_err());
+    assert!(
+        state
+            .agent_leases
+            .acquire(workflow.agent_id.expect("agent"))
+            .is_err()
+    );
     assert!(state.sessions.busy(&session));
     assert!(
         !state
@@ -2014,7 +2027,12 @@ fn uncertain_commit_protection_is_not_a_resumable_gate() {
         .expect("forget provider");
     super::interrupt_session_continuations(&state, session).expect("expire session");
     assert!(state.workflow_execution.acquire().is_err());
-    assert!(state.agent_leases.acquire(workflow.agent_id).is_err());
+    assert!(
+        state
+            .agent_leases
+            .acquire(workflow.agent_id.expect("agent"))
+            .is_err()
+    );
 }
 
 #[tokio::test]

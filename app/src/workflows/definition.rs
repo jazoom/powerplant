@@ -1629,10 +1629,19 @@ fn reject_handoff(steps: &[StepDefinition]) -> Result<(), DefinitionError> {
             || assurance
             || matches!(step.action, StepAction::HumanGate(_))
         {
-            if candidate_inputs.len() != 1 {
+            let source_free_agent = matches!(
+                &step.action,
+                StepAction::Agent(AgentStep {
+                    candidate_authority: CandidateAuthority::ReadOnly,
+                    ..
+                })
+            ) && candidate_inputs.is_empty();
+            if candidate_inputs.len() != 1 && !source_free_agent {
                 return Err(DefinitionError::CandidateInput);
             }
-            let candidate = candidate_inputs[0];
+            let Some(candidate) = candidate_inputs.first() else {
+                continue;
+            };
             match &candidate.source {
                 ArtefactSource::RunInitialCandidate => {
                     if latest_candidate.is_some() {

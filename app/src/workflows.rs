@@ -41,7 +41,9 @@ pub(crate) use executor::{
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, TaskLoopId, WorkflowId};
 #[cfg(test)]
 pub(crate) use quick::tests::pin_quick_task;
-pub(crate) use quick::{HOST_UNCHANGED, alpine_git_id, pin_quick_task_with_context};
+pub(crate) use quick::{
+    HOST_UNCHANGED, alpine_git_id, pin_project_free_quick_task, pin_quick_task_with_context,
+};
 pub(crate) use resolve::{ResolvedEnvironmentSet, preview_environments, resolve_environments};
 pub(crate) use run::{
     PhaseModelSelection, PinnedPreset, RunKind, RunSource, TaskSelection, WorkflowRun, now_ms,

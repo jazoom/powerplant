@@ -474,7 +474,9 @@ pub(crate) fn build_attempt_packet_for_request(
     let verified = verify_inputs(run, step, resolved, store)?;
     let project_instructions =
         ProjectInstructionSnapshot::from_verified(&verified, &project_instructions);
-    let source_available = if tools.iter().any(|tool| {
+    let source_available = if matches!(run.source, super::run::RunSource::None) {
+        "Private scratch storage is available at /workspace through the listed tools. No host directory is mounted.".to_owned()
+    } else if tools.iter().any(|tool| {
         matches!(
             ToolId::parse(&tool.name),
             Some(ToolId::List | ToolId::Read | ToolId::Run)
@@ -500,6 +502,10 @@ pub(crate) fn build_attempt_packet_for_request(
         "Worker transcripts from other attempts are excluded. The ordinary conversation messages below remain part of this request.".to_owned()
     };
     let instructions = match &project_instructions.state {
+        ProjectInstructionState::Absent if matches!(run.source, super::run::RunSource::None) => {
+            "# Directory context\n\nNo host directory or project instructions are available."
+                .to_owned()
+        }
         ProjectInstructionState::Absent => {
             "# Project instructions\n\nNo root AGENTS.md file was present in this candidate."
                 .to_owned()
@@ -795,7 +801,7 @@ pub(crate) fn verify_inputs(
             super::run::RunSource::Captured { source } => run
                 .artefact(&source.initial.id)
                 .and_then(super::artefacts::ArtefactRecord::candidate_hash),
-            super::run::RunSource::Pending => None,
+            super::run::RunSource::None | super::run::RunSource::Pending => None,
         }
         .ok_or(InputContextError::Changed)?;
         for input in decisions {

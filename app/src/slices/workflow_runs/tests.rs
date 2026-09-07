@@ -73,7 +73,7 @@ fn stored_run(state: &AppState) -> RunId {
         RunId::generate().expect("run"),
         1,
         project.id,
-        crate::agents::AgentId::generate().expect("agent"),
+        Some(crate::agents::AgentId::generate().expect("agent")),
         crate::workflows::RunKind::Configured,
         PinnedWorkflowDefinition::pin(None, definition),
         environments,

@@ -330,6 +330,7 @@ pub(super) struct ProviderOption {
     pub(super) selected: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct NetworkOption {
     pub(super) value: &'static str,
     pub(super) label: &'static str,
@@ -342,6 +343,16 @@ pub(super) struct ToolOption {
     pub(super) label: &'static str,
     pub(super) detail: &'static str,
     pub(super) selected: bool,
+}
+
+pub(super) struct SubmittedSettingsFields<'a> {
+    pub(super) provider: &'a str,
+    pub(super) model: &'a str,
+    pub(super) thinking: &'a str,
+    pub(super) instructions: String,
+    pub(super) tools: Vec<String>,
+    pub(super) network: &'a str,
+    pub(super) network_domains: &'a str,
 }
 
 pub(super) enum ConversationPageState {
@@ -366,6 +377,10 @@ pub(super) struct ConversationDetailView {
     pub(super) model_summary: String,
     pub(super) instructions: String,
     pub(super) tool_options: Vec<ToolOption>,
+    pub(super) network_options: Vec<NetworkOption>,
+    pub(super) network_domains: String,
+    pub(super) network_summary: String,
+    pub(super) network_detail: String,
     pub(super) settings_open: bool,
     pub(super) model_available: bool,
     pub(super) job_active: bool,
@@ -379,9 +394,6 @@ pub(super) struct SavedConversationState {
     pub(super) job_id: String,
     pub(super) cursor: u64,
     pub(super) pending_gate: Option<PendingCodeGateView>,
-    pub(super) network_options: Vec<NetworkOption>,
-    pub(super) network_domains: String,
-    pub(super) network_summary: String,
     pub(super) plans: Vec<PlanDocumentView>,
     pub(super) task_text: String,
     pub(super) task_title: String,
@@ -442,6 +454,10 @@ impl ConversationDetailView {
             model_summary: String::new(),
             instructions: form.instructions.clone(),
             tool_options: tool_options(&selected_tools),
+            network_options: network_options(&form.network),
+            network_domains: form.network_domains,
+            network_summary: network_summary_from_form(&form.network),
+            network_detail: String::new(),
             settings_open: false,
             model_available: !form.model.is_empty(),
             job_active: false,
@@ -570,23 +586,7 @@ impl ConversationDetailView {
             });
         let configuration = record.model.as_ref().or(fallback.as_ref());
         let selection = configuration.map(|configuration| &configuration.settings.model);
-        let network_options = vec![
-            NetworkOption {
-                value: "none",
-                label: "No network",
-                selected: record.network == NetworkAccess::None,
-            },
-            NetworkOption {
-                value: "restricted",
-                label: "Restricted domains",
-                selected: matches!(record.network, NetworkAccess::Restricted(_)),
-            },
-            NetworkOption {
-                value: "public",
-                label: "Public internet",
-                selected: record.network == NetworkAccess::Public,
-            },
-        ];
+        let network_options = network_options(record.network.as_str());
         let network_domains = record.network.domains().join("\n");
         let preset_network = configuration
             .and_then(|configuration| configuration.preset.as_ref())
@@ -594,7 +594,8 @@ impl ConversationDetailView {
             .map(|agent| &agent.network);
         let effective_network =
             crate::conversations::intersect_network(&record.network, preset_network);
-        let network_summary = format_network_summary(&record.network, &effective_network);
+        let network_summary = network_summary_from_form(effective_network.as_str());
+        let network_detail = format_network_summary(&record.network, &effective_network);
         let model_picker = ModelPicker::new(
             sources.vault,
             sources.preferences,
@@ -756,6 +757,10 @@ impl ConversationDetailView {
                     })
                     .unwrap_or_default(),
             ),
+            network_options: network_options.clone(),
+            network_domains: network_domains.clone(),
+            network_summary,
+            network_detail,
             settings_open: false,
             job_active,
             session_busy,
@@ -766,9 +771,6 @@ impl ConversationDetailView {
                 job_id,
                 cursor,
                 pending_gate,
-                network_options,
-                network_domains,
-                network_summary,
                 plans,
                 task_text: String::new(),
                 task_title: String::new(),
@@ -789,22 +791,21 @@ impl ConversationDetailView {
     pub(super) fn with_settings_fields(
         mut self,
         state: &crate::state::AppState,
-        provider: &str,
-        model: &str,
-        thinking: &str,
-        instructions: String,
-        tools: &[String],
+        fields: SubmittedSettingsFields<'_>,
     ) -> Self {
         self.model_picker = ModelPicker::new(
             &state.vault,
             &state.preferences,
             &state.models_dev,
-            provider,
-            model,
-            thinking,
+            fields.provider,
+            fields.model,
+            fields.thinking,
         );
-        self.instructions = instructions;
-        self.tool_options = tool_options(tools);
+        self.instructions = fields.instructions;
+        self.tool_options = tool_options(&fields.tools);
+        self.network_options = network_options(fields.network);
+        self.network_domains = fields.network_domains.to_owned();
+        self.network_summary = network_summary_from_form(fields.network);
         self.settings_open = true;
         self
     }
@@ -824,6 +825,34 @@ impl ConversationDetailView {
     }
 }
 
+fn network_options(selected: &str) -> Vec<NetworkOption> {
+    vec![
+        NetworkOption {
+            value: "none",
+            label: "Off",
+            selected: selected.is_empty() || selected == "none",
+        },
+        NetworkOption {
+            value: "restricted",
+            label: "Restricted domains",
+            selected: selected == "restricted",
+        },
+        NetworkOption {
+            value: "public",
+            label: "Public internet",
+            selected: selected == "public",
+        },
+    ]
+}
+
+fn network_summary_from_form(network: &str) -> String {
+    match network {
+        "restricted" => "Restricted domains".to_owned(),
+        "public" => "Public internet".to_owned(),
+        _ => "Network off".to_owned(),
+    }
+}
+
 fn tool_options(selected: &[String]) -> Vec<ToolOption> {
     ToolId::ALL
         .into_iter()
@@ -837,9 +866,9 @@ fn tool_options(selected: &[String]) -> Vec<ToolOption> {
             value: tool.as_str(),
             label: tool.label(),
             detail: match tool {
-                ToolId::List => "List files in authorised project directories.",
-                ToolId::Read => "Read files in authorised project directories.",
-                ToolId::Write => "Write files in an authorised candidate workspace.",
+                ToolId::List => "List files in private scratch storage or authorised directories.",
+                ToolId::Read => "Read files in private scratch storage or authorised directories.",
+                ToolId::Write => "Write files in private scratch storage or a candidate workspace.",
                 ToolId::Run => "Run commands in the sandbox.",
             },
             selected: selected.iter().any(|value| value == tool.as_str()),

@@ -1,4 +1,7 @@
-use crate::{agents::ToolId, providers::ModelSelection};
+use crate::{
+    agents::{NetworkAccess, ToolId},
+    providers::ModelSelection,
+};
 
 pub(crate) const MAXIMUM_INSTRUCTION_BYTES: usize = crate::agents::MAXIMUM_INSTRUCTION_BYTES;
 
@@ -7,6 +10,7 @@ pub(crate) struct ExecutionSettings {
     pub(crate) model: ModelSelection,
     pub(crate) instructions: String,
     pub(crate) tools: Vec<ToolId>,
+    pub(crate) network: NetworkAccess,
 }
 
 impl ExecutionSettings {
@@ -31,7 +35,13 @@ impl ExecutionSettings {
             model,
             instructions,
             tools,
+            network: NetworkAccess::None,
         })
+    }
+
+    pub(crate) fn with_network(mut self, network: NetworkAccess) -> Option<Self> {
+        self.network = network.validate().ok()?;
+        Some(self)
     }
 }
 

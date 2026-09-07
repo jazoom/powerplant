@@ -22,6 +22,7 @@ pub(crate) struct AttemptCapabilities {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PrimarySourceLocation {
     AttemptWorkspace,
+    PrivateWorkspace,
     UserProject,
 }
 
@@ -59,6 +60,39 @@ impl AttemptCapabilities {
     ) -> Result<Self, CapabilityError> {
         let policy = crate::agents::DirectoryPolicy::from_record_with_primary(agent, primary_alias);
         derive_with_ceiling(step, agent.revision, &agent.tools, &agent.network, &policy)
+    }
+
+    pub(crate) fn derive_project_free(
+        step: &StepDefinition,
+        authority: &crate::execution::ProjectFreeAuthority,
+    ) -> Result<Self, CapabilityError> {
+        let StepAction::Agent(action) = &step.action else {
+            return Err(CapabilityError::Authority);
+        };
+        if action.candidate_authority != crate::workflows::definition::CandidateAuthority::ReadOnly
+            || !action.authority.directories.is_empty()
+            || !action
+                .authority
+                .tools
+                .iter()
+                .all(|tool| authority.tools.contains(tool))
+        {
+            return Err(CapabilityError::Authority);
+        }
+        Ok(Self {
+            schema: CAPABILITY_SCHEMA,
+            agent_revision: authority.revision,
+            tools: action.authority.tools.clone(),
+            directories: vec![CapabilityDirectory {
+                alias: "workspace".to_owned(),
+                guest_path: crate::execution::GUEST_WORKSPACE.to_owned(),
+                access: AccessMode::ReadWrite,
+                role: DirectoryRole::PrimarySource,
+            }],
+            source_location: PrimarySourceLocation::PrivateWorkspace,
+            git_admin: AccessMode::ReadOnly,
+            network: NetworkCapability::from_agent(&authority.network),
+        })
     }
 
     pub(crate) fn derive_for_authority(
@@ -121,6 +155,7 @@ impl PrimarySourceLocation {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::AttemptWorkspace => "attempt-workspace",
+            Self::PrivateWorkspace => "private-workspace",
             Self::UserProject => "user-project",
         }
     }
@@ -128,6 +163,7 @@ impl PrimarySourceLocation {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "attempt-workspace" => Some(Self::AttemptWorkspace),
+            "private-workspace" => Some(Self::PrivateWorkspace),
             "user-project" => Some(Self::UserProject),
             _ => None,
         }
@@ -136,6 +172,7 @@ impl PrimarySourceLocation {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::AttemptWorkspace => "Attempt workspace",
+            Self::PrivateWorkspace => "Private workspace",
             Self::UserProject => "User project",
         }
     }

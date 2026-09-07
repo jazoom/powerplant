@@ -225,6 +225,7 @@ async fn invalid_first_submissions_preserve_all_local_choices_and_unsent_text() 
 #[tokio::test]
 async fn first_send_persists_message_and_model_then_replaces_location() {
     let state = test_state();
+    ready_starter_environment(&state).await;
     let token = connected(&state);
     let project = register_project(&state, "Context");
     let effort = state
@@ -294,6 +295,137 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
     assert_eq!(record.projects, vec![project.id]);
     assert!(record.grants.is_empty());
     assert!(record.execution_target.is_none());
+}
+
+#[tokio::test]
+async fn network_tool_reply_uses_private_workspace_without_catalogue_identity() {
+    let mut state = test_state();
+    let run_dir = tempfile::tempdir().unwrap();
+    state.workflow_runs = std::sync::Arc::new(
+        crate::workflows::WorkflowRunStore::open(run_dir.path().to_path_buf()).unwrap(),
+    );
+    ready_starter_environment(&state).await;
+    let backend = crate::providers::tests::ScriptedBackend::tool_then(
+        "run",
+        serde_json::json!({"command": "wget -qO- https://example.com"}),
+        "The network check completed.",
+    );
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(backend));
+    let token = connected(&state);
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
+            &format!(
+                "action=send&provider=xai&model=grok-4.6&thinking={}&message=Check%20the%20site&tool_run=run&network=restricted&network_domains=example.com",
+                effort.as_str()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let conversation = state.conversations.list().pop().expect("conversation");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .conversations
+            .get(&conversation.id)
+            .expect("conversation")
+            .active_job
+            .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("tool reply");
+    let run_id = state
+        .workflow_runs
+        .summaries()
+        .pop()
+        .expect("source-free run summary")
+        .id;
+    let run = state.workflow_runs.get(&run_id).expect("source-free run");
+    assert!(run.project_id.is_none());
+    assert!(run.agent_id.is_none());
+    assert!(matches!(run.source, crate::workflows::RunSource::None));
+    assert!(
+        matches!(run.state, crate::workflows::run::RunState::Completed),
+        "run: {run:#?}"
+    );
+    let settled = state.conversations.get(&conversation.id).unwrap();
+    assert_eq!(
+        settled
+            .messages
+            .iter()
+            .filter(|message| message.text == "Check the site")
+            .count(),
+        1
+    );
+    assert_eq!(
+        settled.messages.last().unwrap().text,
+        "The network check completed."
+    );
+    let capabilities = &run.attempts[0].capabilities;
+    assert_eq!(capabilities.primary().unwrap().guest_path, "/workspace");
+    assert_eq!(
+        capabilities.network,
+        crate::workflows::capabilities::NetworkCapability::Restricted(vec![
+            "example.com".to_owned()
+        ])
+    );
+    assert!(run.gates.is_empty());
+    assert!(run.artefacts.is_empty());
+    let reopened = crate::workflows::WorkflowRunStore::open(run_dir.path().to_path_buf()).unwrap();
+    let loaded = reopened.get(&run_id).expect("loaded source-free run");
+    assert!(loaded.project_id.is_none());
+    assert!(matches!(loaded.source, crate::workflows::RunSource::None));
+}
+
+#[tokio::test]
+async fn first_message_preflight_requires_runtime_only_for_tools() {
+    let state = test_state();
+    let token = connected(&state);
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let base = format!(
+        "action=send&provider=xai&model=grok-4.6&thinking={}&message=Hello",
+        effort.as_str()
+    );
+    let tool_fields = format!("{base}&tool_run=run");
+    let invalid_domains =
+        format!("{base}&network=restricted&network_domains=https%3A%2F%2Fexample.com");
+    for fields in [&tool_fields, &invalid_domains] {
+        let response = app(&state)
+            .oneshot(command("/conversations/new", &token, fields))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(state.conversations.list().is_empty());
+        assert!(!state.sessions.busy(&session_id(&token)));
+    }
+    state
+        .sandboxes
+        .set_missing_runtime(crate::sandbox::MissingRuntime::Both);
+    let response = app(&state)
+        .oneshot(command("/conversations/new", &token, &tool_fields))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(state.conversations.list().is_empty());
+    let response = app(&state)
+        .oneshot(command("/conversations/new", &token, &base))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let record = state.conversations.list().pop().unwrap();
+    assert_eq!(record.messages[0].text, "Hello");
+    assert!(state.workflow_runs.summaries().is_empty());
 }
 
 #[tokio::test]

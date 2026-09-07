@@ -15,7 +15,7 @@ impl WorkflowRun {
             id,
             created_at_ms,
             super::ProjectId::generate().expect("project"),
-            agent_id,
+            Some(agent_id),
             super::RunKind::Configured,
             pinned,
             environments,
@@ -1216,21 +1216,65 @@ fn project_identity_and_run_kind_round_trip() {
             RunId::generate().expect("run"),
             10,
             project_id,
-            crate::agents::AgentId::generate().expect("agent"),
+            Some(crate::agents::AgentId::generate().expect("agent")),
             kind,
             PinnedWorkflowDefinition::pin(None, definition),
             environments,
         );
         let loaded = WorkflowRun::from_file(run.to_file()).expect("load");
-        assert_eq!(loaded.project_id, project_id);
+        assert_eq!(loaded.project_id, Some(project_id));
         assert_eq!(loaded.kind, kind);
     }
 }
 
 #[test]
+fn source_free_records_reject_source_and_identity_substitution() {
+    let environment = crate::environments::EnvironmentId::generate().expect("environment");
+    let pinned = crate::workflows::pin_project_free_quick_task(
+        &[crate::agents::ToolId::Run],
+        "Use private scratch files.",
+        environment,
+    )
+    .expect("source-free quick task");
+    let run = WorkflowRun::create_source_free_for_conversation(
+        RunId::generate().expect("run"),
+        10,
+        crate::conversations::ConversationId::generate().expect("conversation"),
+        pinned.clone(),
+        crate::tests::test_environment_set(&pinned.definition),
+        Vec::new(),
+    );
+
+    let loaded = WorkflowRun::from_file(run.to_file()).expect("load source-free run");
+    assert!(loaded.project_id.is_none());
+    assert!(loaded.agent_id.is_none());
+    assert!(matches!(loaded.source, super::RunSource::None));
+    assert!(loaded.artefacts.is_empty());
+    for tamper in [
+        |run: &mut WorkflowRun| run.project_id = Some(super::ProjectId::generate().unwrap()),
+        |run: &mut WorkflowRun| run.agent_id = Some(super::AgentId::generate().unwrap()),
+        |run: &mut WorkflowRun| run.conversation_id = None,
+        |run: &mut WorkflowRun| run.source = super::RunSource::Pending,
+    ] {
+        let mut changed = run.clone();
+        tamper(&mut changed);
+        assert_eq!(
+            WorkflowRun::from_file(changed.to_file()).err(),
+            Some(super::RunRecordError::Corrupt)
+        );
+    }
+    let mut project_run = new_run();
+    project_run.project_id = None;
+    assert_eq!(
+        WorkflowRun::from_file(project_run.to_file()).err(),
+        Some(super::RunRecordError::Corrupt)
+    );
+}
+
+#[test]
 fn missing_or_unknown_project_identity_fails_load() {
     let mut file = new_run().to_file();
-    file.project_id = "not-a-project-id".to_owned();
+    file.project_id = Some("not-a-project-id".to_owned());
     assert_eq!(
         WorkflowRun::from_file(file).err(),
         Some(super::RunRecordError::Corrupt)
@@ -1407,7 +1451,7 @@ fn quick_task_run(kind: super::RunKind) -> WorkflowRun {
         RunId::generate().expect("run"),
         10,
         crate::projects::ProjectId::generate().expect("project"),
-        crate::agents::AgentId::generate().expect("agent"),
+        Some(crate::agents::AgentId::generate().expect("agent")),
         kind,
         pinned,
         environments,

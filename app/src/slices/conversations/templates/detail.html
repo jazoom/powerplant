@@ -77,6 +77,14 @@
         </button>
         <button
           type="button"
+          class="btn btn-ghost btn-sm min-h-10"
+          popovertarget="conversation-settings"
+          data-conversation-network-summary
+        >
+          {{ network_summary }}
+        </button>
+        <button
+          type="button"
           class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-project]"
           popovertarget="conversation-project-settings"
         >
@@ -717,93 +725,6 @@
             </details>
           </section>
 
-          <section
-            id="conversation-network-settings"
-            popover
-            class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] space-y-4 overflow-y-auto p-5 md:inset-x-auto md:top-28 md:right-8 md:w-[min(40rem,calc(100vw-18rem))]"
-            aria-labelledby="conversation-network-heading"
-          >
-            <div>
-              <div class="flex items-center justify-between gap-3">
-                <h2
-                  id="conversation-network-heading"
-                  class="text-lg font-semibold"
-                >
-                  Guest network access
-                </h2>
-                <button
-                  type="button"
-                  class="btn btn-ghost btn-sm min-h-11"
-                  popovertarget="conversation-network-settings"
-                  popovertargetaction="hide"
-                >
-                  Close
-                </button>
-              </div>
-              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
-                This setting applies to sandbox work for the execution target.
-                It does not give a project-free model filesystem access. Presets
-                can narrow this choice, and private or host networks stay
-                blocked.
-              </p>
-              <p class="mt-2 text-sm">
-                <span class="font-medium">{{ saved.network_summary }}</span>
-              </p>
-            </div>
-            <form
-              data-graft
-              method="post"
-              action="/conversations/{{ saved.id }}/network"
-              class="flex max-w-xl flex-col gap-4"
-            >
-              <input
-                type="hidden"
-                name="revision"
-                value="{{ saved.revision }}"
-              />
-              <fieldset class="flex flex-col gap-3">
-                <legend class="text-sm font-semibold">Access level</legend>
-                {% for option in saved.network_options %}
-                  <label class="flex items-start gap-2 text-sm">
-                    <input
-                      class="radio radio-sm mt-0.5"
-                      type="radio"
-                      name="network"
-                      value="{{ option.value }}"
-                      {% if option.selected %}checked{% endif %}
-                      {% if job_active || session_busy %}disabled{% endif %}
-                    />
-                    <span>{{ option.label }}</span>
-                  </label>
-                {% endfor %}
-              </fieldset>
-              <label
-                class="flex flex-col gap-1"
-                for="conversation-network-domains"
-              >
-                <span class="text-sm">Allowed domains</span>
-                <textarea
-                  id="conversation-network-domains"
-                  class="textarea textarea-bordered min-h-24"
-                  name="network_domains"
-                  maxlength="8127"
-                  {% if job_active || session_busy %}disabled{% endif %}
-                >
-{{ saved.network_domains }}</textarea>
-                <span class="text-quiet text-xs">
-                  Use one domain per line. Each entry includes its subdomains
-                  and ports. Private and host networks remain excluded.
-                </span>
-              </label>
-              <button
-                class="btn btn-secondary self-start"
-                type="submit"
-                {% if job_active || session_busy %}disabled{% endif %}
-              >
-                Save network access
-              </button>
-            </form>
-          </section>
           {% if let Some(gate) = saved.pending_gate %}
             <section
               id="conversation-candidate"
@@ -1091,16 +1012,9 @@
               Project attachments identify related work. They grant no access
               until you select an access level below. Read-only access permits
               List, Read and Run. Writable target access also permits Write in
-              the candidate workspace. Guest network access starts at None.
+              the candidate workspace. Sandbox network access starts at Off.
             </p>
           </div>
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm min-h-11"
-            popovertarget="conversation-network-settings"
-          >
-            Guest network access
-          </button>
           {% if attached_projects.is_empty() %}
             <p class="text-quiet text-sm">
               No projects are attached to this conversation. Attach one before
@@ -1453,7 +1367,7 @@
         >
           <legend class="text-sm font-semibold">Available tools</legend>
           <p class="text-quiet text-xs">
-            Tools run only when the conversation also has explicit project
+            Tools use private scratch storage at /workspace without directory
             access. Plain chat needs no sandbox.
           </p>
           <div class="grid gap-2 sm:grid-cols-2">
@@ -1481,6 +1395,64 @@
             {% endfor %}
           </div>
         </fieldset>
+
+        <section
+          class="border-base-300 mt-6 space-y-3 border-t pt-5"
+          aria-labelledby="conversation-network-heading"
+        >
+          <div>
+            <h3 id="conversation-network-heading" class="text-sm font-semibold">
+              Sandbox network
+            </h3>
+            <p class="text-quiet mt-1 text-xs">
+              This controls sandbox tools only. Provider requests still leave
+              the host. Private and host networks remain blocked.
+            </p>
+            {% if !network_detail.is_empty() %}
+              <p class="mt-2 text-sm break-words">{{ network_detail }}</p>
+            {% endif %}
+          </div>
+          <fieldset
+            class="grid gap-2 sm:grid-cols-3"
+            {% if job_active %}disabled{% endif %}
+          >
+            <legend class="sr-only">Sandbox network access</legend>
+            {% for option in network_options %}
+              <label
+                class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+              >
+                <input
+                  form="{{ self.model_form() }}"
+                  class="radio radio-sm"
+                  type="radio"
+                  name="network"
+                  value="{{ option.value }}"
+                  {% if option.selected %}checked{% endif %}
+                />
+                <span>{{ option.label }}</span>
+              </label>
+            {% endfor %}
+          </fieldset>
+          <label
+            class="flex flex-col gap-1"
+            for="conversation-settings-network-domains"
+          >
+            <span class="text-sm">Allowed domains</span>
+            <textarea
+              form="{{ self.model_form() }}"
+              id="conversation-settings-network-domains"
+              class="textarea textarea-bordered min-h-24 w-full"
+              name="network_domains"
+              maxlength="8127"
+              {% if job_active %}disabled{% endif %}
+            >
+{{ network_domains }}</textarea>
+            <span class="text-quiet text-xs">
+              Use one domain per line. Restricted access includes subdomains and
+              all ports.
+            </span>
+          </label>
+        </section>
 
         {% if !presets.is_empty() %}
           <section
@@ -1593,13 +1565,6 @@
             >
               Plans and
               tasks{% if !saved.plans.is_empty() %}· {{ saved.plans.len() }}{% endif %}
-            </button>
-            <button
-              type="button"
-              class="btn btn-secondary btn-sm min-h-11"
-              popovertarget="conversation-network-settings"
-            >
-              Guest network access
             </button>
           </div>
           <section

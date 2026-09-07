@@ -24,6 +24,9 @@ pub(crate) fn compose_role(
         expertise
     };
     let mut facts = String::from("# Runtime facts\n\nGuest directories:\n");
+    if policy.is_private_workspace() {
+        facts.push_str("- Private scratch storage at /workspace (read-write)\n");
+    }
     for grant in policy.grants() {
         facts.push_str("- ");
         facts.push_str(&grant.alias);

@@ -32,15 +32,19 @@ The user brings the provider key or plan login. Power Plant does not sell model 
 
 The user registers projects, agents, environments and workflows on this machine. Agents work in sandboxes on the local machine. Conversations retain their discussion history on this machine.
 
-A conversation does not require a named agent. The user selects a model directly or applies an optional preset. Project attachments provide context references only until the user grants access.
+A conversation does not require a named agent or project. The user selects a model directly or applies an optional preset. Project attachments provide context references only until the user grants access.
 
 A read-only project grant permits List, Read and Run in an isolated candidate. A writable target grant also permits Write in that candidate. Only one project can have writable conversation access.
 
 Other granted projects supply read-only context under stable `/access/<alias>` paths. The sandbox blocks writes to those projects, even when the target permits Write.
 
-Guest network access defaults to None. A separate conversation control permits restricted domains or public internet access. Preset ceilings can narrow this choice. Private and host networks remain excluded. Project attachments and target changes do not expand network access.
+Sandbox network access defaults to Off. Conversation settings permit restricted domains or public internet access. Private and host networks remain excluded. Provider traffic remains separate and leaves the host for model inference.
 
-A writable conversation message starts the system-owned Quick task. The agent creates an isolated candidate. The user reviews the exact candidate diff before Power Plant applies a local Git commit. Apply and Discard actions belong to the conversation and settle that conversation after the decision.
+A tool-enabled conversation message starts the system-owned Quick task. Without project access, tools use private scratch storage at `/workspace`. Power Plant mounts no user directory for this work.
+
+Scratch storage belongs to one attempt, not the conversation. Source-free tools create no Git candidate, code approval gate or commit.
+
+A writable project message creates an isolated candidate. The user reviews the exact candidate diff before Power Plant applies a local Git commit.
 
 ## Operating Context
 
@@ -72,7 +76,7 @@ They create agents in the local catalogue. Each agent has a name, instructions, 
 
 An agent network policy permits no network, selected domain suffixes or the public internet. No network is the default. Public access excludes the host and private networks. Restricted access includes each listed domain, its subdomains and all ports.
 
-They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. A workflow can use only a ready snapshot.
+They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. Sandbox tools require a ready snapshot. Tool-free chat requires no sandbox runtime or snapshot.
 
 They create workflow definitions with a default environment, roles and ordered steps. A definition can run once or repeat one group of phases for each remaining task. A task list is not required for a one-shot definition. Ordinary chat still needs no workflow.
 
@@ -119,7 +123,7 @@ A workflow can declare a saved plan input. The authoring form offers Implementat
 
 The launch sheet selects an immutable plan revision from the conversation. The run retains its own copy and the source reference. Only phases that declare that input receive the plan. Later corrections or association removal cannot change the run copy. The run inspector exposes that copy.
 
-Each run records project identity and run kind. Run kinds are Configured and Quick task. A run can belong to an independent conversation.
+Project-backed runs record the actual project identity. Source-free Quick tasks record neither a project identity nor an agent identity. Run kinds are Configured and Quick task. A run can belong to an independent conversation.
 
 The browser session remains a command boundary, not a conversation identity. The session permits one active command while a conversation reservation protects its unfinished operation. A safe approval gate releases the session reservation so another conversation can run a command.
 
@@ -171,6 +175,8 @@ Current capabilities:
 - Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
 - Send a Quick task from an independent conversation with no workflow selection.
+- Use sandbox tools with private scratch storage and no project.
+- Set sandbox network access to Off, restricted domains or public internet.
 - Grant read-only or writable project authority from a conversation.
 - Review a candidate diff and Apply or Discard it from the owning conversation.
 - Launch a configured workflow from a conversation.
@@ -205,7 +211,8 @@ Current constraints:
 - One workflow execution can be active process-wide.
 - The project catalogue grants no file access. Explicit conversation grants or saved-agent directory grants supply execution authority.
 - Project paths cannot change. Project records cannot be deleted in this release.
-- Quick task needs the ready Alpine Git seed snapshot. The product does not fall back to another environment.
+- Sandbox-backed Quick task needs the ready Alpine Git seed snapshot. The product does not fall back to another environment.
+- Tool-free chat needs no sandbox runtime or prepared environment.
 - Quick task never enters the workflow catalogue.
 
 Later work:

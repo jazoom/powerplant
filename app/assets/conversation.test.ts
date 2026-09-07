@@ -250,7 +250,10 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
                 : "conversation-settings-form";
         root.insertAdjacentHTML(
             "beforeend",
-            `<textarea name="instructions" form="${formId}"></textarea><input type="checkbox" name="tool_read" value="read" form="${formId}">`,
+            `<textarea name="instructions" form="${formId}"></textarea><input type="checkbox" name="tool_read" value="read" form="${formId}">
+            <input type="radio" name="network" value="none" checked form="${formId}">
+            <input type="radio" name="network" value="restricted" form="${formId}">
+            <textarea name="network_domains" form="${formId}"></textarea>`,
         );
         const original = root.innerHTML;
         const instructions = root.querySelector<HTMLTextAreaElement>(
@@ -262,6 +265,16 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
             root.querySelector<HTMLInputElement>('[name="tool_read"]')!;
         read.checked = true;
         read.dispatchEvent(new Event("input", { bubbles: true }));
+        const network = root.querySelector<HTMLInputElement>(
+            '[name="network"][value="restricted"]',
+        )!;
+        network.checked = true;
+        network.dispatchEvent(new Event("input", { bubbles: true }));
+        const domains = root.querySelector<HTMLTextAreaElement>(
+            '[name="network_domains"]',
+        )!;
+        domains.value = "example.com";
+        domains.dispatchEvent(new Event("input", { bubbles: true }));
         select("provider", "two");
         const unrelated = document.createElement("form");
         unrelated.id = "conversation-rename";
@@ -275,6 +288,8 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
             targetIds: ["conversation-detail"],
         };
         island.reconcile?.({ cause: "patch", detail });
+        expect(value("network")).toBe("restricted");
+        expect(value("network_domains")).toBe("example.com");
         expect(value("instructions")).toBe("Keep my draft");
         expect(value("tool_read")).toBe("read");
         expect(value("provider")).toBe("two");
@@ -287,6 +302,8 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
             detail: { ...detail, form: submitted },
         });
         expect(value("instructions")).toBe("");
+        expect(value("network")).toBe("none");
+        expect(value("network_domains")).toBe("");
         expect(value("tool_read")).toBeNull();
         expect(value("model")).toBe("Alpha");
     });

@@ -5,6 +5,7 @@ use super::record::{
     canonical_directory, guest_path_for,
 };
 use super::tool_id::ToolId;
+use crate::execution::GUEST_WORKSPACE;
 use crate::projects::{ProjectId, ProjectRecord};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -226,6 +227,17 @@ fn preset_directory_access(
 }
 
 impl DirectoryPolicy {
+    pub(crate) fn private_workspace() -> Self {
+        Self {
+            grants: Vec::new(),
+            primary_alias: String::new(),
+        }
+    }
+
+    pub(crate) fn is_private_workspace(&self) -> bool {
+        self.grants.is_empty()
+    }
+
     // The selected project grant is /project even when another grant is the saved primary.
     pub(crate) fn from_record_with_primary(record: &AgentRecord, primary_alias: &str) -> Self {
         let grants = record
@@ -264,7 +276,11 @@ impl DirectoryPolicy {
             .iter()
             .find(|grant| grant.alias == self.primary_alias)
             .map(|grant| grant.guest_path.as_str())
-            .unwrap_or(GUEST_PROJECT)
+            .unwrap_or(if self.grants.is_empty() {
+                GUEST_WORKSPACE
+            } else {
+                GUEST_PROJECT
+            })
     }
 
     pub(crate) fn primary_access(&self) -> AccessMode {
@@ -272,7 +288,11 @@ impl DirectoryPolicy {
             .iter()
             .find(|grant| grant.alias == self.primary_alias)
             .map(|grant| grant.access)
-            .unwrap_or(AccessMode::ReadOnly)
+            .unwrap_or(if self.grants.is_empty() {
+                AccessMode::ReadWrite
+            } else {
+                AccessMode::ReadOnly
+            })
     }
 
     pub(crate) fn resolve(&self, raw: &str) -> Result<(String, AccessMode), &'static str> {
@@ -289,12 +309,21 @@ impl DirectoryPolicy {
             format!("{}/{raw}", self.primary_guest())
         };
         let normalised = normalise_absolute(&joined)?;
+        if self.grants.is_empty() {
+            return (normalised == GUEST_WORKSPACE
+                || normalised.starts_with(&format!("{GUEST_WORKSPACE}/")))
+            .then_some((normalised, AccessMode::ReadWrite))
+            .ok_or("Stay inside the private workspace.");
+        }
         self.grant_for(&normalised)
             .map(|grant| (normalised, grant.access))
             .ok_or("Stay inside a granted directory.")
     }
 
     pub(crate) fn guest_roots(&self) -> Vec<String> {
+        if self.grants.is_empty() {
+            return vec![GUEST_WORKSPACE.to_owned()];
+        }
         self.grants
             .iter()
             .map(|grant| grant.guest_path.clone())
@@ -302,6 +331,9 @@ impl DirectoryPolicy {
     }
 
     pub(crate) fn writable_roots(&self) -> Vec<String> {
+        if self.grants.is_empty() {
+            return vec![GUEST_WORKSPACE.to_owned()];
+        }
         self.grants
             .iter()
             .filter(|grant| grant.access.is_writable())

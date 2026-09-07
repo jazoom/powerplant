@@ -30,12 +30,12 @@ pub(crate) const RUN_RECORD_VERSION: u32 = 1;
 pub(crate) struct WorkflowRun {
     pub(crate) id: RunId,
     pub(crate) created_at_ms: u64,
-    pub(crate) project_id: ProjectId,
+    pub(crate) project_id: Option<ProjectId>,
     pub(crate) conversation_id: Option<ConversationId>,
     pub(crate) launch_brief: String,
     pub(crate) task_selection: Option<TaskSelection>,
     pub(crate) kind: RunKind,
-    pub(crate) agent_id: AgentId,
+    pub(crate) agent_id: Option<AgentId>,
     pub(crate) phase_models: Vec<PhaseModelSelection>,
     pub(crate) pinned: PinnedWorkflowDefinition,
     pub(crate) environments: ResolvedEnvironmentSet,
@@ -139,6 +139,7 @@ pub(crate) enum RunState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RunSource {
+    None,
     Pending,
     Captured { source: RunSourceState },
 }
@@ -279,14 +280,16 @@ pub(super) struct RunFile {
     record_version: u32,
     id: String,
     created_at_ms: u64,
-    project_id: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    project_id: Option<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     conversation_id: Option<String>,
     launch_brief: String,
     #[serde(deserialize_with = "crate::storage::required_option")]
     task_selection: Option<TaskSelectionFile>,
     kind: String,
-    agent_id: String,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    agent_id: Option<String>,
     phase_models: Vec<PhaseModelFile>,
     workflow_id: Option<String>,
     version: String,
@@ -504,6 +507,7 @@ struct ArtefactRefFile {
 #[serde(tag = "state", rename_all = "kebab-case")]
 #[allow(clippy::large_enum_variant)]
 enum RunSourceFile {
+    None,
     Pending,
     Captured { source: RunSourceStateFile },
 }
@@ -657,7 +661,7 @@ impl WorkflowRun {
         id: RunId,
         created_at_ms: u64,
         project_id: ProjectId,
-        agent_id: AgentId,
+        agent_id: Option<AgentId>,
         kind: RunKind,
         pinned: PinnedWorkflowDefinition,
         environments: ResolvedEnvironmentSet,
@@ -666,7 +670,7 @@ impl WorkflowRun {
         Self {
             id,
             created_at_ms,
-            project_id,
+            project_id: Some(project_id),
             conversation_id: None,
             launch_brief: String::new(),
             task_selection: None,
@@ -677,6 +681,37 @@ impl WorkflowRun {
             environments,
             state: RunState::Ready { step },
             source: RunSource::Pending,
+            artefacts: Vec::new(),
+            attempts: Vec::new(),
+            gates: Vec::new(),
+            revision_reservation: None,
+            parent_loop: None,
+        }
+    }
+
+    pub(crate) fn create_source_free_for_conversation(
+        id: RunId,
+        created_at_ms: u64,
+        conversation_id: ConversationId,
+        pinned: PinnedWorkflowDefinition,
+        environments: ResolvedEnvironmentSet,
+        phase_models: Vec<PhaseModelSelection>,
+    ) -> Self {
+        let step = pinned.definition.first_step().clone();
+        Self {
+            id,
+            created_at_ms,
+            project_id: None,
+            conversation_id: Some(conversation_id),
+            launch_brief: String::new(),
+            task_selection: None,
+            kind: RunKind::QuickTask,
+            agent_id: None,
+            phase_models,
+            pinned,
+            environments,
+            state: RunState::Ready { step },
+            source: RunSource::None,
             artefacts: Vec::new(),
             attempts: Vec::new(),
             gates: Vec::new(),
@@ -698,7 +733,7 @@ impl WorkflowRun {
             id,
             created_at_ms,
             project_id,
-            AgentId::generate().expect("conversation authority identity"),
+            None,
             RunKind::QuickTask,
             pinned,
             environments,
@@ -723,7 +758,7 @@ impl WorkflowRun {
             id,
             created_at_ms,
             project_id,
-            AgentId::generate().expect("conversation authority identity"),
+            None,
             RunKind::Configured,
             pinned,
             environments,
@@ -1845,14 +1880,14 @@ impl WorkflowRun {
             record_version: RUN_RECORD_VERSION,
             id: self.id.as_hex(),
             created_at_ms: self.created_at_ms,
-            project_id: self.project_id.as_hex(),
+            project_id: self.project_id.map(|id| id.as_hex()),
             conversation_id: self
                 .conversation_id
                 .map(|conversation| conversation.as_hex()),
             launch_brief: self.launch_brief.clone(),
             task_selection: self.task_selection.as_ref().map(task_selection_to_file),
             kind: self.kind.as_str().to_owned(),
-            agent_id: self.agent_id.as_hex(),
+            agent_id: self.agent_id.map(|id| id.as_hex()),
             phase_models: self.phase_models.iter().map(phase_model_to_file).collect(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
             version: self.pinned.version.as_hex(),
@@ -1876,7 +1911,10 @@ impl WorkflowRun {
             return Err(RunRecordError::Corrupt);
         }
         let id = RunId::parse(&file.id).ok_or(RunRecordError::Corrupt)?;
-        let project_id = ProjectId::parse(&file.project_id).ok_or(RunRecordError::Corrupt)?;
+        let project_id = match file.project_id.as_deref() {
+            Some(value) => Some(ProjectId::parse(value).ok_or(RunRecordError::Corrupt)?),
+            None => None,
+        };
         let conversation_id = match file.conversation_id.as_deref() {
             Some(value) => Some(ConversationId::parse(value).ok_or(RunRecordError::Corrupt)?),
             None => None,
@@ -1886,7 +1924,10 @@ impl WorkflowRun {
             .task_selection
             .map(task_selection_from_file)
             .transpose()?;
-        let agent_id = AgentId::parse(&file.agent_id).ok_or(RunRecordError::Corrupt)?;
+        let agent_id = match file.agent_id.as_deref() {
+            Some(value) => Some(AgentId::parse(value).ok_or(RunRecordError::Corrupt)?),
+            None => None,
+        };
         let phase_models = file
             .phase_models
             .into_iter()
@@ -1963,7 +2004,30 @@ impl WorkflowRun {
             .len()
             .checked_add(self.gates.len())
             .ok_or(RunRecordError::Corrupt)?;
-        if fact_count > self.pinned.definition.attempt_bound()
+        let source_free = matches!(self.source, RunSource::None);
+        if source_free != self.project_id.is_none()
+            || (self.conversation_id.is_none() && self.agent_id.is_none())
+            || (source_free
+                && (self.agent_id.is_some()
+                    || self.kind != RunKind::QuickTask
+                    || !self.gates.is_empty()
+                    || !self.artefacts.is_empty()
+                    || self.pinned.definition.steps().iter().any(|step| {
+                        !matches!(&step.action, StepAction::Agent(action)
+                            if action.candidate_authority == crate::workflows::definition::CandidateAuthority::ReadOnly
+                                && action.authority.directories.is_empty())
+                            || !step.inputs.is_empty()
+                            || step.required_outputs().iter().any(|output| {
+                                output.kind != crate::workflows::definition::OutputKind::AssistantReply
+                            })
+                    })
+                    || self.attempts.iter().any(|attempt| {
+                        attempt.capabilities.source_location != PrimarySourceLocation::PrivateWorkspace
+                    })))
+            || (!source_free && self.attempts.iter().any(|attempt| {
+                attempt.capabilities.source_location == PrimarySourceLocation::PrivateWorkspace
+            }))
+            || fact_count > self.pinned.definition.attempt_bound()
             || self.artefacts.len() > crate::workflows::artefacts::MAXIMUM_ARTEFACTS
         {
             return Err(RunRecordError::Corrupt);
@@ -2880,6 +2944,7 @@ fn output_from_file(file: AttemptOutputFile) -> Result<AttemptArtefactOutput, Ru
 
 fn source_to_file(source: &RunSource) -> RunSourceFile {
     match source {
+        RunSource::None => RunSourceFile::None,
         RunSource::Pending => RunSourceFile::Pending,
         RunSource::Captured { source } => RunSourceFile::Captured {
             source: RunSourceStateFile {
@@ -2898,6 +2963,7 @@ fn source_to_file(source: &RunSource) -> RunSourceFile {
 
 fn source_from_file(file: RunSourceFile) -> Result<RunSource, RunRecordError> {
     Ok(match file {
+        RunSourceFile::None => RunSource::None,
         RunSourceFile::Pending => RunSource::Pending,
         RunSourceFile::Captured { source } => RunSource::Captured {
             source: RunSourceState {
@@ -3615,7 +3681,10 @@ fn validate_attempt_isolation(
     } else if attempt.commit_transaction.is_some()
         || attempt.commit_result.is_some()
         || attempt.capabilities.git_admin != AccessMode::ReadOnly
-        || attempt.capabilities.source_location != PrimarySourceLocation::AttemptWorkspace
+        || !matches!(
+            attempt.capabilities.source_location,
+            PrimarySourceLocation::AttemptWorkspace | PrimarySourceLocation::PrivateWorkspace
+        )
     {
         return Err(RunRecordError::Corrupt);
     }
@@ -3742,10 +3811,20 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                 .iter()
                 .filter(|directory| directory.role == DirectoryRole::SecondaryContext)
                 .collect();
-            capabilities.git_admin == AccessMode::ReadOnly
-                && capabilities.source_location == PrimarySourceLocation::AttemptWorkspace
+            let private_workspace = capabilities.source_location
+                == PrimarySourceLocation::PrivateWorkspace
+                && action.candidate_authority
+                    == crate::workflows::definition::CandidateAuthority::ReadOnly
+                && action.authority.directories.is_empty()
                 && primary.len() == 1
-                && primary[0].access == action.candidate_authority.access()
+                && primary[0].guest_path == crate::execution::GUEST_WORKSPACE
+                && primary[0].access == AccessMode::ReadWrite;
+            let candidate_workspace = capabilities.source_location
+                == PrimarySourceLocation::AttemptWorkspace
+                && primary.len() == 1
+                && primary[0].access == action.candidate_authority.access();
+            capabilities.git_admin == AccessMode::ReadOnly
+                && (private_workspace || candidate_workspace)
                 && capabilities
                     .tools
                     .iter()
@@ -3787,7 +3866,9 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
 }
 
 fn valid_guest_path(path: &str) -> bool {
-    (path == crate::agents::GUEST_PROJECT || path.starts_with("/access/"))
+    (path == crate::agents::GUEST_PROJECT
+        || path == crate::execution::GUEST_WORKSPACE
+        || path.starts_with("/access/"))
         && !path.contains('\\')
         && !path.contains(':')
         && !path.contains("..")
@@ -3832,6 +3913,7 @@ fn capabilities_from_file(
         PrimarySourceLocation::parse(&file.source_location).ok_or(RunRecordError::Corrupt)?;
     match (git_admin, source_location) {
         (AccessMode::ReadOnly, PrimarySourceLocation::AttemptWorkspace)
+        | (AccessMode::ReadOnly, PrimarySourceLocation::PrivateWorkspace)
         | (AccessMode::ReadWrite, PrimarySourceLocation::UserProject) => {}
         _ => return Err(RunRecordError::Corrupt),
     }
@@ -4249,6 +4331,8 @@ fn predicted_from_gate(
 
 fn validate_source(run: &WorkflowRun) -> Result<(), RunRecordError> {
     match &run.source {
+        RunSource::None if run.project_id.is_none() && run.agent_id.is_none() => Ok(()),
+        RunSource::None => Err(RunRecordError::Corrupt),
         RunSource::Pending => Ok(()),
         RunSource::Captured { source } => {
             validate_source_ref(run, &source.initial)?;

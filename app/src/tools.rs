@@ -1,7 +1,7 @@
 use rig_core::completion::ToolDefinition;
 use serde::Deserialize;
 
-use crate::agents::{DirectoryPolicy, GUEST_PROJECT, ToolId};
+use crate::agents::{DirectoryPolicy, ToolId};
 use crate::sandbox::{GuestExec, GuestSandbox};
 use crate::sessions::Job;
 
@@ -53,7 +53,7 @@ impl ToolId {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Shell command to run. Starts in /project."
+                        "description": "Shell command to run. Starts in the primary directory."
                     }
                 },
                 "required": ["command"],
@@ -260,7 +260,7 @@ async fn dispatch(
         ToolId::Read => {
             let args: PathArgs = parse_args(arguments)?;
             let (path, _) = context.policy.resolve(&args.path)?;
-            if path == GUEST_PROJECT
+            if path == context.policy.primary_guest()
                 || context
                     .policy
                     .grants()
@@ -288,7 +288,7 @@ async fn dispatch(
             if !access.is_writable() {
                 return Err("That path is read-only.");
             }
-            if path == GUEST_PROJECT
+            if path == context.policy.primary_guest()
                 || context
                     .policy
                     .grants()

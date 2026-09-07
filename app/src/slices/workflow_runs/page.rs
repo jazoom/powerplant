@@ -259,7 +259,7 @@ fn index_row_from_run(summary: &RunSummary, projects: &ProjectStore) -> IndexRow
 }
 
 fn index_row_from_loop(summary: &LoopSummary, projects: &ProjectStore) -> IndexRow {
-    let (_, project_name) = project_presentation(summary.project_id, projects);
+    let (_, project_name) = project_presentation(Some(summary.project_id), projects);
     IndexRow {
         id: summary.id.as_hex(),
         href: format!("/runs/loops/{}", summary.id.as_hex()),
@@ -1113,11 +1113,15 @@ fn next_candidate_hash(
     let reference = match &candidate.source {
         crate::workflows::definition::ArtefactSource::RunInitialCandidate => match &run.source {
             crate::workflows::run::RunSource::Captured { source } => &source.initial,
-            crate::workflows::run::RunSource::Pending => return None,
+            crate::workflows::run::RunSource::None | crate::workflows::run::RunSource::Pending => {
+                return None;
+            }
         },
         crate::workflows::definition::ArtefactSource::RunCurrentCandidate => match &run.source {
             crate::workflows::run::RunSource::Captured { source } => &source.accepted,
-            crate::workflows::run::RunSource::Pending => return None,
+            crate::workflows::run::RunSource::None | crate::workflows::run::RunSource::Pending => {
+                return None;
+            }
         },
         crate::workflows::definition::ArtefactSource::RunCurrentPlan => return None,
         crate::workflows::definition::ArtefactSource::LaunchInput { .. } => return None,
@@ -1222,11 +1226,12 @@ fn pinned_environments(
 }
 
 fn project_presentation(
-    project_id: crate::projects::ProjectId,
+    project_id: Option<crate::projects::ProjectId>,
     projects: &ProjectStore,
 ) -> (String, String) {
-    match projects.get(&project_id) {
+    match project_id.and_then(|id| projects.get(&id)) {
         Some(project) => (format!("/projects/{}", project.id.as_hex()), project.name),
+        None if project_id.is_none() => (String::new(), "Private workspace".to_owned()),
         None => (String::new(), "Unknown project".to_owned()),
     }
 }

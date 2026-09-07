@@ -134,6 +134,7 @@ impl ConversationModelConfiguration {
                 record.instructions.clone(),
                 record.tools.clone(),
             )
+            .and_then(|settings| settings.with_network(record.network.clone()))
             .expect("stored agent settings are valid"),
             preset: Some(AppliedPreset {
                 id: record.id,
@@ -398,6 +399,10 @@ impl ConversationStore {
             None => "New conversation".to_owned(),
         };
         let projects = project.into_iter().collect();
+        let network = model
+            .as_ref()
+            .map(|model| model.settings.network.clone())
+            .unwrap_or_default();
         let mut conversations = self.lock();
         check_capacity(&conversations)?;
         if conversations.contains_key(&id) {
@@ -412,7 +417,7 @@ impl ConversationStore {
             projects,
             grants: Vec::new(),
             execution_target: None,
-            network: crate::agents::NetworkAccess::None,
+            network,
             model,
             source_review: None,
             plan_reviews: Vec::new(),
@@ -887,7 +892,10 @@ impl ConversationStore {
             if current.active_job.is_some() {
                 return Err(ConversationError::Active);
             }
-            current.network = network;
+            current.network = network.clone();
+            if let Some(model) = &mut current.model {
+                model.settings.network = network;
+            }
             for grant in &mut current.grants {
                 grant.authority_revision = current.revision;
             }
@@ -901,11 +909,11 @@ impl ConversationStore {
         expected_revision: u32,
         selection: ModelSelection,
     ) -> Result<ConversationRecord, ConversationError> {
-        self.select_model_configuration(
-            id,
-            expected_revision,
-            ConversationModelConfiguration::direct(selection),
-        )
+        let mut model = ConversationModelConfiguration::direct(selection);
+        if let Some(current) = self.get(id) {
+            model.settings.network = current.network;
+        }
+        self.select_model_configuration(id, expected_revision, model)
     }
 
     pub(crate) fn apply_preset(
@@ -932,6 +940,7 @@ impl ConversationStore {
             if current.active_job.is_some() {
                 return Err(ConversationError::Active);
             }
+            current.network = model.settings.network.clone();
             current.model = Some(model);
             Ok(())
         })
@@ -947,6 +956,7 @@ impl ConversationStore {
             if current.active_job.is_some() {
                 return Err(ConversationError::Active);
             }
+            current.network = settings.network.clone();
             current.model = Some(ConversationModelConfiguration {
                 settings,
                 preset: None,
@@ -1268,7 +1278,10 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         return Err(ConversationError::Corrupt);
     }
     let network = parse_stored_network(&file.network, &file.network_domains)?;
-    let model = file.model.map(model_from_file).transpose()?;
+    let mut model = file.model.map(model_from_file).transpose()?;
+    if let Some(model) = &mut model {
+        model.settings.network = network.clone();
+    }
     let source_review = file.source_review.map(review_link_from_file).transpose()?;
     let plan_reviews = file
         .plan_reviews

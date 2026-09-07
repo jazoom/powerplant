@@ -194,11 +194,12 @@ impl WorkflowContinuationRegistry {
 pub(crate) struct WorkflowJob {
     pub(crate) run_id: RunId,
     pub(crate) session_id: SessionId,
-    pub(crate) project_id: ProjectId,
-    pub(crate) agent_id: crate::agents::AgentId,
+    pub(crate) project_id: Option<ProjectId>,
+    pub(crate) agent_id: Option<crate::agents::AgentId>,
     pub(crate) agent_revision: u32,
     pub(crate) conversation_id: Option<ConversationId>,
     pub(crate) authority: Option<EffectiveAuthority>,
+    pub(crate) project_free_authority: Option<crate::execution::ProjectFreeAuthority>,
     pub(crate) grant_alias: String,
     pub(crate) grant_access: AccessMode,
     pub(crate) connection: ProviderConnection,
@@ -213,12 +214,13 @@ pub(crate) struct WorkflowJob {
 
 impl WorkflowJob {
     pub(crate) fn conversation_key(&self) -> Option<crate::sessions::ConversationKey> {
-        self.conversation_id
-            .is_none()
-            .then_some(crate::sessions::ConversationKey {
-                project_id: self.project_id,
-                agent_id: self.agent_id,
-            })
+        match (self.conversation_id, self.project_id, self.agent_id) {
+            (None, Some(project_id), Some(agent_id)) => Some(crate::sessions::ConversationKey {
+                project_id,
+                agent_id,
+            }),
+            _ => None,
+        }
     }
 
     fn active_connection(&self) -> ProviderConnection {
@@ -417,7 +419,7 @@ pub(crate) async fn execute_run(
             }
             continue;
         }
-        if job.authority.is_some()
+        if (job.authority.is_some() || job.project_free_authority.is_some())
             && let Err(error) = confirm_run_authority(&state, &job)
         {
             if state
@@ -524,7 +526,7 @@ pub(crate) async fn execute_run(
             };
             let initial = match &run.source {
                 crate::workflows::RunSource::Captured { source } => source.initial.clone(),
-                crate::workflows::RunSource::Pending => {
+                crate::workflows::RunSource::None | crate::workflows::RunSource::Pending => {
                     settle_job(
                         &state,
                         &job,
@@ -628,8 +630,25 @@ pub(crate) async fn execute_run(
                 return;
             }
         };
-        let capabilities = if let Some(authority) = phase_authority.as_ref() {
-            if run.conversation_id != job.conversation_id || authority.project_id != run.project_id
+        let capabilities = if let Some(authority) = job.project_free_authority.as_ref() {
+            if run.project_id.is_some()
+                || run.agent_id.is_some()
+                || run.conversation_id != job.conversation_id
+            {
+                settle_job(
+                    &state,
+                    &job,
+                    JobStatus::Failed,
+                    Some("The private workspace authority does not match this run."),
+                );
+                return;
+            }
+            crate::workflows::capabilities::AttemptCapabilities::derive_project_free(
+                &step, authority,
+            )
+        } else if let Some(authority) = phase_authority.as_ref() {
+            if run.conversation_id != job.conversation_id
+                || Some(authority.project_id) != run.project_id
             {
                 settle_job(
                     &state,
@@ -643,7 +662,7 @@ pub(crate) async fn execute_run(
                 &step, authority,
             )
         } else {
-            let Some(agent) = state.agents.get(&job.agent_id) else {
+            let Some(agent) = job.agent_id.and_then(|id| state.agents.get(&id)) else {
                 fail_operational(&state, &job);
                 return;
             };
@@ -992,7 +1011,10 @@ async fn isolate_and_run(
             captured: None,
         };
     }
-    let Some(candidate_input) = load_candidate_input(state, job, inputs) else {
+    let private_workspace = capabilities.source_location
+        == crate::workflows::capabilities::PrimarySourceLocation::PrivateWorkspace;
+    let candidate_input = load_candidate_input(state, job, inputs);
+    if candidate_input.is_none() && !private_workspace {
         return IsolatedRun::Finished {
             outcome: StepOutcome::Failed {
                 category: FailureCategory::Definition,
@@ -1002,7 +1024,7 @@ async fn isolate_and_run(
             drafts,
             captured: None,
         };
-    };
+    }
     let workspace = match state
         .workflow_workspaces
         .create_attempt(job.run_id, attempt_id)
@@ -1034,15 +1056,15 @@ async fn isolate_and_run(
             };
         }
     };
-    let hash = candidate_input.artefact_hash;
-    if crate::workflows::artefacts::CandidateMaterialise::into_workspace(
-        &workspace.project,
-        &candidate_input.artefact,
-        hash,
-        &state.workflow_artefacts,
-    )
-    .is_err()
-    {
+    if candidate_input.as_ref().is_some_and(|candidate_input| {
+        crate::workflows::artefacts::CandidateMaterialise::into_workspace(
+            &workspace.project,
+            &candidate_input.artefact,
+            candidate_input.artefact_hash,
+            &state.workflow_artefacts,
+        )
+        .is_err()
+    }) {
         let (outcome, cleanup) = finish_workspace_only(
             workspace,
             StepOutcome::Failed {
@@ -1057,39 +1079,22 @@ async fn isolate_and_run(
             captured: None,
         };
     }
-    let user_project = match job
-        .host_policy
-        .grants()
-        .iter()
-        .find(|grant| grant.alias == job.host_policy.primary_alias())
-    {
-        Some(grant) => grant.host_path.clone(),
-        None => {
-            let (outcome, cleanup) = finish_workspace_only(
-                workspace,
-                StepOutcome::Failed {
-                    category: FailureCategory::Operational,
-                    error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
-                },
-            );
-            return IsolatedRun::Finished {
-                outcome,
-                cleanup,
-                drafts,
-                captured: None,
-            };
-        }
-    };
-    let git_dir = user_project.join(".git");
-    if candidate_input.artefact.git_admin
-        != match crate::workflows::artefacts::candidate::git_fingerprint(&git_dir) {
-            Ok(value) => value,
-            Err(_) => {
+    let user_project = if private_workspace {
+        workspace.project.clone()
+    } else {
+        match job
+            .host_policy
+            .grants()
+            .iter()
+            .find(|grant| grant.alias == job.host_policy.primary_alias())
+        {
+            Some(grant) => grant.host_path.clone(),
+            None => {
                 let (outcome, cleanup) = finish_workspace_only(
                     workspace,
                     StepOutcome::Failed {
                         category: FailureCategory::Operational,
-                        error: Some("The Git directory changed before that step.".to_owned()),
+                        error: Some(OPERATIONAL_STORE_ERROR.to_owned()),
                     },
                 );
                 return IsolatedRun::Finished {
@@ -1100,6 +1105,32 @@ async fn isolate_and_run(
                 };
             }
         }
+    };
+    let git_dir = user_project.join(".git");
+    if !private_workspace
+        && candidate_input
+            .as_ref()
+            .expect("candidate-backed attempt")
+            .artefact
+            .git_admin
+            != match crate::workflows::artefacts::candidate::git_fingerprint(&git_dir) {
+                Ok(value) => value,
+                Err(_) => {
+                    let (outcome, cleanup) = finish_workspace_only(
+                        workspace,
+                        StepOutcome::Failed {
+                            category: FailureCategory::Operational,
+                            error: Some("The Git directory changed before that step.".to_owned()),
+                        },
+                    );
+                    return IsolatedRun::Finished {
+                        outcome,
+                        cleanup,
+                        drafts,
+                        captured: None,
+                    };
+                }
+            }
     {
         let (outcome, cleanup) = finish_workspace_only(
             workspace,
@@ -1146,7 +1177,7 @@ async fn isolate_and_run(
             attempt_id,
             inputs,
             &user_project,
-            &candidate_input,
+            candidate_input.as_ref().expect("commit candidate"),
             &sandbox,
         )
         .await
@@ -1170,11 +1201,15 @@ async fn isolate_and_run(
             (Some(first), Some(second)) if first == second => Some(first),
             _ => None,
         }
-    } else if stopped {
+    } else if stopped && !private_workspace {
         crate::workflows::artefacts::CandidateCapture::capture_worktree(
             &workspace.project,
             &git_dir,
-            &candidate_input.artefact.git_admin,
+            &candidate_input
+                .as_ref()
+                .expect("candidate-backed attempt")
+                .artefact
+                .git_admin,
             &state.workflow_artefacts,
         )
         .ok()
@@ -1193,7 +1228,12 @@ async fn isolate_and_run(
             .as_ref()
             .zip(commit.as_ref())
             .is_some_and(|(captured, commit)| {
-                captured.candidate_hash == candidate_input.artefact.candidate_hash
+                captured.candidate_hash
+                    == candidate_input
+                        .as_ref()
+                        .expect("commit candidate")
+                        .artefact
+                        .candidate_hash
                     && captured
                         .repository
                         .head
@@ -1282,7 +1322,7 @@ async fn isolate_and_run(
             journal: false,
         }
     };
-    let mut outcome = match (outcome, stopped, captured.is_some()) {
+    let mut outcome = match (outcome, stopped, private_workspace || captured.is_some()) {
         (StepOutcome::Completed, true, true) => StepOutcome::Completed,
         (StepOutcome::Completed, _, _) => StepOutcome::Failed {
             category: FailureCategory::Operational,
@@ -1899,7 +1939,7 @@ async fn run_agent_step(
                 ),
             };
         }
-    } else if let Some(record) = state.agents.get(&job.agent_id) {
+    } else if let Some(record) = job.agent_id.and_then(|id| state.agents.get(&id)) {
         let directories: Vec<(String, AccessMode)> = record
             .directories
             .iter()
@@ -1923,7 +1963,9 @@ async fn run_agent_step(
         .as_ref()
         .map(|authority| &authority.policy)
         .unwrap_or(&job.host_policy);
-    let policy =
+    let policy = if job.project_free_authority.is_some() {
+        phase_policy.clone()
+    } else {
         match intersect_authority(action.candidate_authority, &action.authority, phase_policy) {
             Ok(policy) => policy,
             Err(()) => {
@@ -1935,7 +1977,8 @@ async fn run_agent_step(
                     ),
                 };
             }
-        };
+        }
+    };
     let Some(role) = run.pinned.definition.role(&action.role).cloned() else {
         return StepOutcome::Failed {
             category: FailureCategory::Definition,
@@ -1962,16 +2005,14 @@ async fn run_agent_step(
                     .and_then(|record| record.model)
                     .map(|model| model.settings.instructions)
                     .or_else(|| {
-                        state
-                            .agents
-                            .get(&job.agent_id)
+                        job.agent_id
+                            .and_then(|id| state.agents.get(&id))
                             .map(|record| record.instructions)
                     })
                     .unwrap_or_default()
             } else {
-                state
-                    .agents
-                    .get(&job.agent_id)
+                job.agent_id
+                    .and_then(|id| state.agents.get(&id))
                     .map(|record| record.instructions)
                     .unwrap_or_default()
             }
@@ -1996,7 +2037,9 @@ async fn run_agent_step(
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
-    let project_instructions =
+    let project_instructions = if job.project_free_authority.is_some() {
+        crate::workflows::input_context::ProjectInstructions::Absent
+    } else {
         match crate::workflows::input_context::read_project_instructions(sandbox, secret).await {
             Ok(instructions) => instructions,
             Err(error) => {
@@ -2005,7 +2048,8 @@ async fn run_agent_step(
                     error: Some(error.message().to_owned()),
                 };
             }
-        };
+        }
+    };
     let Some(run) = state.workflow_runs.get(&job.run_id) else {
         return StepOutcome::Failed {
             category: FailureCategory::Operational,
@@ -2082,7 +2126,7 @@ async fn run_agent_step(
         step_key.as_str(),
     );
     let spec = AgentRunSpec {
-        agent_id: job.authority.is_none().then_some(job.agent_id),
+        agent_id: job.agent_id,
         revision: 0,
         preamble: packet.prompt.clone(),
         tools: packet.request_tools(),
@@ -2427,17 +2471,25 @@ async fn start_attempt_sandbox(
         .environment_snapshots
         .restore_path(&environment.snapshot.artifact_key)
         .map_err(|_| "That environment snapshot is unavailable.")?;
+    let private_workspace = capabilities.source_location
+        == crate::workflows::capabilities::PrimarySourceLocation::PrivateWorkspace;
     let user_project = job
         .host_policy
         .grants()
         .iter()
-        .find(|grant| grant.alias == job.host_policy.primary_alias())
-        .ok_or("Choose a project directory.")?;
-    let spec = if capabilities.source_location
+        .find(|grant| grant.alias == job.host_policy.primary_alias());
+    let spec = if private_workspace {
+        crate::sandbox::SandboxSpec::private_workspace(
+            workspace.project.clone(),
+            capabilities.sandbox_network(),
+        )
+    } else if capabilities.source_location
         == crate::workflows::capabilities::PrimarySourceLocation::UserProject
     {
+        let user_project = user_project.ok_or("Choose a project directory.")?;
         commit_attempt_spec(capabilities, &user_project.host_path)?
     } else {
+        let user_project = user_project.ok_or("Choose a project directory.")?;
         let spec = attempt_spec(
             capabilities,
             workspace,
@@ -2595,7 +2647,26 @@ fn confirm_run_authority(
     state: &AppState,
     job: &WorkflowJob,
 ) -> Result<std::path::PathBuf, String> {
-    let Some(project) = state.projects.get(&job.project_id) else {
+    if let Some(authority) = job.project_free_authority.as_ref() {
+        let Some(conversation_id) = job.conversation_id else {
+            return Err("The private workspace authority is missing its conversation.".to_owned());
+        };
+        let Some(record) = state.conversations.get(&conversation_id) else {
+            return Err("That conversation is not in the catalogue.".to_owned());
+        };
+        let current = crate::conversations::resolve_project_free_authority(&record, &state.agents)
+            .map_err(|error| error.message().to_owned())?;
+        if current.tools != authority.tools
+            || current.network != authority.network
+            || !authority.policy.is_private_workspace()
+            || job.project_id.is_some()
+            || job.agent_id.is_some()
+        {
+            return Err("The conversation tool authority changed before dispatch.".to_owned());
+        }
+        return Ok(std::path::PathBuf::new());
+    }
+    let Some(project) = job.project_id.and_then(|id| state.projects.get(&id)) else {
         return Err("That project is not in the catalogue.".to_owned());
     };
     if let Some(authority) = job.authority.as_ref() {
@@ -2633,7 +2704,7 @@ fn confirm_run_authority(
             .map_err(|_| "A granted directory is no longer at the saved path.".to_owned())?;
         return Ok(project.host_path);
     }
-    let Some(agent) = state.agents.get(&job.agent_id) else {
+    let Some(agent) = job.agent_id.and_then(|id| state.agents.get(&id)) else {
         return Err("That agent is not in the catalogue.".to_owned());
     };
     if agent.revision != job.agent_revision {
@@ -2653,7 +2724,7 @@ fn confirm_run_authority(
                 "Project authority changed before dispatch. Try again.".to_owned()
             }
         })?;
-    if authority.grant_access != job.grant_access || authority.project_id != job.project_id {
+    if authority.grant_access != job.grant_access || Some(authority.project_id) != job.project_id {
         return Err("This agent no longer has access to that project.".to_owned());
     }
     Ok(project.host_path)
@@ -2982,7 +3053,12 @@ fn publish_success(
         id: attempt_id,
         complete: complete_attempt,
     } = attempt;
-    let captured = captured.ok_or("Power Plant could not capture isolated outputs.")?;
+    let source_free = job.project_free_authority.is_some();
+    let captured = if source_free {
+        captured
+    } else {
+        Some(captured.ok_or("Power Plant could not capture isolated outputs.")?)
+    };
     let writes = step.writes_primary_source();
     let produces_candidate = writes
         || step.command_source_effect()
@@ -2999,7 +3075,9 @@ fn publish_success(
                 .and_then(|run| run.artefact(&input.artefact.id).cloned())
         })
         .and_then(|record| candidate_hash_of(&record));
-    if !produces_candidate && expected.is_some_and(|hash| hash != captured.candidate_hash) {
+    if !produces_candidate
+        && expected.is_some_and(|hash| captured.is_none_or(|value| hash != value.candidate_hash))
+    {
         return Err("The project changed during that step.");
     }
     let mut artefacts = Vec::new();
@@ -3022,7 +3100,7 @@ fn publish_success(
         let record = publish_candidate(
             state,
             job,
-            captured,
+            captured.ok_or("Power Plant could not capture isolated outputs.")?,
             crate::workflows::artefacts::ArtefactProducer::StepAttempt {
                 attempt_id,
                 step: step.key.clone(),
@@ -3046,7 +3124,7 @@ fn publish_success(
         });
         artefacts.push(record);
     }
-    let candidate_hash = captured.candidate_hash;
+    let candidate_hash = captured.map(|value| value.candidate_hash);
     let connection = job.active_connection();
     let secret = match &connection.auth {
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
@@ -3100,7 +3178,7 @@ fn publish_success(
             step,
             output,
             draft,
-            candidate_hash,
+            candidate_hash.ok_or("A structured output needs a candidate source.")?,
             provenance_inputs,
             secret.as_deref(),
         )?;
@@ -3446,7 +3524,7 @@ fn park_paused_job(state: &AppState, job: &WorkflowJob) -> Result<(), &'static s
     let loop_id = job.task_loop.ok_or(OPERATIONAL_STORE_ERROR)?;
     let project = state
         .projects
-        .get(&job.project_id)
+        .get(&job.project_id.expect("project-backed job"))
         .ok_or(OPERATIONAL_STORE_ERROR)?;
     // A successful commit changes HEAD and the index. The next command must compare
     // against this post-commit checkpoint, not the pre-commit candidate manifest.
@@ -3719,7 +3797,7 @@ fn recovery_project_path(
     run: &crate::workflows::WorkflowRun,
 ) -> Result<std::path::PathBuf, &'static str> {
     let error = "Power Plant could not recover a commit transaction.";
-    let Some(project) = state.projects.get(&run.project_id) else {
+    let Some(project) = run.project_id.and_then(|id| state.projects.get(&id)) else {
         return Err(error);
     };
     if let Some(conversation_id) = run.conversation_id {
@@ -3740,7 +3818,7 @@ fn recovery_project_path(
             return Err(error);
         }
     } else {
-        let Some(agent) = state.agents.get(&run.agent_id) else {
+        let Some(agent) = run.agent_id.and_then(|id| state.agents.get(&id)) else {
             return Err(error);
         };
         let Some(grant) = crate::projects::exact_grant(&agent, &project) else {
@@ -3858,11 +3936,12 @@ pub(crate) fn reconstruct_loop_job(
     Ok(WorkflowJob {
         run_id: child_id,
         session_id,
-        project_id: record.project_id,
-        agent_id: record.agent_id,
+        project_id: Some(record.project_id),
+        agent_id: Some(record.agent_id),
         agent_revision: resolved.effective.revision,
         conversation_id: Some(record.conversation_id),
         authority: Some(resolved.effective.clone()),
+        project_free_authority: None,
         grant_alias: resolved.effective.grant_alias.clone(),
         grant_access: resolved.effective.grant_access,
         connection,
@@ -3897,7 +3976,7 @@ pub(crate) fn recover_commit_transactions(state: &AppState) -> Result<(), &'stat
         }
         let initial_ref = match &run.source {
             crate::workflows::RunSource::Captured { source } => &source.initial,
-            crate::workflows::RunSource::Pending => {
+            crate::workflows::RunSource::None | crate::workflows::RunSource::Pending => {
                 return Err("Power Plant could not recover a commit transaction.");
             }
         };

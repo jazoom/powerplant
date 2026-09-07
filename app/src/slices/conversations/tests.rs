@@ -41,6 +41,28 @@ pub(super) fn connected(state: &AppState) -> String {
     token.raw().as_str().to_owned()
 }
 
+pub(super) async fn ready_starter_environment(state: &AppState) {
+    state.environments.apply_production_seeds();
+    let preparation = state
+        .environments
+        .claim_oldest_queued()
+        .expect("claim starter")
+        .expect("starter preparation");
+    let snapshot = crate::tests::sample_snapshot(preparation.id);
+    state.environment_snapshots.mark(
+        snapshot.artifact_key.clone(),
+        crate::environments::snapshot::SnapshotAvailability::Available,
+    );
+    state
+        .environments
+        .finish_ready(
+            &preparation.id,
+            snapshot,
+            crate::environments::PreparationLogRecord::empty(),
+        )
+        .expect("ready starter");
+}
+
 pub(super) fn session_id(token: &str) -> sessions::SessionId {
     sessions::SessionId::from_validated(&sessions::ValidatedToken::parse(token).expect("token"))
 }
@@ -99,7 +121,7 @@ fn candidate_run(
         run_id,
         1,
         crate::projects::ProjectId::generate().expect("project"),
-        crate::agents::AgentId::generate().expect("agent"),
+        Some(crate::agents::AgentId::generate().expect("agent")),
         crate::workflows::RunKind::Configured,
         pinned.clone(),
         crate::tests::test_environment_set(&pinned.definition),
@@ -789,7 +811,7 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
             name: "Review preset".to_owned(),
             instructions: "Review only the supplied discussion.".to_owned(),
             selection: Some(selection.clone()),
-            tools: vec![ToolId::Write],
+            tools: Vec::new(),
             network: NetworkAccess::Public,
             directories: vec![crate::agents::DirectoryGrant {
                 alias: "project".to_owned(),

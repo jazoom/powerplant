@@ -1786,12 +1786,44 @@ async fn send_message(
     }
 }
 
-enum StartMessageError {
+pub(super) enum StartMessageError {
     User(PatchStatus, &'static str),
     Internal(AppError),
 }
 
-async fn start_message(
+pub(super) async fn preflight_execution(
+    state: &AppState,
+    model: &ConversationModelConfiguration,
+) -> Result<(), StartMessageError> {
+    if model.settings.tools.is_empty() {
+        return Ok(());
+    }
+    if let Some(missing) = state.sandboxes.missing() {
+        return Err(StartMessageError::User(
+            PatchStatus::UnprocessableEntity,
+            missing.message(),
+        ));
+    }
+    let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
+        StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
+    })?;
+    let pinned = workflows::pin_project_free_quick_task(
+        &model.settings.tools,
+        &model.settings.instructions,
+        environment,
+    )
+    .map_err(|error| StartMessageError::User(PatchStatus::UnprocessableEntity, error.message()))?;
+    workflows::resolve_environments(
+        &pinned.definition,
+        &state.environments,
+        &state.environment_snapshots,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| StartMessageError::User(PatchStatus::UnprocessableEntity, error.message()))
+}
+
+pub(super) async fn start_message(
     state: &AppState,
     session: crate::sessions::SessionId,
     record: ConversationRecord,
@@ -1799,6 +1831,7 @@ async fn start_message(
     model: ConversationModelConfiguration,
     text: String,
 ) -> Result<ConversationRecord, StartMessageError> {
+    preflight_execution(state, &model).await?;
     if record.active_job.is_some() {
         return Err(StartMessageError::User(
             PatchStatus::Conflict,
@@ -1836,48 +1869,67 @@ async fn start_message(
             ));
         }
     };
-    let workflow = if let Some(authority) = authority
-        .as_ref()
-        .filter(|authority| !authority.tools.is_empty())
-    {
-        let phase_authority = if let Some(applied) = model.preset.as_ref() {
-            let Some(preset) = state.agents.get(&applied.id) else {
-                return Err(StartMessageError::User(
-                    PatchStatus::Conflict,
-                    "The applied preset is no longer available.",
-                ));
-            };
-            if preset.revision != applied.revision {
-                return Err(StartMessageError::User(
-                    PatchStatus::Conflict,
-                    "The applied preset changed. Reload the conversation.",
-                ));
-            }
-            crate::conversations::apply_preset_ceiling(authority, &preset)
-                .map_err(|error| StartMessageError::User(PatchStatus::Conflict, error.message()))?
+    let workflow = if !model.settings.tools.is_empty() {
+        let project_free = authority
+            .is_none()
+            .then(|| crate::conversations::resolve_project_free_authority(&record, &state.agents))
+            .transpose()
+            .map_err(|error| StartMessageError::User(PatchStatus::Conflict, error.message()))?;
+        let phase_authority = if let Some(authority) = authority.as_ref() {
+            Some(if let Some(applied) = model.preset.as_ref() {
+                let Some(preset) = state.agents.get(&applied.id) else {
+                    return Err(StartMessageError::User(
+                        PatchStatus::Conflict,
+                        "The applied preset is no longer available.",
+                    ));
+                };
+                if preset.revision != applied.revision {
+                    return Err(StartMessageError::User(
+                        PatchStatus::Conflict,
+                        "The applied preset changed. Reload the conversation.",
+                    ));
+                }
+                crate::conversations::apply_preset_ceiling(authority, &preset).map_err(|error| {
+                    StartMessageError::User(PatchStatus::Conflict, error.message())
+                })?
+            } else {
+                authority.clone()
+            })
         } else {
-            authority.clone()
+            None
         };
         let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
             StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
         })?;
-        let secondary = phase_authority
-            .policy
-            .grants()
-            .iter()
-            .filter(|grant| grant.alias != authority.grant_alias)
-            .map(|grant| workflows::definition::GuestDirectoryAccess {
-                alias: grant.alias.clone(),
-                access: crate::agents::AccessMode::ReadOnly,
-            })
-            .collect();
-        let pinned = workflows::pin_quick_task_with_context(
-            phase_authority.grant_access,
-            &phase_authority.tools,
-            &model.settings.instructions,
-            environment,
-            secondary,
-        )
+        let pinned = if let Some(authority) = authority.as_ref() {
+            let phase_authority = phase_authority.as_ref().expect("project authority");
+            let secondary = phase_authority
+                .policy
+                .grants()
+                .iter()
+                .filter(|grant| grant.alias != authority.grant_alias)
+                .map(|grant| workflows::definition::GuestDirectoryAccess {
+                    alias: grant.alias.clone(),
+                    access: crate::agents::AccessMode::ReadOnly,
+                })
+                .collect();
+            workflows::pin_quick_task_with_context(
+                phase_authority.grant_access,
+                &phase_authority.tools,
+                &model.settings.instructions,
+                environment,
+                secondary,
+            )
+        } else {
+            workflows::pin_project_free_quick_task(
+                &project_free
+                    .as_ref()
+                    .expect("private workspace authority")
+                    .tools,
+                &model.settings.instructions,
+                environment,
+            )
+        }
         .map_err(|error| {
             StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
         })?;
@@ -1899,7 +1951,14 @@ async fn start_message(
         let run_id = workflows::RunId::generate().map_err(|error| {
             StartMessageError::Internal(AppError::new("create workflow run identifier", error))
         })?;
-        Some((run_id, authority.clone(), pinned, environments, execution))
+        Some((
+            run_id,
+            authority,
+            project_free,
+            pinned,
+            environments,
+            execution,
+        ))
     } else {
         None
     };
@@ -1929,7 +1988,7 @@ async fn start_message(
             return Err(StartMessageError::User(status_for(error), error.message()));
         }
     };
-    if let Some((run_id, authority, pinned, environments, execution)) = workflow {
+    if let Some((run_id, authority, project_free, pinned, environments, execution)) = workflow {
         let secret = match connection.auth {
             crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
             crate::providers::AuthMethod::Plan => None,
@@ -1953,17 +2012,7 @@ async fn start_message(
                 ));
             }
         };
-        let mut run = WorkflowRun::create_for_conversation(
-            run_id,
-            workflows::now_ms(),
-            authority.project_id,
-            started.id,
-            pinned,
-            environments,
-            Vec::new(),
-        );
-        run.phase_models = run
-            .pinned
+        let phase_models = pinned
             .definition
             .steps()
             .iter()
@@ -1981,7 +2030,26 @@ async fn start_message(
                         name: preset.name.clone(),
                     }),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let mut run = match authority.as_ref() {
+            Some(authority) => WorkflowRun::create_for_conversation(
+                run_id,
+                workflows::now_ms(),
+                authority.project_id,
+                started.id,
+                pinned,
+                environments,
+                phase_models,
+            ),
+            None => WorkflowRun::create_source_free_for_conversation(
+                run_id,
+                workflows::now_ms(),
+                started.id,
+                pinned,
+                environments,
+                phase_models,
+            ),
+        };
         run.launch_brief = launch_brief;
         if let Err(error) = state.workflow_runs.create(run.clone()) {
             let _ = state.conversations.settle_message(
@@ -2000,27 +2068,48 @@ async fn start_message(
             )));
         }
         job.set_workflow_name(run.pinned.definition.name().to_owned());
-        job.set_step_label("Source capture".to_owned());
-        let agent_id = run.agent_id;
+        job.set_step_label(if authority.is_some() {
+            "Source capture".to_owned()
+        } else {
+            "Preparing private workspace".to_owned()
+        });
+        let host_policy = authority
+            .as_ref()
+            .map(|authority| authority.policy.clone())
+            .or_else(|| {
+                project_free
+                    .as_ref()
+                    .map(|authority| authority.policy.clone())
+            })
+            .expect("tool execution authority");
         tokio::spawn(workflows::execute_run(
             state.clone(),
             WorkflowJob {
                 run_id,
                 session_id: session,
-                project_id: authority.project_id,
-                agent_id,
-                agent_revision: authority.revision,
+                project_id: run.project_id,
+                agent_id: run.agent_id,
+                agent_revision: authority
+                    .as_ref()
+                    .map_or(record.revision, |authority| authority.revision),
                 conversation_id: Some(started.id),
-                authority: Some(authority.clone()),
-                grant_alias: authority.grant_alias.clone(),
-                grant_access: authority.grant_access,
+                authority: authority.clone(),
+                project_free_authority: project_free,
+                grant_alias: authority
+                    .as_ref()
+                    .map_or_else(String::new, |authority| authority.grant_alias.clone()),
+                grant_access: authority
+                    .as_ref()
+                    .map_or(crate::agents::AccessMode::ReadWrite, |authority| {
+                        authority.grant_access
+                    }),
                 connection,
                 phase_providers: run
                     .model_phases()
                     .map(|phase| phase.selection.provider)
                     .collect(),
                 active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
-                host_policy: authority.policy.clone(),
+                host_policy,
                 turns,
                 job: job.clone(),
                 eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),

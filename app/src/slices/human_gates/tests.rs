@@ -46,7 +46,7 @@ fn plan_checkpoint_rejects_code_decisions_and_stale_plan_hashes() {
         workflows::RunId::generate().expect("run"),
         1,
         project,
-        agent,
+        Some(agent),
         RunKind::Configured,
         pinned,
         crate::tests::test_environment_set(&definition),
@@ -422,7 +422,7 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
         workflows::RunId::generate().expect("run"),
         1,
         project.id,
-        agent.id,
+        Some(agent.id),
         kind,
         pinned,
         environments,
@@ -539,11 +539,12 @@ fn awaiting_gate(kind: RunKind) -> GateFixture {
     let inserted = state.gate_continuations.insert(workflows::WorkflowJob {
         run_id,
         session_id: session,
-        project_id: project.id,
-        agent_id: agent.id,
+        project_id: Some(project.id),
+        agent_id: Some(agent.id),
         agent_revision: agent.revision,
         conversation_id: None,
         authority: None,
+        project_free_authority: None,
         grant_alias: "project".to_owned(),
         grant_access: AccessMode::ReadWrite,
         connection: ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6"),
@@ -653,11 +654,12 @@ fn conversation_awaiting_gate() -> GateFixture {
             .insert(workflows::WorkflowJob {
                 run_id: fixture.run_id,
                 session_id: session,
-                project_id: fixture.project_id,
+                project_id: Some(fixture.project_id),
                 agent_id: run.agent_id,
                 agent_revision: authority.effective.revision,
                 conversation_id: Some(conversation.id),
                 authority: Some(authority.effective.clone()),
+                project_free_authority: None,
                 grant_alias: authority.effective.grant_alias.clone(),
                 grant_access: authority.effective.grant_access,
                 connection: ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6"),
@@ -679,9 +681,9 @@ fn conversation_awaiting_gate() -> GateFixture {
     fixture.conversation_id = Some(conversation.id);
     fixture.key = sessions::ConversationKey {
         project_id: fixture.project_id,
-        agent_id: run.agent_id,
+        agent_id: run.agent_id.expect("agent"),
     };
-    fixture.agent_id = run.agent_id;
+    fixture.agent_id = run.agent_id.expect("agent");
     fixture
 }
 

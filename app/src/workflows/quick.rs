@@ -46,6 +46,39 @@ pub(crate) fn pin_quick_task_with_context(
     Ok(PinnedWorkflowDefinition::pin(None, definition))
 }
 
+pub(crate) fn pin_project_free_quick_task(
+    tools: &[ToolId],
+    instructions: &str,
+    environment: EnvironmentId,
+) -> Result<PinnedWorkflowDefinition, DefinitionError> {
+    let role = RoleDefinition::new(
+        RoleKey::parse(ROLE_KEY).expect("quick task role"),
+        "Agent".to_owned(),
+        String::new(),
+        instructions.to_owned(),
+    )?;
+    let work = StepDefinition {
+        key: StepKey::parse(AGENT_STEP_KEY).expect("quick task step"),
+        name: "Work on task".to_owned(),
+        inputs: Vec::new(),
+        action: StepAction::Agent(AgentStep {
+            role: RoleKey::parse(ROLE_KEY).expect("quick task role"),
+            environment: StepEnvironment::WorkflowDefault,
+            candidate_authority: CandidateAuthority::ReadOnly,
+            authority: AgentAuthority::new(tools.to_vec(), Vec::new())?,
+            required_outputs: vec![assistant_output()],
+        }),
+        review: None,
+    };
+    let definition = WorkflowDefinition::from_parts(
+        QUICK_TASK_NAME.to_owned(),
+        environment,
+        vec![role],
+        vec![work],
+    )?;
+    Ok(PinnedWorkflowDefinition::pin(None, definition))
+}
+
 pub(crate) fn alpine_git_id(
     catalogue: &EnvironmentCatalogue,
 ) -> Result<EnvironmentId, ResolveEnvironmentError> {

@@ -396,7 +396,7 @@ fn summaries_include_project_identity() {
             RunId::generate().expect("run"),
             1,
             project_id,
-            crate::agents::AgentId::generate().expect("agent"),
+            Some(crate::agents::AgentId::generate().expect("agent")),
             crate::workflows::RunKind::Configured,
             crate::workflows::definition::PinnedWorkflowDefinition::pin(None, definition),
             environments,
@@ -404,7 +404,7 @@ fn summaries_include_project_identity() {
         .expect("create");
     let summaries = store.summaries();
     assert_eq!(summaries[0].id, run.id);
-    assert_eq!(summaries[0].project_id, project_id);
+    assert_eq!(summaries[0].project_id, Some(project_id));
 }
 
 #[test]

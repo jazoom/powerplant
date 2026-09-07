@@ -303,6 +303,59 @@ fn secondary_alias_and_canonical_path_collisions_are_rejected() {
 }
 
 #[test]
+fn private_workspace_keeps_live_preset_ceilings_without_mounting_preset_directories() {
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    let preset = state
+        .agents
+        .create(crate::agents::AgentDraft {
+            name: "Offline".to_owned(),
+            instructions: String::new(),
+            selection: None,
+            tools: vec![ToolId::Run],
+            network: NetworkAccess::None,
+            directories: Vec::new(),
+            primary_directory: String::new(),
+        })
+        .unwrap();
+    let selection = crate::providers::ModelSelection::new(
+        crate::providers::ProviderKind::Xai,
+        "test-model".to_owned(),
+        None,
+    )
+    .unwrap();
+    let mut model =
+        crate::conversations::ConversationModelConfiguration::from_preset(&preset, selection);
+    model.settings.network = NetworkAccess::Public;
+    model.settings.tools.push(ToolId::Write);
+    let mut record = state
+        .conversations
+        .create_saved(
+            crate::conversations::ConversationId::generate().unwrap(),
+            None,
+            None,
+            Some(model),
+            None,
+        )
+        .unwrap();
+    let authority = resolve_project_free_authority(&record, &state.agents).unwrap();
+    assert_eq!(authority.network, NetworkAccess::None);
+    assert_eq!(authority.tools, vec![ToolId::Run]);
+    assert!(authority.policy.grants().is_empty());
+    record
+        .model
+        .as_mut()
+        .unwrap()
+        .preset
+        .as_mut()
+        .unwrap()
+        .revision += 1;
+    assert_eq!(
+        resolve_project_free_authority(&record, &state.agents).err(),
+        Some(ConversationAccessError::Stale)
+    );
+}
+
+#[test]
 fn network_intersection_never_expands_a_conversation_selection() {
     assert_eq!(
         intersect_network(

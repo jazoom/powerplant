@@ -411,7 +411,10 @@ async fn decide(
         let agent = if run.conversation_id.is_some() {
             None
         } else {
-            match state.agent_leases.acquire(run.agent_id) {
+            match state
+                .agent_leases
+                .acquire(run.agent_id.expect("catalogue-backed run agent"))
+            {
                 Ok(agent) => Some(agent),
                 Err(()) => {
                     return_continuation(&state, continuation, reservation_acquired);
@@ -965,7 +968,10 @@ fn decision_destination(run: &crate::workflows::WorkflowRun) -> String {
         (RunKind::QuickTask, Some(conversation)) => {
             format!("/conversations/{}", conversation.as_hex())
         }
-        (RunKind::QuickTask, None) => format!("/projects/{}", run.project_id.as_hex()),
+        (RunKind::QuickTask, None) => format!(
+            "/projects/{}",
+            run.project_id.expect("project-backed run").as_hex()
+        ),
         (RunKind::Configured, _) => format!("/runs/{}", run.id.as_hex()),
     }
 }
@@ -999,7 +1005,7 @@ fn continuation_authority(
     {
         return ContinuationAuthority::Stale;
     }
-    let Some(project) = state.projects.get(&run.project_id) else {
+    let Some(project) = run.project_id.and_then(|id| state.projects.get(&id)) else {
         return ContinuationAuthority::Stale;
     };
     if let Some(conversation_id) = run.conversation_id {
@@ -1034,7 +1040,7 @@ fn continuation_authority(
         }
         return ContinuationAuthority::Ready;
     }
-    let Some(agent) = state.agents.get(&run.agent_id) else {
+    let Some(agent) = run.agent_id.and_then(|id| state.agents.get(&id)) else {
         return ContinuationAuthority::Stale;
     };
     if agent.revision != continuation.agent_revision {

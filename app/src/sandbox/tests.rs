@@ -103,6 +103,10 @@ impl super::SandboxFleet {
         }
     }
 
+    pub(crate) fn set_missing_runtime(&self, missing: MissingRuntime) {
+        *lock_mutex(&self.runtime.missing) = Some(missing);
+    }
+
     pub(crate) fn guest_named(&self, attempt: AttemptId) -> bool {
         lock_mutex(&self.attempt_handles).contains_key(&attempt)
     }
@@ -284,6 +288,25 @@ fn writable_user_project_mounts_are_rejected() {
         super::reject_user_project_write(&commit, &spec.mounts[0].host),
         Err(SandboxError::UserProjectWrite)
     ));
+}
+
+#[test]
+fn private_workspace_spec_exposes_no_user_directory_guest_path() {
+    let host = tempfile::tempdir().unwrap();
+    let spec = SandboxSpec::private_workspace(
+        host.path().to_path_buf(),
+        NetworkAccess::Restricted(vec!["example.com".to_owned()]),
+    );
+
+    assert_eq!(spec.workdir, "/workspace");
+    assert_eq!(spec.mounts.len(), 1);
+    assert_eq!(spec.mounts[0].guest, "/workspace");
+    assert!(!spec.mounts[0].read_only);
+    assert_eq!(spec.mounts[0].host, host.path());
+    assert_eq!(
+        spec.network,
+        NetworkAccess::Restricted(vec!["example.com".to_owned()])
+    );
 }
 
 #[test]

@@ -228,6 +228,29 @@ fn resolve_authority_inner(
     Ok(Some(authority))
 }
 
+pub(crate) fn resolve_project_free_authority(
+    record: &crate::conversations::ConversationRecord,
+    agents: &AgentStore,
+) -> Result<crate::execution::ProjectFreeAuthority, ConversationAccessError> {
+    let model = record
+        .model
+        .as_ref()
+        .ok_or(ConversationAccessError::Preset)?;
+    let mut authority =
+        crate::execution::ProjectFreeAuthority::from_settings(record.revision, &model.settings);
+    if let Some(applied) = &model.preset {
+        let preset = agents
+            .get(&applied.id)
+            .ok_or(ConversationAccessError::Preset)?;
+        if preset.revision != applied.revision {
+            return Err(ConversationAccessError::Stale);
+        }
+        authority.network = intersect_network(&authority.network, Some(&preset.network));
+        authority.tools.retain(|tool| preset.tools.contains(tool));
+    }
+    Ok(authority)
+}
+
 pub(crate) fn apply_preset_ceiling(
     base: &EffectiveAuthority,
     preset: &crate::agents::AgentRecord,
