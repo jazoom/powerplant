@@ -97,6 +97,43 @@ impl PresetStore {
         Ok(record)
     }
 
+    pub(crate) fn update(
+        &self,
+        id: PresetId,
+        revision: u32,
+        name: &str,
+        settings: ExecutionSettings,
+    ) -> Result<PresetRecord, PresetError> {
+        let name = normalise_name(name)?;
+        let mut records = self.lock();
+        let current = records.get(&id).ok_or(PresetError::Missing)?;
+        if current.revision != revision {
+            return Err(PresetError::Stale);
+        }
+        let mut record = current.clone();
+        record.revision = revision.checked_add(1).ok_or(PresetError::Stale)?;
+        record.name = name;
+        record.settings = settings;
+        persist(self.dir.as_deref(), &record)?;
+        records.insert(id, record.clone());
+        Ok(record)
+    }
+
+    pub(crate) fn delete(&self, id: PresetId, revision: u32) -> Result<(), PresetError> {
+        let mut records = self.lock();
+        let record = records.get(&id).ok_or(PresetError::Missing)?;
+        if record.revision != revision {
+            return Err(PresetError::Stale);
+        }
+        if let Some(dir) = &self.dir {
+            let path = crate::storage::confined_child(dir, &format!("{id}.json"))
+                .map_err(|_| PresetError::Persist)?;
+            fs::remove_file(path).map_err(|_| PresetError::Persist)?;
+        }
+        records.remove(&id);
+        Ok(())
+    }
+
     pub(crate) fn preview(
         &self,
         session: SessionId,

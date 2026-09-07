@@ -7,15 +7,12 @@ use model_picker::ModelPicker;
 mod tests;
 
 use crate::{
-    agents::{AgentRecord, ToolId},
+    agents::AgentRecord,
     conversations::{
         ConversationMessage, ConversationModelConfiguration, ConversationRecord,
         MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus, PlanDocument, PlanSource,
     },
-    environments::{
-        EnvironmentCatalogue, EnvironmentId, EnvironmentSnapshotRepository, PreparationState,
-        SnapshotAvailability,
-    },
+    environments::{EnvironmentCatalogue, EnvironmentId, EnvironmentSnapshotRepository},
     models::models_dev::ModelsDevCatalogue,
     projects::{ProjectId, ProjectRecord},
     providers::ModelSelection,
@@ -376,14 +373,6 @@ pub(super) struct NetworkOption {
     pub(super) selected: bool,
 }
 
-pub(super) struct EnvironmentOption {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) readiness: &'static str,
-    pub(super) availability: &'static str,
-    pub(super) selected: bool,
-}
-
 pub(super) struct EnvironmentSwitchView {
     pub(super) requested_id: String,
     pub(super) requested_name: String,
@@ -401,13 +390,9 @@ pub(super) struct EnvironmentSwitchGateView {
     pub(super) review_href: String,
 }
 
-pub(super) struct ToolOption {
-    pub(super) field_name: &'static str,
-    pub(super) value: &'static str,
-    pub(super) label: &'static str,
-    pub(super) detail: &'static str,
-    pub(super) selected: bool,
-}
+use crate::slices::execution_settings::page::{
+    EnvironmentOption, ToolOption, environment_options, environment_status, tool_options,
+};
 
 pub(super) struct SubmittedSettingsFields<'a> {
     pub(super) provider: &'a str,
@@ -438,6 +423,7 @@ pub(super) struct ConversationDetailView {
     model_picker: ModelPicker,
     pub(super) presets: Vec<PresetOption>,
     pub(super) preset_name: String,
+    pub(super) preset_source: String,
     pub(super) preset_preview: Option<PresetPreviewView>,
     pub(super) attached_projects: Vec<ProjectContextView>,
     pub(super) attachable_projects: Vec<CatalogueProjectOption>,
@@ -551,6 +537,7 @@ impl ConversationDetailView {
                     selected: preset.id.as_hex() == form.preset,
                 })
                 .collect(),
+            preset_source: String::new(),
             preset_name: if form.preset_name.trim().is_empty() {
                 draft_directories
                     .first()
@@ -891,6 +878,28 @@ impl ConversationDetailView {
             model_available: selection.is_some(),
             model_picker,
             presets,
+            preset_source: configuration
+                .and_then(|c| {
+                    c.preset.as_ref().map(|source| {
+                        let status = sources.presets.iter().find(|p| p.id == source.id).map_or(
+                            "Source unavailable; independent local settings",
+                            |p| {
+                                if p.revision != source.revision {
+                                    "Source changed; independent local settings"
+                                } else if p.settings != c.settings {
+                                    "Locally customised"
+                                } else {
+                                    "Independent copy"
+                                }
+                            },
+                        );
+                        format!(
+                            "{} · {} · source revision {}",
+                            source.name, status, source.revision
+                        )
+                    })
+                })
+                .unwrap_or_default(),
             preset_name: configuration
                 .map(|configuration| crate::presets::suggested_name(&configuration.settings))
                 .unwrap_or_else(|| "Untitled preset".to_owned()),
@@ -1203,39 +1212,6 @@ fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
     }
 }
 
-fn environment_options(
-    catalogue: &EnvironmentCatalogue,
-    snapshots: &EnvironmentSnapshotRepository,
-    selected: Option<EnvironmentId>,
-) -> Vec<EnvironmentOption> {
-    let records = catalogue.list();
-    let mut options = records
-        .iter()
-        .map(|record| {
-            let (readiness, availability) = environment_status(record, catalogue, snapshots);
-            EnvironmentOption {
-                id: record.id.as_hex(),
-                name: record.name.clone(),
-                readiness,
-                availability,
-                selected: selected == Some(record.id),
-            }
-        })
-        .collect::<Vec<_>>();
-    if let Some(id) = selected
-        && records.iter().all(|record| record.id != id)
-    {
-        options.push(EnvironmentOption {
-            id: id.as_hex(),
-            name: "Selected environment unavailable".to_owned(),
-            readiness: "Unavailable",
-            availability: "Unavailable",
-            selected: true,
-        });
-    }
-    options
-}
-
 fn environment_summary(
     catalogue: &EnvironmentCatalogue,
     snapshots: &EnvironmentSnapshotRepository,
@@ -1249,35 +1225,6 @@ fn environment_summary(
     };
     let (readiness, availability) = environment_status(&record, catalogue, snapshots);
     format!("{} · {readiness} · {availability}", record.name)
-}
-
-fn environment_status(
-    record: &crate::environments::EnvironmentRecord,
-    catalogue: &EnvironmentCatalogue,
-    snapshots: &EnvironmentSnapshotRepository,
-) -> (&'static str, &'static str) {
-    let latest = catalogue.preparation(&record.latest_preparation);
-    let readiness = match latest.as_ref().map(|preparation| preparation.state) {
-        Some(PreparationState::Ready) => "Ready",
-        Some(PreparationState::Queued) => "Queued",
-        Some(PreparationState::Preparing) => "Preparing",
-        Some(PreparationState::Failed) => "Preparation failed",
-        Some(PreparationState::Interrupted) => "Preparation interrupted",
-        Some(PreparationState::Cancelled) => "Preparation cancelled",
-        Some(PreparationState::Superseded) => "Preparation superseded",
-        None => "Not ready",
-    };
-    let availability = record
-        .ready_preparation
-        .and_then(|id| catalogue.preparation(&id))
-        .and_then(|preparation| preparation.snapshot)
-        .map(|snapshot| snapshots.recorded_availability(&snapshot))
-        .map_or("No snapshot", |availability| match availability {
-            SnapshotAvailability::Available => "Available",
-            SnapshotAvailability::Missing => "Snapshot unavailable",
-            SnapshotAvailability::Corrupt => "Snapshot corrupt",
-        });
-    (readiness, availability)
 }
 
 fn network_options(selected: &str) -> Vec<NetworkOption> {
@@ -1306,29 +1253,6 @@ fn network_summary_from_form(network: &str) -> String {
         "public" => "Public internet".to_owned(),
         _ => "Network off".to_owned(),
     }
-}
-
-fn tool_options(selected: &[String]) -> Vec<ToolOption> {
-    ToolId::ALL
-        .into_iter()
-        .map(|tool| ToolOption {
-            field_name: match tool {
-                ToolId::List => "tool_list",
-                ToolId::Read => "tool_read",
-                ToolId::Write => "tool_write",
-                ToolId::Run => "tool_run",
-            },
-            value: tool.as_str(),
-            label: tool.label(),
-            detail: match tool {
-                ToolId::List => "List files in private scratch storage or authorised directories.",
-                ToolId::Read => "Read files in private scratch storage or authorised directories.",
-                ToolId::Write => "Write files in private scratch storage or a candidate workspace.",
-                ToolId::Run => "Run commands in the sandbox.",
-            },
-            selected: selected.iter().any(|value| value == tool.as_str()),
-        })
-        .collect()
 }
 
 pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {

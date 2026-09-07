@@ -1822,6 +1822,12 @@
               provider credential.
             </p>
           </div>
+          {% if !preset_source.is_empty() %}
+            <p class="text-quiet text-sm">
+              {{ preset_source }}. Local edits never update the source preset.
+            </p>
+          {% endif %}
+          <a href="/presets" data-graft class="link text-sm">Manage presets</a>
           {% if !presets.is_empty() %}
             <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
               <label
@@ -1961,68 +1967,7 @@
           </div>
         </section>
 
-        <section
-          class="border-base-300 mt-6 space-y-3 border-t pt-5"
-          aria-labelledby="conversation-instructions-heading"
-        >
-          <div>
-            <h3
-              id="conversation-instructions-heading"
-              class="text-sm font-semibold"
-            >
-              Instructions
-            </h3>
-            <p class="text-quiet mt-1 text-xs">
-              Give the model persistent guidance for every reply in this
-              conversation.
-            </p>
-          </div>
-          <textarea
-            form="{{ self.model_form() }}"
-            id="conversation-instructions"
-            aria-labelledby="conversation-instructions-heading"
-            name="instructions"
-            class="textarea textarea-bordered min-h-28 w-full"
-            maxlength="32768"
-            {% if job_active %}disabled{% endif %}
-          >
-{{ instructions }}</textarea>
-        </section>
-
-        <fieldset
-          class="border-base-300 mt-6 space-y-3 border-t pt-5"
-          {% if job_active %}disabled{% endif %}
-        >
-          <legend class="text-sm font-semibold">Available tools</legend>
-          <p class="text-quiet text-xs">
-            Tools use private scratch storage at /workspace without directory
-            access. Plain chat needs no sandbox.
-          </p>
-          <div class="grid gap-2 sm:grid-cols-2">
-            {% for tool in tool_options %}
-              <label
-                class="border-base-300 flex min-h-16 items-start gap-3 border p-3"
-              >
-                <input
-                  form="{{ self.model_form() }}"
-                  type="checkbox"
-                  class="checkbox checkbox-sm mt-0.5"
-                  name="{{ tool.field_name }}"
-                  value="{{ tool.value }}"
-                  {% if tool.selected %}checked{% endif %}
-                />
-                <span>
-                  <span class="block text-sm font-medium"
-                    >{{ tool.label }}</span
-                  >
-                  <span class="text-quiet mt-0.5 block text-xs"
-                    >{{ tool.detail }}</span
-                  >
-                </span>
-              </label>
-            {% endfor %}
-          </div>
-        </fieldset>
+        {% include "execution_settings/templates/fields.html" %}
 
         <section
           class="border-base-300 mt-6 space-y-3 border-t pt-5"

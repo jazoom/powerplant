@@ -40,6 +40,14 @@ Preset application replaces the conversation settings after a full preview. It d
 
 A preset retains descriptive source provenance. Later source changes do not alter conversations or workflow phases that already copied its values.
 
+Settings links to Presets at `/presets`. The page supports explicit creation, revision-bound edits and revision-bound deletion.
+
+The preset editor shares instruction, tool and environment presentation with conversations. Preset edits request access but authorise no execution or sensitive access.
+
+Unavailable providers, models, recipes and directories retain their requested values. Preset deletion needs no available provider or execution resource.
+
+Conversation Settings identifies the source snapshot and local customisation. Local edits never update the source preset. The Presets page provides that explicit action.
+
 Preset previews expire after 30 minutes. Each preview binds its replacement to the session and the destination settings revision or draft digest.
 
 Preset application removes legacy project permissions. Missing providers, environments and directories remain requested values without substitutions or access approval.

@@ -26,7 +26,10 @@ fn preview_survives_source_deletion_but_not_replay() {
     let preview = store
         .preview(session, record.id, destination.clone())
         .unwrap();
-    store.lock().remove(&record.id);
+    let changed = store
+        .update(record.id, record.revision, "Changed source", settings())
+        .unwrap();
+    store.delete(record.id, changed.revision).unwrap();
     let applied = store
         .consume_preview(session, &preview.token, &destination)
         .unwrap();
@@ -34,6 +37,53 @@ fn preview_survives_source_deletion_but_not_replay() {
     assert!(
         store
             .consume_preview(session, &preview.token, &destination)
+            .is_err()
+    );
+}
+
+#[test]
+fn edits_and_deletion_are_revision_bound_and_copies_remain_independent() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = PresetStore::open(temp.path().to_path_buf()).unwrap();
+    let record = store
+        .create("Original", settings(), PresetProvenance::Draft)
+        .unwrap();
+    let copy = crate::conversations::ConversationModelConfiguration::from_preset(&record);
+    let mut changed = settings();
+    changed.instructions = "Changed".to_owned();
+    let updated = store.update(record.id, 1, "Renamed", changed).unwrap();
+    assert_eq!(updated.revision, 2);
+    assert_eq!(
+        store.update(record.id, 1, "Stale", settings()),
+        Err(crate::presets::PresetError::Stale)
+    );
+    assert_eq!(
+        store.delete(record.id, 1),
+        Err(crate::presets::PresetError::Stale)
+    );
+    assert_eq!(copy.settings, record.settings);
+    assert_eq!(
+        PresetStore::open(temp.path().to_path_buf())
+            .unwrap()
+            .get(&record.id),
+        Some(updated)
+    );
+    store.delete(record.id, 2).unwrap();
+    assert!(
+        PresetStore::open(temp.path().to_path_buf())
+            .unwrap()
+            .get(&record.id)
+            .is_none()
+    );
+    assert_eq!(copy.settings, record.settings);
+    assert!(
+        store
+            .create("\n", settings(), PresetProvenance::Draft)
+            .is_err()
+    );
+    assert!(
+        store
+            .create(&"é".repeat(41), settings(), PresetProvenance::Draft)
             .is_err()
     );
 }

@@ -136,7 +136,11 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The product offers five colour themes. Springfield is the default.
 - The theme changes immediately and persists in local filesystem storage.
 - Settings puts Theme first and the model catalogue refresh second.
-- Settings has a separate local data reset after the model catalogue refresh.
+- Settings links to Presets before the separate local data reset.
+- Presets uses a ruled list and an inline editor with shared instruction, tool and environment presentation.
+- Preset deletion has an inline confirmation. It leaves existing copies unchanged.
+- Unavailable preset resources retain their values and explicit status labels.
+- Conversation Settings shows preset provenance and local customisation. Manage presets opens the explicit source editor.
 - Reset requires an explicit confirmation and records a restart-applied deletion.
 - Project source directories outside the Power Plant data directory remain unchanged.
 - The desktop shell uses a persistent index grouped into Work, Configure and System.

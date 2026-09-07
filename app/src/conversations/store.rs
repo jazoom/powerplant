@@ -998,10 +998,11 @@ impl ConversationStore {
                 return Err(ConversationError::Active);
             }
             current.network = settings.network.clone();
-            current.model = Some(ConversationModelConfiguration {
-                settings,
-                preset: None,
-            });
+            let preset = current
+                .model
+                .as_ref()
+                .and_then(|model| model.preset.clone());
+            current.model = Some(ConversationModelConfiguration { settings, preset });
             Ok(())
         })
     }
@@ -1018,7 +1019,6 @@ impl ConversationStore {
             }
             let model = current.model.as_mut().ok_or(ConversationError::Selection)?;
             model.settings.environment = environment;
-            model.preset = None;
             Ok(())
         })
     }
@@ -1041,7 +1041,6 @@ impl ConversationStore {
                 .clone()
                 .with_directories(directories)
                 .ok_or(ConversationError::Directories)?;
-            model.preset = None;
             Ok(())
         })
     }
@@ -1070,7 +1069,6 @@ impl ConversationStore {
                 .clone()
                 .with_directories(directories)
                 .ok_or(ConversationError::Directories)?;
-            model.preset = None;
             Ok(())
         })
     }
@@ -1093,7 +1091,6 @@ impl ConversationStore {
                 .position(|grant| grant.id == grant_id)
                 .ok_or(ConversationError::Directories)?;
             model.settings.directories.remove(index);
-            model.preset = None;
             Ok(())
         })
     }
