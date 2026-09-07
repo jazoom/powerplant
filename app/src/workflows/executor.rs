@@ -3626,6 +3626,7 @@ fn settle_with_reply(
             conversation_reply.unwrap_or(reply.text),
             message_status,
         );
+        crate::conversations::titles::start(state, conversation_id);
         let _ = state.sessions.finish_conversation_job(
             &workflow.session_id,
             conversation_id,

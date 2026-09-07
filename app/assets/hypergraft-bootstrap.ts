@@ -9,6 +9,7 @@ import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
 import { initNavigationMore } from "./navigation-more";
+import { initConversation } from "./conversation";
 import { initObserve } from "./observe";
 import { initThemeSelector } from "./theme";
 import { initThinkingVisibility } from "./thinking-visibility";
@@ -33,6 +34,7 @@ export function startApp(): void {
             "connect-plan": initConnectPlan,
             "desk-settings": initDeskSettings,
             "navigation-more": initNavigationMore,
+            conversation: initConversation,
             observe: initObserve,
             "shortcut-hint": initShortcutHint,
             "theme-selector": initThemeSelector,

@@ -774,8 +774,10 @@ async fn project_detail_lists_associated_conversations_and_new_work_action() {
         .expect("project detail");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    let new_path = format!("/conversations/new?project={}", project.id.as_hex());
-    assert!(text.contains(&format!("href=\"{new_path}\"")));
+    assert!(text.contains(&format!(
+        "href=\"/conversations/new?project={}\"",
+        project.id.as_hex()
+    )));
     assert!(text.contains(&format!("/conversations/{}", conversation.id)));
     assert!(text.contains("Project discussion"));
     assert!(!text.contains("Open with an agent"));
@@ -806,7 +808,7 @@ async fn one_eligible_agent_does_not_redirect_from_project_detail() {
     let text = body_text(response).await;
     assert!(text.contains("New conversation"));
     assert!(text.contains(&format!(
-        "/conversations/new?project={}",
+        "href=\"/conversations/new?project={}\"",
         project.id.as_hex()
     )));
 }
@@ -878,7 +880,7 @@ async fn project_detail_does_not_require_an_agent_or_preset() {
 }
 
 #[tokio::test]
-async fn grant_opens_the_explicit_conversation_form() {
+async fn grant_returns_to_project_detail() {
     let state = test_state();
     let token = connected(&state);
     let project_dir = git_worktree();
@@ -910,10 +912,8 @@ async fn grant_opens_the_explicit_conversation_form() {
         .expect("grant");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains(&format!(
-        "navigate=\"/conversations/new?project={}\"",
-        project.id.as_hex()
-    )));
+    assert!(text.contains(&format!("navigate=\"/projects/{}\"", project.id.as_hex())));
+    assert!(state.conversations.list().is_empty());
     let updated = state.agents.get(&agent.id).expect("updated");
     assert_eq!(updated.directories.len(), 2);
     assert_eq!(updated.directories[1].alias, "code");
@@ -1068,7 +1068,7 @@ async fn grant_duplicate_alias_is_rejected() {
 }
 
 #[tokio::test]
-async fn enhanced_grant_navigates_to_the_desk() {
+async fn enhanced_grant_navigates_to_the_project() {
     let state = test_state();
     let token = connected(&state);
     let project_dir = git_worktree();
@@ -1100,14 +1100,11 @@ async fn enhanced_grant_navigates_to_the_desk() {
         .expect("enhanced grant");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains(&format!(
-        "navigate=\"/conversations/new?project={}\"",
-        project.id.as_hex()
-    )));
+    assert!(text.contains(&format!("navigate=\"/projects/{}\"", project.id.as_hex())));
 }
 
 #[tokio::test]
-async fn starter_creates_exact_path_authority_and_opens_conversation_creation() {
+async fn starter_creates_exact_path_authority_and_returns_to_project_detail() {
     let state = test_state();
     let token = connected(&state);
     let dir = git_worktree();
@@ -1147,10 +1144,8 @@ async fn starter_creates_exact_path_authority_and_opens_conversation_creation() 
     assert_eq!(agent.directories[0].access, AccessMode::ReadWrite);
     assert_eq!(agent.primary_directory, "project");
     let text = body_text(response).await;
-    assert!(text.contains(&format!(
-        "navigate=\"/conversations/new?project={}\"",
-        project.id.as_hex()
-    )));
+    assert!(text.contains(&format!("navigate=\"/projects/{}\"", project.id.as_hex())));
+    assert!(state.conversations.list().is_empty());
 }
 
 #[cfg(unix)]
@@ -1220,7 +1215,7 @@ async fn a_repeated_starter_command_does_not_create_a_duplicate() {
     assert_eq!(first.status(), axum::http::StatusCode::OK);
     let created = state.agents.list();
     assert_eq!(created.len(), 1);
-    let new_path = format!("/conversations/new?project={}", project.id.as_hex());
+    let new_path = format!("/projects/{}", project.id.as_hex());
     assert!(
         body_text(first)
             .await
@@ -1281,10 +1276,7 @@ async fn concurrent_starter_commands_create_one_eligible_agent() {
     assert_eq!(second.status(), axum::http::StatusCode::OK);
     let agents = state.agents.list();
     assert_eq!(agents.len(), 1);
-    let marker = format!(
-        "navigate=\"/conversations/new?project={}\"",
-        project.id.as_hex()
-    );
+    let marker = format!("navigate=\"/projects/{}\"", project.id.as_hex());
     assert!(body_text(first).await.contains(&marker));
     assert!(body_text(second).await.contains(&marker));
 }

@@ -15,6 +15,47 @@ use super::{
 };
 
 impl ConversationStore {
+    fn create_record(
+        &self,
+        title: String,
+        projects: Vec<ProjectId>,
+        title_pending: bool,
+    ) -> Result<super::ConversationRecord, ConversationError> {
+        self.create_saved(
+            super::ConversationId::generate().map_err(|_| ConversationError::Random)?,
+            projects.first().copied(),
+            (!title_pending).then_some(title),
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn create_untitled(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<super::ConversationRecord, ConversationError> {
+        self.create_record(
+            "New conversation".to_owned(),
+            project.into_iter().collect(),
+            true,
+        )
+    }
+
+    pub(crate) fn create(
+        &self,
+        title: String,
+    ) -> Result<super::ConversationRecord, ConversationError> {
+        self.create_record(title, Vec::new(), false)
+    }
+
+    pub(crate) fn create_with_project(
+        &self,
+        title: String,
+        project: ProjectId,
+    ) -> Result<super::ConversationRecord, ConversationError> {
+        self.create_record(title, vec![project], false)
+    }
+
     pub(crate) fn begin_message(
         &self,
         id: &super::ConversationId,
@@ -36,8 +77,124 @@ impl ConversationStore {
         Self {
             path: None,
             inner: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            title_updates: tokio::sync::broadcast::channel(16).0,
         }
     }
+}
+
+#[test]
+fn invalid_first_messages_do_not_allocate_or_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    let id = super::ConversationId::generate().unwrap();
+    for message in [
+        "   ".to_owned(),
+        "x".repeat(super::MAXIMUM_MESSAGE_BYTES + 1),
+        "bad\0input".to_owned(),
+    ] {
+        assert_eq!(
+            store.create_saved(
+                id,
+                None,
+                None,
+                None,
+                Some((JobId::generate().unwrap(), message))
+            ),
+            Err(ConversationError::Message)
+        );
+        assert!(store.get(&id).is_none());
+        assert!(store.lock().is_empty());
+        assert!(!dir.path().join(super::CATALOGUE_FILE).exists());
+    }
+}
+
+#[test]
+fn restart_preserves_explicit_saves_with_or_without_a_manual_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ConversationStore::in_memory();
+    let draft = store.create_untitled(None).unwrap();
+    let saved = store.create("New conversation".to_owned()).unwrap();
+    let file = super::CatalogueFile {
+        version: super::CATALOGUE_VERSION,
+        conversations: vec![super::record_to_file(&draft), super::record_to_file(&saved)],
+    };
+    write_catalogue(dir.path(), &serde_json::to_string(&file).unwrap());
+
+    let reopened = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    assert_eq!(reopened.get(&draft.id), Some(draft));
+    assert_eq!(reopened.get(&saved.id), Some(saved));
+    assert_eq!(reopened.list().len(), 2);
+}
+
+#[test]
+fn capacity_never_evicts_saved_conversations() {
+    let store = ConversationStore::in_memory();
+    for _ in 0..super::MAXIMUM_CONVERSATIONS {
+        store
+            .create_saved(
+                super::ConversationId::generate().unwrap(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    let before = store.list();
+    assert_eq!(
+        store.create_saved(
+            super::ConversationId::generate().unwrap(),
+            None,
+            None,
+            None,
+            None
+        ),
+        Err(ConversationError::Full)
+    );
+    assert_eq!(store.list(), before);
+}
+
+#[test]
+fn automatic_titles_preserve_manual_edits_and_command_revisions() {
+    let store = ConversationStore::in_memory();
+    let record = store.create_untitled(None).unwrap();
+    let job = JobId::generate().unwrap();
+    let started = store
+        .begin_message(
+            &record.id,
+            record.revision,
+            ModelSelection::new(ProviderKind::Deepseek, "deepseek-v4-flash".to_owned(), None)
+                .unwrap(),
+            job,
+            "Fix the parser".to_owned(),
+        )
+        .unwrap();
+    assert_eq!(started.title, "Fix the parser");
+    assert!(store.claim_title(&record.id).is_none());
+    store
+        .settle_message(&record.id, job, "Done".to_owned(), MessageStatus::Complete)
+        .unwrap();
+    let claimed = store.claim_title(&record.id).unwrap();
+    assert!(store.claim_title(&record.id).is_none());
+    store
+        .save_automatic_title(&record.id, claimed.revision, "Parser repair".to_owned())
+        .unwrap();
+    assert_eq!(store.get(&record.id).unwrap().revision, claimed.revision);
+    let renamed = store
+        .rename(&record.id, claimed.revision, "My title".to_owned())
+        .unwrap();
+    assert_eq!(
+        store.save_automatic_title(&record.id, claimed.revision, "Late title".to_owned()),
+        Err(ConversationError::Conflict)
+    );
+    assert_eq!(store.get(&record.id).unwrap().title, renamed.title);
+
+    let record = store.create_untitled(None).unwrap();
+    let record = store
+        .rename(&record.id, record.revision, "New conversation".to_owned())
+        .unwrap();
+    assert!(!record.title_pending);
+    assert!(store.claim_title(&record.id).is_none());
 }
 
 #[test]

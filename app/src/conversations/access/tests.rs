@@ -357,6 +357,7 @@ fn resolving_a_conversation_materialises_each_secondary_project_by_id() {
         id: conversation_id,
         revision: 4,
         title: "Discussion".to_owned(),
+        title_pending: false,
         projects: vec![primary.id, secondary.id],
         grants: vec![
             ConversationGrant {

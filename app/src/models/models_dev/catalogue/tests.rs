@@ -3,6 +3,35 @@ use super::*;
 const BUNDLED: &[u8] = include_bytes!("../../../../catalogue/models-dev-v1.json");
 
 #[test]
+fn background_metadata_rejects_unknown_prices_and_non_production_routes() {
+    let fixture = serde_json::json!({
+        "attachment": false, "tool_call": true,
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "limit": {"context": 4096, "output": 128},
+        "release_date": "2026-09-01",
+        "cost": {"input": 0.1, "output": 0.2},
+        "experimental": {"modes": {"fast": {}}}
+    });
+    let model: SourceModel = serde_json::from_value(fixture.clone()).unwrap();
+    assert!(background_metadata("ordinary", &model).is_some());
+    assert!(background_metadata("ordinary:free", &model).is_none());
+    for (field, value) in [
+        ("cost", serde_json::Value::Null),
+        ("cost", serde_json::json!({"input": 0.0, "output": 0.0})),
+        ("cost", serde_json::json!({"input": 0.1})),
+        ("release_date", serde_json::json!("unknown")),
+        ("experimental", serde_json::json!(true)),
+        ("status", serde_json::json!("beta")),
+        ("status", serde_json::json!("deprecated")),
+    ] {
+        let mut value_fixture = fixture.clone();
+        value_fixture[field] = value;
+        let model: SourceModel = serde_json::from_value(value_fixture).unwrap();
+        assert!(background_metadata("ordinary", &model).is_none(), "{field}");
+    }
+}
+
+#[test]
 fn canonical_validation_rejects_unknown_fields_and_order_changes() {
     let value: serde_json::Value = serde_json::from_slice(BUNDLED).expect("catalogue");
     let mut unknown = value.clone();
@@ -97,6 +126,16 @@ fn source_filter_uses_fallback_identifiers_and_deduplicates_efforts() {
         );
     }
 
+    openai_models.insert(
+        "title-only".to_owned(),
+        serde_json::json!({
+            "attachment": false, "tool_call": false,
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "limit": {"context": 4096, "output": 128},
+            "release_date": "2026-09-01", "cost": {"input": 0.1, "output": 0.2}
+        }),
+    );
+
     let snapshot = filter_source(
         &serde_json::to_vec(&source).expect("source"),
         "W/\"fixture\"",
@@ -118,7 +157,14 @@ fn source_filter_uses_fallback_identifiers_and_deduplicates_efforts() {
         .iter()
         .find(|provider| provider.id == ProviderKind::OpenaiCodex.as_str())
         .expect("OpenAI provider");
-    assert_eq!(openai.models.len(), 1);
+    assert_eq!(openai.models.len(), 2);
+    let title_only = openai
+        .models
+        .iter()
+        .find(|model| model.id == "title-only")
+        .unwrap();
+    assert!(title_only.background_only);
+    assert!(title_only.background.is_some());
 
     let stored = serde_json::to_value(&snapshot).expect("stored snapshot");
     let model = &stored["providers"][0]["models"][0];

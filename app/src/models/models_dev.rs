@@ -1,4 +1,7 @@
+mod background;
 mod catalogue;
+
+pub(crate) use background::{TITLE_INPUT_TOKENS, TITLE_OUTPUT_TOKENS};
 
 use std::{
     fs,
@@ -129,7 +132,14 @@ impl ModelsDevCatalogue {
             .providers
             .iter()
             .find(|provider| provider.id == kind.as_str())
-            .map(|provider| provider.models.iter().map(model_metadata).collect())
+            .map(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .filter(|model| !model.background_only)
+                    .map(model_metadata)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -139,8 +149,33 @@ impl ModelsDevCatalogue {
             .providers
             .iter()
             .find(|provider| provider.id == kind.as_str())
-            .and_then(|provider| provider.models.iter().find(|model| model.id == id))
+            .and_then(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .find(|model| model.id == id && !model.background_only)
+            })
             .map(model_metadata)
+    }
+
+    pub(crate) fn title_model(
+        &self,
+        kind: ProviderKind,
+    ) -> Option<crate::providers::ModelSelection> {
+        let active = self.read();
+        let provider = active
+            .providers
+            .iter()
+            .find(|provider| provider.id == kind.as_str())?;
+        let model = background::select(&provider.models, time::OffsetDateTime::now_utc().date())?;
+        Some(crate::providers::ModelSelection {
+            provider: kind,
+            model: model.id.clone(),
+            thinking: ["none", "minimal", "low"]
+                .iter()
+                .find(|effort| model.efforts.iter().any(|value| value == **effort))
+                .and_then(|effort| ThinkingEffort::new((*effort).to_owned())),
+        })
     }
 
     pub(crate) fn context_limit(&self, kind: ProviderKind, id: &str) -> Option<u64> {

@@ -1,0 +1,99 @@
+<label class="flex flex-col gap-1"
+  ><span class="text-sm">Provider</span
+  ><select
+    form="{{ self.model_form() }}"
+    id="conversation-provider"
+    name="provider"
+    {% if job_active %}disabled{% endif %}
+    class="select select-bordered"
+  >
+    {% if model_picker.providers.is_empty() %}
+      <option value="" disabled>No connected providers</option>
+    {% endif %}
+    {% for provider in model_picker.providers %}
+      <option
+        value="{{ provider.value }}"
+        data-default-model="{{ provider.model }}"
+        {% if provider.selected %}selected{% endif %}
+      >
+        {{ provider.label }}
+      </option>
+    {% endfor %}
+  </select></label
+>
+<div id="conversation-model-picker" class="flex min-w-0 flex-col gap-1">
+  <span id="conversation-model-label" class="text-sm">Model</span>
+  <input
+    form="{{ self.model_form() }}"
+    name="model"
+    id="conversation-model"
+    type="hidden"
+    value="{{ model_picker.model }}"
+  />
+  <button
+    id="conversation-model-toggle"
+    type="button"
+    class="select select-bordered h-auto min-h-10 w-full min-w-0 text-left"
+    aria-labelledby="conversation-model-label conversation-model-value"
+    aria-controls="conversation-model-options"
+    aria-expanded="false"
+    {% if job_active || model_picker.models.is_empty() %}disabled{% endif %}
+  >
+    <span id="conversation-model-value" class="min-w-0 break-all"
+      >{% if model_picker.models.is_empty() %}No models available{% else %}{{ model_picker.model }}{% endif %}</span
+    >
+  </button>
+  <div
+    id="conversation-model-options"
+    class="border-base-300 min-w-0 border p-2 [contain:inline-size]"
+    hidden
+  >
+    <label class="sr-only" for="conversation-model-search">Search models</label>
+    <input
+      id="conversation-model-search"
+      type="search"
+      class="input input-bordered w-full min-w-0"
+      placeholder="Search models"
+      maxlength="256"
+      autocomplete="off"
+      aria-controls="conversation-model-results"
+      aria-describedby="conversation-model-search-status"
+    />
+    <p
+      id="conversation-model-search-status"
+      role="status"
+      class="text-quiet px-2 py-2 text-xs"
+    ></p>
+    <div
+      id="conversation-model-results"
+      role="group"
+      aria-label="Models"
+      class="max-h-48 overflow-y-auto overscroll-contain"
+    ></div>
+  </div>
+</div>
+<label class="flex flex-col gap-1"
+  ><span class="text-sm">Thinking effort</span
+  ><select
+    form="{{ self.model_form() }}"
+    id="conversation-thinking"
+    name="thinking"
+    class="select select-bordered"
+    {% if job_active || model_picker.efforts.is_empty() %}disabled{% endif %}
+  >
+    {% if model_picker.efforts.is_empty() %}
+      <option value="">Not available</option>
+    {% endif %}
+    {% for effort in model_picker.efforts %}
+      <option
+        value="{{ effort.value }}"
+        {% if effort.value == model_picker.thinking %}selected{% endif %}
+      >
+        {{ effort.label }}
+      </option>
+    {% endfor %}
+  </select></label
+>
+<template
+  data-conversation-model-catalogue="{{ model_picker.catalogue }}"
+></template>

@@ -156,7 +156,7 @@ async fn create(
     match state.agents.create(draft) {
         Ok(record) => {
             let destination = match &starter {
-                Some(project) => format!("/conversations/new?project={}", project.id.as_hex()),
+                Some(project) => format!("/projects/{}", project.id.as_hex()),
                 None => format!("/agents/{}/configuration", record.id.as_hex()),
             };
             Ok(responses::command_navigation(&destination))

@@ -56,6 +56,16 @@ The product marks a project unavailable when its stored path no longer resolves.
 
 The `/` route opens `/conversations`. The conversations route lists local history and offers a New conversation action. A conversation can start without a project or preset.
 
+The new-conversation page has no record or conversation identity. Navigation and invalid submissions create nothing in memory or local storage.
+
+Only a valid first message creates the record and replaces the page URL with its canonical address. Model, effort, preset, project and title choices remain unsaved page state before that message.
+
+Provider choices contain connected providers only. Model and thinking effort dropdowns use the models.dev snapshot. A model without adjustable effort shows Not available.
+
+Project-scoped entry carries an intended project reference, not file access. Saved conversations offer explicit project grants, documents, workflows and review work.
+
+At the conversation limit, Power Plant rejects a new save. Existing conversations remain unchanged.
+
 The project catalogue is not host access authority. Explicit conversation grants authorise conversation work. Saved-agent execution uses agent directory grants. An agent is eligible when one stored canonical grant path equals the project path. Prefix matches give no authority. Project registration gives no authority.
 
 They create agents in the local catalogue. Each agent has a name, instructions, tools, a network policy and host directory grants. The selected project grant maps to `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`.

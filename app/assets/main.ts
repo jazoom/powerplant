@@ -5,6 +5,23 @@ import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./input.css";
 import { startApp } from "./hypergraft-bootstrap";
+import { listenForRequestSettled } from "hypergraft/browser";
+
+listenForRequestSettled((detail) => {
+    if (
+        detail.outcome === "applied-patch" &&
+        !detail.targetIds.includes("conversation-detail")
+    ) {
+        return;
+    }
+    // A top-layer panel must not conceal command or transport errors.
+    document
+        .querySelectorAll<HTMLElement>(".conversation-panel:popover-open")
+        .forEach((panel) => panel.hidePopover());
+    if (detail.outcome === "applied-patch" && detail.status !== 200) {
+        document.querySelector<HTMLElement>("#conversation-error")?.focus();
+    }
+});
 
 startApp();
 

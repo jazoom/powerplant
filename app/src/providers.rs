@@ -544,6 +544,32 @@ impl ChatBackend {
         }
     }
 
+    pub(crate) async fn stream_title(
+        &self,
+        connection: &ProviderConnection,
+        prompt: String,
+        preamble: &str,
+    ) -> Result<ModelStream, ProviderError> {
+        let history = [ChatTurn::user(prompt)];
+        match self {
+            Self::Rig => {
+                rig::stream_turn(
+                    connection,
+                    &history,
+                    &[],
+                    &[],
+                    preamble,
+                    Some(crate::models::models_dev::TITLE_OUTPUT_TOKENS),
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Scripted(backend) => {
+                backend.stream_turn(connection, &history, &[], &[], preamble)
+            }
+        }
+    }
+
     pub(crate) async fn stream_turn(
         &self,
         connection: &ProviderConnection,
@@ -553,7 +579,7 @@ impl ChatBackend {
         preamble: &str,
     ) -> Result<ModelStream, ProviderError> {
         match self {
-            Self::Rig => rig::stream_turn(connection, history, extra, tools, preamble).await,
+            Self::Rig => rig::stream_turn(connection, history, extra, tools, preamble, None).await,
             #[cfg(test)]
             Self::Scripted(backend) => {
                 backend.stream_turn(connection, history, extra, tools, preamble)

@@ -154,8 +154,10 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Invalid controls reveal their phase before browser validation moves focus. Server errors reveal the first affected phase and its advanced settings.
 - Workflow overviews show each phase purpose, candidate effect, fresh model context and approval route. Independent review is labelled only when that phase exists. Environment overrides and technical mappings stay under Advanced settings.
 - Conversation workflow launch uses the same ordered process presentation as workflow configuration.
-- Conversation pages put the discussion and composer before project access and workflow controls.
-- The conversation detail includes model selection, project access and workflow launch controls. The empty transcript contains no task suggestions.
+- Conversation pages keep the transcript and composer within the viewport. The empty transcript offers a short invitation, not setup forms or task suggestions.
+- The selected model and Project access stay visible above the transcript. Native popovers contain their controls.
+- Conversation options contains rename and delete controls, plus access to plans, tasks and guest network settings.
+- Project access remains explicit. The composer shows each attached project and its access level.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
 - The composer expands with the message. Run workflow stays beside the conversation title.
 - Jump to latest appears when the reader leaves the transcript end. New output does not move a reader away from earlier messages.

@@ -466,7 +466,7 @@
 
     body:has(.chat-sheet) .app-frame {
         height: 100dvh;
-        min-height: 36rem;
+        min-height: 0;
         overflow: visible;
     }
 
@@ -1538,6 +1538,14 @@
         outline-offset: -3px;
     }
 
+    .conversation-panel {
+        color: var(--powerplant-ink);
+        border: 1px solid var(--powerplant-strong-rule);
+        border-radius: var(--radius-box);
+        background: var(--powerplant-paper);
+        box-shadow: 0 0.8rem 2rem var(--powerplant-shadow-medium);
+    }
+
     .chat-turn {
         display: grid;
         width: min(48rem, calc(100% - 4rem));
@@ -2194,7 +2202,7 @@
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: auto minmax(0, 1fr);
         height: 100dvh;
-        min-height: 44rem;
+        min-height: 0;
     }
 
     body:has(.chat-sheet) .app-brand {

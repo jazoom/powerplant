@@ -33,6 +33,33 @@ test("the send shortcut submits Quick task", () => {
     expect(requestSubmit).toHaveBeenCalledWith(quick);
 });
 
+test("navigation replaces the draft before a later conversation command patch", () => {
+    const form = composerForm();
+    const textarea = form.querySelector("textarea")!;
+    const controller = new AbortController();
+    const island = initComposer(form, { signal: controller.signal });
+    textarea.value = "Private draft from the previous conversation";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    textarea.value = "";
+    island?.reconcile?.({
+        cause: "location",
+        detail: { url: "/conversations/new", cause: "link-navigation" },
+    });
+    island?.reconcile?.({
+        cause: "patch",
+        detail: {
+            requestKind: "patch",
+            form: document.createElement("form"),
+            url: "/conversations/another/model",
+            outcome: "applied-patch",
+            status: 422,
+            targetIds: ["conversation-detail"],
+        },
+    });
+    expect(textarea.value).toBe("");
+    controller.abort();
+});
+
 test("a sandbox projection preserves the unsent message", () => {
     const form = composerForm();
     document.body.append(form);

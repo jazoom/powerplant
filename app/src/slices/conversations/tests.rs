@@ -13,11 +13,11 @@ use crate::{
     state::AppState,
 };
 
-fn test_state() -> AppState {
+pub(super) fn test_state() -> AppState {
     crate::tests::test_state(RuntimeConfig::development())
 }
 
-fn app(state: &AppState) -> axum::Router {
+pub(super) fn app(state: &AppState) -> axum::Router {
     crate::slices::router()
         .layer(from_fn_with_state(
             state.clone(),
@@ -27,7 +27,7 @@ fn app(state: &AppState) -> axum::Router {
         .with_state(state.clone())
 }
 
-fn connected(state: &AppState) -> String {
+pub(super) fn connected(state: &AppState) -> String {
     state
         .vault
         .put(ProviderConnection::with_key(
@@ -41,7 +41,7 @@ fn connected(state: &AppState) -> String {
     token.raw().as_str().to_owned()
 }
 
-fn session_id(token: &str) -> sessions::SessionId {
+pub(super) fn session_id(token: &str) -> sessions::SessionId {
     sessions::SessionId::from_validated(&sessions::ValidatedToken::parse(token).expect("token"))
 }
 
@@ -63,7 +63,7 @@ fn cookie(token: &str) -> String {
     format!("powerplant_session={token}")
 }
 
-fn register_project(state: &AppState, name: &str) -> crate::projects::ProjectRecord {
+pub(super) fn register_project(state: &AppState, name: &str) -> crate::projects::ProjectRecord {
     let directory = tempfile::tempdir().expect("project directory");
     assert!(
         std::process::Command::new("git")
@@ -177,7 +177,7 @@ fn candidate_run(
     (run, reference)
 }
 
-fn document(path: &str, token: &str) -> Request<Body> {
+pub(super) fn document(path: &str, token: &str) -> Request<Body> {
     Request::builder()
         .uri(path)
         .header(header::COOKIE, cookie(token))
@@ -185,7 +185,7 @@ fn document(path: &str, token: &str) -> Request<Body> {
         .expect("request")
 }
 
-fn navigation(path: &str, token: &str) -> Request<Body> {
+pub(super) fn navigation(path: &str, token: &str) -> Request<Body> {
     Request::builder()
         .uri(path)
         .header(header::COOKIE, cookie(token))
@@ -195,7 +195,7 @@ fn navigation(path: &str, token: &str) -> Request<Body> {
         .expect("request")
 }
 
-fn command(path: &str, token: &str, body: &str) -> Request<Body> {
+pub(super) fn command(path: &str, token: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri(path)
@@ -207,7 +207,7 @@ fn command(path: &str, token: &str, body: &str) -> Request<Body> {
         .expect("request")
 }
 
-async fn text(response: axum::response::Response) -> String {
+pub(super) async fn text(response: axum::response::Response) -> String {
     String::from_utf8(
         to_bytes(response.into_body(), usize::MAX)
             .await
@@ -339,7 +339,7 @@ fn candidate_review_rejects_changed_hashes_and_secret_instructions() {
 }
 
 #[tokio::test]
-async fn catalogue_and_new_conversation_use_document_and_navigation_representations() {
+async fn catalogue_uses_document_and_navigation_without_creating_a_conversation() {
     let state = test_state();
     let token = connected(&state);
 
@@ -353,28 +353,165 @@ async fn catalogue_and_new_conversation_use_document_and_navigation_representati
     assert_eq!(document_body.matches("id=\"chat-main\"").count(), 1);
 
     let navigation_response = app(&state)
-        .oneshot(navigation("/conversations/new", &token))
+        .oneshot(navigation("/conversations", &token))
         .await
         .expect("navigation");
     assert_eq!(navigation_response.status(), StatusCode::OK);
     let navigation_body = text(navigation_response).await;
     assert!(navigation_body.contains("operation=\"children\" target=\"chat-main\""));
+    assert!(state.conversations.list().is_empty());
+
+    let new_page = app(&state)
+        .oneshot(document("/conversations/new", &token))
+        .await
+        .expect("new page");
+    assert_eq!(new_page.status(), StatusCode::OK);
+    assert!(state.conversations.list().is_empty());
 }
 
 #[tokio::test]
-async fn create_rename_and_delete_use_independent_conversation_identity() {
+async fn conversation_states_share_document_navigation_and_detail_patch_controls() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state.conversations.create("Saved".to_owned()).unwrap();
+    for (path, lifecycle, model_form) in [
+        (
+            "/conversations/new".to_owned(),
+            "new",
+            "conversation-composer",
+        ),
+        (
+            format!("/conversations/{}", record.id),
+            "saved",
+            "conversation-model-form",
+        ),
+    ] {
+        let patch = Request::builder()
+            .uri(&path)
+            .header(header::COOKIE, cookie(&token))
+            .header("graft-request", "patch")
+            .header(header::ACCEPT, "text/vnd.hypergraft.patches+html")
+            .body(Body::empty())
+            .unwrap();
+        for (request, target) in [
+            (document(&path, &token), None),
+            (navigation(&path, &token), Some("chat-main")),
+            (patch, Some("conversation-detail")),
+        ] {
+            let response = app(&state).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = text(response).await;
+            if let Some(target) = target {
+                assert!(body.contains(&format!("target=\"{target}\"")));
+            }
+            if target != Some("conversation-detail") {
+                assert_eq!(body.matches("data-island=\"conversation\"").count(), 1);
+            }
+            assert!(body.contains(&format!("data-conversation-state=\"{lifecycle}\"")));
+            for id in [
+                "transcript",
+                "conversation-composer",
+                "conversation-model-picker",
+                "conversation-model-search",
+                "conversation-model-settings",
+                "conversation-project-settings",
+            ] {
+                assert_eq!(body.matches(&format!("id=\"{id}\"")).count(), 1);
+            }
+            assert!(body.contains(&format!("form=\"{model_form}\"")));
+            assert!(body.contains("data-conversation-model-catalogue=\"{&#34;xai&#34;:"));
+            assert!(!body.contains("&#34;deepseek&#34;:"));
+        }
+    }
+    assert_eq!(state.conversations.list(), vec![record]);
+}
+
+#[tokio::test]
+async fn saved_model_commands_accept_disabled_effort_and_reject_stale_revision() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state.conversations.create("Saved".to_owned()).unwrap();
+    let model = state
+        .models_dev
+        .models(ProviderKind::Xai)
+        .into_iter()
+        .find(|model| {
+            state
+                .models_dev
+                .efforts(ProviderKind::Xai, &model.id)
+                .is_empty()
+        })
+        .unwrap();
+    let path = format!("/conversations/{}/model", record.id);
+    let fields = format!(
+        "revision={}&provider=xai&model={}",
+        record.revision,
+        form_value(&model.id)
+    );
+    let response = app(&state)
+        .oneshot(command(&path, &token, &fields))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("target=\"conversation-detail\""));
+    let updated = state.conversations.get(&record.id).unwrap();
+    assert_eq!(updated.model.as_ref().unwrap().selection.model, model.id);
+    assert!(updated.model.as_ref().unwrap().selection.thinking.is_none());
+    let response = app(&state)
+        .oneshot(command(&path, &token, &fields))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(state.conversations.get(&record.id).unwrap(), updated);
+}
+
+#[tokio::test]
+async fn creation_errors_target_the_shared_page_from_any_entry_point() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(command("/conversations", &token, "project=missing"))
+        .await
+        .expect("create");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = text(response).await;
+    assert!(body.contains("target=\"chat-main\""));
+    assert!(!body.contains("target=\"conversation-form\""));
+    assert!(body.contains("Choose an available project."));
+    assert!(body.contains("location=\"/conversations\""));
+    assert!(state.conversations.list().is_empty());
+}
+
+#[tokio::test]
+async fn rename_and_delete_use_independent_conversation_identity() {
     let state = test_state();
     let token = connected(&state);
 
-    let create = app(&state)
-        .oneshot(command("/conversations", &token, "title=First+discussion"))
-        .await
-        .expect("create");
-    assert_eq!(create.status(), StatusCode::OK);
-    let create_body = text(create).await;
-    let record = state.conversations.list().pop().expect("record");
+    let record = state
+        .conversations
+        .create("Saved conversation".to_owned())
+        .unwrap();
     let path = format!("/conversations/{}", record.id.as_hex());
-    assert!(create_body.contains(&format!("navigate=\"{path}\"")));
+
+    let title_projection = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("{path}?title=true"))
+                .header(header::COOKIE, cookie(&token))
+                .header("graft-request", "patch")
+                .header(header::ACCEPT, "text/vnd.hypergraft.patches+html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(title_projection.status(), StatusCode::OK);
+    assert!(
+        text(title_projection)
+            .await
+            .contains("target=\"conversation-heading\"")
+    );
 
     let detail = app(&state)
         .oneshot(document(&path, &token))
@@ -399,6 +536,7 @@ async fn create_rename_and_delete_use_independent_conversation_identity() {
     assert!(rename_body.contains("title=\"Renamed | Power Plant\""));
     let renamed = state.conversations.get(&record.id).expect("renamed");
     assert_eq!(renamed.title, "Renamed");
+    assert_eq!(state.conversations.list(), vec![renamed.clone()]);
 
     let delete = app(&state)
         .oneshot(command(
@@ -414,41 +552,28 @@ async fn create_rename_and_delete_use_independent_conversation_identity() {
 }
 
 #[tokio::test]
-async fn project_creation_form_attaches_only_after_an_explicit_post() {
+async fn project_entry_carries_context_without_creating_a_record() {
     let state = test_state();
     let token = connected(&state);
     let project = register_project(&state, "Context project");
-    let form_path = format!("/conversations/new?project={}", project.id.as_hex());
-
-    let form = app(&state)
-        .oneshot(document(&form_path, &token))
+    let catalogue_path = format!("/conversations?project={}", project.id.as_hex());
+    let catalogue = app(&state)
+        .oneshot(document(&catalogue_path, &token))
         .await
-        .expect("new conversation form");
-    assert_eq!(form.status(), StatusCode::OK);
-    let form_body = text(form).await;
-    assert!(form_body.contains(&format!(
-        "name=\"project\" value=\"{}\"",
-        project.id.as_hex()
-    )));
-    assert!(form_body.contains("This reference does not grant file access"));
+        .expect("filtered catalogue");
+    assert_eq!(catalogue.status(), StatusCode::OK);
     assert!(state.conversations.list().is_empty());
 
-    let created = app(&state)
-        .oneshot(command(
-            "/conversations",
+    let page = app(&state)
+        .oneshot(navigation(
+            &format!("/conversations/new?project={}", project.id),
             &token,
-            &format!("title=Project+discussion&project={}", project.id.as_hex()),
         ))
         .await
-        .expect("create conversation");
-    assert_eq!(created.status(), StatusCode::OK);
-    let record = state.conversations.list().pop().expect("conversation");
-    assert_eq!(record.projects, vec![project.id]);
-    assert!(
-        text(created)
-            .await
-            .contains(&format!("navigate=\"/conversations/{}\"", record.id))
-    );
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(text(page).await.contains(&project.id.as_hex()));
+    assert!(state.conversations.list().is_empty());
 }
 
 #[tokio::test]

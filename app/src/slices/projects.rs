@@ -292,7 +292,7 @@ async fn grant_agent(
     };
     match state.agents.update(&agent.id, revision, draft) {
         Ok(_) => Ok(responses::command_navigation(&format!(
-            "/conversations/new?project={}",
+            "/projects/{}",
             project.id.as_hex()
         ))),
         Err(error @ (AgentError::Random | AgentError::Persist | AgentError::Corrupt)) => {
@@ -333,7 +333,7 @@ async fn create_starter(
     };
     match state.agents.ensure_starter(&project) {
         Ok(StarterAgent::One(_) | StarterAgent::Created(_)) => Ok(responses::command_navigation(
-            &format!("/conversations/new?project={}", project.id.as_hex()),
+            &format!("/projects/{}", project.id.as_hex()),
         )),
         Ok(StarterAgent::Several) => Ok(responses::command_navigation(&format!(
             "/projects/{}",

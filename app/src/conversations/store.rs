@@ -83,6 +83,7 @@ pub(crate) struct ConversationRecord {
     pub(crate) id: ConversationId,
     pub(crate) revision: u32,
     pub(crate) title: String,
+    pub(crate) title_pending: bool,
     pub(crate) projects: Vec<ProjectId>,
     pub(crate) grants: Vec<ConversationGrant>,
     pub(crate) execution_target: Option<ProjectId>,
@@ -224,6 +225,7 @@ impl std::error::Error for ConversationError {}
 pub(crate) struct ConversationStore {
     path: Option<PathBuf>,
     inner: Mutex<BTreeMap<ConversationId, ConversationRecord>>,
+    title_updates: tokio::sync::broadcast::Sender<()>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -239,6 +241,8 @@ struct ConversationFile {
     id: String,
     revision: u32,
     title: String,
+    #[serde(default)]
+    title_pending: bool,
     projects: Vec<String>,
     grants: Vec<ConversationGrantFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
@@ -354,6 +358,7 @@ impl ConversationStore {
         Ok(Self {
             path: Some(path),
             inner: Mutex::new(conversations),
+            title_updates: tokio::sync::broadcast::channel(16).0,
         })
     }
 
@@ -365,39 +370,42 @@ impl ConversationStore {
         self.lock().get(id).cloned()
     }
 
-    pub(crate) fn create(&self, title: String) -> Result<ConversationRecord, ConversationError> {
-        self.create_record(title, Vec::new())
-    }
-
-    pub(crate) fn create_with_project(
+    pub(crate) fn create_saved(
         &self,
-        title: String,
-        project: ProjectId,
+        id: ConversationId,
+        project: Option<ProjectId>,
+        title: Option<String>,
+        model: Option<ConversationModelConfiguration>,
+        message: Option<(JobId, String)>,
     ) -> Result<ConversationRecord, ConversationError> {
-        self.create_record(title, vec![project])
-    }
-
-    fn create_record(
-        &self,
-        title: String,
-        projects: Vec<ProjectId>,
-    ) -> Result<ConversationRecord, ConversationError> {
-        let title = normalise_title(&title)?;
+        let title_pending = title.is_none();
+        let message = message
+            .map(|(job, text)| normalise_message(&text).map(|text| (job, text)))
+            .transpose()?;
+        let title = match title {
+            Some(title) => normalise_title(&title)?,
+            None => message.as_ref().map_or_else(
+                || "New conversation".to_owned(),
+                |(_, text)| super::titles::excerpt(text),
+            ),
+        };
+        let projects = project.into_iter().collect();
         let mut conversations = self.lock();
-        if conversations.len() >= MAXIMUM_CONVERSATIONS {
-            return Err(ConversationError::Full);
+        check_capacity(&conversations)?;
+        if conversations.contains_key(&id) {
+            return Err(ConversationError::Conflict);
         }
-        let id = unused_identifier(&conversations)?;
         let now = now_ms();
         let record = ConversationRecord {
             id,
             revision: 1,
             title,
+            title_pending,
             projects,
             grants: Vec::new(),
             execution_target: None,
             network: crate::agents::NetworkAccess::None,
-            model: None,
+            model,
             source_review: None,
             plan_reviews: Vec::new(),
             review_context: None,
@@ -409,6 +417,24 @@ impl ConversationStore {
             created_at_ms: now,
             updated_at_ms: now,
         };
+        let mut record = record;
+        if let Some((job, text)) = message {
+            record.messages = vec![
+                ConversationMessage {
+                    role: MessageRole::User,
+                    text,
+                    status: MessageStatus::Complete,
+                    request: None,
+                },
+                ConversationMessage {
+                    role: MessageRole::Assistant,
+                    text: String::new(),
+                    status: MessageStatus::Pending,
+                    request: Some(job),
+                },
+            ];
+            record.active_job = Some(job);
+        }
         conversations.insert(id, record.clone());
         if let Err(error) = persist(self.path.as_deref(), &conversations) {
             conversations.remove(&id);
@@ -455,9 +481,7 @@ impl ConversationStore {
                 ConversationError::Review
             });
         }
-        if conversations.len() >= MAXIMUM_CONVERSATIONS {
-            return Err(ConversationError::Full);
-        }
+        check_capacity(&conversations)?;
         let mut projects = Vec::with_capacity(read_only_projects.len());
         let mut grants = Vec::with_capacity(read_only_projects.len());
         for (project_id, project_revision) in read_only_projects {
@@ -499,6 +523,7 @@ impl ConversationStore {
             id,
             revision: 1,
             title,
+            title_pending: false,
             projects,
             grants,
             execution_target: target,
@@ -576,9 +601,7 @@ impl ConversationStore {
                 Ok(source)
             })
             .transpose()?;
-        if conversations.len() >= MAXIMUM_CONVERSATIONS {
-            return Err(ConversationError::Full);
-        }
+        check_capacity(&conversations)?;
         let id = unused_identifier(&conversations)?;
         let now = now_ms();
         let source_link = CandidateReviewLink {
@@ -597,6 +620,7 @@ impl ConversationStore {
             id,
             revision: 1,
             title,
+            title_pending: false,
             projects: Vec::new(),
             grants: Vec::new(),
             execution_target: None,
@@ -644,8 +668,52 @@ impl ConversationStore {
         let title = normalise_title(&title)?;
         self.replace(id, expected_revision, |current| {
             current.title = title;
+            current.title_pending = false;
             Ok(())
         })
+    }
+
+    pub(crate) fn subscribe_titles(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.title_updates.subscribe()
+    }
+
+    pub(crate) fn claim_title(&self, id: &ConversationId) -> Option<ConversationRecord> {
+        self.replace(id, 0, |record| {
+            if !record.title_pending
+                || record.messages.len() != 2
+                || record.messages[1].status != MessageStatus::Complete
+            {
+                return Err(ConversationError::Conflict);
+            }
+            record.title_pending = false;
+            Ok(())
+        })
+        .ok()
+    }
+
+    // An automatic title is presentation-only. It must not invalidate open command forms.
+    // A manual rename still changes the revision and therefore wins this comparison.
+    pub(crate) fn save_automatic_title(
+        &self,
+        id: &ConversationId,
+        revision: u32,
+        title: String,
+    ) -> Result<(), ConversationError> {
+        let title = normalise_title(&title)?;
+        let mut records = self.lock();
+        let current = records.get(id).cloned().ok_or(ConversationError::Missing)?;
+        if current.revision != revision {
+            return Err(ConversationError::Conflict);
+        }
+        let mut updated = current.clone();
+        updated.title = title;
+        records.insert(*id, updated);
+        if let Err(error) = persist(self.path.as_deref(), &records) {
+            records.insert(*id, current);
+            return Err(error);
+        }
+        let _ = self.title_updates.send(());
+        Ok(())
     }
 
     pub(crate) fn attach_project(
@@ -880,6 +948,9 @@ impl ConversationStore {
             if let Some(model) = model {
                 current.model = Some(model);
             }
+            if current.title_pending && current.messages.is_empty() {
+                current.title = super::titles::excerpt(&text);
+            }
             current.messages.push(ConversationMessage {
                 role: MessageRole::User,
                 text,
@@ -1099,6 +1170,16 @@ fn interrupt_recovered_requests(
     changed
 }
 
+fn check_capacity(
+    conversations: &BTreeMap<ConversationId, ConversationRecord>,
+) -> Result<(), ConversationError> {
+    if conversations.len() < MAXIMUM_CONVERSATIONS {
+        Ok(())
+    } else {
+        Err(ConversationError::Full)
+    }
+}
+
 fn unused_identifier(
     conversations: &BTreeMap<ConversationId, ConversationRecord>,
 ) -> Result<ConversationId, ConversationError> {
@@ -1282,6 +1363,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         id,
         revision: file.revision,
         title,
+        title_pending: file.title_pending,
         projects,
         grants,
         execution_target,
@@ -1539,6 +1621,7 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         id: record.id.as_hex(),
         revision: record.revision,
         title: record.title.clone(),
+        title_pending: record.title_pending,
         projects: record.projects.iter().map(ProjectId::as_hex).collect(),
         grants: record
             .grants
@@ -1603,7 +1686,7 @@ fn parse_stored_network(
     }
 }
 
-fn normalise_title(raw: &str) -> Result<String, ConversationError> {
+pub(crate) fn normalise_title(raw: &str) -> Result<String, ConversationError> {
     let title = raw.trim();
     if title.is_empty() || title.len() > MAXIMUM_TITLE_BYTES || title.chars().any(char::is_control)
     {
@@ -1612,7 +1695,7 @@ fn normalise_title(raw: &str) -> Result<String, ConversationError> {
     Ok(title.to_owned())
 }
 
-fn normalise_message(raw: &str) -> Result<String, ConversationError> {
+pub(crate) fn normalise_message(raw: &str) -> Result<String, ConversationError> {
     let text = raw.trim();
     if text.is_empty()
         || text.len() > MAXIMUM_MESSAGE_BYTES

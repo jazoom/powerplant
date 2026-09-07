@@ -116,13 +116,17 @@ pub(super) async fn stream_turn(
     extra: &[Message],
     tools: &[ToolDefinition],
     preamble: &str,
+    max_tokens: Option<u64>,
 ) -> Result<ModelStream, ProviderError> {
     match (connection.kind, connection.auth) {
         (ProviderKind::Xai, AuthMethod::ApiKey) => {
             let client = xai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
         (ProviderKind::Xai, AuthMethod::Plan) => {
             let token = xai_plan_token(connection).await?;
@@ -134,18 +138,27 @@ pub(super) async fn stream_turn(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::ApiKey) => {
             let client = openai::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
         (ProviderKind::OpenaiCodex, AuthMethod::Plan) => {
             let client = chatgpt_plan_client(connection, false, preamble)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
         (ProviderKind::Synthetic, _) => {
             let client = openai::Client::builder()
@@ -155,19 +168,28 @@ pub(super) async fn stream_turn(
                 .map_err(|_| ProviderError::Unreachable)?
                 .completions_api();
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
         (ProviderKind::Openrouter, _) => {
             let client = openrouter::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
         (ProviderKind::Deepseek, _) => {
             let client = deepseek::Client::new(connection.api_key.expose())
                 .map_err(|_| ProviderError::Unreachable)?;
             let model = client.completion_model(&connection.model);
-            stream_messages(model, history, extra, tools, preamble, connection).await
+            stream_messages(
+                model, history, extra, tools, preamble, connection, max_tokens,
+            )
+            .await
         }
     }
 }
@@ -264,6 +286,7 @@ async fn stream_messages<M>(
     tools: &[ToolDefinition],
     preamble: &str,
     connection: &ProviderConnection,
+    max_tokens: Option<u64>,
 ) -> Result<ModelStream, ProviderError>
 where
     M: CompletionModel + Clone,
@@ -283,8 +306,20 @@ where
         .completion_request(prompt)
         .preamble(preamble.to_owned())
         .messages(messages);
-    if let Some(parameters) = thinking_parameters(connection) {
+    let parameters = if max_tokens.is_some() {
+        match connection.kind {
+            ProviderKind::Deepseek => Some(serde_json::json!({"thinking": {"type": "disabled"}})),
+            ProviderKind::Openrouter => Some(serde_json::json!({"reasoning": {"enabled": false}})),
+            _ => thinking_parameters(connection),
+        }
+    } else {
+        thinking_parameters(connection)
+    };
+    if let Some(parameters) = parameters {
         request = request.additional_params(parameters);
+    }
+    if let Some(limit) = max_tokens {
+        request = request.max_tokens(limit);
     }
     if !tools.is_empty() {
         request = request.tools(tools.to_vec());

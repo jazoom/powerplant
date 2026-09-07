@@ -90,6 +90,11 @@ export function initComposer(
 
     return {
         reconcile(context) {
+            if (context.cause === "location") {
+                // A retained composer must not carry a draft into another conversation.
+                captureDraft();
+                return;
+            }
             if (
                 context.cause !== "patch" ||
                 context.detail.outcome !== "applied-patch"

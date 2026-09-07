@@ -6,7 +6,6 @@ related_targets:
     [
         "route:/",
         "route:/conversations",
-        "route:/conversations/new",
         "route:/projects/new",
         "route:/projects/folder",
         "route:/projects/{project_id}",
@@ -41,9 +40,9 @@ The project title and the New conversation action form the first visual level. T
 
 The project page lists conversations that reference the project. Each row has a canonical conversation link.
 
-A New conversation action opens `/conversations/new?project={project_id}`. The form carries the project reference through its explicit POST. A GET never creates a conversation.
+A New conversation action submits a POST to `/conversations` with the project identifier. The response opens the new conversation directly.
 
-The conversation form explains that a project reference does not grant file access. The conversation page supplies explicit read-only and writable access controls.
+A GET never creates a conversation. A project reference does not grant file access. The conversation page supplies explicit read-only and writable access controls.
 
 Project registration does not grant model or filesystem access. The conversation page shows access effects before each grant.
 
@@ -53,7 +52,7 @@ On the catalogue, the primary action is New project. Each project row has Rename
 
 On project detail, the primary action is New conversation.
 
-The project page also offers Start project work. Both actions open the explicit conversation form with the project reference.
+The project page also offers Start project work. Both actions create and open a conversation with the project reference.
 
 On the new project page, the primary action is Add project.
 
@@ -101,17 +100,15 @@ Project detail actions wrap at narrow widths. New conversation remains visible w
 
 `/conversations` lists local history and offers New conversation.
 
-`/conversations/new` presents a title form without creating a record.
+The New conversation form submits directly to `/conversations`. Its optional project identifier becomes an attachment without a grant.
 
-`/conversations/new?project={project_id}` presents the same form with one project reference.
-
-The form creates the conversation only after an explicit POST. A project reference becomes an attachment without a grant.
+Creation has no intermediate page or title field.
 
 `/projects` lists registered projects. It also opens the new project page when the catalogue is empty.
 
 `/projects/{project_id}` lists conversations that reference the selected project. It does not select an agent or redirect to an old project desk.
 
-The old project-and-agent desk URL is not a conversation URL. The project page uses canonical conversation links or the explicit creation form.
+The old project-and-agent desk URL is not a conversation URL. The project page uses canonical conversation links or direct creation commands.
 
 After a project is created, the product opens its project detail page. The user can then create a conversation without choosing a preset.
 

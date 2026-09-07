@@ -755,10 +755,7 @@ async fn starter_create_ignores_a_submitted_host_path() {
     assert_eq!(agents[0].name, "Worker");
     assert_eq!(agents[0].directories.len(), 1);
     assert_eq!(agents[0].directories[0].host_path, project.host_path);
-    assert!(text.contains(&format!(
-        "navigate=\"/conversations/new?project={}\"",
-        project.id.as_hex()
-    )));
+    assert!(text.contains(&format!("navigate=\"/projects/{}\"", project.id.as_hex())));
     keep_dir(&state, dir);
     keep_dir(&state, other);
 }

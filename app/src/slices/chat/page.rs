@@ -403,7 +403,7 @@ impl ChatViewModel {
         self.project_name = project.name.clone();
         self.project_path = project.host_path.to_string_lossy().into_owned();
         self.project_available = project.host_path_is_available();
-        self.desk_href = format!("/conversations/new?project={}", project.id);
+        self.desk_href = format!("/projects/{}", project.id);
         self.agent_choices = eligible
             .iter()
             .map(|agent| AgentChoice {

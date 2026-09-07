@@ -43,7 +43,11 @@ pub(super) struct Model {
     pub(super) reasoning: bool,
     pub(super) efforts: Vec<String>,
     pub(super) attachment: bool,
+    #[serde(default)]
+    pub(super) background_only: bool,
     pub(super) limit: ModelLimit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) background: Option<super::background::BackgroundMetadata>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -82,11 +86,26 @@ struct SourceModel {
     #[serde(default)]
     status: Option<String>,
     limit: SourceLimit,
+    #[serde(default)]
+    release_date: String,
+    #[serde(default)]
+    cost: Option<SourceCost>,
+    #[serde(default)]
+    experimental: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct SourceCost {
+    input: Option<f64>,
+    output: Option<f64>,
+    reasoning: Option<f64>,
 }
 
 #[derive(Deserialize)]
 struct SourceLimit {
     context: u64,
+    #[serde(default)]
+    output: u64,
 }
 
 #[derive(Deserialize)]
@@ -131,7 +150,8 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
             {
                 return Err(());
             }
-            if !model.tool_call
+            let background = background_metadata(id, model);
+            if (!model.tool_call && background.is_none())
                 || !model.modalities.input.iter().any(|value| value == "text")
                 || model.modalities.output.as_slice() != ["text"]
                 || model.status.as_deref() == Some("deprecated")
@@ -168,12 +188,17 @@ pub(super) fn filter_source(bytes: &[u8], etag: &str, now: u64) -> Result<Snapsh
                 reasoning: model.reasoning,
                 efforts,
                 attachment: model.attachment,
+                background_only: !model.tool_call,
                 limit: ModelLimit {
                     context: model.limit.context,
                 },
+                background,
             });
         }
-        if !models.iter().any(|model| model.id == kind.default_model()) {
+        if !models
+            .iter()
+            .any(|model| model.id == kind.default_model() && !model.background_only)
+        {
             return Err(());
         }
         models.sort_by(|left, right| left.id.cmp(&right.id));
@@ -215,6 +240,23 @@ pub(super) fn parse_snapshot(bytes: &[u8]) -> Result<Snapshot, ()> {
     Ok(snapshot)
 }
 
+fn background_metadata(
+    id: &str,
+    model: &SourceModel,
+) -> Option<super::background::BackgroundMetadata> {
+    if model.status.is_some() || model.experimental == true || super::background::unsuitable(id) {
+        return None;
+    }
+    let cost = model.cost.as_ref()?;
+    let metadata = super::background::BackgroundMetadata {
+        release_date: model.release_date.clone(),
+        input_cost: cost.input?,
+        output_cost: cost.output?.max(cost.reasoning.unwrap_or(0.0)),
+        output_limit: model.limit.output,
+    };
+    metadata.valid().then_some(metadata)
+}
+
 fn validate_snapshot(snapshot: &Snapshot) -> Result<(), ()> {
     if snapshot.version != 1
         || snapshot.source.url != SOURCE_URL
@@ -237,7 +279,7 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<(), ()> {
             || !provider
                 .models
                 .iter()
-                .any(|model| model.id == kind.default_model())
+                .any(|model| model.id == kind.default_model() && !model.background_only)
         {
             return Err(());
         }
@@ -245,6 +287,10 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<(), ()> {
         for model in &provider.models {
             let mut efforts = HashSet::new();
             if !bounded(&model.id, MAXIMUM_MODEL_BYTES)
+                || (model.background_only && model.background.is_none())
+                || model.background.as_ref().is_some_and(|metadata| {
+                    !metadata.valid() || super::background::unsuitable(&model.id)
+                })
                 || !model_ids.insert(&model.id)
                 || model.efforts.len() > MAXIMUM_EFFORTS
                 || model.efforts.iter().any(|effort| {

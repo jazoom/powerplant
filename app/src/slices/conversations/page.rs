@@ -1,4 +1,7 @@
+mod model_picker;
+
 use askama::Template;
+use model_picker::ModelPicker;
 
 #[cfg(test)]
 mod tests;
@@ -18,7 +21,6 @@ use crate::{
 };
 
 pub(super) const CATALOGUE_TITLE: &str = "Conversations | Power Plant";
-pub(super) const NEW_TITLE: &str = "New conversation | Power Plant";
 
 pub(super) struct ConversationListItem {
     pub(super) id: String,
@@ -102,27 +104,6 @@ impl CatalogueView {
             error,
         }
     }
-}
-
-#[derive(Template)]
-#[template(
-    path = "conversations/templates/index.html",
-    block = "conversation_form"
-)]
-pub(super) struct ConversationFormContents<'a> {
-    pub(super) title: &'a str,
-    pub(super) project_id: &'a str,
-    pub(super) project_name: &'a str,
-    pub(super) error: &'static str,
-}
-
-#[derive(Template)]
-#[template(path = "conversations/templates/index.html", block = "new_page")]
-pub(super) struct ConversationFormView {
-    pub(super) title: String,
-    pub(super) project_id: String,
-    pub(super) project_name: String,
-    pub(super) error: &'static str,
 }
 
 pub(super) struct ReviewProjectOption {
@@ -257,26 +238,6 @@ impl CandidateReviewView {
     }
 }
 
-impl ConversationFormView {
-    pub(super) fn new(title: &str, project: Option<&ProjectRecord>, error: &'static str) -> Self {
-        Self {
-            title: title.to_owned(),
-            project_id: project.map_or_else(String::new, |project| project.id.as_hex()),
-            project_name: project.map_or_else(String::new, |project| project.name.clone()),
-            error,
-        }
-    }
-
-    pub(super) fn contents(&self) -> ConversationFormContents<'_> {
-        ConversationFormContents {
-            title: &self.title,
-            project_id: &self.project_id,
-            project_name: &self.project_name,
-            error: self.error,
-        }
-    }
-}
-
 pub(super) struct MessageView {
     pub(super) index: usize,
     pub(super) user: bool,
@@ -367,66 +328,37 @@ pub(super) struct NetworkOption {
     pub(super) selected: bool,
 }
 
-#[derive(Template)]
-#[template(
-    path = "conversations/templates/index.html",
-    block = "conversation_detail"
-)]
-pub(super) struct ConversationDetailContents<'a> {
-    pub(super) heading: &'a str,
-    pub(super) title: &'a str,
-    pub(super) id: &'a str,
-    pub(super) revision: &'a str,
-    pub(super) error: &'static str,
-    pub(super) messages: &'a [MessageView],
-    pub(super) omitted_messages: usize,
-    pub(super) providers: &'a [ProviderOption],
-    pub(super) presets: &'a [PresetOption],
-    pub(super) attached_projects: &'a [ProjectContextView],
-    pub(super) attachable_projects: &'a [CatalogueProjectOption],
-    pub(super) project_limit_reached: bool,
-    pub(super) model_summary: &'a str,
-    pub(super) model_available: bool,
-    pub(super) job_id: &'a str,
-    pub(super) cursor: u64,
-    pub(super) job_active: bool,
-    pub(super) session_busy: bool,
-    pub(super) pending_gate: Option<&'a PendingCodeGateView>,
-    pub(super) network_options: &'a [NetworkOption],
-    pub(super) network_domains: &'a str,
-    pub(super) network_summary: &'a str,
-    pub(super) plans: &'a [PlanDocumentView],
-    pub(super) task_text: &'a str,
-    pub(super) task_title: &'a str,
-    pub(super) source_review: Option<&'a ConversationLinkView>,
-    pub(super) linked_reviews: &'a [ConversationLinkView],
-    pub(super) source_candidate_review: Option<&'a CandidateReviewLinkView>,
-    pub(super) linked_candidate_reviews: &'a [CandidateReviewLinkView],
-    pub(super) workflow_progress: Option<&'a WorkflowProgressView>,
+pub(super) enum ConversationPageState {
+    New { project: String, message: String },
+    Saved(Box<SavedConversationState>),
 }
 
 #[derive(Template)]
-#[template(path = "conversations/templates/index.html", block = "detail_page")]
+#[template(path = "conversations/templates/detail.html", blocks = ["conversation_detail"])]
 pub(super) struct ConversationDetailView {
     pub(super) heading: String,
     pub(super) document_title: String,
     pub(super) title: String,
-    pub(super) id: String,
-    pub(super) revision: String,
+    pub(super) state: ConversationPageState,
     pub(super) error: &'static str,
     pub(super) messages: Vec<MessageView>,
     pub(super) omitted_messages: usize,
-    pub(super) providers: Vec<ProviderOption>,
+    model_picker: ModelPicker,
     pub(super) presets: Vec<PresetOption>,
     pub(super) attached_projects: Vec<ProjectContextView>,
     pub(super) attachable_projects: Vec<CatalogueProjectOption>,
-    pub(super) project_limit_reached: bool,
     pub(super) model_summary: String,
     pub(super) model_available: bool,
-    pub(super) job_id: String,
-    pub(super) cursor: u64,
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
+}
+
+pub(super) struct SavedConversationState {
+    pub(super) id: String,
+    pub(super) revision: String,
+    pub(super) project_limit_reached: bool,
+    pub(super) job_id: String,
+    pub(super) cursor: u64,
     pub(super) pending_gate: Option<PendingCodeGateView>,
     pub(super) network_options: Vec<NetworkOption>,
     pub(super) network_domains: String,
@@ -441,6 +373,120 @@ pub(super) struct ConversationDetailView {
     pub(super) workflow_progress: Option<WorkflowProgressView>,
 }
 impl ConversationDetailView {
+    pub(super) fn from_new(
+        state: &crate::state::AppState,
+        form: super::new::NewForm,
+        error: &'static str,
+    ) -> Self {
+        Self {
+            heading: "New conversation".to_owned(),
+            document_title: "New conversation | Power Plant".to_owned(),
+            title: form.title,
+            model_picker: ModelPicker::new(
+                &state.vault,
+                &state.models_dev,
+                &form.provider,
+                &form.model,
+                &form.thinking,
+            ),
+            presets: state
+                .agents
+                .list()
+                .into_iter()
+                .map(|agent| PresetOption {
+                    id: agent.id.as_hex(),
+                    name: agent.name,
+                    description: String::new(),
+                    selected: agent.id.as_hex() == form.preset,
+                })
+                .collect(),
+            attachable_projects: state
+                .projects
+                .list()
+                .into_iter()
+                .map(|project| CatalogueProjectOption {
+                    id: project.id.as_hex(),
+                    name: project.name,
+                    selected: project.id.as_hex() == form.project,
+                })
+                .collect(),
+            state: ConversationPageState::New {
+                project: form.project,
+                message: form.message,
+            },
+            error,
+            messages: Vec::new(),
+            omitted_messages: 0,
+            attached_projects: Vec::new(),
+            model_summary: String::new(),
+            model_available: !form.model.is_empty(),
+            job_active: false,
+            session_busy: false,
+        }
+    }
+
+    pub(super) fn saved(&self) -> Option<&SavedConversationState> {
+        match &self.state {
+            ConversationPageState::New { .. } => None,
+            ConversationPageState::Saved(saved) => Some(saved),
+        }
+    }
+
+    fn is_new(&self) -> bool {
+        self.saved().is_none()
+    }
+
+    fn draft_project(&self) -> &str {
+        match &self.state {
+            ConversationPageState::New { project, .. } => project,
+            ConversationPageState::Saved(_) => "",
+        }
+    }
+
+    fn draft_message(&self) -> &str {
+        match &self.state {
+            ConversationPageState::New { message, .. } => message,
+            ConversationPageState::Saved(_) => "",
+        }
+    }
+
+    fn model_form(&self) -> &'static str {
+        if self.is_new() {
+            "conversation-composer"
+        } else {
+            "conversation-model-form"
+        }
+    }
+
+    fn composer_action(&self) -> String {
+        self.saved().map_or_else(
+            || "/conversations/new".to_owned(),
+            |saved| format!("/conversations/{}/messages", saved.id),
+        )
+    }
+
+    fn composer_disabled(&self) -> bool {
+        !self.is_new() && (self.job_active || self.session_busy || !self.model_available)
+    }
+
+    fn transcript_empty(&self) -> bool {
+        self.messages.is_empty()
+            && self.saved().is_none_or(|saved| {
+                saved.workflow_progress.is_none()
+                    && saved.pending_gate.is_none()
+                    && saved.source_review.is_none()
+                    && saved.source_candidate_review.is_none()
+            })
+    }
+
+    pub(super) fn with_task_text(mut self, title: String, text: String) -> Self {
+        if let ConversationPageState::Saved(saved) = &mut self.state {
+            saved.task_title = title;
+            saved.task_text = text;
+        }
+        self
+    }
+
     #[cfg(test)]
     pub(super) fn from_record(
         record: &ConversationRecord,
@@ -525,24 +571,15 @@ impl ConversationDetailView {
         let effective_network =
             crate::conversations::intersect_network(&record.network, preset_network);
         let network_summary = format_network_summary(&record.network, &effective_network);
-        let providers = sources
-            .vault
-            .desk_providers()
-            .into_iter()
-            .map(|provider| ProviderOption {
-                value: provider.kind.as_str(),
-                label: provider.kind.label(),
-                model: selection
-                    .filter(|selection| selection.provider == provider.kind)
-                    .map_or(provider.model, |selection| selection.model.clone()),
-                thinking: selection
-                    .filter(|selection| selection.provider == provider.kind)
-                    .and_then(|selection| selection.thinking.as_ref())
-                    .map(|value| value.as_str().to_owned())
-                    .unwrap_or_default(),
-                selected: selection.is_some_and(|selection| selection.provider == provider.kind),
-            })
-            .collect();
+        let model_picker = ModelPicker::new(
+            sources.vault,
+            sources.models,
+            selection.map_or("", |selection| selection.provider.as_str()),
+            selection.map_or("", |selection| selection.model.as_str()),
+            selection
+                .and_then(|selection| selection.thinking.as_ref())
+                .map_or("", |effort| effort.as_str()),
+        );
         let presets = agents
             .iter()
             .map(|agent| PresetOption {
@@ -660,42 +697,46 @@ impl ConversationDetailView {
             }
             _ => (String::new(), 0, false),
         };
-        // Plan controls share the envelope with the transcript.
-        let message_budget = (800_usize * 1024).saturating_sub(plans.len() * 3072);
+        // Plan controls and the escaped model catalogue share the transcript envelope.
+        let message_budget = (800_usize * 1024)
+            .saturating_sub(plans.len() * 3072)
+            .saturating_sub(ammonia::clean_text(&model_picker.catalogue).len());
         let messages = visible_messages(record, message_budget);
         let omitted_messages = record.messages.len() - messages.len();
         Self {
             heading: record.title.clone(),
             document_title: format!("{} | Power Plant", record.title),
             title: title.to_owned(),
-            id: record.id.as_hex(),
-            revision: record.revision.to_string(),
             error,
             messages,
             omitted_messages,
             model_available: selection.is_some(),
-            providers,
+            model_picker,
             presets,
             attached_projects,
             attachable_projects,
-            project_limit_reached: record.projects.len() >= MAXIMUM_PROJECT_ASSOCIATIONS,
             model_summary,
-            job_id,
-            cursor,
             job_active,
             session_busy,
-            pending_gate,
-            network_options,
-            network_domains,
-            network_summary,
-            plans,
-            task_text: String::new(),
-            task_title: String::new(),
-            source_review,
-            linked_reviews,
-            source_candidate_review,
-            linked_candidate_reviews,
-            workflow_progress: None,
+            state: ConversationPageState::Saved(Box::new(SavedConversationState {
+                id: record.id.as_hex(),
+                revision: record.revision.to_string(),
+                project_limit_reached: record.projects.len() >= MAXIMUM_PROJECT_ASSOCIATIONS,
+                job_id,
+                cursor,
+                pending_gate,
+                network_options,
+                network_domains,
+                network_summary,
+                plans,
+                task_text: String::new(),
+                task_title: String::new(),
+                source_review,
+                linked_reviews,
+                source_candidate_review,
+                linked_candidate_reviews,
+                workflow_progress: None,
+            })),
         }
     }
 
@@ -703,43 +744,14 @@ impl ConversationDetailView {
         mut self,
         workflow_progress: Option<WorkflowProgressView>,
     ) -> Self {
-        self.workflow_progress = workflow_progress;
+        if let ConversationPageState::Saved(saved) = &mut self.state {
+            saved.workflow_progress = workflow_progress;
+        }
         self
     }
 
-    pub(super) fn contents(&self) -> ConversationDetailContents<'_> {
-        ConversationDetailContents {
-            heading: &self.heading,
-            title: &self.title,
-            id: &self.id,
-            revision: &self.revision,
-            error: self.error,
-            messages: &self.messages,
-            omitted_messages: self.omitted_messages,
-            providers: &self.providers,
-            presets: &self.presets,
-            attached_projects: &self.attached_projects,
-            attachable_projects: &self.attachable_projects,
-            project_limit_reached: self.project_limit_reached,
-            model_summary: &self.model_summary,
-            model_available: self.model_available,
-            job_id: &self.job_id,
-            cursor: self.cursor,
-            job_active: self.job_active,
-            session_busy: self.session_busy,
-            pending_gate: self.pending_gate.as_ref(),
-            network_options: &self.network_options,
-            network_domains: &self.network_domains,
-            network_summary: &self.network_summary,
-            plans: &self.plans,
-            task_text: &self.task_text,
-            task_title: &self.task_title,
-            source_review: self.source_review.as_ref(),
-            linked_reviews: &self.linked_reviews,
-            source_candidate_review: self.source_candidate_review.as_ref(),
-            linked_candidate_reviews: &self.linked_candidate_reviews,
-            workflow_progress: self.workflow_progress.as_ref(),
-        }
+    pub(super) fn contents(&self) -> impl Template + '_ {
+        self.as_conversation_detail()
     }
 }
 

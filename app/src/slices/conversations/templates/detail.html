@@ -1,0 +1,1545 @@
+<main
+  data-section="conversations"
+  data-context-detail
+  class="chat-sheet w-full flex-1"
+>
+  <section
+    id="conversation-detail"
+    data-island="conversation"
+    class="flex min-h-0 flex-1 flex-col"
+  >
+    {% block conversation_detail %}
+      <template
+        data-conversation-state="{% if self.is_new() %}new{% else %}saved{% endif %}"
+      ></template>
+      <header
+        class="border-base-300 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-5 py-4 sm:px-8"
+      >
+        <div class="min-w-0">
+          <h1
+            id="conversation-heading"
+            class="text-lg font-semibold break-words"
+          >
+            {% block conversation_heading %}{{ heading }}{% endblock conversation_heading %}
+          </h1>
+          {% if let Some(saved) = self.saved() %}
+            <form
+              id="conversation-title-projection"
+              method="get"
+              action="/conversations/{{ saved.id }}"
+              data-graft
+              data-graft-live
+              hidden
+            >
+              <input type="hidden" name="title" value="true" />
+            </form>
+          {% endif %}
+        </div>
+        <div class="flex flex-wrap items-center gap-1">
+          {% if let Some(saved) = self.saved() %}
+            <a
+              href="/conversations/{{ saved.id }}/workflow"
+              data-graft
+              class="btn btn-ghost btn-sm"
+              >Run workflow</a
+            >
+          {% endif %}
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            popovertarget="conversation-options"
+          >
+            Conversation options
+          </button>
+        </div>
+      </header>
+      <div class="flex shrink-0 flex-wrap items-center gap-2 px-5 py-2 sm:px-8">
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm h-auto min-h-10 max-w-full gap-2 py-2 text-left [anchor-name:--conversation-model]"
+          popovertarget="conversation-model-settings"
+        >
+          <span class="sr-only">Model:</span>
+          <span class="min-w-0 break-all" data-conversation-model-summary
+            >{% if model_picker.model.is_empty() %}Choose a model{% else %}{{ model_picker.model }}{% endif %}</span
+          >
+          <svg
+            aria-hidden="true"
+            class="size-4 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-project]"
+          popovertarget="conversation-project-settings"
+        >
+          Project
+          access{% if !attached_projects.is_empty() %}
+            · {{ attached_projects.len() }}
+          {% endif %}
+        </button>
+      </div>
+      {% if error != "" %}
+        <div
+          id="conversation-error"
+          class="alert alert-error mx-5 w-auto shrink-0 sm:mx-8"
+          role="alert"
+          tabindex="-1"
+        >
+          <p>{{ error }}</p>
+        </div>
+      {% endif %}
+      <section
+        id="transcript"
+        data-island="transcript"
+        tabindex="-1"
+        class="chat-transcript"
+        aria-label="Messages"
+        aria-live="polite"
+      >
+        {% if let Some(saved) = self.saved() %}
+          {% if let Some(run) = saved.workflow_progress %}
+            <section
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-3 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-workflow-heading"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2
+                    id="conversation-workflow-heading"
+                    class="text-lg font-semibold"
+                  >
+                    Workflow progress
+                  </h2>
+                  <p class="text-quiet mt-1 text-sm">
+                    The worker uses the launch brief and a fresh context for
+                    each phase. This conversation history stays outside worker
+                    inputs.
+                  </p>
+                </div>
+                <a
+                  href="{{ run.run_href }}"
+                  data-graft
+                  class="btn btn-secondary btn-sm"
+                >
+                  Inspect run
+                </a>
+              </div>
+              <dl class="grid gap-2 text-sm sm:grid-cols-[8rem_1fr]">
+                <dt class="text-quiet">Workflow</dt>
+                <dd>{{ run.name }}</dd>
+                <dt class="text-quiet">State</dt>
+                <dd>{{ run.state }}</dd>
+                <dt class="text-quiet">Current phase</dt>
+                <dd>{{ run.current_step }}</dd>
+                {% if run.task_progress != "" %}
+                  <dt class="text-quiet">Tasks</dt>
+                  <dd>{{ run.task_progress }}</dd>
+                {% endif %}
+                <dt class="text-quiet">Result</dt>
+                <dd>{{ run.result }}</dd>
+              </dl>
+              {% if run.loop_id != "" && (run.can_pause || run.can_continue || run.can_retry || run.can_stop || run.pause_requested) %}
+                <div id="loop-controls" class="flex flex-col gap-3">
+                  {% if run.pause_requested %}
+                    <p class="text-sm">
+                      {% if run.awaiting_gate %}
+                        A pause waits until you decide this task. Pause is not
+                        approval. The required decision stays visible.
+                      {% else %}
+                        A pause waits until this task finishes implementation,
+                        review and commit. Pause is not approval.
+                      {% endif %}
+                    </p>
+                  {% else if run.can_pause %}
+                    <p class="text-quiet text-sm">
+                      Pause after task finishes this task's implementation,
+                      review and commit before the next task. Pause is not
+                      approval.
+                    </p>
+                  {% else if run.can_continue %}
+                    <p class="text-quiet text-sm">
+                      Continue starts the next pending task. It does not repeat
+                      a completed task.
+                    </p>
+                  {% else if run.can_retry %}
+                    <p class="text-quiet text-sm">
+                      Retry current task starts a fresh child from the recorded
+                      task base. It does not resume the earlier worker
+                      transcript. The previous candidate stays available for
+                      inspection.
+                    </p>
+                  {% endif %}
+                  {% if run.can_stop %}
+                    <p class="text-quiet text-sm">
+                      Stop now cancels the current task. Earlier commits remain.
+                      This does not roll back the project.
+                    </p>
+                  {% endif %}
+                  <div class="flex flex-wrap gap-2">
+                    {% if run.can_pause %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="/runs/loops/{{ run.loop_id }}/pause"
+                        class="inline"
+                      >
+                        <input
+                          type="hidden"
+                          name="token"
+                          value="{{ run.command_token }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="surface"
+                          value="conversation"
+                        />
+                        <button class="btn btn-secondary btn-sm" type="submit">
+                          Pause after task
+                        </button>
+                      </form>
+                    {% endif %}
+                    {% if run.can_continue %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="/runs/loops/{{ run.loop_id }}/continue"
+                        class="inline"
+                      >
+                        <input
+                          type="hidden"
+                          name="token"
+                          value="{{ run.command_token }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="surface"
+                          value="conversation"
+                        />
+                        <button class="btn btn-primary btn-sm" type="submit">
+                          Continue
+                        </button>
+                      </form>
+                    {% endif %}
+                    {% if run.can_retry %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="/runs/loops/{{ run.loop_id }}/retry"
+                        class="inline"
+                      >
+                        <input
+                          type="hidden"
+                          name="token"
+                          value="{{ run.command_token }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="surface"
+                          value="conversation"
+                        />
+                        <button class="btn btn-primary btn-sm" type="submit">
+                          Retry current task
+                        </button>
+                      </form>
+                    {% endif %}
+                    {% if run.can_stop %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="/runs/loops/{{ run.loop_id }}/stop"
+                        class="inline"
+                      >
+                        <input
+                          type="hidden"
+                          name="token"
+                          value="{{ run.command_token }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="surface"
+                          value="conversation"
+                        />
+                        <button class="btn btn-ghost btn-sm" type="submit">
+                          Stop now
+                        </button>
+                      </form>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endif %}
+            </section>
+          {% endif %}
+          {% if let Some(review) = saved.source_review %}
+            <section
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-review-source-heading"
+            >
+              <div>
+                <h2
+                  id="conversation-review-source-heading"
+                  class="text-lg font-semibold"
+                >
+                  Plan under review
+                </h2>
+                <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                  This conversation keeps an immutable plan reference. Source
+                  messages, thoughts, tool output and write authority are not
+                  inherited.
+                </p>
+              </div>
+              <div
+                class="border-base-300 flex flex-wrap items-center gap-3 border-y py-3"
+              >
+                <div class="min-w-0 flex-1">
+                  <p class="font-medium break-words">{{ review.plan_title }}</p>
+                  <p class="text-quiet mt-1 text-xs">
+                    Revision {{ review.plan_revision }} ·
+                    {{ review.content_hash }}
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <a
+                    href="{{ review.plan_href }}"
+                    data-graft
+                    class="btn btn-secondary btn-sm"
+                    >Open plan</a
+                  >
+                  <a
+                    href="{{ review.href }}"
+                    data-graft
+                    class="btn btn-ghost btn-sm"
+                    >Open source conversation: {{ review.title }}</a
+                  >
+                </div>
+              </div>
+            </section>
+          {% endif %}
+          {% if let Some(review) = saved.source_candidate_review %}
+            <section
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-candidate-review-source-heading"
+            >
+              <div>
+                <h2
+                  id="conversation-candidate-review-source-heading"
+                  class="text-lg font-semibold"
+                >
+                  Candidate under review
+                </h2>
+                <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                  This conversation received one immutable candidate and diff
+                  base. Its discussion cannot approve or change the source run.
+                </p>
+              </div>
+              <dl class="grid gap-2 text-sm sm:grid-cols-[8rem_1fr]">
+                <dt class="text-quiet">Candidate</dt>
+                <dd class="font-mono break-all">{{ review.candidate_hash }}</dd>
+                <dt class="text-quiet">Diff base</dt>
+                <dd class="font-mono break-all">{{ review.diff_base_hash }}</dd>
+              </dl>
+              <div class="flex flex-wrap gap-2">
+                <a
+                  href="{{ review.run_href }}"
+                  data-graft
+                  class="btn btn-secondary btn-sm"
+                  >Open source run</a
+                >
+                {% if !review.title.is_empty() %}
+                  <a
+                    href="{{ review.href }}"
+                    data-graft
+                    class="btn btn-ghost btn-sm"
+                    >Open source conversation: {{ review.title }}</a
+                  >
+                {% endif %}
+              </div>
+            </section>
+          {% endif %}
+          {% if !saved.linked_candidate_reviews.is_empty() %}
+            <section
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-linked-candidate-reviews-heading"
+            >
+              <div>
+                <h2
+                  id="conversation-linked-candidate-reviews-heading"
+                  class="text-lg font-semibold"
+                >
+                  Linked candidate reviews
+                </h2>
+                <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                  A linked review is discussion only. It never supplies approval
+                  for the source run.
+                </p>
+              </div>
+              <ul class="record-list" aria-label="Linked candidate reviews">
+                {% for review in saved.linked_candidate_reviews %}
+                  <li class="record-row flex-wrap gap-3">
+                    <div class="min-w-0 flex-1">
+                      <a
+                        href="{{ review.href }}"
+                        data-graft
+                        class="link link-hover font-medium break-words"
+                        >{{ review.title }}</a
+                      >
+                      <p class="text-quiet mt-1 text-xs">
+                        Candidate {{ review.candidate_hash }} · base
+                        {{ review.diff_base_hash }}
+                      </p>
+                    </div>
+                    <a
+                      href="{{ review.run_href }}"
+                      data-graft
+                      class="btn btn-ghost btn-sm"
+                      >Open source run</a
+                    >
+                  </li>
+                {% endfor %}
+              </ul>
+            </section>
+          {% endif %}
+          {% if !saved.linked_reviews.is_empty() %}
+            <section
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-linked-reviews-heading"
+            >
+              <div>
+                <h2
+                  id="conversation-linked-reviews-heading"
+                  class="text-lg font-semibold"
+                >
+                  Linked plan reviews
+                </h2>
+                <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                  These links identify review conversations. They do not pass
+                  discussion history or project authority between conversations.
+                </p>
+              </div>
+              <ul class="record-list" aria-label="Linked plan reviews">
+                {% for review in saved.linked_reviews %}
+                  <li class="record-row flex-wrap gap-3">
+                    <div class="min-w-0 flex-1">
+                      <a
+                        href="{{ review.href }}"
+                        data-graft
+                        class="link link-hover font-medium break-words"
+                        >{{ review.title }}</a
+                      >
+                      <p class="text-quiet mt-1 text-xs">
+                        Revision {{ review.plan_revision }} ·
+                        {{ review.content_hash }}
+                      </p>
+                    </div>
+                    <a
+                      href="{{ review.plan_href }}"
+                      data-graft
+                      class="btn btn-ghost btn-sm"
+                      >Open plan</a
+                    >
+                  </li>
+                {% endfor %}
+              </ul>
+            </section>
+          {% endif %}
+          <section
+            id="conversation-documents"
+            popover
+            class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] space-y-4 overflow-y-auto p-5 md:inset-x-auto md:top-28 md:right-8 md:w-[min(40rem,calc(100vw-18rem))]"
+            aria-labelledby="conversation-plans-heading"
+          >
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <h2
+                  id="conversation-plans-heading"
+                  class="text-lg font-semibold"
+                >
+                  Plans and tasks
+                </h2>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm min-h-11"
+                  popovertarget="conversation-documents"
+                  popovertargetaction="hide"
+                >
+                  Close
+                </button>
+              </div>
+              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                Documents are immutable local records. A correction creates a
+                new revision. Earlier content remains available.
+              </p>
+              <p class="text-quiet mt-2 max-w-[60ch] text-sm">
+                Task preparation uses {{ model_summary }} without guest tools.
+                The model replies in this conversation. Save as tasks validates
+                its output without execution.
+              </p>
+            </div>
+            {% if saved.plans.is_empty() %}
+              <p class="text-quiet text-sm">
+                No documents are associated with this conversation.
+              </p>
+            {% else %}
+              <ul class="record-list" aria-label="Saved plans and tasks">
+                {% for plan in saved.plans %}
+                  <li class="record-row flex-wrap gap-3">
+                    <div class="min-w-0 flex-1">
+                      <p class="font-medium break-words">{{ plan.title }}</p>
+                      <p class="text-quiet mt-1 text-xs">
+                        {{ plan.kind }} · Revision {{ plan.revision }} ·
+                        {{ plan.provenance }} · {{ plan.content_hash }}
+                      </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                      <a
+                        href="{{ plan.open_href }}"
+                        data-graft
+                        class="btn btn-secondary btn-sm"
+                        >{% if plan.task_list %}Open tasks{% else %}Open plan{% endif %}</a
+                      >
+                      <a
+                        href="{{ plan.export_href }}"
+                        class="btn btn-ghost btn-sm"
+                        >{% if plan.task_list %}Export for Pi{% else %}Export{% endif %}</a
+                      >
+                      {% if !plan.task_list %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="{{ plan.prepare_href }}"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="document_revision"
+                            value="{{ plan.revision }}"
+                          />
+                          <button
+                            class="btn btn-secondary btn-sm"
+                            type="submit"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Create tasks from this plan
+                          </button>
+                        </form>
+                      {% endif %}
+                      {% if !plan.review_href.is_empty() %}
+                        <a
+                          href="{{ plan.review_href }}"
+                          data-graft
+                          class="btn btn-ghost btn-sm"
+                          >Review in a new conversation</a
+                        >
+                      {% endif %}
+                      <form
+                        data-graft
+                        method="post"
+                        action="{{ plan.remove_href }}"
+                      >
+                        <input
+                          type="hidden"
+                          name="revision"
+                          value="{{ saved.revision }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="document_revision"
+                          value="{{ plan.revision }}"
+                        />
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="submit"
+                          {% if job_active || session_busy %}disabled{% endif %}
+                        >
+                          Remove
+                        </button>
+                      </form>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+            <details class="file-disclosure">
+              <summary>Save plan text</summary>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/plans/text"
+                class="mt-3 flex max-w-3xl flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+                <label class="flex flex-col gap-1" for="submitted-plan-title">
+                  <span class="text-sm">Title</span>
+                  <input
+                    id="submitted-plan-title"
+                    class="input input-bordered"
+                    name="title"
+                    required
+                    maxlength="120"
+                  />
+                </label>
+                <label
+                  class="flex flex-col gap-1"
+                  for="submitted-plan-markdown"
+                >
+                  <span class="text-sm">Plan text</span>
+                  <textarea
+                    id="submitted-plan-markdown"
+                    class="textarea textarea-bordered min-h-40"
+                    name="markdown"
+                    required
+                    maxlength="65536"
+                  ></textarea>
+                </label>
+                <button class="btn btn-secondary self-start" type="submit">
+                  Save as plan
+                </button>
+              </form>
+            </details>
+            <details class="file-disclosure">
+              <summary>Import tasks from a project</summary>
+              <p class="text-quiet mt-1 text-sm">
+                Import reads one explicitly authorised project file through a
+                read-only guest. It does not call a model or execute tasks.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/tasks/import"
+                class="mt-3 flex max-w-3xl flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+                <label class="flex flex-col gap-1"
+                  ><span class="text-sm">Authorised project</span>
+                  <select
+                    class="select select-bordered"
+                    name="project_id"
+                    required
+                  >
+                    <option value="">Select a project</option>
+                    {% for project in attached_projects %}{% if project.access_granted %}
+                      <option value="{{ project.id }}">
+                        {{ project.name }}
+                      </option>
+                    {% endif %}{% endfor %}
+                  </select>
+                </label>
+                <label class="flex flex-col gap-1"
+                  ><span class="text-sm">Project-relative file path</span
+                  ><input
+                    class="input input-bordered"
+                    name="path"
+                    required
+                    maxlength="4096"
+                    placeholder="tasks/release.md"
+                /></label>
+                <label class="flex flex-col gap-1"
+                  ><span class="text-sm">Title</span
+                  ><input
+                    class="input input-bordered"
+                    name="title"
+                    required
+                    maxlength="120"
+                /></label>
+                <button
+                  class="btn btn-secondary self-start"
+                  type="submit"
+                  {% if job_active || session_busy %}disabled{% endif %}
+                >
+                  Import tasks
+                </button>
+              </form>
+            </details>
+            <details
+              class="file-disclosure"
+              {% if !saved.task_text.is_empty() %}open{% endif %}
+            >
+              <summary>Save task list text</summary>
+              <p class="text-quiet mt-1 text-sm">
+                Use a heading and top-level checkbox tasks. Checked tasks stay
+                as authored. Power Plant only marks unchecked tasks as eligible.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/tasks/text"
+                class="mt-3 flex max-w-3xl flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+                <label class="flex flex-col gap-1" for="submitted-task-title"
+                  ><span class="text-sm">Title</span
+                  ><input
+                    id="submitted-task-title"
+                    class="input input-bordered"
+                    name="title"
+                    value="{{ saved.task_title }}"
+                    required
+                    maxlength="120"
+                /></label>
+                <label class="flex flex-col gap-1" for="submitted-task-markdown"
+                  ><span class="text-sm">Task list text</span
+                  ><textarea
+                    id="submitted-task-markdown"
+                    class="textarea textarea-bordered min-h-40"
+                    name="markdown"
+                    required
+                    maxlength="65536"
+                  >
+{{ saved.task_text }}</textarea>
+                </label>
+                <button class="btn btn-secondary self-start" type="submit">
+                  Save as tasks
+                </button>
+              </form>
+            </details>
+          </section>
+
+          <section
+            id="conversation-network-settings"
+            popover
+            class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] space-y-4 overflow-y-auto p-5 md:inset-x-auto md:top-28 md:right-8 md:w-[min(40rem,calc(100vw-18rem))]"
+            aria-labelledby="conversation-network-heading"
+          >
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <h2
+                  id="conversation-network-heading"
+                  class="text-lg font-semibold"
+                >
+                  Guest network access
+                </h2>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm min-h-11"
+                  popovertarget="conversation-network-settings"
+                  popovertargetaction="hide"
+                >
+                  Close
+                </button>
+              </div>
+              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+                This setting applies to sandbox work for the execution target.
+                It does not give a project-free model filesystem access. Presets
+                can narrow this choice, and private or host networks stay
+                blocked.
+              </p>
+              <p class="mt-2 text-sm">
+                <span class="font-medium">{{ saved.network_summary }}</span>
+              </p>
+            </div>
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ saved.id }}/network"
+              class="flex max-w-xl flex-col gap-4"
+            >
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ saved.revision }}"
+              />
+              <fieldset class="flex flex-col gap-3">
+                <legend class="text-sm font-semibold">Access level</legend>
+                {% for option in saved.network_options %}
+                  <label class="flex items-start gap-2 text-sm">
+                    <input
+                      class="radio radio-sm mt-0.5"
+                      type="radio"
+                      name="network"
+                      value="{{ option.value }}"
+                      {% if option.selected %}checked{% endif %}
+                      {% if job_active || session_busy %}disabled{% endif %}
+                    />
+                    <span>{{ option.label }}</span>
+                  </label>
+                {% endfor %}
+              </fieldset>
+              <label
+                class="flex flex-col gap-1"
+                for="conversation-network-domains"
+              >
+                <span class="text-sm">Allowed domains</span>
+                <textarea
+                  id="conversation-network-domains"
+                  class="textarea textarea-bordered min-h-24"
+                  name="network_domains"
+                  maxlength="8127"
+                  {% if job_active || session_busy %}disabled{% endif %}
+                >
+{{ saved.network_domains }}</textarea>
+                <span class="text-quiet text-xs">
+                  Use one domain per line. Each entry includes its subdomains
+                  and ports. Private and host networks remain excluded.
+                </span>
+              </label>
+              <button
+                class="btn btn-secondary self-start"
+                type="submit"
+                {% if job_active || session_busy %}disabled{% endif %}
+              >
+                Save network access
+              </button>
+            </form>
+          </section>
+          {% if let Some(gate) = saved.pending_gate %}
+            <section
+              id="conversation-candidate"
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-candidate-heading"
+            >
+              <div>
+                <h2
+                  id="conversation-candidate-heading"
+                  class="text-lg font-semibold"
+                >
+                  Candidate ready for approval
+                </h2>
+                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                  The host project remains unchanged. Review this exact
+                  candidate before you apply it.
+                </p>
+              </div>
+              <dl class="grid gap-2 text-sm sm:grid-cols-[7rem_1fr]">
+                <dt class="text-quiet">Diff base</dt>
+                <dd class="font-mono break-all">{{ gate.diff_base }}</dd>
+                <dt class="text-quiet">Candidate</dt>
+                <dd class="font-mono break-all">{{ gate.candidate }}</dd>
+              </dl>
+              {% if gate.changes.is_empty() %}
+                <p class="text-quiet text-sm">The candidate has no changes.</p>
+              {% else %}
+                <div>
+                  <h3 class="text-sm font-semibold">Candidate diff</h3>
+                  <ul class="mt-2 space-y-2">
+                    {% for change in gate.changes %}
+                      <li class="border-base-300 flex gap-3 border p-2 text-sm">
+                        <span class="badge badge-outline badge-sm"
+                          >{{ change.status }}</span
+                        >
+                        <span class="font-mono break-all"
+                          >{{ change.path }}</span
+                        >
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+              <div class="flex flex-wrap gap-3">
+                <a href="{{ gate.diff_href }}" data-graft class="link text-sm"
+                  >Open the full candidate diff</a
+                >
+                <a href="{{ gate.review_href }}" data-graft class="link text-sm"
+                  >Review in a new conversation</a
+                >
+              </div>
+              <div class="flex flex-wrap gap-3 border-t pt-4">
+                <form
+                  data-graft
+                  method="post"
+                  action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/approve"
+                >
+                  <input
+                    type="hidden"
+                    name="gate-revision"
+                    value="{{ gate.revision }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="candidate"
+                    value="{{ gate.candidate }}"
+                  />
+                  <input type="hidden" name="surface" value="conversation" />
+                  <button class="btn btn-primary" type="submit">
+                    Apply changes
+                  </button>
+                </form>
+                <form
+                  data-graft
+                  method="post"
+                  action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/cancel"
+                >
+                  <input
+                    type="hidden"
+                    name="gate-revision"
+                    value="{{ gate.revision }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="candidate"
+                    value="{{ gate.candidate }}"
+                  />
+                  <input type="hidden" name="surface" value="conversation" />
+                  <button class="btn btn-outline" type="submit">
+                    Discard changes
+                  </button>
+                </form>
+              </div>
+            </section>
+          {% endif %}
+        {% endif %}
+        {% if self.transcript_empty() %}
+          <div class="m-auto max-w-xl px-6 py-8 text-center">
+            <h2 class="text-2xl font-semibold text-balance sm:text-3xl">
+              What do you want to work on?
+            </h2>
+            <p class="text-quiet mt-3">Ask a question or describe a task.</p>
+          </div>
+        {% endif %}
+        {% if omitted_messages > 0 %}
+          <p class="text-quiet text-sm">
+            {{ omitted_messages }} earlier messages exceed the display limit.
+            They remain in local history and model context.
+          </p>
+        {% endif %}
+        {% for message in messages %}{% include "conversations/templates/message_article.html" %}{% endfor %}
+      </section>
+      {% if let Some(saved) = self.saved() %}
+        <div id="conversation-observe" hidden>
+          {% let active = job_active %}{% let id = saved.id %}{% let job_id = saved.job_id %}{% let cursor = saved.cursor %}{% include "conversations/templates/observe.html" %}
+        </div>
+      {% endif %}
+      <div id="conversation-composer-dock" class="composer-dock">
+        <div class="chat-latest-row">
+          <button
+            type="button"
+            class="chat-jump-latest btn btn-outline btn-sm"
+            data-jump-latest
+            hidden
+          >
+            Jump to latest
+          </button>
+        </div>
+        <div class="mx-auto w-full max-w-3xl">
+          {% if self.is_new() %}
+            <p
+              data-conversation-project-summary
+              class="text-composer-quiet mb-2 text-xs"
+              {% if self.draft_project().is_empty() %}hidden{% endif %}
+            >
+              {% for project in attachable_projects %}{% if project.selected %}
+                {{ project.name }}
+                · No file access
+              {% endif %}{% endfor %}
+            </p>
+          {% endif %}
+          {% if !attached_projects.is_empty() %}
+            <p class="text-composer-quiet mb-2 text-xs">
+              {% for project in attached_projects %}
+                <span class="mr-3 inline-block"
+                  >{{ project.name }} ·
+                  {% if project.writable %}
+                    Writable access
+                  {% else if project.access_granted %}
+                    Read-only access
+                  {% else %}
+                    No file access
+                  {% endif %}</span
+                >
+              {% endfor %}
+            </p>
+          {% endif %}
+          <form
+            id="conversation-composer"
+            data-island="composer"
+            data-graft
+            method="post"
+            action="{{ self.composer_action() }}"
+            class="composer-form"
+          >
+            {% if let Some(saved) = self.saved() %}
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ saved.revision }}"
+              />
+            {% endif %}
+            <label class="sr-only" for="composer-message">Message</label>
+            <textarea
+              id="composer-message"
+              name="message"
+              class="composer-message textarea"
+              placeholder="Ask a question or describe a task…"
+              rows="3"
+              {% if !self.is_new() %}required{% endif %}
+              maxlength="32768"
+              {% if self.composer_disabled() %}disabled{% endif %}
+            >
+{{ self.draft_message() }}</textarea>
+            {% if !model_available %}
+              <p class="text-quiet px-4 py-2 text-sm">
+                <a href="/connect" data-graft class="link"
+                  >Connect a provider</a
+                >
+                to send a message.
+              </p>
+            {% endif %}
+            {% if session_busy && !job_active %}
+              <p class="text-quiet text-sm">
+                Another command is active in this browser session.
+              </p>
+            {% endif %}
+            <div class="composer-toolbar">
+              <span
+                data-island="shortcut-hint"
+                class="shortcut-hint text-quiet text-xs"
+              ></span>
+              {# Explicit ARIA values replace the transport overlay on a retained submitter. #}
+              <button
+                class="btn btn-primary min-w-20"
+                type="submit"
+                name="action"
+                value="send"
+                aria-disabled="{{ self.composer_disabled() }}"
+                {% if self.composer_disabled() %}disabled{% endif %}
+              >
+                Send
+              </button>
+            </div>
+          </form>
+          {% if let Some(saved) = self.saved() %}{% if job_active %}
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ saved.id }}/cancel"
+            >
+              <input
+                type="hidden"
+                name="job"
+                value="{{ saved.job_id }}"
+              /><button class="btn btn-ghost btn-sm" type="submit">
+                Cancel reply
+              </button>
+            </form>
+          {% endif %}{% endif %}
+        </div>
+      </div>
+      <section
+        id="conversation-project-settings"
+        popover
+        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] w-auto min-w-0 space-y-4 overflow-y-auto p-5 [position-anchor:--conversation-project] supports-[position-area:bottom]:top-2 supports-[position-area:bottom]:max-h-[min(65dvh,calc(100%-1.5rem))] supports-[position-area:bottom]:[position-area:bottom_span-all] md:left-72 md:max-w-[40rem] md:supports-[left:anchor(left)]:left-[anchor(left)]"
+        aria-labelledby="conversation-project-heading"
+      >
+        <div class="flex items-center justify-between gap-3">
+          <h2 id="conversation-project-heading" class="text-lg font-semibold">
+            Project access
+          </h2>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-11"
+            popovertarget="conversation-project-settings"
+            popovertargetaction="hide"
+          >
+            Close
+          </button>
+        </div>
+        {% if self.is_new() %}
+          <label class="flex flex-col gap-1"
+            ><span class="text-sm">Project context</span
+            ><select
+              form="conversation-composer"
+              name="project"
+              class="select select-bordered"
+            >
+              <option value="">No project</option>
+              {% for project in attachable_projects %}
+                <option
+                  value="{{ project.id }}"
+                  {% if project.selected %}selected{% endif %}
+                >
+                  {{ project.name }}
+                </option>
+              {% endfor %}
+            </select></label
+          >
+          <p class="text-quiet text-sm">
+            Project context grants no file access. Saved conversations offer
+            explicit access controls.
+          </p>
+        {% else if let Some(saved) = self.saved() %}
+          <div>
+            <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+              Project attachments identify related work. They grant no access
+              until you select an access level below. Read-only access permits
+              List, Read and Run. Writable target access also permits Write in
+              the candidate workspace. Guest network access starts at None.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-11"
+            popovertarget="conversation-network-settings"
+          >
+            Guest network access
+          </button>
+          {% if attached_projects.is_empty() %}
+            <p class="text-quiet text-sm">
+              No projects are attached to this conversation. Attach one before
+              you grant access.
+            </p>
+          {% else %}
+            <ul class="record-list" aria-label="Project context">
+              {% for project in attached_projects %}
+                <li class="record-row flex-wrap gap-3">
+                  <div class="min-w-0 flex-1">
+                    <p class="font-medium break-words">{{ project.name }}</p>
+                    <p class="text-quiet mt-1 text-xs">{{ project.status }}</p>
+                    {% if project.secondary_context %}
+                      <p class="text-quiet mt-1 font-mono text-xs">
+                        Guest path: /access/{{ project.alias }}
+                      </p>
+                    {% endif %}
+                    {% if project.access_granted %}
+                      {% if project.execution_target %}
+                        <p class="mt-1 text-xs font-medium">Execution target</p>
+                      {% else %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/target"
+                          class="mt-2"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="project"
+                            value="{{ project.id }}"
+                          />
+                          <button
+                            class="btn btn-secondary btn-xs"
+                            type="submit"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Use as execution target
+                          </button>
+                        </form>
+                      {% endif %}
+                      {% if !project.writable %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/access"
+                          class="mt-3"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="project"
+                            value="{{ project.id }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="access"
+                            value="read-write"
+                          />
+                          <p class="text-quiet mb-2 text-xs">
+                            Grant effect: List, Read, Run and Write in the
+                            candidate workspace. Network access stays unchanged.
+                          </p>
+                          <button
+                            class="btn btn-secondary btn-xs"
+                            type="submit"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Grant writable target access
+                          </button>
+                        </form>
+                      {% endif %}
+                    {% else %}
+                      <div class="mt-2 flex flex-wrap gap-3">
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/access"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="project"
+                            value="{{ project.id }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="access"
+                            value="read-only"
+                          />
+                          <p class="text-quiet mb-2 text-xs">
+                            Grant effect: List, Read and Run. Network access
+                            stays unchanged.
+                          </p>
+                          <button
+                            class="btn btn-secondary btn-xs"
+                            type="submit"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Grant read-only access
+                          </button>
+                        </form>
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/access"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="project"
+                            value="{{ project.id }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="access"
+                            value="read-write"
+                          />
+                          <p class="text-quiet mb-2 text-xs">
+                            Grant effect: List, Read, Run and Write in the
+                            candidate workspace. Network access stays unchanged.
+                          </p>
+                          <button
+                            class="btn btn-secondary btn-xs"
+                            type="submit"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Grant writable target access
+                          </button>
+                        </form>
+                      </div>
+                    {% endif %}
+                  </div>
+                  <form
+                    data-graft
+                    method="post"
+                    action="/conversations/{{ saved.id }}/projects/{{ project.id }}"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ saved.revision }}"
+                    />
+                    <button
+                      class="btn btn-ghost btn-sm"
+                      type="submit"
+                      {% if job_active || session_busy %}disabled{% endif %}
+                    >
+                      Detach
+                    </button>
+                  </form>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if saved.project_limit_reached %}
+            <p class="text-quiet text-sm">
+              This conversation has the maximum of eight project references.
+            </p>
+          {% else if attachable_projects.is_empty() %}
+            <p class="text-quiet text-sm">
+              <a href="/projects" data-graft class="link">Add a project</a> to
+              make its files available here.
+            </p>
+          {% else %}
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ saved.id }}/projects"
+              class="flex max-w-xl flex-wrap items-end gap-3"
+            >
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ saved.revision }}"
+              />
+              <label
+                class="flex min-w-56 flex-1 flex-col gap-1"
+                for="conversation-project"
+              >
+                <span class="text-sm">Attach a project</span>
+                <select
+                  id="conversation-project"
+                  class="select select-bordered"
+                  name="project"
+                  {% if job_active || session_busy %}disabled{% endif %}
+                >
+                  {% for project in attachable_projects %}
+                    <option value="{{ project.id }}">{{ project.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button
+                class="btn btn-secondary"
+                type="submit"
+                {% if job_active || session_busy %}disabled{% endif %}
+              >
+                Attach project
+              </button>
+            </form>
+          {% endif %}
+        {% endif %}
+      </section>
+      <section
+        id="conversation-model-settings"
+        popover
+        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] w-auto min-w-0 space-y-4 overflow-y-auto p-5 [position-anchor:--conversation-model] supports-[position-area:bottom]:top-2 supports-[position-area:bottom]:max-h-[min(65dvh,calc(100%-1.5rem))] supports-[position-area:bottom]:[position-area:bottom_span-all] md:left-72 md:max-w-[40rem] md:supports-[left:anchor(left)]:left-[anchor(left)]"
+        aria-labelledby="conversation-model-heading"
+      >
+        <div class="flex items-center justify-between gap-3">
+          <h2 id="conversation-model-heading" class="text-lg font-semibold">
+            Model and preset
+          </h2>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-11"
+            popovertarget="conversation-model-settings"
+            popovertargetaction="hide"
+          >
+            Close
+          </button>
+        </div>
+
+        {% if let Some(saved) = self.saved() %}
+          <p class="text-quiet text-sm break-words">{{ model_summary }}</p>
+          <form
+            id="conversation-model-form"
+            data-graft
+            method="post"
+            action="/conversations/{{ saved.id }}/model"
+          >
+            <input type="hidden" name="revision" value="{{ saved.revision }}" />
+          </form>
+          {% if !presets.is_empty() %}
+            <form
+              id="conversation-preset-form"
+              data-graft
+              method="post"
+              action="/conversations/{{ saved.id }}/preset"
+            >
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ saved.revision }}"
+              />
+            </form>
+          {% endif %}
+        {% endif %}
+        <div class="flex min-w-0 flex-col gap-3">
+          {% include "conversations/templates/model_picker.html" %}
+          {% if !self.is_new() %}
+            <button
+              form="conversation-model-form"
+              class="btn btn-secondary self-start"
+              type="submit"
+              aria-disabled="{{ job_active }}"
+              {% if job_active %}disabled{% endif %}
+            >
+              Use model directly
+            </button>
+          {% endif %}
+          {% if !presets.is_empty() %}
+            <label class="flex flex-col gap-1" for="conversation-preset">
+              <span class="text-sm">Agent preset</span>
+              <select
+                id="conversation-preset"
+                name="preset"
+                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
+                class="select select-bordered"
+                {% if job_active %}disabled{% endif %}
+              >
+                {% if self.is_new() %}
+                  <option value="">Use model directly</option>
+                {% endif %}
+                {% for preset in presets %}
+                  <option
+                    value="{{ preset.id }}"
+                    {% if preset.selected %}selected{% endif %}
+                  >
+                    {{ preset.name }}{% if !preset.description.is_empty() %}
+                      — {{ preset.description }}
+                    {% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <span class="text-quiet text-xs"
+                >A preset copies its instructions and model preference. Without
+                a model preference, it keeps the current model. Its folders
+                grant no access.</span
+              >
+            </label>
+            {% if !self.is_new() %}
+              <button
+                form="conversation-preset-form"
+                class="btn btn-secondary self-start"
+                type="submit"
+                aria-disabled="{{ job_active }}"
+                {% if job_active %}disabled{% endif %}
+              >
+                Apply preset
+              </button>
+            {% endif %}
+          {% endif %}
+          {% if self.is_new() %}
+            <p class="text-quiet text-sm">
+              These choices apply to your first message. Nothing is saved yet.
+            </p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section
+        id="conversation-options"
+        popover
+        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] space-y-4 overflow-y-auto p-5 md:inset-x-auto md:top-28 md:right-8 md:w-[min(40rem,calc(100vw-18rem))]"
+        aria-labelledby="conversation-options-heading"
+      >
+        <div class="flex items-center justify-between gap-3">
+          <h2 id="conversation-options-heading" class="text-lg font-semibold">
+            Conversation options
+          </h2>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-11"
+            popovertarget="conversation-options"
+            popovertargetaction="hide"
+          >
+            Close
+          </button>
+        </div>
+        {% if self.is_new() %}
+          <label class="flex flex-col gap-1"
+            ><span class="text-sm">Title</span
+            ><input
+              form="conversation-composer"
+              name="title"
+              class="input input-bordered"
+              maxlength="120"
+              value="{{ title }}"
+              placeholder="Automatic title after the first message"
+          /></label>
+          <p class="text-quiet text-sm">
+            Nothing is saved until you send your first message.
+          </p>
+          <p class="text-quiet text-sm">
+            Saved conversations offer plans, tasks, workflows and guest network
+            controls.
+          </p>
+        {% else if let Some(saved) = self.saved() %}
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm min-h-11"
+              popovertarget="conversation-documents"
+            >
+              Plans and
+              tasks{% if !saved.plans.is_empty() %}· {{ saved.plans.len() }}{% endif %}
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm min-h-11"
+              popovertarget="conversation-network-settings"
+            >
+              Guest network access
+            </button>
+          </div>
+          <section
+            class="file-section space-y-3"
+            aria-labelledby="conversation-name-heading"
+          >
+            <h3 id="conversation-name-heading" class="text-sm font-semibold">
+              Rename conversation
+            </h3>
+            <form
+              data-graft
+              method="post"
+              action="/conversations/{{ saved.id }}/rename"
+              class="flex max-w-xl flex-col gap-3"
+            >
+              <input
+                type="hidden"
+                name="revision"
+                value="{{ saved.revision }}"
+              /><label
+                class="flex flex-col gap-1"
+                for="conversation-rename-title"
+                ><span class="sr-only">Title</span
+                ><input
+                  id="conversation-rename-title"
+                  class="input input-bordered"
+                  name="title"
+                  required
+                  maxlength="120"
+                  value="{{ title }}" /></label
+              ><button class="btn btn-primary self-start" type="submit">
+                Save title
+              </button>
+            </form>
+          </section>
+          <details class="danger-zone file-disclosure">
+            <summary>Delete conversation</summary>
+            <div class="max-w-xl space-y-3 pt-4">
+              <p class="text-quiet text-sm">
+                This removes this discussion from local history. You cannot
+                delete an active conversation.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/delete"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                /><button
+                  class="btn btn-error btn-outline btn-sm"
+                  type="submit"
+                >
+                  Delete conversation
+                </button>
+              </form>
+            </div>
+          </details>
+          <p class="text-quiet text-sm">
+            Conversation history stays on this machine. Every local browser
+            session can open it.
+          </p>
+        {% endif %}
+      </section>
+    {% endblock conversation_detail %}
+  </section>
+</main>

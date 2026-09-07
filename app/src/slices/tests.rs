@@ -283,14 +283,52 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
         patch(
             "/conversations",
             Some(&token),
-            &format!("title=Project+work&project={}", project.id),
+            &format!("project={}", project.id),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let conversation = state.conversations.list().pop().expect("conversation");
+    assert_eq!(
+        navigate_target(&text),
+        format!("/conversations/new?project={}", project.id)
+    );
+    assert!(state.conversations.list().is_empty());
+    let (status, _, _) = send(
+        &state,
+        patch(
+            "/conversations/new",
+            Some(&token),
+            &format!(
+                "action=send&project={}&provider=xai&model=grok-4.6&thinking={}&message=Hello",
+                project.id,
+                state
+                    .models_dev
+                    .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+                    .unwrap()
+                    .as_str()
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state
+            .conversations
+            .list()
+            .iter()
+            .any(|record| record.active_job.is_some())
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let conversation = state
+        .conversations
+        .list()
+        .pop()
+        .expect("saved conversation");
     let conversation_path = format!("/conversations/{}", conversation.id);
-    assert_eq!(navigate_target(&text), conversation_path);
     assert!(state.agents.list().is_empty());
     assert!(conversation.grants.is_empty());
     ready_alpine_git(&state);

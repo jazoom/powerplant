@@ -2,6 +2,7 @@ mod access;
 mod documents;
 mod id;
 mod store;
+pub(crate) mod titles;
 
 pub(crate) use access::resolve_authority;
 pub(crate) use access::{
@@ -15,6 +16,7 @@ pub(crate) use id::ConversationId;
 pub(crate) use store::{
     CandidateReviewContext, CandidateReviewCreation, CandidateReviewLink, ConversationError,
     ConversationMessage, ConversationModelConfiguration, ConversationRecord, ConversationStore,
-    MAXIMUM_PROJECT_ASSOCIATIONS, MAXIMUM_REPLY_BYTES, MAXIMUM_TITLE_BYTES, MessageRole,
-    MessageStatus, PlanReviewContext, PlanReviewCreation, PlanReviewLink,
+    MAXIMUM_MESSAGE_BYTES, MAXIMUM_PROJECT_ASSOCIATIONS, MAXIMUM_REPLY_BYTES, MAXIMUM_TITLE_BYTES,
+    MessageRole, MessageStatus, PlanReviewContext, PlanReviewCreation, PlanReviewLink,
+    normalise_message, normalise_title,
 };

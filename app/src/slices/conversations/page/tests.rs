@@ -5,6 +5,16 @@ use askama::Template;
 #[test]
 fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
     let state = crate::tests::test_state(RuntimeConfig::development());
+    for provider in crate::providers::ProviderKind::ALL {
+        state
+            .vault
+            .put(crate::providers::ProviderConnection::with_key(
+                provider,
+                "test-key",
+                "test-model",
+            ))
+            .unwrap();
+    }
     let mut record = state
         .conversations
         .create("Discussion".to_owned())
@@ -71,7 +81,7 @@ fn network_form_preserves_domains_and_shows_the_narrower_preset_ceiling() {
         "",
     );
     assert_eq!(
-        NetworkAccess::parse_form("restricted", &view.network_domains)
+        NetworkAccess::parse_form("restricted", &view.saved().unwrap().network_domains)
             .expect("resubmitted domains"),
         record.network
     );

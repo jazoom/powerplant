@@ -137,6 +137,9 @@ pub(super) async fn run(
         state
             .conversations
             .settle_message(&conversation, job.id(), reply, message_status);
+    if settlement.is_ok() {
+        crate::conversations::titles::start(&state, conversation);
+    }
     if settlement.is_ok() || settlement == Err(crate::conversations::ConversationError::Conflict) {
         job.finish(status, error.as_deref());
         state

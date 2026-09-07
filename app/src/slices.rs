@@ -36,4 +36,6 @@ pub(crate) fn live_router() -> hypergraft::live::LiveRouter<AppState> {
     hypergraft::live::LiveRouter::new()
         .merge(chat::live_router())
         .expect("live projection paths are unique")
+        .merge(conversations::live_router())
+        .expect("live projection paths are unique")
 }

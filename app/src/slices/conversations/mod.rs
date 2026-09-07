@@ -1,4 +1,7 @@
 mod job;
+mod new;
+mod title;
+pub(super) use title::live_router;
 mod page;
 mod task_import;
 mod workflow;
@@ -33,8 +36,8 @@ use crate::{
 
 use self::page::{
     CandidateReviewLinkView, CandidateReviewView, CatalogueView, ConversationDetailView,
-    ConversationFormView, ConversationLinkView, ModelSources, PlanDocumentPage, PlanReviewView,
-    PresetOption, ProviderOption, ReviewProjectOption,
+    ConversationLinkView, ModelSources, PlanDocumentPage, PlanReviewView, PresetOption,
+    ProviderOption, ReviewProjectOption,
 };
 
 const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
@@ -42,7 +45,7 @@ const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/conversations", get(catalogue).post(create))
-        .route("/conversations/new", get(new_conversation))
+        .route("/conversations/new", get(new::show).post(new::save))
         .route("/conversations/{conversation_id}", get(detail))
         .route(
             "/conversations/{conversation_id}/workflow",
@@ -130,15 +133,8 @@ pub(super) fn router() -> Router<AppState> {
         .route("/plans/{document_id}/revisions", post(revise_plan))
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct ConversationQuery {
-    project: String,
-}
-
 #[derive(Deserialize)]
 struct ConversationForm {
-    title: String,
     #[serde(default)]
     project: String,
 }
@@ -240,6 +236,7 @@ struct ModelForm {
     revision: String,
     provider: String,
     model: String,
+    #[serde(default)]
     thinking: String,
 }
 
@@ -282,6 +279,8 @@ struct CatalogueQuery {
 struct ObserveQuery {
     job: String,
     cursor: String,
+    #[serde(default)]
+    title: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -309,34 +308,10 @@ async fn catalogue(
     render_catalogue(&state, graft, filter, error)
 }
 
-async fn new_conversation(
-    State(state): State<AppState>,
-    _session: RequiredSession,
-    graft: GraftRequest,
-    Query(query): Query<ConversationQuery>,
-) -> AppResult<Response> {
-    let project = if query.project.trim().is_empty() {
-        None
-    } else {
-        let Some(project) =
-            ProjectId::parse(query.project.trim()).and_then(|id| state.projects.get(&id))
-        else {
-            return Ok(responses::request_navigation(graft, "/projects"));
-        };
-        Some(project)
-    };
-    render_form_page(
-        &state,
-        graft,
-        PatchStatus::Ok,
-        ConversationFormView::new("", project.as_ref(), ""),
-    )
-}
-
 async fn create(
     State(state): State<AppState>,
     _session: RequiredSession,
-    graft: PatchGraft,
+    _graft: PatchGraft,
     Form(form): Form<ConversationForm>,
 ) -> AppResult<Response> {
     let project = if form.project.trim().is_empty() {
@@ -345,33 +320,15 @@ async fn create(
         let Some(project) =
             ProjectId::parse(form.project.trim()).and_then(|id| state.projects.get(&id))
         else {
-            return render_form_command(
-                graft,
-                PatchStatus::UnprocessableEntity,
-                ConversationFormView::new(&form.title, None, "Choose an available project."),
-            );
+            return creation_error(&state, "Choose an available project.");
         };
         Some(project)
     };
-    let result = match project.as_ref() {
-        Some(project) => state
-            .conversations
-            .create_with_project(form.title.clone(), project.id),
-        None => state.conversations.create(form.title.clone()),
-    };
-    match result {
-        Ok(record) => Ok(responses::command_navigation(&conversation_path(&record))),
-        Err(
-            error @ (ConversationError::Random
-            | ConversationError::Persist
-            | ConversationError::Corrupt),
-        ) => Err(AppError::new("store conversation", error)),
-        Err(error) => render_form_command(
-            graft,
-            status_for(error),
-            ConversationFormView::new(&form.title, project.as_ref(), error.message()),
-        ),
-    }
+    let path = project.map_or_else(
+        || "/conversations/new".to_owned(),
+        |project| format!("/conversations/new?project={}", project.id.as_hex()),
+    );
+    Ok(responses::command_navigation(&path))
 }
 
 async fn detail(
@@ -384,6 +341,9 @@ async fn detail(
     let Some(record) = load_conversation(&state, &conversation_id) else {
         return Ok(responses::request_navigation(graft, "/conversations"));
     };
+    if graft == GraftRequest::Patch && query.title {
+        return title::response(&record);
+    }
     if graft == GraftRequest::Patch && !query.job.is_empty() {
         return observe_message(state, session.0, record, query);
     }
@@ -1479,8 +1439,7 @@ async fn save_task_list_text(
                 &record.title,
                 DocumentError::TaskList.message(),
             );
-            view.task_title = form.title;
-            view.task_text = form.markdown;
+            view = view.with_task_text(form.title, form.markdown);
             render_detail_command(graft, PatchStatus::UnprocessableEntity, view)
         }
         Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
@@ -3440,40 +3399,17 @@ fn render_catalogue(
     )
 }
 
-fn render_form_page(
-    state: &AppState,
-    graft: GraftRequest,
-    status: PatchStatus,
-    view: ConversationFormView,
-) -> AppResult<Response> {
-    match graft {
-        GraftRequest::Document => {
-            let mut response = responses::chat_page_response(page::NEW_TITLE, state, &view)?;
-            responses::apply_patch_status(&mut response, status);
-            Ok(response)
-        }
-        GraftRequest::Navigation => Ok(hypergraft::outcome::page_patch(
-            page::NEW_TITLE,
-            "chat-main",
-            &view,
-        )?),
-        GraftRequest::Patch => Ok(hypergraft::outcome::children_patch(
-            status,
-            "conversation-form",
-            &view.contents(),
-        )?),
-    }
-}
-fn render_form_command(
-    _graft: PatchGraft,
-    status: PatchStatus,
-    view: ConversationFormView,
-) -> AppResult<Response> {
-    Ok(hypergraft::outcome::children_patch(
-        status,
-        "conversation-form",
-        &view.contents(),
-    )?)
+fn creation_error(state: &AppState, error: &'static str) -> AppResult<Response> {
+    let view = CatalogueView::from_records(
+        &state.conversations.list(),
+        &state.projects.list(),
+        None,
+        error,
+    );
+    let mut patches = hypergraft::PatchSet::new().title(page::CATALOGUE_TITLE);
+    patches.children("chat-main", &view)?;
+    patches.replace_location("/conversations")?;
+    Ok(patches.respond(PatchStatus::UnprocessableEntity)?)
 }
 fn render_detail(
     state: &AppState,
