@@ -36,11 +36,18 @@ pub(super) struct NewForm {
     pub(super) action: String,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct NewQuery {
+    project: String,
+    source: String,
+}
+
 pub(super) async fn show(
     State(state): State<AppState>,
     session: RequiredSession,
     graft: GraftRequest,
-    Query(query): Query<CatalogueQuery>,
+    Query(query): Query<NewQuery>,
 ) -> AppResult<Response> {
     let mut form = NewForm {
         project: query.project,
@@ -69,6 +76,19 @@ pub(super) async fn show(
             .map(|effort| effort.as_str().to_owned())
             .unwrap_or_default();
         form.model = provider.model;
+    }
+    if !query.source.is_empty() {
+        let Some(source) = load_conversation(&state, &query.source) else {
+            return Ok(responses::request_navigation(graft, "/conversations"));
+        };
+        // Copy values only. Runtime consent and unfinished work belong to the source.
+        form = NewForm {
+            draft_nonce: form.draft_nonce,
+            ..NewForm::default()
+        };
+        if let Some(configuration) = &source.model {
+            super::settings::copy_settings_to_draft(&mut form, &configuration.settings);
+        }
     }
     let error = project(&state, &form.project).err().unwrap_or("");
     render_detail(

@@ -98,6 +98,12 @@ The `/` route opens `/conversations`. The conversations route lists local histor
 
 The new-conversation page has no record or conversation identity. Navigation and invalid submissions create nothing in memory or local storage.
 
+New with same settings opens an unsaved draft from a conversation, including one with pending work. It copies the implemented settings as independent values, not a live source reference.
+
+The draft copies no title, messages, documents, review associations, reservations or runtime consent. Sensitive directory grants show Pending approval. Source edits or deletion do not change the draft. The source retains its pending work.
+
+The first message revalidates the submitted settings and directory identities. Unavailable resources receive no substitutions.
+
 Only a valid first message creates the record and replaces the page URL with its canonical address. Model, effort, preset, directory and title choices remain unsaved page state before that message.
 
 The folder chooser can add grants before that message. Chooser cancellation creates no grant or conversation record.

@@ -744,8 +744,14 @@ pub(super) async fn apply_draft_preset(
 }
 
 fn apply_settings_to_draft(form: &mut super::new::NewForm, preset: &crate::presets::PresetRecord) {
-    let settings = &preset.settings;
     form.preset = preset.id.as_hex();
+    copy_settings_to_draft(form, &preset.settings);
+}
+
+pub(super) fn copy_settings_to_draft(
+    form: &mut super::new::NewForm,
+    settings: &crate::execution::ExecutionSettings,
+) {
     form.provider = settings.model.provider.as_str().to_owned();
     form.model = settings.model.model.clone();
     form.thinking = settings

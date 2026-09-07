@@ -38,6 +38,12 @@
         <div class="flex flex-wrap items-center gap-1">
           {% if let Some(saved) = self.saved() %}
             <a
+              href="{{ self.fresh_draft_href() }}"
+              data-graft
+              class="btn btn-ghost btn-sm"
+              >New with same settings</a
+            >
+            <a
               href="/conversations/{{ saved.id }}/workflow"
               data-graft
               class="btn btn-ghost btn-sm"

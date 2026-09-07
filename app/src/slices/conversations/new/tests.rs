@@ -5,6 +5,175 @@ use axum::http::StatusCode;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn copied_draft_is_independent_and_navigation_creates_no_record() {
+    let state = test_state();
+    let token = connected(&state);
+    let source = state
+        .conversations
+        .create("Private source title".to_owned())
+        .unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+            .unwrap(),
+        "Copied instructions".to_owned(),
+        Vec::new(),
+        super::super::default_environment(&state).unwrap(),
+    )
+    .unwrap();
+    let source = state
+        .conversations
+        .select_model_configuration(
+            &source.id,
+            source.revision,
+            crate::conversations::ConversationModelConfiguration {
+                settings: settings.clone(),
+                preset: None,
+            },
+        )
+        .unwrap();
+    let job = crate::sessions::JobId::generate().unwrap();
+    let source = state
+        .conversations
+        .begin_message_with_model(
+            &source.id,
+            source.revision,
+            None,
+            job,
+            "Unfinished source work".to_owned(),
+        )
+        .unwrap();
+    let path = format!("/conversations/new?source={}", source.id);
+    for request in [document(&path, &token), navigation(&path, &token)] {
+        let response = app(&state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = text(response).await;
+        assert!(body.contains("Copied instructions"));
+        assert!(!body.contains("Private source title"));
+        assert!(!body.contains("Unfinished source work"));
+        assert!(body.contains("data-conversation-state=\"new\""));
+        assert_eq!(state.conversations.list().len(), 1);
+        assert_eq!(
+            state.conversations.get(&source.id).unwrap().revision,
+            source.revision
+        );
+    }
+    assert_eq!(
+        state.conversations.get(&source.id).unwrap().active_job,
+        Some(job)
+    );
+    state
+        .conversations
+        .settle_message(
+            &source.id,
+            job,
+            String::new(),
+            crate::conversations::MessageStatus::Interrupted,
+            None,
+        )
+        .unwrap();
+    let settled = state.conversations.get(&source.id).unwrap();
+    state
+        .conversations
+        .delete(&source.id, settled.revision)
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
+            &format!(
+                "action=send&provider={}&model={}&environment={}&instructions={}&thinking={}&message=",
+                settings.model.provider.as_str(),
+                settings.model.model,
+                settings.environment,
+                form_value("Independent instructions"),
+                state.models_dev.effective_effort(ProviderKind::Xai, "grok-4.6", None).unwrap().as_str()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = text(response).await;
+    assert!(body.contains("Independent instructions"));
+    assert!(body.contains(crate::conversations::ConversationError::Message.message()));
+    assert!(state.conversations.list().is_empty());
+}
+
+#[tokio::test]
+async fn copied_sensitive_access_requires_new_consent() {
+    let mut state = test_state();
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    state.local_data = crate::local_data::LocalDataReset::for_test(data);
+    let token = connected(&state);
+    let session = session_id(&token);
+    let grant = crate::execution::DirectoryGrant::from_selected(home.path(), &[]).unwrap();
+    let source = state
+        .conversations
+        .create("Sensitive source".to_owned())
+        .unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+            .unwrap(),
+        String::new(),
+        Vec::new(),
+        super::super::default_environment(&state).unwrap(),
+    )
+    .unwrap()
+    .with_directories(vec![grant.clone()])
+    .unwrap();
+    let source = state
+        .conversations
+        .update_execution_settings(&source.id, source.revision, settings.clone())
+        .unwrap();
+    let request = state
+        .access_consent
+        .request_conversation(session, source.id, &settings, &grant)
+        .unwrap();
+    state
+        .access_consent
+        .approve_conversation(&request, session, source.id, &settings, &grant)
+        .unwrap();
+
+    let response = app(&state)
+        .oneshot(document(
+            &format!("/conversations/new?source={}", source.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Pending approval"));
+    assert!(
+        body.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("name=\"consent_reference\" value=\"\"")
+    );
+    assert!(body.contains("name=\"directory_0\""));
+
+    let response = app(&state).oneshot(command(
+        "/conversations/new", &token,
+        &format!("action=send&provider=xai&model=grok-4.6&environment={}&directory_0={}&thinking={}&message=Hello",
+            settings.environment, form_value(&grant.form_value()),
+            state.models_dev.effective_effort(ProviderKind::Xai, "grok-4.6", None).unwrap().as_str()),
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        text(response)
+            .await
+            .contains("Directory review or sensitive access needs explicit approval.")
+    );
+    assert_eq!(state.conversations.list().len(), 1);
+    assert!(
+        state
+            .access_consent
+            .authorised_conversation(session, source.id, &settings, &grant)
+    );
+}
+
+#[tokio::test]
 async fn model_preference_changes_only_for_valid_patches_without_a_conversation() {
     let state = test_state();
     state

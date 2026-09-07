@@ -602,6 +602,13 @@ impl ConversationDetailView {
         }
     }
 
+    fn fresh_draft_href(&self) -> String {
+        self.saved().map_or_else(
+            || "/conversations/new".to_owned(),
+            |saved| format!("/conversations/new?source={}", saved.id),
+        )
+    }
+
     pub(super) fn saved(&self) -> Option<&SavedConversationState> {
         match &self.state {
             ConversationPageState::New { .. } => None,
