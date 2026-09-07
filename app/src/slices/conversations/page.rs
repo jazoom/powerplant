@@ -69,11 +69,13 @@ pub(super) struct ProjectContextView {
     pub(super) secondary_context: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct CandidateChangeView {
     pub(super) path: String,
     pub(super) status: &'static str,
 }
 
+#[derive(Clone)]
 pub(super) struct PendingCodeGateView {
     pub(super) run_id: String,
     pub(super) gate_id: String,
@@ -369,6 +371,23 @@ pub(super) struct EnvironmentOption {
     pub(super) selected: bool,
 }
 
+pub(super) struct EnvironmentSwitchView {
+    pub(super) requested_id: String,
+    pub(super) requested_name: String,
+    pub(super) current_name: String,
+    pub(super) active_job: bool,
+    pub(super) job_id: String,
+    pub(super) gate: Option<EnvironmentSwitchGateView>,
+}
+
+pub(super) struct EnvironmentSwitchGateView {
+    pub(super) run_id: String,
+    pub(super) gate_id: String,
+    pub(super) revision: String,
+    pub(super) candidate: String,
+    pub(super) review_href: String,
+}
+
 pub(super) struct ToolOption {
     pub(super) field_name: &'static str,
     pub(super) value: &'static str,
@@ -421,6 +440,7 @@ pub(super) struct ConversationDetailView {
     pub(super) tool_options: Vec<ToolOption>,
     pub(super) environment_options: Vec<EnvironmentOption>,
     pub(super) environment_summary: String,
+    pub(super) environment_switch: Option<EnvironmentSwitchView>,
     pub(super) network_options: Vec<NetworkOption>,
     pub(super) network_domains: String,
     pub(super) network_summary: String,
@@ -555,6 +575,7 @@ impl ConversationDetailView {
                 &state.environment_snapshots,
                 EnvironmentId::parse(&form.environment),
             ),
+            environment_switch: None,
             network_options: network_options(&form.network),
             network_domains: form.network_domains,
             network_summary: network_summary_from_form(&form.network),
@@ -888,6 +909,7 @@ impl ConversationDetailView {
                 sources.environment_snapshots,
                 selected_environment,
             ),
+            environment_switch: None,
             network_options: network_options.clone(),
             network_domains: network_domains.clone(),
             network_summary,
@@ -1034,6 +1056,50 @@ impl ConversationDetailView {
         self.network_options = network_options(fields.network);
         self.network_domains = fields.network_domains.to_owned();
         self.network_summary = network_summary_from_form(fields.network);
+        self.settings_open = true;
+        self
+    }
+
+    pub(super) fn with_environment_switch(
+        mut self,
+        state: &crate::state::AppState,
+        requested: EnvironmentId,
+        gate: Option<&PendingCodeGateView>,
+    ) -> Self {
+        let current_name = self
+            .saved()
+            .and_then(|saved| crate::conversations::ConversationId::parse(&saved.id))
+            .and_then(|id| state.conversations.get(&id))
+            .and_then(|record| record.model.map(|model| model.settings.environment))
+            .and_then(|id| state.environments.get(&id))
+            .map_or_else(
+                || "Current environment unavailable".to_owned(),
+                |item| item.name,
+            );
+        let requested_name = state.environments.get(&requested).map_or_else(
+            || "Requested environment unavailable".to_owned(),
+            |item| item.name,
+        );
+        let switch_gate = gate.map(|gate| EnvironmentSwitchGateView {
+            run_id: gate.run_id.clone(),
+            gate_id: gate.gate_id.clone(),
+            revision: gate.revision.clone(),
+            candidate: gate.candidate.clone(),
+            review_href: gate.diff_href.clone(),
+        });
+        for option in &mut self.environment_options {
+            option.selected = option.id == requested.as_hex();
+        }
+        self.environment_switch = Some(EnvironmentSwitchView {
+            requested_id: requested.as_hex(),
+            requested_name,
+            current_name,
+            active_job: self.job_active,
+            job_id: self
+                .saved()
+                .map_or_else(String::new, |saved| saved.job_id.clone()),
+            gate: switch_gate,
+        });
         self.settings_open = true;
         self
     }

@@ -379,6 +379,32 @@ impl Job {
         }
     }
 
+    pub(crate) async fn wait_for_terminal(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if matches!(
+                self.snapshot().status,
+                JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled
+            ) {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let notified = self.notify.notified();
+            if matches!(
+                self.snapshot().status,
+                JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled
+            ) {
+                return true;
+            }
+            if tokio::time::timeout(remaining, notified).await.is_err() {
+                return false;
+            }
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, JobInner> {
         self.inner
             .lock()

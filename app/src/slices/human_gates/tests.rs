@@ -1,12 +1,12 @@
 use axum::{
     body::{Body, to_bytes},
-    http::{Request, header},
+    http::{Request, StatusCode, header},
     middleware::from_fn_with_state,
 };
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use super::forms::{DecisionForm, FormError};
+use super::forms::{DecisionForm, EnvironmentSwitchDecisionForm, FormError};
 use crate::{
     agents::{AccessMode, AgentDraft, DirectoryGrant, DirectoryPolicy, ToolId},
     config::RuntimeConfig,
@@ -205,6 +205,40 @@ fn decision_forms_reject_duplicate_and_blank_revision_fields() {
         DecisionForm::parse(blank_note, true).err(),
         Some(FormError::Note)
     );
+}
+
+#[test]
+fn environment_switch_decisions_reject_missing_and_duplicate_bindings() {
+    let environment = crate::tests::test_environment_id();
+    let fields = vec![
+        ("gate-revision".to_owned(), "1".to_owned()),
+        ("candidate".to_owned(), "sha256:00".to_owned()),
+        ("conversation-revision".to_owned(), "2".to_owned()),
+        ("environment".to_owned(), environment.as_hex()),
+        ("surface".to_owned(), "conversation".to_owned()),
+    ];
+    for required in [
+        "gate-revision",
+        "candidate",
+        "conversation-revision",
+        "environment",
+    ] {
+        let missing = fields
+            .iter()
+            .filter(|(key, _)| key != required)
+            .cloned()
+            .collect();
+        assert!(matches!(
+            EnvironmentSwitchDecisionForm::parse(missing),
+            Err(FormError::Invalid)
+        ));
+    }
+    let mut duplicate = fields;
+    duplicate.push(("candidate".to_owned(), "sha256:01".to_owned()));
+    assert!(matches!(
+        EnvironmentSwitchDecisionForm::parse(duplicate),
+        Err(FormError::Invalid)
+    ));
 }
 
 #[tokio::test]
@@ -1286,6 +1320,87 @@ async fn a_conversation_discard_settles_only_that_conversation_and_rejects_dupli
     )
     .await;
     assert_eq!(duplicate.status(), axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn environment_switch_discards_only_the_current_candidate_after_readiness() {
+    let fixture = conversation_awaiting_gate();
+    let conversation = fixture.conversation_id.unwrap();
+    let before = fixture.state.conversations.get(&conversation).unwrap();
+    let run_before = fixture.state.workflow_runs.get(&fixture.run_id).unwrap();
+    let host_before = std::fs::read(fixture.host.join("file.txt")).unwrap();
+    let (replacement, _) = fixture
+        .state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Replacement".to_owned(),
+            oci_image: "docker.io/library/alpine:3.20".to_owned(),
+            setup_script: String::new(),
+        })
+        .unwrap();
+    let body = format!(
+        "{}&conversation-revision={}&environment={}",
+        fixture.decision_body(&fixture.candidate),
+        before.revision,
+        replacement.id,
+    );
+    let response = post_decision(&fixture, "discard-and-switch", body.clone(), None).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        fixture.state.conversations.get(&conversation).unwrap(),
+        before
+    );
+    assert!(
+        fixture
+            .state
+            .gate_continuations
+            .available(&fixture.run_id, &fixture.session)
+    );
+
+    while let Some(preparation) = fixture.state.environments.claim_oldest_queued().unwrap() {
+        let snapshot = crate::tests::sample_snapshot(preparation.id);
+        fixture.state.environment_snapshots.mark(
+            snapshot.artifact_key.clone(),
+            crate::environments::snapshot::SnapshotAvailability::Available,
+        );
+        fixture
+            .state
+            .environments
+            .finish_ready(
+                &preparation.id,
+                snapshot,
+                crate::environments::PreparationLogRecord::empty(),
+            )
+            .unwrap();
+    }
+    for invalid in [
+        body.replace(&fixture.candidate, "sha256:00"),
+        body.replace(
+            &format!("conversation-revision={}", before.revision),
+            "conversation-revision=0",
+        ),
+    ] {
+        let response = post_decision(&fixture, "discard-and-switch", invalid, None).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            fixture.state.conversations.get(&conversation).unwrap(),
+            before
+        );
+    }
+    let response = post_decision(&fixture, "discard-and-switch", body.clone(), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let settled = fixture.state.conversations.get(&conversation).unwrap();
+    assert!(settled.active_job.is_none());
+    assert_eq!(settled.model.unwrap().settings.environment, replacement.id);
+    let run_after = fixture.state.workflow_runs.get(&fixture.run_id).unwrap();
+    assert_eq!(run_after.environments, run_before.environments);
+    assert!(run_after.artefact(&fixture.candidate_id).is_some());
+    assert_eq!(
+        std::fs::read(fixture.host.join("file.txt")).unwrap(),
+        host_before
+    );
+    let replay = post_decision(&fixture, "discard-and-switch", body, None).await;
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

@@ -60,6 +60,46 @@ impl DecisionForm {
     }
 }
 
+pub(super) struct EnvironmentSwitchDecisionForm {
+    pub(super) revision: GateRevision,
+    pub(super) candidate: String,
+    pub(super) conversation_revision: u32,
+    pub(super) environment: crate::environments::EnvironmentId,
+    pub(super) conversation_surface: bool,
+}
+
+impl EnvironmentSwitchDecisionForm {
+    pub(super) fn parse(pairs: Vec<(String, String)>) -> Result<Self, FormError> {
+        let mut revision = None;
+        let mut candidate = None;
+        let mut conversation_revision = None;
+        let mut environment = None;
+        let mut conversation_surface = false;
+        let mut seen = Vec::new();
+        for (key, value) in pairs {
+            if seen.contains(&key) {
+                return Err(FormError::Invalid);
+            }
+            seen.push(key.clone());
+            match key.as_str() {
+                "gate-revision" => revision = GateRevision::parse(&value),
+                "candidate" if !value.is_empty() => candidate = Some(value),
+                "conversation-revision" => conversation_revision = value.parse().ok(),
+                "environment" => environment = crate::environments::EnvironmentId::parse(&value),
+                "surface" if value == "conversation" => conversation_surface = true,
+                _ => return Err(FormError::Invalid),
+            }
+        }
+        Ok(Self {
+            revision: revision.ok_or(FormError::Invalid)?,
+            candidate: candidate.ok_or(FormError::Invalid)?,
+            conversation_revision: conversation_revision.ok_or(FormError::Invalid)?,
+            environment: environment.ok_or(FormError::Invalid)?,
+            conversation_surface,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DiffQuery {
     pub(super) page: usize,

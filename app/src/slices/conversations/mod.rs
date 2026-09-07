@@ -4,7 +4,7 @@ mod new;
 mod title;
 pub(super) use title::live_router;
 mod page;
-mod settings;
+pub(crate) mod settings;
 mod task_import;
 mod workflow;
 
@@ -122,6 +122,14 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/settings",
             post(settings::update),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings/environment",
+            post(settings::preview_environment_switch),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings/environment/stop-and-switch",
+            post(settings::stop_and_switch_environment),
         )
         .route(
             "/conversations/{conversation_id}/directories/pick",

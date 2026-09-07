@@ -39,6 +39,10 @@ pub(super) fn router() -> Router<AppState> {
         )
         .route("/runs/{run_id}/gates/{gate_id}/cancel", post(cancel))
         .route(
+            "/runs/{run_id}/gates/{gate_id}/discard-and-switch",
+            post(discard_and_switch),
+        )
+        .route(
             "/runs/{run_id}/gates/{gate_id}/objects/{side}/{change}",
             get(object),
         )
@@ -222,6 +226,163 @@ async fn cancel(
         DecisionAction::Cancel,
     )
     .await
+}
+
+async fn discard_and_switch(
+    State(state): State<AppState>,
+    RequiredSession(session): RequiredSession,
+    graft: PatchGraft,
+    Path((run_raw, gate_raw)): Path<(String, String)>,
+    Form(pairs): Form<Vec<(String, String)>>,
+) -> AppResult<Response> {
+    let Some((run_id, gate_id)) = ids(&run_raw, &gate_raw) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let form = match forms::EnvironmentSwitchDecisionForm::parse(pairs) {
+        Ok(form) => form,
+        Err(_) => {
+            return command_error_target(
+                graft,
+                PatchStatus::Conflict,
+                "That environment switch is stale. Reload the conversation.",
+                "conversation-settings",
+            );
+        }
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That candidate is unavailable.",
+            "conversation-settings",
+        );
+    };
+    let Some(conversation_id) = run.conversation_id else {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That candidate does not belong to this conversation.",
+            "conversation-settings",
+        );
+    };
+    let Some(conversation) = state.conversations.get(&conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(gate) = run.gates.iter().find(|gate| gate.id == gate_id) else {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That candidate is unavailable.",
+            "conversation-settings",
+        );
+    };
+    let target = run
+        .artefact(&gate.candidate.id)
+        .and_then(crate::workflows::artefacts::ArtefactRecord::candidate_hash)
+        .map(|hash| hash.as_str());
+    if conversation.revision != form.conversation_revision
+        || gate.revision != form.revision
+        || gate.state != crate::workflows::gates::HumanGateState::AwaitingDecision
+        || target.as_deref() != Some(form.candidate.as_str())
+        || !form.conversation_surface
+        || !state.gate_continuations.available(&run_id, &session)
+    {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That environment switch is stale. Reload the conversation.",
+            "conversation-settings",
+        );
+    }
+    if let Err(error) = crate::slices::conversations::settings::replacement_environment_ready(
+        &state,
+        &conversation,
+        form.environment,
+    )
+    .await
+    {
+        return command_error_target(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            error,
+            "conversation-settings",
+        );
+    }
+    let Some(continuation) = state.gate_continuations.take(&run_id) else {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That candidate is unavailable.",
+            "conversation-settings",
+        );
+    };
+    if continuation.session_id != session
+        || continuation.conversation_id != Some(conversation_id)
+        || !state
+            .conversations
+            .get(&conversation_id)
+            .is_some_and(|current| {
+                current.revision == form.conversation_revision
+                    && current.active_job == Some(continuation.job.id())
+            })
+        || state
+            .sessions
+            .acquire_job_reservation(
+                &session,
+                continuation.conversation_id,
+                continuation.job.id(),
+            )
+            .is_err()
+    {
+        state.gate_continuations.put_back(continuation);
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "Another command is active in this browser session.",
+            "conversation-settings",
+        );
+    }
+    if state
+        .workflow_runs
+        .mutate(&run_id, |run| {
+            run.cancel_gate(gate_id, form.revision, crate::workflows::now_ms())
+        })
+        .is_err()
+    {
+        return_continuation(&state, continuation, true);
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "That environment switch is stale. Reload the conversation.",
+            "conversation-settings",
+        );
+    }
+    if let Some(loop_id) = continuation.task_loop {
+        let _ = state.task_loops.cancel(&loop_id);
+    }
+    settle_cancelled_job(&state, &continuation);
+    let Some(settled) = state.conversations.get(&conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    if state
+        .conversations
+        .select_environment(&conversation_id, settled.revision, form.environment)
+        .is_err()
+    {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "The changes were discarded, but Power Plant could not save the new environment.",
+            "conversation-settings",
+        );
+    }
+    state
+        .access_consent
+        .invalidate_conversation(conversation_id);
+    Ok(responses::command_navigation(&format!(
+        "/conversations/{}",
+        conversation_id.as_hex()
+    )))
 }
 
 fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun) -> String {

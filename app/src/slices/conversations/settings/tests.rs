@@ -9,6 +9,7 @@ use super::super::tests::{app, command, connected, test_state, text};
 async fn settings_update_validates_the_complete_form_and_revision() {
     let state = test_state();
     let token = connected(&state);
+    super::super::tests::ready_starter_environment(&state).await;
     let record = state.conversations.create("Saved".to_owned()).unwrap();
     let effort = state
         .models_dev
@@ -133,6 +134,100 @@ async fn settings_update_validates_the_complete_form_and_revision() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Stop task and switch"));
     assert_eq!(state.conversations.get(&active.id).unwrap(), active);
+
+    let preview_path = format!("/conversations/{}/settings/environment", active.id);
+    let response = app(&state)
+        .oneshot(command(
+            &preview_path,
+            &token,
+            &format!(
+                "revision={}&environment={}",
+                record.revision,
+                super::super::default_environment(&state).unwrap()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(text(response).await.contains("Reload the conversation"));
+
+    let (unready, _) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Not prepared".to_owned(),
+            oci_image: "docker.io/library/alpine:3.20".to_owned(),
+            setup_script: String::new(),
+        })
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &preview_path,
+            &token,
+            &format!("revision={}&environment={}", active.revision, unready.id),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(text(response).await.contains("not ready"));
+
+    let stop_path = format!(
+        "/conversations/{}/settings/environment/stop-and-switch",
+        active.id
+    );
+    let other_job = crate::sessions::JobId::generate().unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &stop_path,
+            &token,
+            &format!(
+                "revision={}&environment={}&job={}",
+                active.revision,
+                super::super::default_environment(&state).unwrap(),
+                other_job
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(!job.cancel_requested());
+
+    let response = app(&state)
+        .oneshot(command(
+            &stop_path,
+            &token,
+            &format!(
+                "revision={}&environment={}&job={}",
+                active.revision,
+                super::super::default_environment(&state).unwrap(),
+                job.id()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(text(response).await.contains("still stopping the task"));
+    assert_eq!(state.conversations.get(&active.id).unwrap(), active);
+
+    job.finish(crate::sessions::JobStatus::Failed, Some("Cleanup failed"));
+    let response = app(&state)
+        .oneshot(command(
+            &stop_path,
+            &token,
+            &format!(
+                "revision={}&environment={}&job={}",
+                active.revision,
+                super::super::default_environment(&state).unwrap(),
+                job.id()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(text(response).await.contains("could not clean up the task"));
+    assert_eq!(state.conversations.get(&active.id).unwrap(), active);
+    assert!(state.sessions.busy(&owner));
 }

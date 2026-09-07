@@ -96,6 +96,12 @@ An agent network policy permits no network, selected domain suffixes or the publ
 
 They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant selects that starter for new conversations by default. The user can select another recipe for later attempts.
 
+An idle conversation owns no persistent sandbox. An environment change selects the ready snapshot for subsequent attempts only.
+
+An active task needs an explicit Stop task and switch action. Power Plant waits for managed cancellation and sandbox cleanup before it saves the selection.
+
+Pending reviewed changes need review or an exact-candidate discard before a switch. A discard retains immutable evidence, conversation history and existing host files.
+
 Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. Each tool attempt pins the selected ready snapshot. The conversation does not own a persistent sandbox. Tool-free chat requires no sandbox runtime or snapshot.
 
 They create workflow definitions with a default environment, roles and ordered steps. A definition can run once or repeat one group of phases for each remaining task. A task list is not required for a one-shot definition. Ordinary chat still needs no workflow.
@@ -193,6 +199,7 @@ Current capabilities:
 - Edit and delete environment recipes.
 - Prepare environment snapshots for workflow use.
 - Select an environment for each conversation and its later tool attempts.
+- Stop active work or discard reviewed changes before an environment switch.
 - Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
 - Send a Quick task from an independent conversation with no workflow selection.

@@ -38,6 +38,17 @@ listenForRequestSettled((detail) => {
     }
 });
 
+document.addEventListener("change", (event) => {
+    if (
+        event.target instanceof HTMLSelectElement &&
+        event.target.id === "conversation-environment"
+    ) {
+        document
+            .querySelector<HTMLElement>("[data-environment-switch]")
+            ?.setAttribute("hidden", "");
+    }
+});
+
 startApp();
 
 const LIVE_RELOAD_EVENT_STREAM = "/_tower-livereload/event-stream";

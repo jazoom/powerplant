@@ -47,7 +47,10 @@ pub(crate) use quick::{
     HOST_UNCHANGED, alpine_git_id, pin_project_free_quick_task_with_directories,
     pin_quick_task_with_context,
 };
-pub(crate) use resolve::{ResolvedEnvironmentSet, preview_environments, resolve_environments};
+pub(crate) use resolve::{
+    ResolvedEnvironmentSet, preview_environments, resolve_environments,
+    validate_replacement_environment,
+};
 pub(crate) use run::{
     PhaseModelSelection, PinnedPreset, RunKind, RunSource, TaskSelection, WorkflowRun, now_ms,
 };

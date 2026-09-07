@@ -1887,7 +1887,6 @@
               name="environment"
               class="select select-bordered w-full"
               required
-              {% if job_active %}disabled{% endif %}
             >
               {% if environment_options.is_empty() %}
                 <option value="">No environments available</option>
@@ -1907,6 +1906,136 @@
             Power Plant never substitutes another environment when this
             selection or its snapshot becomes unavailable.
           </p>
+          {% if let Some(saved) = self.saved() %}
+            {% if job_active || saved.pending_gate.is_some() %}
+              <button
+                form="conversation-settings-form"
+                formaction="/conversations/{{ saved.id }}/settings/environment"
+                class="btn btn-secondary"
+                type="submit"
+              >
+                Review environment switch
+              </button>
+            {% endif %}
+          {% endif %}
+          {% if let Some(saved) = self.saved() %}
+            {% if let Some(change) = environment_switch %}
+              <div
+                class="alert alert-warning mt-4 items-start"
+                role="alert"
+                data-environment-switch
+              >
+                <div class="min-w-0 space-y-3">
+                  <div>
+                    <h4 class="font-semibold">Change the next environment</h4>
+                    <p class="mt-1 text-sm break-words">
+                      Change from {{ change.current_name }} to
+                      {{ change.requested_name }}.
+                    </p>
+                  </div>
+                  {% if change.active_job %}
+                    <p class="text-sm">
+                      Stop task and switch cancels the active task. Power Plant
+                      waits for the task to stop and removes any temporary
+                      sandbox. Unsaved work in that sandbox is lost.
+                    </p>
+                    <p class="text-sm">
+                      Conversation history and existing host files remain. The
+                      new environment applies only to subsequent attempts.
+                    </p>
+                    <form
+                      data-graft
+                      method="post"
+                      action="/conversations/{{ saved.id }}/settings/environment/stop-and-switch"
+                      class="flex flex-wrap gap-2"
+                    >
+                      <input
+                        type="hidden"
+                        name="revision"
+                        value="{{ saved.revision }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="environment"
+                        value="{{ change.requested_id }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="job"
+                        value="{{ change.job_id }}"
+                      />
+                      <button class="btn btn-warning" type="submit">
+                        Stop task and switch
+                      </button>
+                      <a
+                        href="/conversations/{{ saved.id }}"
+                        data-graft
+                        class="btn btn-ghost"
+                        >Cancel</a
+                      >
+                    </form>
+                  {% else if let Some(gate) = change.gate %}
+                    <p class="text-sm">
+                      This task has reviewed changes. Review them or discard the
+                      exact candidate before the environment changes.
+                    </p>
+                    <p class="text-sm">
+                      Discard keeps conversation history and existing host
+                      files. Immutable run evidence also remains.
+                    </p>
+                    <div class="flex flex-wrap gap-2">
+                      <a
+                        href="{{ gate.review_href }}"
+                        data-graft
+                        class="btn btn-secondary"
+                        >Review changes</a
+                      >
+                      <form
+                        data-graft
+                        method="post"
+                        action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/discard-and-switch"
+                      >
+                        <input
+                          type="hidden"
+                          name="gate-revision"
+                          value="{{ gate.revision }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="candidate"
+                          value="{{ gate.candidate }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="conversation-revision"
+                          value="{{ saved.revision }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="environment"
+                          value="{{ change.requested_id }}"
+                        />
+                        <input
+                          type="hidden"
+                          name="surface"
+                          value="conversation"
+                        />
+                        <button class="btn btn-warning" type="submit">
+                          Discard changes and switch
+                        </button>
+                      </form>
+                      <a
+                        href="/conversations/{{ saved.id }}"
+                        data-graft
+                        class="btn btn-ghost"
+                        >Cancel</a
+                      >
+                    </div>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
+          {% endif %}
         </section>
 
         <section

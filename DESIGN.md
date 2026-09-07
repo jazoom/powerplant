@@ -158,6 +158,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - A model shortcut and Project access stay visible above the transcript.
 - The model shortcut opens one Settings panel with inline model, instructions, tool and preset controls.
 - Settings updates keep the panel open. Invalid updates reveal the panel and retain submitted fields.
+- Environment switches stay inline in Settings. Active work offers Stop task and switch, while reviewed work offers review or exact-candidate discard.
+- Environment switch warnings name temporary attempt loss. They state that conversation history and existing host files remain.
 - New conversation settings remain draft values until a valid first message creates the conversation.
 - Conversation options contains rename and delete controls, plus access to plans, tasks and guest network settings.
 - Project access remains explicit. The composer shows each attached project and its access level.

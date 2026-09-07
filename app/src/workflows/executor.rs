@@ -102,6 +102,22 @@ impl WorkflowContinuationRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((agent, execution));
     }
 
+    fn protect_cleanup_failure(
+        &self,
+        job: &Job,
+        agent: Option<LeaseGuard>,
+        execution: ExecutionGuard,
+    ) {
+        let _ = job.finish(
+            JobStatus::Failed,
+            Some("Power Plant could not clean up the sandbox. This operation retains its reservations."),
+        );
+        *self
+            .recovery_protection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((agent, execution));
+    }
+
     pub(crate) fn insert(&self, job: WorkflowJob) -> bool {
         let mut inner = self
             .inner
@@ -824,6 +840,15 @@ pub(crate) async fn execute_run(
             } => (outcome, cleanup, drafts, captured),
         };
         record_missing_terminal_evidence(&state, &job, &step, attempt_id, &outcome);
+        if cleanup != crate::workflows::run::AttemptCleanupRecord::Complete {
+            let _ = persist_cleanup(&state, &job.run_id, attempt_id, cleanup);
+            state.gate_continuations.protect_cleanup_failure(
+                &job.job,
+                _agent_lease,
+                _execution_lease,
+            );
+            return;
+        }
         let recovery_pending = state.workflow_runs.get(&job.run_id).is_some_and(|run| {
             run.attempts
                 .iter()

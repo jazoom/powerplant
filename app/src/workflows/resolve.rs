@@ -198,6 +198,22 @@ pub(crate) async fn resolve_environments(
     })
 }
 
+pub(crate) async fn validate_replacement_environment(
+    catalogue: &EnvironmentCatalogue,
+    snapshots: &EnvironmentSnapshotRepository,
+    id: EnvironmentId,
+) -> Result<(), ResolveEnvironmentError> {
+    let pointer = copy_ready(catalogue, &id)?;
+    snapshots
+        .verify(&pointer.snapshot)
+        .await
+        .map_err(|_| ResolveEnvironmentError::Unavailable)?;
+    if !catalogue.ready_pointer_matches(&pointer) {
+        return Err(ResolveEnvironmentError::Changed);
+    }
+    Ok(())
+}
+
 fn copy_ready(
     catalogue: &EnvironmentCatalogue,
     id: &EnvironmentId,
