@@ -62,11 +62,17 @@ impl ModelPicker {
             })
             .collect();
         let models = catalogue_models.get(provider).cloned().unwrap_or_default();
-        let efforts = models
+        let mut efforts = models
             .iter()
             .find(|option| option.id == model)
             .map(|option| option.efforts.clone())
             .unwrap_or_default();
+        if !thinking.is_empty() && !efforts.iter().any(|effort| effort.value == thinking) {
+            efforts.push(EffortOption {
+                value: thinking.to_owned(),
+                label: format!("Unavailable · {thinking}"),
+            });
+        }
         Self {
             catalogue: serde_json::to_string(&catalogue_models)
                 .expect("catalogue options contain only strings"),

@@ -15,6 +15,62 @@ use crate::{
 use std::sync::Arc;
 
 #[tokio::test]
+async fn conversation_instructions_apply_before_and_after_the_first_exchange() {
+    let mut state = crate::tests::test_state(RuntimeConfig::development());
+    let backend = ScriptedBackend::chunks([Ok("Reply".to_owned())]);
+    state.chat = Arc::new(ChatBackend::Scripted(backend.clone()));
+    let token = generate_session_token().unwrap();
+    state.sessions.insert(token.id());
+    let connection = ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6");
+    state.vault.put(connection.clone()).unwrap();
+    let record = state
+        .conversations
+        .create("Discussion".to_owned())
+        .expect("conversation");
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
+        "Answer from the supplied evidence.".to_owned(),
+        Vec::new(),
+    )
+    .unwrap();
+    let mut record = state
+        .conversations
+        .update_execution_settings(&record.id, record.revision, settings)
+        .unwrap();
+    for message in ["First question", "Second question"] {
+        let job = state
+            .sessions
+            .begin_conversation_job(&token.id(), record.id, record.messages.len() + 1)
+            .unwrap();
+        record = state
+            .conversations
+            .begin_message_with_model(
+                &record.id,
+                record.revision,
+                None,
+                job.id(),
+                message.to_owned(),
+            )
+            .unwrap();
+        super::run(
+            state.clone(),
+            token.id(),
+            record.id,
+            record.clone(),
+            connection.clone(),
+            job,
+        )
+        .await;
+        record = state.conversations.get(&record.id).unwrap();
+        assert_eq!(
+            backend.last_preamble().as_deref(),
+            Some("Answer from the supplied evidence.")
+        );
+        assert!(record.active_job.is_none());
+    }
+}
+
+#[tokio::test]
 async fn bounded_partial_reply_settles_and_observation_restores_commands() {
     let mut state = crate::tests::test_state(RuntimeConfig::development());
     let backend = ScriptedBackend::chunks([

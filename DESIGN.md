@@ -155,7 +155,10 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Workflow overviews show each phase purpose, candidate effect, fresh model context and approval route. Independent review is labelled only when that phase exists. Environment overrides and technical mappings stay under Advanced settings.
 - Conversation workflow launch uses the same ordered process presentation as workflow configuration.
 - Conversation pages keep the transcript and composer within the viewport. The empty transcript offers a short invitation, not setup forms or task suggestions.
-- The selected model and Project access stay visible above the transcript. Native popovers contain their controls.
+- A model shortcut and Project access stay visible above the transcript.
+- The model shortcut opens one Settings panel with inline model, instructions, tool and preset controls.
+- Settings updates keep the panel open. Invalid updates reveal the panel and retain submitted fields.
+- New conversation settings remain draft values until a valid first message creates the conversation.
 - Conversation options contains rename and delete controls, plus access to plans, tasks and guest network settings.
 - Project access remains explicit. The composer shows each attached project and its access level.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
@@ -204,7 +207,9 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Do not stop the server from the reset command.
 - Keep mobile navigation labels generic. Use the Conversations page as the main work switcher and the Projects page as the project switcher.
 - Do not put project names in the permanent mobile row.
-- Keep model selection visible in the conversation detail. Keep project access and workflow launch explicit.
+- Keep the Settings shortcut visible in the conversation detail. Keep project access and workflow launch explicit.
+- Plain chat needs no sandbox when no tools are selected.
+- Advertise only selected tools. Reject calls for tools outside the effective selection.
 - Show workflow process structure before model, environment and technical settings.
 - Show a parent, task and phase hierarchy on task-loop runs and child runs.
 - Keep Run once available without a task list. Keep ordinary chat free of a required workflow.

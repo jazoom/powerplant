@@ -1960,7 +1960,7 @@ async fn run_agent_step(
                     .conversations
                     .get(&conversation_id)
                     .and_then(|record| record.model)
-                    .map(|model| model.instructions)
+                    .map(|model| model.settings.instructions)
                     .or_else(|| {
                         state
                             .agents
@@ -3848,7 +3848,7 @@ pub(crate) fn reconstruct_loop_job(
         let selection = conversation
             .model
             .as_ref()
-            .map(|model| &model.selection)
+            .map(|model| &model.settings.model)
             .ok_or("The conversation has no model selection.")?;
         state
             .vault

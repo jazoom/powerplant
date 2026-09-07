@@ -20,7 +20,7 @@ pub(crate) fn start(state: &AppState, id: ConversationId, language: Option<Brows
     let request = record
         .model
         .as_ref()
-        .and_then(|model| state.models_dev.title_model(model.selection.provider))
+        .and_then(|model| state.models_dev.title_model(model.settings.model.provider))
         .and_then(|selection| {
             state
                 .vault

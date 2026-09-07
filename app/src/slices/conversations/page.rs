@@ -7,7 +7,7 @@ use model_picker::ModelPicker;
 mod tests;
 
 use crate::{
-    agents::{AgentRecord, NetworkAccess},
+    agents::{AgentRecord, NetworkAccess, ToolId},
     conversations::{
         ConversationMessage, ConversationModelConfiguration, ConversationRecord,
         MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus, PlanDocument, PlanSource,
@@ -336,6 +336,14 @@ pub(super) struct NetworkOption {
     pub(super) selected: bool,
 }
 
+pub(super) struct ToolOption {
+    pub(super) field_name: &'static str,
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+    pub(super) detail: &'static str,
+    pub(super) selected: bool,
+}
+
 pub(super) enum ConversationPageState {
     New { project: String, message: String },
     Saved(Box<SavedConversationState>),
@@ -356,6 +364,9 @@ pub(super) struct ConversationDetailView {
     pub(super) attached_projects: Vec<ProjectContextView>,
     pub(super) attachable_projects: Vec<CatalogueProjectOption>,
     pub(super) model_summary: String,
+    pub(super) instructions: String,
+    pub(super) tool_options: Vec<ToolOption>,
+    pub(super) settings_open: bool,
     pub(super) model_available: bool,
     pub(super) job_active: bool,
     pub(super) session_busy: bool,
@@ -386,6 +397,7 @@ impl ConversationDetailView {
         form: super::new::NewForm,
         error: &'static str,
     ) -> Self {
+        let selected_tools = form.tool_values();
         Self {
             heading: "New conversation".to_owned(),
             document_title: "New conversation | Power Plant".to_owned(),
@@ -428,6 +440,9 @@ impl ConversationDetailView {
             omitted_messages: 0,
             attached_projects: Vec::new(),
             model_summary: String::new(),
+            instructions: form.instructions.clone(),
+            tool_options: tool_options(&selected_tools),
+            settings_open: false,
             model_available: !form.model.is_empty(),
             job_active: false,
             session_busy: false,
@@ -463,7 +478,7 @@ impl ConversationDetailView {
         if self.is_new() {
             "conversation-composer"
         } else {
-            "conversation-model-form"
+            "conversation-settings-form"
         }
     }
 
@@ -554,7 +569,7 @@ impl ConversationDetailView {
                 })
             });
         let configuration = record.model.as_ref().or(fallback.as_ref());
-        let selection = configuration.map(|configuration| &configuration.selection);
+        let selection = configuration.map(|configuration| &configuration.settings.model);
         let network_options = vec![
             NetworkOption {
                 value: "none",
@@ -684,7 +699,7 @@ impl ConversationDetailView {
         let model_summary = configuration.map_or_else(
             || "No model selected".to_owned(),
             |configuration| {
-                let selection = &configuration.selection;
+                let selection = &configuration.settings.model;
                 let effort = selection
                     .thinking
                     .as_ref()
@@ -726,6 +741,22 @@ impl ConversationDetailView {
             attached_projects,
             attachable_projects,
             model_summary,
+            instructions: configuration
+                .map(|configuration| configuration.settings.instructions.clone())
+                .unwrap_or_default(),
+            tool_options: tool_options(
+                &configuration
+                    .map(|configuration| {
+                        configuration
+                            .settings
+                            .tools
+                            .iter()
+                            .map(|tool| tool.as_str().to_owned())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            ),
+            settings_open: false,
             job_active,
             session_busy,
             state: ConversationPageState::Saved(Box::new(SavedConversationState {
@@ -750,6 +781,34 @@ impl ConversationDetailView {
         }
     }
 
+    pub(super) fn open_settings(mut self) -> Self {
+        self.settings_open = true;
+        self
+    }
+
+    pub(super) fn with_settings_fields(
+        mut self,
+        state: &crate::state::AppState,
+        provider: &str,
+        model: &str,
+        thinking: &str,
+        instructions: String,
+        tools: &[String],
+    ) -> Self {
+        self.model_picker = ModelPicker::new(
+            &state.vault,
+            &state.preferences,
+            &state.models_dev,
+            provider,
+            model,
+            thinking,
+        );
+        self.instructions = instructions;
+        self.tool_options = tool_options(tools);
+        self.settings_open = true;
+        self
+    }
+
     pub(super) fn with_workflow_progress(
         mut self,
         workflow_progress: Option<WorkflowProgressView>,
@@ -763,6 +822,29 @@ impl ConversationDetailView {
     pub(super) fn contents(&self) -> impl Template + '_ {
         self.as_conversation_detail()
     }
+}
+
+fn tool_options(selected: &[String]) -> Vec<ToolOption> {
+    ToolId::ALL
+        .into_iter()
+        .map(|tool| ToolOption {
+            field_name: match tool {
+                ToolId::List => "tool_list",
+                ToolId::Read => "tool_read",
+                ToolId::Write => "tool_write",
+                ToolId::Run => "tool_run",
+            },
+            value: tool.as_str(),
+            label: tool.label(),
+            detail: match tool {
+                ToolId::List => "List files in authorised project directories.",
+                ToolId::Read => "Read files in authorised project directories.",
+                ToolId::Write => "Write files in an authorised candidate workspace.",
+                ToolId::Run => "Run commands in the sandbox.",
+            },
+            selected: selected.iter().any(|value| value == tool.as_str()),
+        })
+        .collect()
 }
 
 pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {

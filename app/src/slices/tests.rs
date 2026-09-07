@@ -58,11 +58,7 @@ fn activation_state() -> AppState {
     .expect("workflows");
     let mut state = crate::tests::test_state(config.runtime);
     state.chat = Arc::new(ChatBackend::Scripted(
-        crate::tests::ScriptedBackend::tool_then(
-            "list",
-            serde_json::json!({"path": "."}),
-            USEFUL_REPLY,
-        ),
+        crate::tests::ScriptedBackend::chunks([Ok(USEFUL_REPLY.to_owned())]),
     ));
     state.vault = Arc::new(ProviderVault::open(root.join("providers.json")).expect("providers"));
     state.preferences = Arc::new(Preferences::open(root.join("preferences.json")));
@@ -208,7 +204,7 @@ fn ready_alpine_git(state: &AppState) {
 }
 
 #[tokio::test]
-async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() {
+async fn tool_free_activation_reaches_useful_chat_without_a_runtime() {
     let state = activation_state();
     assert!(!state.vault.has_providers());
     assert!(state.projects.list().is_empty());
@@ -380,11 +376,5 @@ async fn first_task_activation_reaches_a_useful_quick_task_without_onboarding() 
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains(USEFUL_REPLY));
     assert!(text.contains(&format!("href=\"{conversation_path}/workflow\"")));
-    let run = state
-        .workflow_runs
-        .get(&state.workflow_runs.summaries()[0].id)
-        .expect("run");
-    assert_eq!(run.kind, crate::workflows::RunKind::QuickTask);
-    assert_eq!(run.pinned.workflow_id, None);
-    assert_eq!(run.conversation_id, Some(conversation.id));
+    assert!(state.workflow_runs.summaries().is_empty());
 }

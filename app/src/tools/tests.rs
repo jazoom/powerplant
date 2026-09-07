@@ -1,4 +1,4 @@
-use super::{MAXIMUM_TOOL_BYTES, mark_truncated, redact};
+use super::{MAXIMUM_TOOL_BYTES, authorised_tool, definitions, mark_truncated, redact};
 use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, DirectoryPolicy, ToolId};
 
 fn policy() -> DirectoryPolicy {
@@ -27,6 +27,19 @@ fn policy() -> DirectoryPolicy {
         },
         "project",
     )
+}
+
+#[test]
+fn definitions_and_dispatch_use_the_same_selected_tool_set() {
+    let selected = [ToolId::Read, ToolId::List];
+    let names: Vec<_> = definitions(&selected)
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect();
+    assert_eq!(names, vec!["read", "list"]);
+    assert_eq!(authorised_tool(&selected, "read"), Some(ToolId::Read));
+    assert_eq!(authorised_tool(&selected, "write"), None);
+    assert_eq!(authorised_tool(&selected, "forged"), None);
 }
 
 #[test]

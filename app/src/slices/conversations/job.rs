@@ -181,7 +181,7 @@ fn instructions(state: &AppState, record: &ConversationRecord) -> String {
     let mut text = record
         .model
         .as_ref()
-        .map_or_else(String::new, |model| model.instructions.clone());
+        .map_or_else(String::new, |model| model.settings.instructions.clone());
     if record.projects.is_empty() {
         return text;
     }

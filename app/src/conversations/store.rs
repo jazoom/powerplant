@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AccessMode, AgentId, AgentRecord};
+use crate::agents::{AccessMode, AgentId, AgentRecord, ToolId};
 use crate::projects::ProjectId;
 use crate::workflows::artefacts::{ArtefactHash, ArtefactReference, ObjectHash};
 use crate::workflows::{ArtefactId, RunId};
@@ -103,8 +103,7 @@ pub(crate) struct ConversationRecord {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConversationModelConfiguration {
-    pub(crate) selection: ModelSelection,
-    pub(crate) instructions: String,
+    pub(crate) settings: crate::execution::ExecutionSettings,
     pub(crate) preset: Option<AppliedPreset>,
 }
 
@@ -118,16 +117,24 @@ pub(crate) struct AppliedPreset {
 impl ConversationModelConfiguration {
     pub(crate) fn direct(selection: ModelSelection) -> Self {
         Self {
-            selection,
-            instructions: String::new(),
+            settings: crate::execution::ExecutionSettings::new(
+                selection,
+                String::new(),
+                Vec::new(),
+            )
+            .expect("empty conversation settings are valid"),
             preset: None,
         }
     }
 
     pub(crate) fn from_preset(record: &AgentRecord, selection: ModelSelection) -> Self {
         Self {
-            selection,
-            instructions: record.instructions.clone(),
+            settings: crate::execution::ExecutionSettings::new(
+                selection,
+                record.instructions.clone(),
+                record.tools.clone(),
+            )
+            .expect("stored agent settings are valid"),
             preset: Some(AppliedPreset {
                 id: record.id,
                 revision: record.revision,
@@ -283,6 +290,7 @@ struct ConversationGrantFile {
 struct ConversationModelFile {
     selection: ModelSelection,
     instructions: String,
+    tools: Vec<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     preset: Option<AppliedPresetFile>,
 }
@@ -929,6 +937,24 @@ impl ConversationStore {
         })
     }
 
+    pub(crate) fn update_execution_settings(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        settings: crate::execution::ExecutionSettings,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            current.model = Some(ConversationModelConfiguration {
+                settings,
+                preset: None,
+            });
+            Ok(())
+        })
+    }
+
     pub(crate) fn begin_message_with_model(
         &self,
         id: &ConversationId,
@@ -1396,14 +1422,13 @@ fn model_from_file(
     )
     .filter(|selection| selection == &file.selection)
     .ok_or(ConversationError::Corrupt)?;
-    if file.instructions.len() > crate::agents::MAXIMUM_INSTRUCTION_BYTES
-        || file
-            .instructions
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
-    {
-        return Err(ConversationError::Corrupt);
-    }
+    let tools = file
+        .tools
+        .iter()
+        .map(|name| ToolId::parse(name).ok_or(ConversationError::Corrupt))
+        .collect::<Result<Vec<_>, _>>()?;
+    let settings = crate::execution::ExecutionSettings::new(selection, file.instructions, tools)
+        .ok_or(ConversationError::Corrupt)?;
     let preset = match file.preset {
         Some(preset)
             if preset.revision > 0
@@ -1420,17 +1445,19 @@ fn model_from_file(
         None => None,
         Some(_) => return Err(ConversationError::Corrupt),
     };
-    Ok(ConversationModelConfiguration {
-        selection,
-        instructions: file.instructions,
-        preset,
-    })
+    Ok(ConversationModelConfiguration { settings, preset })
 }
 
 fn model_to_file(model: &ConversationModelConfiguration) -> ConversationModelFile {
     ConversationModelFile {
-        selection: model.selection.clone(),
-        instructions: model.instructions.clone(),
+        selection: model.settings.model.clone(),
+        instructions: model.settings.instructions.clone(),
+        tools: model
+            .settings
+            .tools
+            .iter()
+            .map(|tool| tool.as_str().to_owned())
+            .collect(),
         preset: model.preset.as_ref().map(|preset| AppliedPresetFile {
             id: preset.id.as_hex(),
             revision: preset.revision,

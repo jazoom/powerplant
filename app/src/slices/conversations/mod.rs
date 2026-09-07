@@ -3,6 +3,7 @@ mod new;
 mod title;
 pub(super) use title::live_router;
 mod page;
+mod settings;
 mod task_import;
 mod workflow;
 
@@ -95,6 +96,10 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/cancel",
             post(cancel_message),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings",
+            post(settings::update),
         )
         .route("/conversations/{conversation_id}/model", post(select_model))
         .route(
@@ -684,7 +689,7 @@ async fn create_candidate_review(
             );
         }
     };
-    let Some(connection) = state.vault.connection_for(&model.selection) else {
+    let Some(connection) = state.vault.connection_for(&model.settings.model) else {
         return render_candidate_review(
             &state,
             graft,
@@ -945,8 +950,9 @@ fn candidate_review_model(
             .clone()
             .or_else(|| candidate_submitted_selection(state, form).ok())
             .or_else(|| {
-                source
-                    .and_then(|record| effective_model(state, record).map(|model| model.selection))
+                source.and_then(|record| {
+                    effective_model(state, record).map(|model| model.settings.model)
+                })
             })
             .ok_or("Choose a model before you start this review.")?
     };
@@ -990,7 +996,8 @@ fn candidate_review_view_model(
     let selection = form
         .and_then(|form| candidate_submitted_selection(state, form).ok())
         .or_else(|| {
-            source.and_then(|record| effective_model(state, record).map(|model| model.selection))
+            source
+                .and_then(|record| effective_model(state, record).map(|model| model.settings.model))
         })
         .or_else(|| {
             state
@@ -1798,13 +1805,13 @@ async fn start_message(
             ConversationError::Active.message(),
         ));
     }
-    if let Err(error) = valid_selection(state, &model.selection) {
+    if let Err(error) = valid_selection(state, &model.settings.model) {
         return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
             error,
         ));
     }
-    let Some(connection) = state.vault.connection_for(&model.selection) else {
+    let Some(connection) = state.vault.connection_for(&model.settings.model) else {
         return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
             "Choose a stored provider.",
@@ -1829,7 +1836,10 @@ async fn start_message(
             ));
         }
     };
-    let workflow = if let Some(authority) = authority.as_ref() {
+    let workflow = if let Some(authority) = authority
+        .as_ref()
+        .filter(|authority| !authority.tools.is_empty())
+    {
         let phase_authority = if let Some(applied) = model.preset.as_ref() {
             let Some(preset) = state.agents.get(&applied.id) else {
                 return Err(StartMessageError::User(
@@ -1864,7 +1874,7 @@ async fn start_message(
         let pinned = workflows::pin_quick_task_with_context(
             phase_authority.grant_access,
             &phase_authority.tools,
-            &model.instructions,
+            &model.settings.instructions,
             environment,
             secondary,
         )
@@ -1960,8 +1970,8 @@ async fn start_message(
             .filter(|step| matches!(&step.action, workflows::definition::StepAction::Agent(_)))
             .map(|step| workflows::PhaseModelSelection {
                 step: step.key.clone(),
-                selection: phase_model.selection.clone(),
-                instructions: phase_model.instructions.clone(),
+                selection: phase_model.settings.model.clone(),
+                instructions: phase_model.settings.instructions.clone(),
                 preset: phase_model
                     .preset
                     .as_ref()
@@ -2222,7 +2232,7 @@ async fn apply_preset(
     let Some(selection) = preset
         .selection
         .clone()
-        .or_else(|| effective_model(&state, &record).map(|model| model.selection))
+        .or_else(|| effective_model(&state, &record).map(|model| model.settings.model))
     else {
         return render_detail_command(
             graft,
@@ -2250,7 +2260,7 @@ async fn apply_preset(
         Ok(updated) => render_detail_command(
             graft,
             PatchStatus::Ok,
-            detail_view(&state, session.0, &updated, &updated.title, ""),
+            detail_view(&state, session.0, &updated, &updated.title, "").open_settings(),
         ),
         Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
             Err(AppError::new("store conversation preset", error))
@@ -3196,7 +3206,7 @@ fn review_view_model(
 ) -> (Vec<ProviderOption>, Vec<PresetOption>, String) {
     let selection = form
         .and_then(|form| submitted_selection(state, form).ok())
-        .or_else(|| effective_model(state, source).map(|model| model.selection));
+        .or_else(|| effective_model(state, source).map(|model| model.settings.model));
     let providers = state
         .preferences
         .desk_providers(&state.vault)

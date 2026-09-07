@@ -64,10 +64,19 @@ impl ConversationStore {
         request: JobId,
         text: String,
     ) -> Result<super::ConversationRecord, ConversationError> {
+        let settings = crate::execution::ExecutionSettings::new(
+            selection,
+            String::new(),
+            crate::agents::ToolId::ALL.to_vec(),
+        )
+        .unwrap();
         self.begin_message_with_model(
             id,
             expected_revision,
-            Some(super::ConversationModelConfiguration::direct(selection)),
+            Some(super::ConversationModelConfiguration {
+                settings,
+                preset: None,
+            }),
             request,
             text,
         )

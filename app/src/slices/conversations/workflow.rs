@@ -514,7 +514,7 @@ pub(super) async fn launch(
     let selection = phase_models
         .first()
         .map(|phase| phase.selection.clone())
-        .or_else(|| super::effective_model(&state, &record).map(|model| model.selection));
+        .or_else(|| super::effective_model(&state, &record).map(|model| model.settings.model));
     let Some(connection) = selection
         .as_ref()
         .and_then(|selection| state.vault.connection_for(selection))
@@ -1146,15 +1146,16 @@ async fn launch_readiness(
         || "No model selected".to_owned(),
         |model| {
             let effort = model
-                .selection
+                .settings
+                .model
                 .thinking
                 .as_ref()
                 .map(|effort| format!(" · Thinking: {}", effort.label()))
                 .unwrap_or_default();
             format!(
                 "{} · {}{}",
-                model.selection.provider.label(),
-                model.selection.model,
+                model.settings.model.provider.label(),
+                model.settings.model.model,
                 effort
             )
         },
@@ -1343,7 +1344,7 @@ fn selected_phase_model_options(
         return Vec::new();
     };
     let agents = state.agents.list();
-    let selected = super::effective_model(state, record).map(|model| model.selection);
+    let selected = super::effective_model(state, record).map(|model| model.settings.model);
     let direct_models: Vec<ModelSelection> = state
         .preferences
         .desk_providers(&state.vault)

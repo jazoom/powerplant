@@ -232,9 +232,10 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
         .effective_effort(ProviderKind::Xai, "grok-4.6", None)
         .unwrap();
     let fields = format!(
-        "action=send&project={}&provider=xai&model=grok-4.6&thinking={}",
+        "action=send&project={}&provider=xai&model=grok-4.6&thinking={}&instructions={}&tool_read=read&tool_list=list",
         project.id,
-        effort.as_str()
+        effort.as_str(),
+        "Use%20the%20supplied%20context."
     );
     for message in [
         "%20",
@@ -257,6 +258,20 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
         .oneshot(command(
             "/conversations/new",
             &token,
+            &format!(
+                "{}&message=Explain%20this",
+                fields.replace("tool_read=read", "tool_read=unknown")
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(state.conversations.list().is_empty());
+
+    let response = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
             &format!("{fields}&message=Explain%20this"),
         ))
         .await
@@ -266,10 +281,16 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
     let record = state.conversations.list().pop().unwrap();
     assert!(body.contains(&format!("location=\"/conversations/{}\"", record.id)));
     assert!(body.contains("data-conversation-state=\"saved\""));
-    assert!(body.contains("id=\"conversation-model-form\""));
+    assert!(body.contains("id=\"conversation-settings-form\""));
     assert!(body.contains("id=\"conversation-model-search\""));
     assert_eq!(record.messages[0].text, "Explain this");
-    assert_eq!(record.model.unwrap().selection.model, "grok-4.6");
+    let settings = record.model.unwrap().settings;
+    assert_eq!(settings.model.model, "grok-4.6");
+    assert_eq!(settings.instructions, "Use the supplied context.");
+    assert_eq!(
+        settings.tools,
+        vec![crate::agents::ToolId::List, crate::agents::ToolId::Read]
+    );
     assert_eq!(record.projects, vec![project.id]);
     assert!(record.grants.is_empty());
     assert!(record.execution_target.is_none());

@@ -40,7 +40,7 @@ async fn title_request_excludes_tools_presets_and_later_history() {
         )
         .unwrap();
     let mut record = state.conversations.claim_title(&initial.id).unwrap();
-    record.model.as_mut().unwrap().instructions = "Private preset instructions".to_owned();
+    record.model.as_mut().unwrap().settings.instructions = "Private preset instructions".to_owned();
     record.messages.push(super::super::ConversationMessage {
         role: super::super::MessageRole::User,
         text: "Later private message".to_owned(),

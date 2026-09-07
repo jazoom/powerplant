@@ -206,7 +206,7 @@ fn resolve_authority_inner(
         });
     }
     let network = intersect_network(&record.network, preset.as_ref().map(|agent| &agent.network));
-    let authority = resolve_grant_with_context(
+    let mut authority = resolve_grant_with_context(
         grant,
         &project,
         record.id,
@@ -215,6 +215,16 @@ fn resolve_authority_inner(
         secondary,
         preset.as_ref(),
     )?;
+    if let Some(selected) = record
+        .model
+        .as_ref()
+        .map(|model| model.settings.tools.as_slice())
+    {
+        authority
+            .effective
+            .tools
+            .retain(|tool| selected.contains(tool));
+    }
     Ok(Some(authority))
 }
 

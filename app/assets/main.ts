@@ -17,9 +17,28 @@ listenForRequestSettled((detail) => {
     // A top-layer panel must not conceal command or transport errors.
     document
         .querySelectorAll<HTMLElement>(".conversation-panel:popover-open")
-        .forEach((panel) => panel.hidePopover());
+        .forEach((panel) => {
+            if (
+                detail.outcome !== "applied-patch" ||
+                panel.id !== "conversation-settings" ||
+                panel.dataset.settingsOpen !== "true"
+            )
+                panel.hidePopover();
+        });
+    const settings = document.querySelector<HTMLElement>(
+        '#conversation-settings[data-settings-open="true"]',
+    );
+    if (
+        detail.outcome === "applied-patch" &&
+        settings &&
+        !settings.matches(":popover-open")
+    )
+        settings.showPopover();
     if (detail.outcome === "applied-patch" && detail.status !== 200) {
-        document.querySelector<HTMLElement>("#conversation-error")?.focus();
+        (
+            document.querySelector<HTMLElement>("#conversation-error") ??
+            settings
+        )?.focus();
     }
 });
 

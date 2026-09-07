@@ -8,6 +8,11 @@ pub(super) struct NewForm {
     pub(super) model: String,
     pub(super) thinking: String,
     pub(super) preset: String,
+    pub(super) instructions: String,
+    pub(super) tool_list: String,
+    pub(super) tool_read: String,
+    pub(super) tool_write: String,
+    pub(super) tool_run: String,
     pub(super) title: String,
     pub(super) message: String,
     action: String,
@@ -45,6 +50,21 @@ pub(super) async fn show(
         PatchStatus::Ok,
         ConversationDetailView::from_new(&state, form, error),
     )
+}
+
+impl NewForm {
+    pub(super) fn tool_values(&self) -> Vec<String> {
+        [
+            &self.tool_list,
+            &self.tool_read,
+            &self.tool_write,
+            &self.tool_run,
+        ]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .collect()
+    }
 }
 
 fn project(state: &AppState, raw: &str) -> Result<Option<ProjectId>, &'static str> {
@@ -91,10 +111,20 @@ fn model(
             .ok_or("Enter a valid model name.")?
     };
     valid_selection(state, &selection)?;
-    Ok(Some(match preset {
+    let mut configuration = match preset {
         Some(preset) => ConversationModelConfiguration::from_preset(&preset, selection),
         None => ConversationModelConfiguration::direct(selection),
-    }))
+    };
+    if configuration.preset.is_none() {
+        let tools = super::settings::parse_tools(&form.tool_values())?;
+        configuration.settings = crate::execution::ExecutionSettings::new(
+            configuration.settings.model,
+            form.instructions.clone(),
+            tools,
+        )
+        .ok_or("Enter instructions within 32 KiB without unsupported control characters.")?;
+    }
+    Ok(Some(configuration))
 }
 
 pub(super) async fn remember_model(
@@ -105,7 +135,7 @@ pub(super) async fn remember_model(
 ) -> AppResult<Response> {
     form.preset.clear();
     let (status, message) = match model(&state, &form) {
-        Ok(Some(model)) => match remember_selection(&state, model.selection) {
+        Ok(Some(model)) => match remember_selection(&state, model.settings.model) {
             Ok(()) => (PatchStatus::Ok, ""),
             Err(error) => (PatchStatus::UnprocessableEntity, error),
         },
@@ -137,6 +167,15 @@ pub(super) async fn save(
             ConversationDetailView::from_new(&state, form, error),
         )
     };
+    let reject_settings = |status, error, form| {
+        render_detail(
+            &state,
+            session.0,
+            GraftRequest::Patch,
+            status,
+            ConversationDetailView::from_new(&state, form, error).open_settings(),
+        )
+    };
     if form.action != "send" {
         return reject(
             PatchStatus::UnprocessableEntity,
@@ -150,13 +189,15 @@ pub(super) async fn save(
     };
     let model = match model(&state, &form) {
         Ok(model) => model,
-        Err(error) => return reject(PatchStatus::UnprocessableEntity, error, form),
+        Err(error) => {
+            return reject_settings(PatchStatus::UnprocessableEntity, error, form);
+        }
     };
     let Some(connection) = model
         .as_ref()
-        .and_then(|model| state.vault.connection_for(&model.selection))
+        .and_then(|model| state.vault.connection_for(&model.settings.model))
     else {
-        return reject(
+        return reject_settings(
             PatchStatus::UnprocessableEntity,
             "Choose a stored provider.",
             form,
@@ -209,7 +250,7 @@ pub(super) async fn save(
     let warning = record
         .model
         .as_ref()
-        .and_then(|model| remember_selection(&state, model.selection.clone()).err())
+        .and_then(|model| remember_selection(&state, model.settings.model.clone()).err())
         .unwrap_or("");
     let view = detail_view(&state, session.0, &record, &record.title, warning);
     let mut patches = hypergraft::PatchSet::new();

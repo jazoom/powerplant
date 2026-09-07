@@ -6,6 +6,7 @@ mod config;
 mod conversations;
 mod environments;
 mod error;
+mod execution;
 mod hex;
 mod local_data;
 mod markdown;

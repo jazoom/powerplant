@@ -14,6 +14,39 @@ export function initConversation(
             ?.form;
     }
 
+    let draftSettings = !!root.querySelector('[data-conversation-state="new"]');
+    const settingsNames = [
+        "provider",
+        "model",
+        "thinking",
+        "instructions",
+        "tool_list",
+        "tool_read",
+        "tool_write",
+        "tool_run",
+        "preset",
+    ];
+    let unsavedSettings:
+        | Map<string, { value: string; checked: boolean; disabled: boolean }>
+        | undefined;
+    function retainSettings() {
+        const form = modelForm();
+        if (!form) return;
+        unsavedSettings = new Map();
+        for (const name of [...settingsNames, "revision"]) {
+            const field = form.elements.namedItem(name);
+            if (
+                field instanceof HTMLInputElement ||
+                field instanceof HTMLSelectElement ||
+                field instanceof HTMLTextAreaElement
+            )
+                unsavedSettings.set(name, {
+                    value: field.value,
+                    checked: field instanceof HTMLInputElement && field.checked,
+                    disabled: field.disabled,
+                });
+        }
+    }
     const choices = new Map<string, { model: string; thinking: string }>();
     let pendingPreference = false;
     let deferredSend:
@@ -268,6 +301,7 @@ export function initConversation(
                     updateModelOptions(model);
                     syncConversation();
                     rememberModel();
+                    retainSettings();
                 }
                 setModelExpanded(false, true);
             } else if (!event.target.closest("#conversation-model-picker")) {
@@ -360,6 +394,14 @@ export function initConversation(
     root.addEventListener(
         "input",
         (event) => {
+            const field = event.target;
+            if (
+                (field instanceof HTMLInputElement ||
+                    field instanceof HTMLSelectElement ||
+                    field instanceof HTMLTextAreaElement) &&
+                settingsNames.includes(field.name)
+            )
+                retainSettings();
             if (
                 event.target instanceof HTMLInputElement &&
                 event.target.id === "conversation-model-search"
@@ -392,6 +434,7 @@ export function initConversation(
                     ["provider", "thinking"].includes(event.target.name)
                 )
                     rememberModel();
+                if (event.target.form === modelForm()) retainSettings();
             }
         },
         { signal },
@@ -408,6 +451,53 @@ export function initConversation(
                     ))
             )
                 return;
+            const settingsResponse =
+                (context.cause === "patch" &&
+                    [
+                        "conversation-settings-form",
+                        "conversation-preset-form",
+                    ].includes(context.detail.form.id)) ||
+                (context.cause === "patch" &&
+                    context.detail.form.id === "conversation-composer" &&
+                    draftSettings);
+            if (context.cause === "location" || settingsResponse) {
+                unsavedSettings = undefined;
+            } else if (unsavedSettings) {
+                const form = modelForm();
+                for (const [name, saved] of unsavedSettings) {
+                    const field = form?.elements.namedItem(name);
+                    if (!(
+                        field instanceof HTMLInputElement ||
+                        field instanceof HTMLSelectElement ||
+                        field instanceof HTMLTextAreaElement
+                    ))
+                        continue;
+                    if (
+                        field instanceof HTMLSelectElement &&
+                        !Array.from(field.options).some(
+                            (option) => option.value === saved.value,
+                        )
+                    )
+                        field.add(new Option(saved.value, saved.value));
+                    field.value = saved.value;
+                    if (field instanceof HTMLInputElement)
+                        field.checked = saved.checked;
+                    if (
+                        name === "thinking" &&
+                        !root.querySelector<HTMLSelectElement>(
+                            '[name="provider"]',
+                        )?.disabled
+                    )
+                        field.disabled = saved.disabled;
+                }
+                const label = root.querySelector("#conversation-model-value");
+                if (label)
+                    label.textContent =
+                        unsavedSettings.get("model")?.value ?? "";
+            }
+            draftSettings = !!root.querySelector(
+                '[data-conversation-state="new"]',
+            );
             pendingPreference = false;
             deferredSend = undefined;
             choices.clear();

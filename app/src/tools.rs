@@ -167,7 +167,7 @@ pub(crate) async fn invoke(
     if name == SUBMIT_WORKFLOW_OUTPUT {
         return submit_output(context, arguments);
     }
-    let Some(kind) = ToolId::parse(name).filter(|kind| context.tools.contains(kind)) else {
+    let Some(kind) = authorised_tool(context.tools, name) else {
         return ToolTrace {
             label: name.to_owned(),
             output: "That tool is not available.".to_owned(),
@@ -180,6 +180,10 @@ pub(crate) async fn invoke(
             output: message.to_owned(),
         },
     }
+}
+
+fn authorised_tool(selected: &[ToolId], name: &str) -> Option<ToolId> {
+    ToolId::parse(name).filter(|kind| selected.contains(kind))
 }
 
 fn submit_output(context: &AgentToolContext<'_>, arguments: &serde_json::Value) -> ToolTrace {

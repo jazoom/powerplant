@@ -383,7 +383,7 @@ async fn conversation_states_share_document_navigation_and_detail_patch_controls
         (
             format!("/conversations/{}", record.id),
             "saved",
-            "conversation-model-form",
+            "conversation-settings-form",
         ),
     ] {
         let patch = Request::builder()
@@ -413,7 +413,7 @@ async fn conversation_states_share_document_navigation_and_detail_patch_controls
                 "conversation-composer",
                 "conversation-model-picker",
                 "conversation-model-search",
-                "conversation-model-settings",
+                "conversation-settings",
                 "conversation-project-settings",
             ] {
                 assert_eq!(body.matches(&format!("id=\"{id}\"")).count(), 1);
@@ -456,8 +456,20 @@ async fn saved_model_commands_accept_disabled_effort_and_reject_stale_revision()
     let body = text(response).await;
     assert!(body.contains("target=\"conversation-detail\""));
     let updated = state.conversations.get(&record.id).unwrap();
-    assert_eq!(updated.model.as_ref().unwrap().selection.model, model.id);
-    assert!(updated.model.as_ref().unwrap().selection.thinking.is_none());
+    assert_eq!(
+        updated.model.as_ref().unwrap().settings.model.model,
+        model.id
+    );
+    assert!(
+        updated
+            .model
+            .as_ref()
+            .unwrap()
+            .settings
+            .model
+            .thinking
+            .is_none()
+    );
     let remembered = state
         .preferences
         .desk_providers(&state.vault)
@@ -516,7 +528,7 @@ async fn model_preference_failure_returns_the_committed_conversation_patch() {
     assert_eq!(response.status(), StatusCode::OK);
     let updated = state.conversations.get(&record.id).unwrap();
     assert!(updated.revision > record.revision);
-    assert_eq!(updated.model.unwrap().selection.model, "grok-4.6");
+    assert_eq!(updated.model.unwrap().settings.model.model, "grok-4.6");
     let body = text(response).await;
     assert!(body.contains("target=\"conversation-detail\""));
     assert!(body.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
@@ -813,8 +825,11 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
         Some(&updated)
     );
     let model = updated.model.as_ref().expect("model configuration");
-    assert_eq!(model.instructions, "Review only the supplied discussion.");
-    assert_eq!(model.selection, selection);
+    assert_eq!(
+        model.settings.instructions,
+        "Review only the supplied discussion."
+    );
+    assert_eq!(model.settings.model, selection);
     let applied = model.preset.as_ref().expect("preset identity");
     assert_eq!((applied.id, applied.revision), (preset.id, preset.revision));
     assert_eq!(updated.id, conversation.id);
@@ -874,8 +889,8 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
     assert_eq!(response.status(), StatusCode::OK);
     let current = state.conversations.get(&conversation.id).expect("current");
     let model = current.model.as_ref().expect("model");
-    assert_eq!(model.selection, selection);
-    assert_eq!(model.instructions, "Reply briefly.");
+    assert_eq!(model.settings.model, selection);
+    assert_eq!(model.settings.instructions, "Reply briefly.");
     assert_eq!(
         model.preset.as_ref().expect("preset").id,
         instructions_only.id
@@ -901,8 +916,8 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
     assert_eq!(response.status(), StatusCode::OK);
     let current = state.conversations.get(&conversation.id).expect("current");
     let model = current.model.expect("direct model");
-    assert_eq!(model.selection, selection);
-    assert!(model.instructions.is_empty());
+    assert_eq!(model.settings.model, selection);
+    assert!(model.settings.instructions.is_empty());
     assert!(model.preset.is_none());
 }
 
@@ -1244,9 +1259,22 @@ async fn writable_access_is_explicit_and_adds_write_without_network_access() {
         .conversations
         .create("Implementation".to_owned())
         .expect("conversation");
+    let configured = state
+        .conversations
+        .update_execution_settings(
+            &conversation.id,
+            conversation.revision,
+            crate::execution::ExecutionSettings::new(
+                ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
+                String::new(),
+                ToolId::ALL.to_vec(),
+            )
+            .unwrap(),
+        )
+        .expect("configure tools");
     let attached = state
         .conversations
-        .attach_project(&conversation.id, conversation.revision, project.id)
+        .attach_project(&conversation.id, configured.revision, project.id)
         .expect("attach");
     let path = format!("/conversations/{}/access", conversation.id);
 
@@ -1935,10 +1963,9 @@ async fn plan_review_copies_only_confirmed_projects_as_read_only() {
             .iter()
             .all(|grant| grant.access == crate::agents::AccessMode::ReadOnly)
     );
-    // Missing execution prerequisites must still produce a patch for the preview's live root.
+    // A tool-free review needs no sandbox or prepared environment.
     let response = text(response).await;
-    assert!(response.contains("target=\"chat-main\""));
-    assert!(response.contains(&format!("location=\"/conversations/{}\"", review.id)));
+    assert!(response.contains(&format!("navigate=\"/conversations/{}\"", review.id)));
 }
 
 #[tokio::test]

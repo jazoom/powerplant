@@ -50,7 +50,7 @@ test("navigation replaces the draft before a later conversation command patch", 
         detail: {
             requestKind: "patch",
             form: document.createElement("form"),
-            url: "/conversations/another/model",
+            url: "/conversations/another/settings",
             outcome: "applied-patch",
             status: 422,
             targetIds: ["conversation-detail"],
