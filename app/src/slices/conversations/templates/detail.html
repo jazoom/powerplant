@@ -884,9 +884,17 @@
                     >{{ directory.name }}</span
                   >
                   <span aria-hidden="true">·</span>
-                  <span
-                    >{% if directory.available %}Read only{% else %}Unavailable{% endif %}</span
-                  >
+                  <span>
+                    {% if !directory.available %}
+                      Unavailable
+                    {% else if directory.pending_approval %}
+                      Pending approval
+                    {% else if directory.sensitive %}
+                      Sensitive access · Read only
+                    {% else %}
+                      Read only
+                    {% endif %}
+                  </span>
                 </span>
               {% endfor %}
             </div>
@@ -923,12 +931,39 @@
               />
             {% else %}
               {% for directory in directories %}
-                <input
-                  type="hidden"
-                  name="directory_{{ loop.index0 }}"
-                  value="{{ directory.form_value }}"
-                />
+                {% if !directory.transient %}
+                  <input
+                    type="hidden"
+                    name="directory_{{ loop.index0 }}"
+                    value="{{ directory.form_value }}"
+                  />
+                {% endif %}
               {% endfor %}
+              <input
+                type="hidden"
+                name="draft_nonce"
+                value="{{ draft_nonce }}"
+              />
+              <input
+                type="hidden"
+                name="consent_reference"
+                value="{{ consent_reference }}"
+              />
+              <input
+                type="hidden"
+                name="pending_directory"
+                value="{{ pending_directory }}"
+              />
+              <input
+                type="hidden"
+                name="consent_request"
+                value="{{ consent_request }}"
+              />
+              <input
+                type="hidden"
+                name="consent_existing"
+                value="{% if consent_existing %}true{% else %}false{% endif %}"
+              />
             {% endif %}
             <label class="sr-only" for="composer-message">Message</label>
             <textarea
@@ -1051,13 +1086,24 @@
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <p class="font-medium break-words">{{ directory.name }}</p>
-                    {% if directory.available %}
+                    {% if !directory.available %}
+                      <span class="badge badge-error badge-sm"
+                        >Unavailable</span
+                      >
+                    {% else if directory.pending_approval %}
+                      <span class="badge badge-warning badge-sm"
+                        >Pending approval</span
+                      >
+                    {% else if directory.sensitive %}
+                      <span class="badge badge-warning badge-sm"
+                        >Sensitive access</span
+                      >
                       <span class="badge badge-success badge-sm"
                         >Read only</span
                       >
                     {% else %}
-                      <span class="badge badge-error badge-sm"
-                        >Unavailable</span
+                      <span class="badge badge-success badge-sm"
+                        >Read only</span
                       >
                     {% endif %}
                   </div>
@@ -1079,38 +1125,136 @@
                   </dl>
                 </div>
                 {% if self.is_new() %}
-                  <button
-                    form="conversation-composer"
-                    formaction="/conversations/new/directories/{{ directory.id }}/remove"
-                    formmethod="post"
-                    class="btn btn-ghost btn-sm min-h-11 self-start"
-                    type="submit"
-                  >
-                    Remove
-                  </button>
-                {% else if let Some(saved) = self.saved() %}
-                  <form
-                    data-graft
-                    method="post"
-                    action="/conversations/{{ saved.id }}/directories/{{ directory.id }}/remove"
-                  >
-                    <input
-                      type="hidden"
-                      name="revision"
-                      value="{{ saved.revision }}"
-                    />
+                  <div class="flex flex-wrap gap-2 self-start">
+                    {% if directory.sensitive && directory.pending_approval && consent_request == "" %}
+                      <button
+                        form="conversation-composer"
+                        formaction="/conversations/new/directories/{{ directory.id }}/consent"
+                        formmethod="post"
+                        class="btn btn-warning btn-sm min-h-11"
+                        type="submit"
+                      >
+                        Review access
+                      </button>
+                    {% endif %}
                     <button
+                      form="conversation-composer"
+                      formaction="/conversations/new/directories/{{ directory.id }}/remove"
+                      formmethod="post"
                       class="btn btn-ghost btn-sm min-h-11"
                       type="submit"
-                      {% if job_active || session_busy %}disabled{% endif %}
                     >
                       Remove
                     </button>
-                  </form>
+                  </div>
+                {% else if let Some(saved) = self.saved() %}
+                  {% if directory.transient %}
+                    <a
+                      data-graft
+                      href="/conversations/{{ saved.id }}"
+                      class="btn btn-ghost btn-sm min-h-11"
+                      >Cancel</a
+                    >
+                  {% else %}
+                    <form
+                      data-graft
+                      method="post"
+                      action="/conversations/{{ saved.id }}/directories/{{ directory.id }}/remove"
+                    >
+                      <input
+                        type="hidden"
+                        name="revision"
+                        value="{{ saved.revision }}"
+                      />
+                      <div class="flex flex-wrap gap-2">
+                        {% if directory.sensitive && directory.pending_approval && consent_request == "" %}
+                          <button
+                            class="btn btn-warning btn-sm min-h-11"
+                            type="submit"
+                            formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/consent"
+                            {% if job_active || session_busy %}disabled{% endif %}
+                          >
+                            Review access
+                          </button>
+                        {% endif %}
+                        <button
+                          class="btn btn-ghost btn-sm min-h-11"
+                          type="submit"
+                          {% if job_active || session_busy %}disabled{% endif %}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </form>
+                  {% endif %}
                 {% endif %}
               </li>
             {% endfor %}
           </ul>
+        {% endif %}
+        {% if consent_request != "" %}
+          <div class="alert alert-warning items-start" role="alert">
+            <div class="min-w-0 space-y-3">
+              <div class="space-y-1">
+                <h3 class="font-semibold">
+                  Approve sensitive directory access
+                </h3>
+                <p class="text-sm break-words">
+                  The requested read-only directory is
+                  <code class="break-all">{{ consent_path }}</code>. Power Plant
+                  stores provider credentials and private conversations at
+                  <code class="break-all">{{ data_root }}</code>.
+                </p>
+                <p class="text-sm">
+                  The model can receive provider credentials, private
+                  conversations and other sensitive records through tool output.
+                  Network off does not prevent this disclosure because provider
+                  requests leave the host separately.
+                </p>
+              </div>
+              {% if self.is_new() %}
+                <button
+                  form="conversation-composer"
+                  formaction="/conversations/new/directories/consent"
+                  formmethod="post"
+                  class="btn btn-warning min-h-11"
+                  type="submit"
+                >
+                  Approve read-only access
+                </button>
+              {% else if let Some(saved) = self.saved() %}
+                <form
+                  data-graft
+                  method="post"
+                  action="/conversations/{{ saved.id }}/directories/consent"
+                >
+                  <input
+                    type="hidden"
+                    name="revision"
+                    value="{{ saved.revision }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="consent_request"
+                    value="{{ consent_request }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="pending_directory"
+                    value="{{ pending_directory }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="existing"
+                    value="{% if consent_existing %}true{% else %}false{% endif %}"
+                  />
+                  <button class="btn btn-warning min-h-11" type="submit">
+                    Approve read-only access
+                  </button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
         {% endif %}
         {% if directories.len() >= 8 %}
           <p class="text-quiet text-sm">
@@ -1447,6 +1591,21 @@
             Close
           </button>
         </div>
+
+        {% for directory in directories %}
+          {% if directory.sensitive %}
+            <div class="alert alert-warning mt-4 items-start">
+              <p class="text-sm break-words">
+                Sensitive read-only access can expose private records. Power
+                Plant stores its data at
+                <code class="break-all">{{ data_root }}</code>. Tool output can
+                disclose credentials and private conversations to the model even
+                with Network off.
+                {% if directory.pending_approval %}Approval is pending.{% endif %}
+              </p>
+            </div>
+          {% endif %}
+        {% endfor %}
 
         {% if error != "" && settings_open %}
           <div

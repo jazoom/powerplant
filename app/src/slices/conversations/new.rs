@@ -23,6 +23,11 @@ pub(super) struct NewForm {
     pub(super) directory_5: String,
     pub(super) directory_6: String,
     pub(super) directory_7: String,
+    pub(super) draft_nonce: String,
+    pub(super) consent_reference: String,
+    pub(super) pending_directory: String,
+    pub(super) consent_request: String,
+    pub(super) consent_existing: String,
     pub(super) title: String,
     pub(super) message: String,
     action: String,
@@ -37,6 +42,12 @@ pub(super) async fn show(
     let mut form = NewForm {
         project: query.project,
         network: "none".to_owned(),
+        draft_nonce: crate::execution::draft_nonce().map_err(|_| {
+            AppError::new(
+                "create draft consent nonce",
+                std::io::Error::other("system random source unavailable"),
+            )
+        })?,
         ..NewForm::default()
     };
     if let Some(provider) = state
@@ -59,11 +70,39 @@ pub(super) async fn show(
         session.0,
         graft,
         PatchStatus::Ok,
-        ConversationDetailView::from_new(&state, form, error),
+        ConversationDetailView::from_new(&state, session.0, form, error),
     )
 }
 
 impl NewForm {
+    pub(super) fn consent_nonce(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        // Bind incomplete draft fields without a provider prerequisite for directory selection.
+        for value in [
+            &self.project,
+            &self.provider,
+            &self.model,
+            &self.thinking,
+            &self.preset,
+            &self.instructions,
+            &self.tool_list,
+            &self.tool_read,
+            &self.tool_write,
+            &self.tool_run,
+            &self.network,
+            &self.network_domains,
+        ] {
+            digest.update(value.len().to_le_bytes());
+            digest.update(value);
+        }
+        format!(
+            "{}:{}",
+            self.draft_nonce,
+            crate::hex::encode(&digest.finalize())
+        )
+    }
+
     pub(super) fn tool_values(&self) -> Vec<String> {
         [
             &self.tool_list,
@@ -108,6 +147,12 @@ impl NewForm {
         .filter(|value| !value.is_empty())
         .map(String::as_str)
         .collect()
+    }
+
+    pub(super) fn pending_directory(&self) -> Option<crate::execution::DirectoryGrant> {
+        (!self.pending_directory.is_empty())
+            .then(|| crate::execution::DirectoryGrant::parse_form(&self.pending_directory))
+            .flatten()
     }
 
     pub(super) fn set_directories(&mut self, directories: &[crate::execution::DirectoryGrant]) {
@@ -236,7 +281,7 @@ pub(super) async fn save(
             session.0,
             GraftRequest::Patch,
             status,
-            ConversationDetailView::from_new(&state, form, error),
+            ConversationDetailView::from_new(&state, session.0, form, error),
         )
     };
     let reject_settings = |status, error, form| {
@@ -245,7 +290,7 @@ pub(super) async fn save(
             session.0,
             GraftRequest::Patch,
             status,
-            ConversationDetailView::from_new(&state, form, error).open_settings(),
+            ConversationDetailView::from_new(&state, session.0, form, error).open_settings(),
         )
     };
     if form.action != "send" {
@@ -300,7 +345,42 @@ pub(super) async fn save(
             form,
         );
     };
-    if let Err(error) = super::preflight_execution(&state, &model).await {
+    if form.pending_directory().is_some() {
+        return reject(
+            PatchStatus::UnprocessableEntity,
+            "Approve or remove the pending sensitive directory.",
+            form,
+        );
+    }
+    let sensitive_grants = model
+        .settings
+        .directories
+        .iter()
+        .filter(|grant| {
+            crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if sensitive_grants.iter().any(|grant| {
+        !state.sessions.contains_live(&session.0)
+            || !state.access_consent.authorised_draft(
+                &form.consent_reference,
+                session.0,
+                &form.consent_nonce(),
+                &model.settings.directories,
+                grant,
+            )
+    }) {
+        return reject(
+            PatchStatus::UnprocessableEntity,
+            crate::execution::DirectoryGrantError::Sensitive.message(),
+            form,
+        );
+    }
+    if let Err(error) = super::preflight_execution(&state, session.0, None, &model).await {
         let super::StartMessageError::User(status, message) = error else {
             return Err(AppError::new(
                 "preflight first conversation message",
@@ -328,6 +408,26 @@ pub(super) async fn save(
         Ok(record) => record,
         Err(error) => return reject(status_for(error), error.message(), form),
     };
+    if !sensitive_grants.is_empty()
+        && state
+            .access_consent
+            .consume_draft(
+                &form.consent_reference,
+                session.0,
+                &form.consent_nonce(),
+                &model.settings,
+                record.id,
+                &sensitive_grants,
+            )
+            .is_err()
+    {
+        let _ = state.conversations.delete(&id, 1);
+        return reject(
+            PatchStatus::UnprocessableEntity,
+            crate::execution::DirectoryGrantError::Sensitive.message(),
+            form,
+        );
+    }
     drop(permit);
     let record =
         match super::start_message(&state, session.0, record, 1, model, form.message.clone()).await

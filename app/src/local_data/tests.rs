@@ -17,8 +17,12 @@ use crate::workflows::{WorkflowExecution, WorkflowRunStore};
 
 impl super::LocalDataReset {
     pub(crate) fn detached() -> Self {
+        Self::for_test(PathBuf::from("/powerplant-test-local-data"))
+    }
+
+    pub(crate) fn for_test(root: PathBuf) -> Self {
         Self {
-            root: PathBuf::from("/powerplant-test-local-data"),
+            root,
             inner: Arc::new(Mutex::new(Inner {
                 pending: false,
                 execution: None,
@@ -552,6 +556,32 @@ fn catalogue_conflict_includes_conversation_directory_grants() {
 
     assert_eq!(
         local_data.catalogue_conflict(&[], &[], &[record]),
+        Some(CatalogueResetConflict::ConversationGrant)
+    );
+
+    let broad_grant = crate::execution::DirectoryGrant::from_selected(dir.path(), &[]).unwrap();
+    let broad_settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
+        String::new(),
+        Vec::new(),
+    )
+    .unwrap()
+    .with_directories(vec![broad_grant])
+    .unwrap();
+    let broad_record = store
+        .create_saved(
+            crate::conversations::ConversationId::generate().unwrap(),
+            None,
+            Some("Broad grant".to_owned()),
+            Some(crate::conversations::ConversationModelConfiguration {
+                settings: broad_settings,
+                preset: None,
+            }),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        local_data.catalogue_conflict(&[], &[], &[broad_record]),
         Some(CatalogueResetConflict::ConversationGrant)
     );
 }

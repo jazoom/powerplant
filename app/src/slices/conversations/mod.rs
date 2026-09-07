@@ -54,6 +54,14 @@ pub(super) fn router() -> Router<AppState> {
             post(directories::pick_new),
         )
         .route(
+            "/conversations/new/directories/consent",
+            post(directories::approve_new),
+        )
+        .route(
+            "/conversations/new/directories/{grant_id}/consent",
+            post(directories::request_new),
+        )
+        .route(
             "/conversations/new/directories/{grant_id}/remove",
             post(directories::remove_new),
         )
@@ -113,6 +121,14 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/directories/pick",
             post(directories::pick_saved),
+        )
+        .route(
+            "/conversations/{conversation_id}/directories/{grant_id}/consent",
+            post(directories::request_saved),
+        )
+        .route(
+            "/conversations/{conversation_id}/directories/consent",
+            post(directories::approve_saved),
         )
         .route(
             "/conversations/{conversation_id}/directories/{grant_id}/remove",
@@ -1810,11 +1826,24 @@ pub(super) enum StartMessageError {
 
 pub(super) async fn preflight_execution(
     state: &AppState,
+    session: crate::sessions::SessionId,
+    conversation: Option<ConversationId>,
     model: &ConversationModelConfiguration,
 ) -> Result<(), StartMessageError> {
-    if model.settings.directories.iter().any(|grant| {
-        crate::execution::authority::sensitive_directory(&grant.host_path, state.local_data.root())
-    }) {
+    if let Some(conversation) = conversation
+        && model.settings.directories.iter().any(|grant| {
+            crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            ) && (!state.sessions.contains_live(&session)
+                || !state.access_consent.authorised_conversation(
+                    session,
+                    conversation,
+                    &model.settings,
+                    grant,
+                ))
+        })
+    {
         return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
             crate::execution::DirectoryGrantError::Sensitive.message(),
@@ -1868,7 +1897,7 @@ pub(super) async fn start_message(
     model: ConversationModelConfiguration,
     text: String,
 ) -> Result<ConversationRecord, StartMessageError> {
-    preflight_execution(state, &model).await?;
+    preflight_execution(state, session, Some(record.id), &model).await?;
     if record.active_job.is_some() {
         return Err(StartMessageError::User(
             PatchStatus::Conflict,
@@ -3189,6 +3218,7 @@ fn detail_view(
         source_candidate_review,
         linked_candidate_reviews,
     )
+    .with_access_status(state, session, record)
     .with_workflow_progress(workflow_progress)
 }
 

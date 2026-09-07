@@ -143,12 +143,18 @@ pub(super) async fn update(
             );
         }
     };
+    let access_changed = record.model.as_ref().is_some_and(|model| {
+        model.settings.tools != settings.tools || model.settings.network != settings.network
+    });
     let selection = settings.model.clone();
     match state
         .conversations
         .update_execution_settings(&record.id, revision, settings)
     {
         Ok(updated) => {
+            if access_changed {
+                state.access_consent.invalidate_conversation(record.id);
+            }
             let warning = remember_selection(&state, selection).err().unwrap_or("");
             render_detail_command(
                 graft,

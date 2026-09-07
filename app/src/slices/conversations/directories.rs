@@ -20,9 +20,19 @@ use super::{
     render_detail_command, status_for,
 };
 
-#[derive(serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
 pub(super) struct DirectoryForm {
     revision: String,
+    consent_request: String,
+    pending_directory: String,
+    existing: String,
+}
+
+struct PendingDirectory {
+    grant: DirectoryGrant,
+    request: String,
+    existing: bool,
 }
 
 pub(super) async fn pick_new(
@@ -61,14 +71,38 @@ pub(super) async fn pick_new(
                 }
             };
             match DirectoryGrant::from_selected(&path, &existing) {
-                Ok(grant) if sensitive(&state, &grant) => (
-                    PatchStatus::UnprocessableEntity,
-                    DirectoryGrantError::Sensitive.message(),
-                ),
+                Ok(grant) if sensitive(&state, &grant) => {
+                    if form.draft_nonce.is_empty() {
+                        form.draft_nonce = crate::execution::draft_nonce().map_err(|_| {
+                            AppError::new(
+                                "create draft consent nonce",
+                                std::io::Error::other("system random source unavailable"),
+                            )
+                        })?;
+                    }
+                    let mut projected = existing;
+                    projected.push(grant.clone());
+                    let request = state
+                        .access_consent
+                        .request_draft(session.0, &form.consent_nonce(), &projected, &grant)
+                        .map_err(|_| {
+                            AppError::new(
+                                "create directory consent request",
+                                std::io::Error::other("system random source unavailable"),
+                            )
+                        })?;
+                    form.pending_directory = grant.form_value();
+                    form.consent_request = request;
+                    form.consent_existing.clear();
+                    (PatchStatus::Ok, "")
+                }
                 Ok(grant) => {
                     let mut directories = existing;
                     directories.push(grant);
                     form.set_directories(&directories);
+                    form.pending_directory.clear();
+                    form.consent_request.clear();
+                    form.consent_existing.clear();
                     (PatchStatus::Ok, "")
                 }
                 Err(error) => (directory_status(error), error.message()),
@@ -76,6 +110,134 @@ pub(super) async fn pick_new(
         }
     };
     render_new(&state, session.0, form, status, error)
+}
+
+pub(super) async fn request_new(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    _graft: PatchGraft,
+    Path(grant_id): Path<String>,
+    Form(mut form): Form<super::new::NewForm>,
+) -> AppResult<Response> {
+    let (Some(grant_id), Ok(directories)) =
+        (DirectoryGrantId::parse(&grant_id), form.directories())
+    else {
+        return render_new(
+            &state,
+            session.0,
+            form,
+            PatchStatus::UnprocessableEntity,
+            DirectoryGrantError::Invalid.message(),
+        );
+    };
+    let Some(grant) = directories
+        .iter()
+        .find(|grant| grant.id == grant_id && sensitive(&state, grant))
+        .cloned()
+    else {
+        return render_new(
+            &state,
+            session.0,
+            form,
+            PatchStatus::UnprocessableEntity,
+            DirectoryGrantError::Invalid.message(),
+        );
+    };
+    let request = state
+        .access_consent
+        .request_draft(session.0, &form.consent_nonce(), &directories, &grant)
+        .map_err(|_| {
+            AppError::new(
+                "create directory consent request",
+                std::io::Error::other("system random source unavailable"),
+            )
+        })?;
+    form.pending_directory = grant.form_value();
+    form.consent_request = request;
+    form.consent_existing = "true".to_owned();
+    render_new(&state, session.0, form, PatchStatus::Ok, "")
+}
+
+pub(super) async fn approve_new(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    _graft: PatchGraft,
+    Form(mut form): Form<super::new::NewForm>,
+) -> AppResult<Response> {
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_new(
+            &state,
+            session.0,
+            form,
+            PatchStatus::Conflict,
+            HOST_PATH_RESET_PENDING,
+        );
+    };
+    let existing = match form.directories() {
+        Ok(directories) => directories,
+        Err(error) => {
+            return render_new(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                error,
+            );
+        }
+    };
+    let Some(grant) = form.pending_directory() else {
+        return render_new(
+            &state,
+            session.0,
+            form,
+            PatchStatus::UnprocessableEntity,
+            "The sensitive access request is invalid. Choose the directory again.",
+        );
+    };
+    if grant.revalidate().is_err() {
+        return render_new(
+            &state,
+            session.0,
+            form,
+            PatchStatus::Conflict,
+            DirectoryGrantError::Unavailable.message(),
+        );
+    }
+    let reapproval = form.consent_existing == "true"
+        && existing
+            .iter()
+            .any(|saved| saved == &grant && sensitive(&state, saved));
+    let mut projected = existing;
+    if !reapproval {
+        projected.push(grant.clone());
+    }
+    let reference = match state.access_consent.approve_draft(
+        &form.consent_request,
+        session.0,
+        &form.consent_nonce(),
+        &projected,
+        &grant,
+    ) {
+        Ok(reference) => reference,
+        Err(_) => {
+            return render_new(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                "The sensitive access request expired or changed. Choose the directory again.",
+            );
+        }
+    };
+    form.set_directories(&projected);
+    if !form.consent_reference.is_empty() {
+        form.consent_reference.push(',');
+    }
+    form.consent_reference.push_str(&reference);
+    form.pending_directory.clear();
+    form.consent_request.clear();
+    form.consent_existing.clear();
+    render_new(&state, session.0, form, PatchStatus::Ok, "")
 }
 
 pub(super) async fn remove_new(
@@ -94,6 +256,16 @@ pub(super) async fn remove_new(
             DirectoryGrantError::Invalid.message(),
         );
     };
+    if form
+        .pending_directory()
+        .is_some_and(|grant| grant.id == grant_id)
+        && form.consent_existing != "true"
+    {
+        form.pending_directory.clear();
+        form.consent_request.clear();
+        form.consent_existing.clear();
+        return render_new(&state, session.0, form, PatchStatus::Ok, "");
+    }
     let directories = match form.directories() {
         Ok(directories) => directories,
         Err(error) => {
@@ -129,6 +301,9 @@ pub(super) async fn remove_new(
         .filter(|grant| grant.id != grant_id)
         .collect::<Vec<_>>();
     form.set_directories(&retained);
+    form.pending_directory.clear();
+    form.consent_request.clear();
+    form.consent_existing.clear();
     render_new(&state, session.0, form, PatchStatus::Ok, "")
 }
 
@@ -172,13 +347,42 @@ pub(super) async fn pick_saved(
                 .unwrap_or_default();
             let grant = match DirectoryGrant::from_selected(&path, existing) {
                 Ok(grant) if sensitive(&state, &grant) => {
-                    return render_saved(
+                    let mut projected = existing.to_vec();
+                    projected.push(grant.clone());
+                    let Some(mut settings) =
+                        record.model.as_ref().map(|model| model.settings.clone())
+                    else {
+                        return render_saved(
+                            &state,
+                            session.0,
+                            graft,
+                            &record,
+                            PatchStatus::UnprocessableEntity,
+                            "Choose a model before directory access.",
+                        );
+                    };
+                    settings.directories = projected;
+                    let request = state
+                        .access_consent
+                        .request_conversation(session.0, record.id, &settings, &grant)
+                        .map_err(|_| {
+                            AppError::new(
+                                "create directory consent request",
+                                std::io::Error::other("system random source unavailable"),
+                            )
+                        })?;
+                    return render_saved_pending(
                         &state,
                         session.0,
                         graft,
                         &record,
-                        PatchStatus::UnprocessableEntity,
-                        DirectoryGrantError::Sensitive.message(),
+                        PatchStatus::Ok,
+                        "",
+                        PendingDirectory {
+                            grant,
+                            request,
+                            existing: false,
+                        },
                     );
                 }
                 Ok(grant) => grant,
@@ -208,6 +412,7 @@ pub(super) async fn pick_saved(
                 .add_directory(&record.id, revision, grant)
             {
                 Ok(updated) => {
+                    state.access_consent.invalidate_conversation(record.id);
                     render_saved(&state, session.0, graft, &updated, PatchStatus::Ok, "")
                 }
                 Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
@@ -222,6 +427,233 @@ pub(super) async fn pick_saved(
                     error.message(),
                 ),
             }
+        }
+    }
+}
+
+pub(super) async fn request_saved(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path((conversation_id, grant_id)): Path<(String, String)>,
+    Form(form): Form<DirectoryForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let (Some(revision), Some(grant_id)) = (
+        parse_revision(&form.revision),
+        DirectoryGrantId::parse(&grant_id),
+    ) else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            REVISION_MESSAGE,
+        );
+    };
+    if revision != record.revision {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::Conflict,
+            REVISION_MESSAGE,
+        );
+    }
+    let Some(settings) = record.model.as_ref().map(|model| &model.settings) else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            DirectoryGrantError::Invalid.message(),
+        );
+    };
+    let Some(grant) = settings
+        .directories
+        .iter()
+        .find(|grant| grant.id == grant_id && sensitive(&state, grant))
+        .cloned()
+    else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            DirectoryGrantError::Invalid.message(),
+        );
+    };
+    let request = state
+        .access_consent
+        .request_conversation(session.0, record.id, settings, &grant)
+        .map_err(|_| {
+            AppError::new(
+                "create directory consent request",
+                std::io::Error::other("system random source unavailable"),
+            )
+        })?;
+    render_saved_pending(
+        &state,
+        session.0,
+        graft,
+        &record,
+        PatchStatus::Ok,
+        "",
+        PendingDirectory {
+            grant,
+            request,
+            existing: true,
+        },
+    )
+}
+
+pub(super) async fn approve_saved(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<DirectoryForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            REVISION_MESSAGE,
+        );
+    };
+    let Some(grant) = DirectoryGrant::parse_form(&form.pending_directory) else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            "The sensitive access request is invalid. Choose the directory again.",
+        );
+    };
+    if grant.revalidate().is_err() {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::Conflict,
+            DirectoryGrantError::Unavailable.message(),
+        );
+    }
+    let existing = record
+        .model
+        .as_ref()
+        .map(|model| model.settings.directories.as_slice())
+        .unwrap_or_default();
+    let reapproval = form.existing == "true"
+        && existing
+            .iter()
+            .any(|saved| saved == &grant && sensitive(&state, saved));
+    if !reapproval && DirectoryGrant::from_selected(&grant.host_path, existing).is_err() {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            "The sensitive access request no longer matches this conversation.",
+        );
+    }
+    let mut projected = existing.to_vec();
+    if !reapproval {
+        projected.push(grant.clone());
+    }
+    if revision != record.revision || record.active_job.is_some() {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::Conflict,
+            REVISION_MESSAGE,
+        );
+    }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::Conflict,
+            HOST_PATH_RESET_PENDING,
+        );
+    };
+    let Some(mut settings) = record.model.as_ref().map(|model| model.settings.clone()) else {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            "Choose a model before directory access.",
+        );
+    };
+    settings.directories = projected;
+    if state
+        .access_consent
+        .approve_conversation(
+            &form.consent_request,
+            session.0,
+            record.id,
+            &settings,
+            &grant,
+        )
+        .is_err()
+    {
+        return render_saved(
+            &state,
+            session.0,
+            graft,
+            &record,
+            PatchStatus::UnprocessableEntity,
+            "The sensitive access request expired or changed. Choose the directory again.",
+        );
+    }
+    if reapproval {
+        return render_saved(&state, session.0, graft, &record, PatchStatus::Ok, "");
+    }
+    match state
+        .conversations
+        .add_directory(&record.id, revision, grant)
+    {
+        Ok(updated) => render_saved(&state, session.0, graft, &updated, PatchStatus::Ok, ""),
+        Err(error) => {
+            state.access_consent.invalidate_conversation(record.id);
+            if matches!(
+                error,
+                ConversationError::Persist | ConversationError::Corrupt
+            ) {
+                return Err(AppError::new(
+                    "store sensitive conversation directory",
+                    error,
+                ));
+            }
+            render_saved(
+                &state,
+                session.0,
+                graft,
+                &record,
+                status_for(error),
+                error.message(),
+            )
         }
     }
 }
@@ -263,7 +695,10 @@ pub(super) async fn remove_saved(
         .conversations
         .remove_directory(&record.id, revision, grant_id)
     {
-        Ok(updated) => render_saved(&state, session.0, graft, &updated, PatchStatus::Ok, ""),
+        Ok(updated) => {
+            state.access_consent.invalidate_conversation(record.id);
+            render_saved(&state, session.0, graft, &updated, PatchStatus::Ok, "")
+        }
         Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
             Err(AppError::new("remove conversation directory", error))
         }
@@ -301,7 +736,26 @@ fn render_new(
         session,
         GraftRequest::Patch,
         status,
-        super::page::ConversationDetailView::from_new(state, form, error).open_directories(),
+        super::page::ConversationDetailView::from_new(state, session, form, error)
+            .open_directories(),
+    )
+}
+
+fn render_saved_pending(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    graft: PatchGraft,
+    record: &crate::conversations::ConversationRecord,
+    status: PatchStatus,
+    error: &'static str,
+    pending: PendingDirectory,
+) -> AppResult<Response> {
+    render_detail_command(
+        graft,
+        status,
+        detail_view(state, session, record, &record.title, error)
+            .with_pending_directory(state, pending.grant, pending.request, pending.existing)
+            .open_directories(),
     )
 }
 

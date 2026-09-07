@@ -298,6 +298,74 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
 }
 
 #[tokio::test]
+async fn sensitive_draft_consent_is_consumed_by_one_valid_first_message() {
+    let mut state = test_state();
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("power-plant-data");
+    std::fs::create_dir(&data).unwrap();
+    state.local_data = crate::local_data::LocalDataReset::for_test(data);
+    let token = connected(&state);
+    let session = session_id(&token);
+    let grant = crate::execution::DirectoryGrant::from_selected(home.path(), &[]).unwrap();
+    let directories = vec![grant.clone()];
+    let nonce = crate::execution::draft_nonce().unwrap();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let draft = super::NewForm {
+        provider: "xai".to_owned(),
+        model: "grok-4.6".to_owned(),
+        thinking: effort.as_str().to_owned(),
+        draft_nonce: nonce.clone(),
+        ..super::NewForm::default()
+    };
+    let bound_nonce = draft.consent_nonce();
+    let request = state
+        .access_consent
+        .request_draft(session, &bound_nonce, &directories, &grant)
+        .unwrap();
+    let reference = state
+        .access_consent
+        .approve_draft(&request, session, &bound_nonce, &directories, &grant)
+        .unwrap();
+    let body = format!(
+        "action=send&provider=xai&model=grok-4.6&thinking={}&message=Hello&draft_nonce={}&consent_reference={}&directory_0={}",
+        effort.as_str(),
+        form_value(&nonce),
+        form_value(&reference),
+        form_value(&grant.form_value()),
+    );
+
+    for rejected in [
+        body.replace("message=Hello", "message="),
+        format!("{body}&instructions=Changed"),
+        format!("{body}&network=public"),
+        body.replace(&reference, "forged"),
+    ] {
+        let response = app(&state)
+            .oneshot(command("/conversations/new", &token, &rejected))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(state.conversations.list().is_empty());
+    }
+    let first = app(&state)
+        .oneshot(command("/conversations/new", &token, &body))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(state.conversations.list().len(), 1);
+
+    let replay = app(&state)
+        .oneshot(command("/conversations/new", &token, &body))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(state.conversations.list().len(), 1);
+}
+
+#[tokio::test]
 async fn first_message_waits_for_the_host_path_permit_before_it_stores_grants() {
     let state = test_state();
     let token = connected(&state);

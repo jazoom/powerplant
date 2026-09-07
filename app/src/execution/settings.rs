@@ -208,7 +208,7 @@ impl DirectoryGrantError {
             Self::Full => "This conversation has the maximum of eight directories.",
             Self::Invalid => "That directory grant is not valid.",
             Self::Sensitive => {
-                "Access to this sensitive directory needs explicit approval. This approval is not available yet."
+                "Access to this sensitive directory needs explicit approval. Open Directories to approve it."
             }
         }
     }

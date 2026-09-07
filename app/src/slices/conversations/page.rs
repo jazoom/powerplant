@@ -47,6 +47,9 @@ pub(super) struct DirectoryView {
     pub(super) guest_path: String,
     pub(super) form_value: String,
     pub(super) available: bool,
+    pub(super) sensitive: bool,
+    pub(super) pending_approval: bool,
+    pub(super) transient: bool,
 }
 
 pub(super) struct ProjectContextView {
@@ -385,6 +388,13 @@ pub(super) struct ConversationDetailView {
     pub(super) attached_projects: Vec<ProjectContextView>,
     pub(super) attachable_projects: Vec<CatalogueProjectOption>,
     pub(super) directories: Vec<DirectoryView>,
+    pub(super) data_root: String,
+    pub(super) consent_path: String,
+    pub(super) consent_request: String,
+    pub(super) pending_directory: String,
+    pub(super) consent_existing: bool,
+    pub(super) draft_nonce: String,
+    pub(super) consent_reference: String,
     pub(super) model_summary: String,
     pub(super) instructions: String,
     pub(super) tool_options: Vec<ToolOption>,
@@ -418,12 +428,39 @@ pub(super) struct SavedConversationState {
 impl ConversationDetailView {
     pub(super) fn from_new(
         state: &crate::state::AppState,
+        session: crate::sessions::SessionId,
         form: super::new::NewForm,
         error: &'static str,
     ) -> Self {
         let selected_tools = form.tool_values();
         let draft_directories = form.directories().unwrap_or_default();
-        let directories = directory_views(&draft_directories);
+        let mut directories = directory_views(&draft_directories);
+        for (view, grant) in directories.iter_mut().zip(&draft_directories) {
+            view.sensitive = crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            );
+            view.pending_approval = view.sensitive
+                && !state.access_consent.authorised_draft(
+                    &form.consent_reference,
+                    session,
+                    &form.consent_nonce(),
+                    &draft_directories,
+                    grant,
+                );
+        }
+        let consent_path = form
+            .pending_directory()
+            .map(|grant| grant.host_path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let consent_existing = form.consent_existing == "true";
+        if !consent_existing && let Some(grant) = form.pending_directory() {
+            let mut view = directory_view(&grant);
+            view.sensitive = true;
+            view.pending_approval = true;
+            view.transient = true;
+            directories.push(view);
+        }
         Self {
             heading: "New conversation".to_owned(),
             document_title: "New conversation | Power Plant".to_owned(),
@@ -466,6 +503,13 @@ impl ConversationDetailView {
             omitted_messages: 0,
             attached_projects: Vec::new(),
             directories,
+            data_root: state.local_data.root().to_string_lossy().into_owned(),
+            consent_path,
+            consent_request: form.consent_request,
+            pending_directory: form.pending_directory,
+            consent_existing,
+            draft_nonce: form.draft_nonce,
+            consent_reference: form.consent_reference,
             model_summary: String::new(),
             instructions: form.instructions.clone(),
             tool_options: tool_options(&selected_tools),
@@ -760,6 +804,13 @@ impl ConversationDetailView {
             directories: configuration
                 .map(|configuration| directory_views(&configuration.settings.directories))
                 .unwrap_or_default(),
+            data_root: String::new(),
+            consent_path: String::new(),
+            consent_request: String::new(),
+            pending_directory: String::new(),
+            consent_existing: false,
+            draft_nonce: String::new(),
+            consent_reference: String::new(),
             model_summary,
             instructions: configuration
                 .map(|configuration| configuration.settings.instructions.clone())
@@ -801,6 +852,66 @@ impl ConversationDetailView {
                 workflow_progress: None,
             })),
         }
+    }
+
+    pub(super) fn with_access_status(
+        mut self,
+        state: &crate::state::AppState,
+        session: crate::sessions::SessionId,
+        record: &ConversationRecord,
+    ) -> Self {
+        self.data_root = state.local_data.root().to_string_lossy().into_owned();
+        if let Some(configuration) = &record.model {
+            for (view, grant) in self
+                .directories
+                .iter_mut()
+                .zip(&configuration.settings.directories)
+            {
+                view.sensitive = crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
+                );
+                view.pending_approval = view.sensitive
+                    && !state.access_consent.authorised_conversation(
+                        session,
+                        record.id,
+                        &configuration.settings,
+                        grant,
+                    );
+            }
+        }
+        self
+    }
+
+    pub(super) fn with_pending_directory(
+        mut self,
+        state: &crate::state::AppState,
+        grant: crate::execution::DirectoryGrant,
+        request: String,
+        existing: bool,
+    ) -> Self {
+        if existing {
+            if let Some(view) = self
+                .directories
+                .iter_mut()
+                .find(|view| view.id == grant.id.as_hex())
+            {
+                view.sensitive = true;
+                view.pending_approval = true;
+            }
+        } else {
+            let mut view = directory_view(&grant);
+            view.sensitive = true;
+            view.pending_approval = true;
+            view.transient = true;
+            self.directories.push(view);
+        }
+        self.data_root = state.local_data.root().to_string_lossy().into_owned();
+        self.consent_path = grant.host_path.to_string_lossy().into_owned();
+        self.consent_request = request;
+        self.pending_directory = grant.form_value();
+        self.consent_existing = existing;
+        self
     }
 
     pub(super) fn open_settings(mut self) -> Self {
@@ -881,6 +992,9 @@ fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
         guest_path: grant.guest_path(),
         form_value: grant.form_value(),
         available: grant.is_available(),
+        sensitive: false,
+        pending_approval: false,
+        transient: false,
     }
 }
 

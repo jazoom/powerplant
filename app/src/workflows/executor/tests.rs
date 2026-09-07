@@ -82,6 +82,98 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
 }
 
 #[test]
+fn sensitive_dispatch_requires_live_consent_and_the_original_directory() {
+    let mut state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let data = home.join("power-plant-data");
+    std::fs::create_dir_all(&data).unwrap();
+    state.local_data = crate::local_data::LocalDataReset::for_test(data);
+    let grant = crate::execution::DirectoryGrant::from_selected(&home, &[]).unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "model".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        vec![crate::agents::ToolId::Read],
+    )
+    .unwrap()
+    .with_directories(vec![grant.clone()])
+    .unwrap();
+    let record = state
+        .conversations
+        .create_saved(
+            crate::conversations::ConversationId::generate().unwrap(),
+            None,
+            None,
+            Some(crate::conversations::ConversationModelConfiguration {
+                settings: settings.clone(),
+                preset: None,
+            }),
+            None,
+        )
+        .unwrap();
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let run_id = crate::workflows::RunId::generate().unwrap();
+    let session = crate::sessions::generate_session_token().unwrap().id();
+    state.sessions.insert(session);
+    let job = super::WorkflowJob {
+        run_id,
+        session_id: session,
+        project_id: None,
+        agent_id: None,
+        agent_revision: 0,
+        conversation_id: Some(record.id),
+        authority: None,
+        host_policy: authority.policy.clone(),
+        project_free_authority: Some(authority),
+        grant_alias: grant.alias.clone(),
+        grant_access: AccessMode::ReadOnly,
+        connection: crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "key",
+            "model",
+        ),
+        phase_providers: Vec::new(),
+        active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        turns: Vec::new(),
+        job: crate::sessions::Job::new(crate::sessions::JobId::generate().unwrap(), run_id, 0),
+        eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        task_loop: None,
+    };
+    assert!(super::confirm_run_authority(&state, &job).is_err());
+    let request = state
+        .access_consent
+        .request_conversation(session, record.id, &settings, &grant)
+        .unwrap();
+    state
+        .access_consent
+        .approve_conversation(&request, session, record.id, &settings, &grant)
+        .unwrap();
+    assert!(super::confirm_run_authority(&state, &job).is_ok());
+
+    state
+        .conversations
+        .rename(&record.id, record.revision, "Renamed".to_owned())
+        .unwrap();
+    assert!(super::confirm_run_authority(&state, &job).is_ok());
+    let old = root.path().join("old-home");
+    std::fs::rename(&home, &old).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    assert!(super::confirm_run_authority(&state, &job).is_err());
+    std::fs::remove_dir(&home).unwrap();
+    std::fs::rename(&old, &home).unwrap();
+    assert!(super::confirm_run_authority(&state, &job).is_ok());
+    state
+        .sessions
+        .advance_clock(crate::sessions::SESSION_LIFETIME + std::time::Duration::from_secs(1));
+    assert!(super::confirm_run_authority(&state, &job).is_err());
+}
+
+#[test]
 fn repository_status_uses_the_fixed_guest_command() {
     let exec = guest_command(SystemCommandId::RepositoryStatus);
     assert_eq!(exec.program, "git");

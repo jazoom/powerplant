@@ -228,7 +228,7 @@ fn write_reset_marker(root: &Path, inner: &mut Inner) -> Result<ResetRequest, Pe
 }
 
 fn path_under_root(root: &Path, path: &Path) -> bool {
-    path.starts_with(root)
+    path.starts_with(root) || root.starts_with(path)
 }
 
 fn establish(config: &StartupConfig) -> Result<PathBuf, PrepareError> {

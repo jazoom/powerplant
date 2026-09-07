@@ -2697,7 +2697,13 @@ fn confirm_run_authority(
                 crate::execution::authority::sensitive_directory(
                     &grant.host_path,
                     state.local_data.root(),
-                )
+                ) && (!state.sessions.contains_live(&job.session_id)
+                    || !state.access_consent.authorised_conversation(
+                        job.session_id,
+                        conversation_id,
+                        &model.settings,
+                        grant,
+                    ))
             })
         }) {
             return Err("Sensitive directory access needs explicit approval.".to_owned());
