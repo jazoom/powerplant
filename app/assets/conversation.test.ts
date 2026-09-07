@@ -253,7 +253,8 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
             `<textarea name="instructions" form="${formId}"></textarea><input type="checkbox" name="tool_read" value="read" form="${formId}">
             <input type="radio" name="network" value="none" checked form="${formId}">
             <input type="radio" name="network" value="restricted" form="${formId}">
-            <textarea name="network_domains" form="${formId}"></textarea>`,
+            <textarea name="network_domains" form="${formId}"></textarea>
+            <select name="environment" form="${formId}"><option value="starter">Starter</option><option value="custom">Custom</option></select>`,
         );
         const original = root.innerHTML;
         const instructions = root.querySelector<HTMLTextAreaElement>(
@@ -275,6 +276,7 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
         )!;
         domains.value = "example.com";
         domains.dispatchEvent(new Event("input", { bubbles: true }));
+        select("environment", "custom");
         select("provider", "two");
         const unrelated = document.createElement("form");
         unrelated.id = "conversation-rename";
@@ -289,6 +291,7 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
         };
         island.reconcile?.({ cause: "patch", detail });
         expect(value("network")).toBe("restricted");
+        expect(value("environment")).toBe("custom");
         expect(value("network_domains")).toBe("example.com");
         expect(value("instructions")).toBe("Keep my draft");
         expect(value("tool_read")).toBe("read");
@@ -302,6 +305,7 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
             detail: { ...detail, form: submitted },
         });
         expect(value("instructions")).toBe("");
+        expect(value("environment")).toBe("starter");
         expect(value("network")).toBe("none");
         expect(value("network_domains")).toBe("");
         expect(value("tool_read")).toBeNull();

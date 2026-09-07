@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     agents::{AccessMode, NetworkAccess, ToolId},
+    environments::EnvironmentId,
     providers::ModelSelection,
 };
 
@@ -19,6 +20,7 @@ pub(crate) struct ExecutionSettings {
     pub(crate) model: ModelSelection,
     pub(crate) instructions: String,
     pub(crate) tools: Vec<ToolId>,
+    pub(crate) environment: EnvironmentId,
     pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
 }
@@ -69,6 +71,7 @@ impl ExecutionSettings {
         model: ModelSelection,
         instructions: String,
         tools: Vec<ToolId>,
+        environment: EnvironmentId,
     ) -> Option<Self> {
         if instructions.len() > MAXIMUM_INSTRUCTION_BYTES
             || instructions
@@ -86,6 +89,7 @@ impl ExecutionSettings {
             model,
             instructions,
             tools,
+            environment,
             network: NetworkAccess::None,
             directories: Vec::new(),
         })

@@ -13,6 +13,7 @@ pub(super) struct NewForm {
     pub(super) tool_read: String,
     pub(super) tool_write: String,
     pub(super) tool_run: String,
+    pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
     pub(super) directory_0: String,
@@ -30,7 +31,7 @@ pub(super) struct NewForm {
     pub(super) consent_existing: String,
     pub(super) title: String,
     pub(super) message: String,
-    action: String,
+    pub(super) action: String,
 }
 
 pub(super) async fn show(
@@ -42,6 +43,9 @@ pub(super) async fn show(
     let mut form = NewForm {
         project: query.project,
         network: "none".to_owned(),
+        environment: super::default_environment(&state)
+            .map(|id| id.as_hex())
+            .unwrap_or_default(),
         draft_nonce: crate::execution::draft_nonce().map_err(|_| {
             AppError::new(
                 "create draft consent nonce",
@@ -90,6 +94,7 @@ impl NewForm {
             &self.tool_read,
             &self.tool_write,
             &self.tool_run,
+            &self.environment,
             &self.network,
             &self.network_domains,
         ] {
@@ -216,9 +221,12 @@ fn model(
             .ok_or("Enter a valid model name.")?
     };
     valid_selection(state, &selection)?;
+    let environment = super::selected_environment(state, &form.environment)?;
     let mut configuration = match preset {
-        Some(preset) => ConversationModelConfiguration::from_preset(&preset, selection),
-        None => ConversationModelConfiguration::direct(selection),
+        Some(preset) => {
+            ConversationModelConfiguration::from_preset(&preset, selection, environment)
+        }
+        None => ConversationModelConfiguration::direct(selection, environment),
     };
     if configuration.preset.is_none() {
         let tools = super::settings::parse_tools(&form.tool_values())?;
@@ -233,6 +241,7 @@ fn model(
             configuration.settings.model,
             form.instructions.clone(),
             tools,
+            environment,
         )
         .and_then(|settings| settings.with_network(network))
         .ok_or("Enter instructions within 32 KiB without unsupported control characters.")?;

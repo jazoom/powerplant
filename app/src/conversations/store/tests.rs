@@ -68,6 +68,7 @@ impl ConversationStore {
             selection,
             String::new(),
             crate::agents::ToolId::ALL.to_vec(),
+            crate::tests::test_environment_id(),
         )
         .unwrap();
         self.begin_message_with_model(
@@ -144,6 +145,7 @@ fn restart_preserves_directory_identity_and_guest_alias() {
         ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
         String::new(),
         Vec::new(),
+        crate::tests::test_environment_id(),
     )
     .unwrap()
     .with_directories(vec![grant.clone()])
@@ -298,6 +300,7 @@ fn workflow_reservations_leave_the_normal_model_selection_unchanged() {
                 None,
             )
             .expect("model"),
+            crate::tests::test_environment_id(),
         )),
     ] {
         let mut conversation = store.create("Workflow".to_owned()).expect("conversation");
@@ -515,7 +518,10 @@ fn linked_plan_reviews_survive_restart_with_the_exact_plan_reference() {
                 source_id: source.id,
                 source_revision: source.revision,
                 title: "Plan review".to_owned(),
-                model: super::super::ConversationModelConfiguration::direct(selection),
+                model: super::super::ConversationModelConfiguration::direct(
+                    selection,
+                    crate::tests::test_environment_id(),
+                ),
                 plan: plan.clone(),
                 task_brief: "Review this plan".to_owned(),
                 read_only_projects: Vec::new(),

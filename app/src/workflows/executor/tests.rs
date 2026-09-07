@@ -27,6 +27,7 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
         .unwrap(),
         String::new(),
         vec![crate::agents::ToolId::Write],
+        crate::tests::test_environment_id(),
     )
     .unwrap();
     let workspace = crate::workflows::workspace::AttemptWorkspace {
@@ -99,6 +100,7 @@ fn sensitive_dispatch_requires_live_consent_and_the_original_directory() {
         .unwrap(),
         String::new(),
         vec![crate::agents::ToolId::Read],
+        crate::tests::test_environment_id(),
     )
     .unwrap()
     .with_directories(vec![grant.clone()])

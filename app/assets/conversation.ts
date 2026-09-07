@@ -24,6 +24,7 @@ export function initConversation(
         "tool_read",
         "tool_write",
         "tool_run",
+        "environment",
         "network",
         "network_domains",
         "preset",
@@ -175,6 +176,16 @@ export function initConversation(
                     : value === "public"
                       ? "Public internet"
                       : "Network off";
+        }
+        const environment = field("environment") as HTMLSelectElement | null;
+        const environmentSummary = root.querySelector(
+            "[data-conversation-environment-summary]",
+        );
+        if (environmentSummary && environment) {
+            environmentSummary.textContent =
+                environment.selectedOptions[0]?.text
+                    .replace(/\s+/g, " ")
+                    .trim() || "Choose environment";
         }
         const project = field("project") as HTMLSelectElement | null;
         const context = root.querySelector<HTMLElement>(

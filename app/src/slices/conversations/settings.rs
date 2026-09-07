@@ -34,6 +34,7 @@ pub(super) struct SettingsForm {
     pub(super) tool_read: String,
     pub(super) tool_write: String,
     pub(super) tool_run: String,
+    pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
 }
@@ -71,6 +72,7 @@ impl SettingsForm {
             thinking: &self.thinking,
             instructions: self.instructions.clone(),
             tools: self.tool_values(),
+            environment: &self.environment,
             network: &self.network,
             network_domains: &self.network_domains,
         }
@@ -89,6 +91,7 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
     let selection = ModelSelection::new(provider, form.model.clone(), thinking)
         .ok_or("Enter a valid model name.")?;
     valid_selection(state, &selection)?;
+    let environment = super::selected_environment(state, &form.environment)?;
     let network_mode = if form.network.trim().is_empty() {
         "none"
     } else {
@@ -100,6 +103,7 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
         selection,
         form.instructions.clone(),
         parse_tools(&form.tool_values())?,
+        environment,
     )
     .and_then(|settings| settings.with_network(network))
     .ok_or("Enter instructions within 32 KiB without unsupported control characters.")
@@ -123,6 +127,20 @@ pub(super) async fn update(
                 .with_settings_fields(&state, form.submitted_fields()),
         );
     };
+    if record.active_job.is_some() || super::has_pending_review(&state, record.id) {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Finish or discard the current work before you change the environment.",
+            )
+            .with_settings_fields(&state, form.submitted_fields()),
+        );
+    }
     let settings = match validate(&state, &form).and_then(|settings| {
         let directories = record
             .model
@@ -144,7 +162,9 @@ pub(super) async fn update(
         }
     };
     let access_changed = record.model.as_ref().is_some_and(|model| {
-        model.settings.tools != settings.tools || model.settings.network != settings.network
+        model.settings.tools != settings.tools
+            || model.settings.network != settings.network
+            || model.settings.environment != settings.environment
     });
     let selection = settings.model.clone();
     match state

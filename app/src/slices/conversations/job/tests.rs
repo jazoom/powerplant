@@ -31,6 +31,7 @@ async fn conversation_instructions_apply_before_and_after_the_first_exchange() {
         ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
         "Answer from the supplied evidence.".to_owned(),
         Vec::new(),
+        crate::tests::test_environment_id(),
     )
     .unwrap();
     let mut record = state

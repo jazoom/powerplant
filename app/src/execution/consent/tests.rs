@@ -21,6 +21,7 @@ fn draft_consent_is_single_use_and_becomes_conversation_consent() {
         .unwrap(),
         String::new(),
         Vec::new(),
+        crate::tests::test_environment_id(),
     )
     .unwrap()
     .with_directories(directories.clone())
@@ -53,6 +54,9 @@ fn draft_consent_is_single_use_and_becomes_conversation_consent() {
     assert!(store.authorised_conversation(session, conversation, &settings, &grant));
     let mut changed = settings.clone();
     changed.network = crate::agents::NetworkAccess::Public;
+    assert!(!store.authorised_conversation(session, conversation, &changed, &grant));
+    changed = settings.clone();
+    changed.environment = crate::environments::EnvironmentId::generate().unwrap();
     assert!(!store.authorised_conversation(session, conversation, &changed, &grant));
     changed = settings.clone();
     changed.tools.push(crate::agents::ToolId::Read);

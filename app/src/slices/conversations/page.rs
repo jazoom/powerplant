@@ -12,6 +12,10 @@ use crate::{
         ConversationMessage, ConversationModelConfiguration, ConversationRecord,
         MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus, PlanDocument, PlanSource,
     },
+    environments::{
+        EnvironmentCatalogue, EnvironmentId, EnvironmentSnapshotRepository, PreparationState,
+        SnapshotAvailability,
+    },
     models::models_dev::ModelsDevCatalogue,
     projects::{ProjectId, ProjectRecord},
     providers::ModelSelection,
@@ -324,6 +328,8 @@ pub(super) struct ModelSources<'a> {
     pub(super) vault: &'a ProviderVault,
     pub(super) preferences: &'a crate::preferences::Preferences,
     pub(super) models: &'a ModelsDevCatalogue,
+    pub(super) environments: &'a EnvironmentCatalogue,
+    pub(super) environment_snapshots: &'a EnvironmentSnapshotRepository,
     pub(super) projects: &'a [ProjectRecord],
     pub(super) documents: &'a [PlanDocument],
 }
@@ -350,6 +356,14 @@ pub(super) struct NetworkOption {
     pub(super) selected: bool,
 }
 
+pub(super) struct EnvironmentOption {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) readiness: &'static str,
+    pub(super) availability: &'static str,
+    pub(super) selected: bool,
+}
+
 pub(super) struct ToolOption {
     pub(super) field_name: &'static str,
     pub(super) value: &'static str,
@@ -364,6 +378,7 @@ pub(super) struct SubmittedSettingsFields<'a> {
     pub(super) thinking: &'a str,
     pub(super) instructions: String,
     pub(super) tools: Vec<String>,
+    pub(super) environment: &'a str,
     pub(super) network: &'a str,
     pub(super) network_domains: &'a str,
 }
@@ -398,6 +413,8 @@ pub(super) struct ConversationDetailView {
     pub(super) model_summary: String,
     pub(super) instructions: String,
     pub(super) tool_options: Vec<ToolOption>,
+    pub(super) environment_options: Vec<EnvironmentOption>,
+    pub(super) environment_summary: String,
     pub(super) network_options: Vec<NetworkOption>,
     pub(super) network_domains: String,
     pub(super) network_summary: String,
@@ -513,6 +530,16 @@ impl ConversationDetailView {
             model_summary: String::new(),
             instructions: form.instructions.clone(),
             tool_options: tool_options(&selected_tools),
+            environment_options: environment_options(
+                &state.environments,
+                &state.environment_snapshots,
+                EnvironmentId::parse(&form.environment),
+            ),
+            environment_summary: environment_summary(
+                &state.environments,
+                &state.environment_snapshots,
+                EnvironmentId::parse(&form.environment),
+            ),
             network_options: network_options(&form.network),
             network_domains: form.network_domains,
             network_summary: network_summary_from_form(&form.network),
@@ -633,19 +660,27 @@ impl ConversationDetailView {
             .desk_providers(sources.vault)
             .into_iter()
             .find(|provider| provider.selected)
-            .map(|connection| {
-                ConversationModelConfiguration::direct(ModelSelection {
-                    provider: connection.kind,
-                    thinking: sources.models.effective_effort(
-                        connection.kind,
-                        &connection.model,
-                        connection.thinking.as_ref(),
-                    ),
-                    model: connection.model,
-                })
+            .and_then(|connection| {
+                crate::workflows::alpine_git_id(sources.environments)
+                    .ok()
+                    .map(|environment| {
+                        ConversationModelConfiguration::direct(
+                            ModelSelection {
+                                provider: connection.kind,
+                                thinking: sources.models.effective_effort(
+                                    connection.kind,
+                                    &connection.model,
+                                    connection.thinking.as_ref(),
+                                ),
+                                model: connection.model,
+                            },
+                            environment,
+                        )
+                    })
             });
         let configuration = record.model.as_ref().or(fallback.as_ref());
         let selection = configuration.map(|configuration| &configuration.settings.model);
+        let selected_environment = configuration.map(|model| model.settings.environment);
         let network_options = network_options(record.network.as_str());
         let network_domains = record.network.domains().join("\n");
         let preset_network = configuration
@@ -827,6 +862,16 @@ impl ConversationDetailView {
                     })
                     .unwrap_or_default(),
             ),
+            environment_options: environment_options(
+                sources.environments,
+                sources.environment_snapshots,
+                selected_environment,
+            ),
+            environment_summary: environment_summary(
+                sources.environments,
+                sources.environment_snapshots,
+                selected_environment,
+            ),
             network_options: network_options.clone(),
             network_domains: network_domains.clone(),
             network_summary,
@@ -939,6 +984,17 @@ impl ConversationDetailView {
         );
         self.instructions = fields.instructions;
         self.tool_options = tool_options(&fields.tools);
+        let selected_environment = EnvironmentId::parse(fields.environment);
+        self.environment_options = environment_options(
+            &state.environments,
+            &state.environment_snapshots,
+            selected_environment,
+        );
+        self.environment_summary = environment_summary(
+            &state.environments,
+            &state.environment_snapshots,
+            selected_environment,
+        );
         self.network_options = network_options(fields.network);
         self.network_domains = fields.network_domains.to_owned();
         self.network_summary = network_summary_from_form(fields.network);
@@ -996,6 +1052,83 @@ fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
         pending_approval: false,
         transient: false,
     }
+}
+
+fn environment_options(
+    catalogue: &EnvironmentCatalogue,
+    snapshots: &EnvironmentSnapshotRepository,
+    selected: Option<EnvironmentId>,
+) -> Vec<EnvironmentOption> {
+    let records = catalogue.list();
+    let mut options = records
+        .iter()
+        .map(|record| {
+            let (readiness, availability) = environment_status(record, catalogue, snapshots);
+            EnvironmentOption {
+                id: record.id.as_hex(),
+                name: record.name.clone(),
+                readiness,
+                availability,
+                selected: selected == Some(record.id),
+            }
+        })
+        .collect::<Vec<_>>();
+    if let Some(id) = selected
+        && records.iter().all(|record| record.id != id)
+    {
+        options.push(EnvironmentOption {
+            id: id.as_hex(),
+            name: "Selected environment unavailable".to_owned(),
+            readiness: "Unavailable",
+            availability: "Unavailable",
+            selected: true,
+        });
+    }
+    options
+}
+
+fn environment_summary(
+    catalogue: &EnvironmentCatalogue,
+    snapshots: &EnvironmentSnapshotRepository,
+    selected: Option<EnvironmentId>,
+) -> String {
+    let Some(selected) = selected else {
+        return "Choose environment".to_owned();
+    };
+    let Some(record) = catalogue.get(&selected) else {
+        return "Environment unavailable".to_owned();
+    };
+    let (readiness, availability) = environment_status(&record, catalogue, snapshots);
+    format!("{} · {readiness} · {availability}", record.name)
+}
+
+fn environment_status(
+    record: &crate::environments::EnvironmentRecord,
+    catalogue: &EnvironmentCatalogue,
+    snapshots: &EnvironmentSnapshotRepository,
+) -> (&'static str, &'static str) {
+    let latest = catalogue.preparation(&record.latest_preparation);
+    let readiness = match latest.as_ref().map(|preparation| preparation.state) {
+        Some(PreparationState::Ready) => "Ready",
+        Some(PreparationState::Queued) => "Queued",
+        Some(PreparationState::Preparing) => "Preparing",
+        Some(PreparationState::Failed) => "Preparation failed",
+        Some(PreparationState::Interrupted) => "Preparation interrupted",
+        Some(PreparationState::Cancelled) => "Preparation cancelled",
+        Some(PreparationState::Superseded) => "Preparation superseded",
+        None => "Not ready",
+    };
+    let availability = record
+        .ready_preparation
+        .and_then(|id| catalogue.preparation(&id))
+        .and_then(|preparation| preparation.snapshot)
+        .map(|snapshot| snapshots.recorded_availability(&snapshot))
+        .map_or("No snapshot", |availability| match availability {
+            SnapshotAvailability::Available => "Available",
+            SnapshotAvailability::Missing => "Snapshot unavailable",
+            SnapshotAvailability::Corrupt => "Snapshot corrupt",
+        });
+    (readiness, availability)
 }
 
 fn network_options(selected: &str) -> Vec<NetworkOption> {

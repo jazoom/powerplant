@@ -14,12 +14,21 @@ async fn settings_update_validates_the_complete_form_and_revision() {
         .models_dev
         .effective_effort(ProviderKind::Xai, "grok-4.6", None)
         .unwrap();
+    let (environment, _) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Rust tools".to_owned(),
+            oci_image: "docker.io/library/alpine:3.20".to_owned(),
+            setup_script: String::new(),
+        })
+        .unwrap();
     let path = format!("/conversations/{}/settings", record.id);
     let valid = format!(
-        "revision={}&provider=xai&model=grok-4.6&thinking={}&instructions={}&tool_read=read&tool_list=list&network=restricted&network_domains=example.com",
+        "revision={}&provider=xai&model=grok-4.6&thinking={}&instructions={}&tool_read=read&tool_list=list&environment={}&network=restricted&network_domains=example.com",
         record.revision,
         effort.as_str(),
-        "Answer%20with%20concise%20evidence."
+        "Answer%20with%20concise%20evidence.",
+        environment.id
     );
     let response = app(&state)
         .oneshot(command(&path, &token, &valid))
@@ -32,6 +41,7 @@ async fn settings_update_validates_the_complete_form_and_revision() {
     let updated = state.conversations.get(&record.id).unwrap();
     let settings = &updated.model.as_ref().unwrap().settings;
     assert_eq!(settings.instructions, "Answer with concise evidence.");
+    assert_eq!(settings.environment, environment.id);
     assert_eq!(
         settings.tools,
         vec![crate::agents::ToolId::List, crate::agents::ToolId::Read]
@@ -40,6 +50,10 @@ async fn settings_update_validates_the_complete_form_and_revision() {
         settings.network,
         crate::agents::NetworkAccess::Restricted(vec!["example.com".to_owned()])
     );
+    state
+        .environments
+        .delete(&environment.id, environment.revision)
+        .unwrap();
 
     for fields in [
         format!(
@@ -55,6 +69,12 @@ async fn settings_update_validates_the_complete_form_and_revision() {
             "revision={}&provider=xai&model=grok-4.6&thinking={}&network=restricted&network_domains=https%3A%2F%2Fexample.com",
             updated.revision,
             effort.as_str()
+        ),
+        format!(
+            "revision={}&provider=xai&model=grok-4.6&thinking={}&environment={}",
+            updated.revision,
+            effort.as_str(),
+            environment.id
         ),
     ] {
         let response = app(&state)
@@ -83,4 +103,36 @@ async fn settings_update_validates_the_complete_form_and_revision() {
     let body = text(response).await;
     assert!(body.contains("Retained"));
     assert!(body.contains("data-settings-open=\"true\""));
+
+    let owner = super::super::tests::session_id(&token);
+    let job = state
+        .sessions
+        .begin_conversation_job(&owner, updated.id, 1)
+        .unwrap();
+    state
+        .conversations
+        .begin_message(
+            &updated.id,
+            updated.revision,
+            settings.model.clone(),
+            job.id(),
+            "Question".to_owned(),
+        )
+        .unwrap();
+    let active = state.conversations.get(&updated.id).unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&provider=xai&model=grok-4.6&thinking={}&environment={}",
+                active.revision,
+                effort.as_str(),
+                super::super::default_environment(&state).unwrap()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(state.conversations.get(&active.id).unwrap(), active);
 }

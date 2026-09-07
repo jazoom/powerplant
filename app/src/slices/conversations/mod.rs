@@ -27,6 +27,7 @@ use crate::{
         ConversationModelConfiguration, ConversationRecord, DocumentError, DocumentId,
         PlanDocument, PlanReviewCreation, PlanReviewLink, PlanRevisionReference, PlanSource,
     },
+    environments::EnvironmentId,
     error::{AppError, AppResult},
     projects::ProjectId,
     providers::{ModelSelection, ProviderKind, ThinkingEffort},
@@ -990,14 +991,24 @@ fn candidate_review_model(
             .ok_or("Choose a model before you start this review.")?
     };
     valid_selection(state, &selection)?;
+    let environment = source
+        .and_then(|record| record.model.as_ref())
+        .map(|model| model.settings.environment)
+        .or_else(|| default_environment(state).ok())
+        .ok_or("The starter environment is unavailable.")?;
     if form.preset.trim().is_empty() {
-        Ok(ConversationModelConfiguration::direct(selection))
+        Ok(ConversationModelConfiguration::direct(
+            selection,
+            environment,
+        ))
     } else {
         let preset = AgentId::parse(form.preset.trim())
             .and_then(|id| state.agents.get(&id))
             .ok_or("Choose an available reviewer preset.")?;
         Ok(ConversationModelConfiguration::from_preset(
-            &preset, selection,
+            &preset,
+            selection,
+            environment,
         ))
     }
 }
@@ -1860,9 +1871,7 @@ pub(super) async fn preflight_execution(
             missing.message(),
         ));
     }
-    let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
-        StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
-    })?;
+    let environment = model.settings.environment;
     let directories = model
         .settings
         .directories
@@ -1970,9 +1979,7 @@ pub(super) async fn start_message(
         } else {
             None
         };
-        let environment = workflows::alpine_git_id(&state.environments).map_err(|error| {
-            StartMessageError::User(PatchStatus::UnprocessableEntity, error.message())
-        })?;
+        let environment = model.settings.environment;
         let pinned = if let Some(authority) = authority.as_ref() {
             let phase_authority = phase_authority.as_ref().expect("project authority");
             let secondary = phase_authority
@@ -2347,9 +2354,20 @@ async fn select_model(
             detail_view(&state, session.0, &record, &record.title, error),
         );
     }
+    let environment = record
+        .model
+        .as_ref()
+        .map(|model| model.settings.environment)
+        .or_else(|| default_environment(&state).ok())
+        .ok_or_else(|| {
+            AppError::new(
+                "select conversation environment",
+                std::io::Error::other("starter environment unavailable"),
+            )
+        })?;
     match state
         .conversations
-        .select_model(&record.id, revision, selection.clone())
+        .select_model(&record.id, revision, selection.clone(), environment)
     {
         Ok(updated) => {
             let warning = remember_selection(&state, selection).err().unwrap_or("");
@@ -2424,9 +2442,20 @@ async fn apply_preset(
             detail_view(&state, session.0, &record, &record.title, error),
         );
     }
+    let environment = record
+        .model
+        .as_ref()
+        .map(|model| model.settings.environment)
+        .or_else(|| default_environment(&state).ok())
+        .ok_or_else(|| {
+            AppError::new(
+                "select conversation environment",
+                std::io::Error::other("starter environment unavailable"),
+            )
+        })?;
     match state
         .conversations
-        .apply_preset(&record.id, revision, &preset, selection)
+        .apply_preset(&record.id, revision, &preset, selection, environment)
     {
         Ok(updated) => render_detail_command(
             graft,
@@ -3083,18 +3112,55 @@ fn effective_model(
             .desk_providers(&state.vault)
             .into_iter()
             .find(|provider| provider.selected)
-            .map(|connection| {
-                ConversationModelConfiguration::direct(ModelSelection {
-                    provider: connection.kind,
-                    thinking: state.models_dev.effective_effort(
-                        connection.kind,
-                        &connection.model,
-                        connection.thinking.as_ref(),
-                    ),
-                    model: connection.model,
+            .and_then(|connection| {
+                default_environment(state).ok().map(|environment| {
+                    ConversationModelConfiguration::direct(
+                        ModelSelection {
+                            provider: connection.kind,
+                            thinking: state.models_dev.effective_effort(
+                                connection.kind,
+                                &connection.model,
+                                connection.thinking.as_ref(),
+                            ),
+                            model: connection.model,
+                        },
+                        environment,
+                    )
                 })
             })
     })
+}
+
+pub(super) fn default_environment(state: &AppState) -> Result<EnvironmentId, &'static str> {
+    workflows::alpine_git_id(&state.environments).map_err(|error| error.message())
+}
+
+pub(super) fn selected_environment(
+    state: &AppState,
+    raw: &str,
+) -> Result<EnvironmentId, &'static str> {
+    let environment = if raw.trim().is_empty() {
+        default_environment(state).map_err(|_| "Choose an available environment.")?
+    } else {
+        EnvironmentId::parse(raw.trim()).ok_or("Choose an available environment.")?
+    };
+    state
+        .environments
+        .get(&environment)
+        .map(|_| environment)
+        .ok_or("Choose an available environment.")
+}
+
+pub(super) fn has_pending_review(state: &AppState, conversation: ConversationId) -> bool {
+    state
+        .workflow_runs
+        .for_conversation(&conversation)
+        .into_iter()
+        .any(|run| {
+            run.gates
+                .iter()
+                .any(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
+        })
 }
 
 fn remember_selection(state: &AppState, selection: ModelSelection) -> Result<(), &'static str> {
@@ -3204,6 +3270,8 @@ fn detail_view(
             vault: &state.vault,
             preferences: &state.preferences,
             models: &state.models_dev,
+            environments: &state.environments,
+            environment_snapshots: &state.environment_snapshots,
             projects: &state.projects.list(),
             documents: &state.documents.list_for_conversation(record.id),
         },
@@ -3312,14 +3380,21 @@ fn review_model(
         }
     };
     valid_selection(state, &selection)?;
+    let environment =
+        default_environment(state).map_err(|_| "The starter environment is unavailable.")?;
     if form.preset.trim().is_empty() {
-        Ok(ConversationModelConfiguration::direct(selection))
+        Ok(ConversationModelConfiguration::direct(
+            selection,
+            environment,
+        ))
     } else {
         let preset = AgentId::parse(form.preset.trim())
             .and_then(|id| state.agents.get(&id))
             .ok_or("Choose an available reviewer preset.")?;
         Ok(ConversationModelConfiguration::from_preset(
-            &preset, selection,
+            &preset,
+            selection,
+            environment,
         ))
     }
 }

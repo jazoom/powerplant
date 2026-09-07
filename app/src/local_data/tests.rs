@@ -536,6 +536,7 @@ fn catalogue_conflict_includes_conversation_directory_grants() {
         ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
         String::new(),
         Vec::new(),
+        crate::tests::test_environment_id(),
     )
     .unwrap()
     .with_directories(vec![grant])
@@ -564,6 +565,7 @@ fn catalogue_conflict_includes_conversation_directory_grants() {
         ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
         String::new(),
         Vec::new(),
+        crate::tests::test_environment_id(),
     )
     .unwrap()
     .with_directories(vec![broad_grant])

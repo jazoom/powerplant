@@ -28,6 +28,7 @@ pub(super) fn app(state: &AppState) -> axum::Router {
 }
 
 pub(super) fn connected(state: &AppState) -> String {
+    state.environments.apply_production_seeds();
     state
         .vault
         .put(ProviderConnection::with_key(
@@ -682,7 +683,12 @@ async fn send_persists_a_project_free_reply() {
     let selection = ModelSelection::new(ProviderKind::Xai, model, effort).expect("selection");
     let record = state
         .conversations
-        .select_model(&record.id, record.revision, selection)
+        .select_model(
+            &record.id,
+            record.revision,
+            selection,
+            crate::tests::test_environment_id(),
+        )
         .expect("selection saved");
     let path = format!("/conversations/{}/messages", record.id.as_hex());
 
@@ -1048,6 +1054,7 @@ async fn project_context_references_are_distinct_and_do_not_expose_paths() {
                     .effective_effort(ProviderKind::Xai, &model, None),
             )
             .expect("model"),
+            crate::tests::test_environment_id(),
         )
         .expect("select model");
     let response = app(&state)
@@ -1290,6 +1297,7 @@ async fn writable_access_is_explicit_and_adds_write_without_network_access() {
                 ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
                 String::new(),
                 ToolId::ALL.to_vec(),
+                crate::tests::test_environment_id(),
             )
             .unwrap(),
         )
@@ -2010,7 +2018,12 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
     .expect("model");
     let record = state
         .conversations
-        .select_model(&record.id, record.revision, selection)
+        .select_model(
+            &record.id,
+            record.revision,
+            selection,
+            crate::tests::test_environment_id(),
+        )
         .expect("selection");
     let project = register_project(&state, "Writable project");
     let record = state

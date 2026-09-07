@@ -54,6 +54,7 @@ fn store_provider(state: &AppState, key: &str) {
 }
 
 fn connected(state: &AppState) -> String {
+    state.environments.apply_production_seeds();
     store_provider(state, SECRET_KEY);
     let token = sessions::generate_session_token().expect("session token");
     state.sessions.insert(token.id());

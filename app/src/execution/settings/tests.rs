@@ -12,9 +12,23 @@ fn model() -> ModelSelection {
 #[test]
 fn settings_reject_duplicate_tools_and_control_characters() {
     assert!(
-        ExecutionSettings::new(model(), String::new(), vec![ToolId::Read, ToolId::Read],).is_none()
+        ExecutionSettings::new(
+            model(),
+            String::new(),
+            vec![ToolId::Read, ToolId::Read],
+            crate::tests::test_environment_id(),
+        )
+        .is_none()
     );
-    assert!(ExecutionSettings::new(model(), "bad\0text".to_owned(), Vec::new()).is_none());
+    assert!(
+        ExecutionSettings::new(
+            model(),
+            "bad\0text".to_owned(),
+            Vec::new(),
+            crate::tests::test_environment_id(),
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -44,10 +58,15 @@ fn duplicate_directory_identity_is_invalid_at_distinct_paths() {
     duplicate.alias = "other".to_owned();
     duplicate.host_path = parent.path().with_extension("alias");
     assert!(
-        ExecutionSettings::new(model(), String::new(), Vec::new())
-            .unwrap()
-            .with_directories(vec![first, duplicate])
-            .is_none()
+        ExecutionSettings::new(
+            model(),
+            String::new(),
+            Vec::new(),
+            crate::tests::test_environment_id(),
+        )
+        .unwrap()
+        .with_directories(vec![first, duplicate])
+        .is_none()
     );
 }
 

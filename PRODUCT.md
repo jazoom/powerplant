@@ -82,7 +82,9 @@ They create agents in the local catalogue. Each agent has a name, instructions, 
 
 An agent network policy permits no network, selected domain suffixes or the public internet. No network is the default. Public access excludes the host and private networks. Restricted access includes each listed domain, its subdomains and all ports.
 
-They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. Sandbox tools require a ready snapshot. Tool-free chat requires no sandbox runtime or snapshot.
+They create environment recipes with an OCI image and an optional setup script. A new installation includes a starter Git environment. Power Plant selects that starter for new conversations by default. The user can select another recipe for later attempts.
+
+Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. Each tool attempt pins the selected ready snapshot. The conversation does not own a persistent sandbox. Tool-free chat requires no sandbox runtime or snapshot.
 
 They create workflow definitions with a default environment, roles and ordered steps. A definition can run once or repeat one group of phases for each remaining task. A task list is not required for a one-shot definition. Ordinary chat still needs no workflow.
 
@@ -103,7 +105,7 @@ They open a project to see its conversations. The project page lists conversatio
 
 The old project-and-agent desk is not a conversation route. Project work starts at a conversation. Agent configuration stays at `/agents` and `/agents/{agent_id}/configuration`.
 
-A writable conversation message starts the system-owned Quick task. Quick task is a system-owned one-agent run. It needs no configured workflow. It uses the pinned starter Git environment. The product does not start a run when that prepared snapshot is absent or unavailable.
+A writable conversation message starts the system-owned Quick task. Quick task is a system-owned one-agent run. It needs no configured workflow. It uses the environment selected in the conversation. The product does not start a run when that selected snapshot is absent or unavailable.
 
 A read-only project grant produces a one-step Quick task. The step can answer and inspect files. It cannot produce a candidate revision.
 
@@ -178,6 +180,7 @@ Current capabilities:
 - Create environment recipes from an OCI image and a setup script.
 - Edit and delete environment recipes.
 - Prepare environment snapshots for workflow use.
+- Select an environment for each conversation and its later tool attempts.
 - Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
 - Send a Quick task from an independent conversation with no workflow selection.
@@ -221,7 +224,8 @@ Current constraints:
 - New directory grants are Read only. Sensitive home or Power Plant data grants remain unavailable until explicit consent exists.
 - Tools cannot combine legacy project access with conversation directory grants.
 - Project paths cannot change. Project records cannot be deleted in this release.
-- Sandbox-backed Quick task needs the ready Alpine Git seed snapshot. The product does not fall back to another environment.
+- Sandbox-backed Quick task needs the selected ready snapshot. The product does not fall back to another environment.
+- Environment changes wait until active execution and pending reviewed work settle.
 - Tool-free chat needs no sandbox runtime or prepared environment.
 - Quick task never enters the workflow catalogue.
 

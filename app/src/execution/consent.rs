@@ -342,6 +342,7 @@ fn access_digest(directories: &[DirectoryGrant]) -> [u8; 32] {
 fn settings_digest(settings: &super::ExecutionSettings) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(access_digest(&settings.directories));
+    digest.update(settings.environment.as_hex());
     for tool in &settings.tools {
         digest.update(tool.as_str());
         digest.update([0]);

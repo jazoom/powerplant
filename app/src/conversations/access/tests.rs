@@ -323,8 +323,11 @@ fn private_workspace_keeps_live_preset_ceilings_without_mounting_preset_director
         None,
     )
     .unwrap();
-    let mut model =
-        crate::conversations::ConversationModelConfiguration::from_preset(&preset, selection);
+    let mut model = crate::conversations::ConversationModelConfiguration::from_preset(
+        &preset,
+        selection,
+        crate::tests::test_environment_id(),
+    );
     model.settings.network = NetworkAccess::Public;
     model.settings.tools.push(ToolId::Write);
     let mut record = state

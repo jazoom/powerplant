@@ -144,6 +144,34 @@ impl EnvironmentSnapshotRepository {
         storage::confined_child(root, key.as_str()).map_err(|_| SnapshotError::Path)
     }
 
+    pub(crate) fn recorded_availability(
+        &self,
+        snapshot: &PreparedSnapshot,
+    ) -> SnapshotAvailability {
+        #[cfg(test)]
+        {
+            let overrides = self
+                .overrides
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((_, availability)) = overrides
+                .iter()
+                .rev()
+                .find(|(key, _)| key == &snapshot.artifact_key)
+            {
+                return *availability;
+            }
+        }
+        self.artifact_dir(&snapshot.artifact_key)
+            .map_or(SnapshotAvailability::Missing, |path| {
+                if path.exists() {
+                    SnapshotAvailability::Available
+                } else {
+                    SnapshotAvailability::Missing
+                }
+            })
+    }
+
     pub(crate) async fn inspect(&self, snapshot: &PreparedSnapshot) -> SnapshotAvailability {
         #[cfg(test)]
         {

@@ -15,6 +15,7 @@ fn conversation(state: &crate::state::AppState) -> crate::conversations::Convers
             Some("Directory test".to_owned()),
             Some(ConversationModelConfiguration::direct(
                 ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
+                crate::tests::test_environment_id(),
             )),
             None,
         )

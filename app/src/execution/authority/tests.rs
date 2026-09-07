@@ -10,6 +10,7 @@ fn settings() -> crate::execution::ExecutionSettings {
         ModelSelection::new(ProviderKind::Xai, "test-model".to_owned(), None).unwrap(),
         String::new(),
         vec![ToolId::List, ToolId::Write],
+        crate::tests::test_environment_id(),
     )
     .and_then(|settings| settings.with_network(NetworkAccess::Public))
     .unwrap()

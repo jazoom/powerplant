@@ -115,24 +115,33 @@ pub(crate) struct AppliedPreset {
 }
 
 impl ConversationModelConfiguration {
-    pub(crate) fn direct(selection: ModelSelection) -> Self {
+    pub(crate) fn direct(
+        selection: ModelSelection,
+        environment: crate::environments::EnvironmentId,
+    ) -> Self {
         Self {
             settings: crate::execution::ExecutionSettings::new(
                 selection,
                 String::new(),
                 Vec::new(),
+                environment,
             )
             .expect("empty conversation settings are valid"),
             preset: None,
         }
     }
 
-    pub(crate) fn from_preset(record: &AgentRecord, selection: ModelSelection) -> Self {
+    pub(crate) fn from_preset(
+        record: &AgentRecord,
+        selection: ModelSelection,
+        environment: crate::environments::EnvironmentId,
+    ) -> Self {
         Self {
             settings: crate::execution::ExecutionSettings::new(
                 selection,
                 record.instructions.clone(),
                 record.tools.clone(),
+                environment,
             )
             .and_then(|settings| settings.with_network(record.network.clone()))
             .expect("stored agent settings are valid"),
@@ -294,6 +303,7 @@ struct ConversationModelFile {
     selection: ModelSelection,
     instructions: String,
     tools: Vec<String>,
+    environment: String,
     directories: Vec<DirectoryGrantFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     preset: Option<AppliedPresetFile>,
@@ -922,8 +932,9 @@ impl ConversationStore {
         id: &ConversationId,
         expected_revision: u32,
         selection: ModelSelection,
+        environment: crate::environments::EnvironmentId,
     ) -> Result<ConversationRecord, ConversationError> {
-        let mut model = ConversationModelConfiguration::direct(selection);
+        let mut model = ConversationModelConfiguration::direct(selection, environment);
         if let Some(current) = self.get(id) {
             model.settings.network = current.network;
         }
@@ -936,11 +947,12 @@ impl ConversationStore {
         expected_revision: u32,
         preset: &AgentRecord,
         selection: ModelSelection,
+        environment: crate::environments::EnvironmentId,
     ) -> Result<ConversationRecord, ConversationError> {
         self.select_model_configuration(
             id,
             expected_revision,
-            ConversationModelConfiguration::from_preset(preset, selection),
+            ConversationModelConfiguration::from_preset(preset, selection, environment),
         )
     }
 
@@ -1522,9 +1534,12 @@ fn model_from_file(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or(ConversationError::Corrupt)?;
-    let settings = crate::execution::ExecutionSettings::new(selection, file.instructions, tools)
-        .and_then(|settings| settings.with_directories(directories))
+    let environment = crate::environments::EnvironmentId::parse(&file.environment)
         .ok_or(ConversationError::Corrupt)?;
+    let settings =
+        crate::execution::ExecutionSettings::new(selection, file.instructions, tools, environment)
+            .and_then(|settings| settings.with_directories(directories))
+            .ok_or(ConversationError::Corrupt)?;
     let preset = match file.preset {
         Some(preset)
             if preset.revision > 0
@@ -1554,6 +1569,7 @@ fn model_to_file(model: &ConversationModelConfiguration) -> ConversationModelFil
             .iter()
             .map(|tool| tool.as_str().to_owned())
             .collect(),
+        environment: model.settings.environment.as_hex(),
         directories: model
             .settings
             .directories

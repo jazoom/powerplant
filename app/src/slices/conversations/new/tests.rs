@@ -473,6 +473,32 @@ async fn network_tool_reply_uses_private_workspace_without_catalogue_identity() 
         crate::workflows::WorkflowRunStore::open(run_dir.path().to_path_buf()).unwrap(),
     );
     ready_starter_environment(&state).await;
+    let (environment, _queued) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Network tools".to_owned(),
+            oci_image: "docker.io/library/alpine:3.20".to_owned(),
+            setup_script: String::new(),
+        })
+        .unwrap();
+    let preparation = state
+        .environments
+        .claim_oldest_queued()
+        .unwrap()
+        .expect("custom preparation");
+    let snapshot = crate::tests::sample_snapshot(preparation.id);
+    state.environment_snapshots.mark(
+        snapshot.artifact_key.clone(),
+        crate::environments::snapshot::SnapshotAvailability::Available,
+    );
+    state
+        .environments
+        .finish_ready(
+            &preparation.id,
+            snapshot,
+            crate::environments::PreparationLogRecord::empty(),
+        )
+        .unwrap();
     let backend = crate::providers::tests::ScriptedBackend::tool_then(
         "run",
         serde_json::json!({"command": "wget -qO- https://example.com"}),
@@ -489,8 +515,9 @@ async fn network_tool_reply_uses_private_workspace_without_catalogue_identity() 
             "/conversations/new",
             &token,
             &format!(
-                "action=send&provider=xai&model=grok-4.6&thinking={}&message=Check%20the%20site&tool_run=run&network=restricted&network_domains=example.com",
-                effort.as_str()
+                "action=send&provider=xai&model=grok-4.6&thinking={}&message=Check%20the%20site&tool_run=run&environment={}&network=restricted&network_domains=example.com",
+                effort.as_str(),
+                environment.id
             ),
         ))
         .await
@@ -519,6 +546,7 @@ async fn network_tool_reply_uses_private_workspace_without_catalogue_identity() 
     let run = state.workflow_runs.get(&run_id).expect("source-free run");
     assert!(run.project_id.is_none());
     assert!(run.agent_id.is_none());
+    assert_eq!(run.pinned.definition.default_environment(), environment.id);
     assert!(matches!(run.source, crate::workflows::RunSource::None));
     assert!(
         matches!(run.state, crate::workflows::run::RunState::Completed),
@@ -593,6 +621,9 @@ async fn first_message_preflight_requires_runtime_only_for_tools() {
     assert_eq!(response.status(), StatusCode::OK);
     let record = state.conversations.list().pop().unwrap();
     assert_eq!(record.messages[0].text, "Hello");
+    let selected = record.model.unwrap().settings.environment;
+    let selected_record = state.environments.get(&selected).unwrap();
+    assert!(selected_record.ready_preparation.is_none());
     assert!(state.workflow_runs.summaries().is_empty());
 }
 
