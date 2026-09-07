@@ -342,6 +342,20 @@ async fn decide(
         Some(diff)
     };
 
+    if diff
+        .as_ref()
+        .is_some_and(crate::workflows::artefacts::CandidateDiff::ordinary)
+        && !matches!(action, DecisionAction::Cancel)
+    {
+        return command_error_for_run(
+            graft,
+            PatchStatus::Conflict,
+            "Prepared ordinary-directory changes can only be discarded in this release.",
+            &run,
+            form.conversation_surface,
+        );
+    }
+
     if matches!(action, DecisionAction::Revision) {
         let valid_route = run.human_revision_policy(&gate.step).is_some();
         if run.kind == RunKind::QuickTask && run.conversation_id.is_none() || !valid_route {

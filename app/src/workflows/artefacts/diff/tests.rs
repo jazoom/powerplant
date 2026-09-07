@@ -1,7 +1,6 @@
 use super::{CandidateDiff, DiffError, MANIFEST_PAGE_SIZE};
 use crate::workflows::artefacts::candidate::{
-    CandidateEntry, CandidateEntryKind, CandidateRevisionArtefact, GitAdministrativeFingerprint,
-    GitObjectFormat, RepositoryAnchor, hash_entries,
+    CandidateEntry, CandidateEntryKind, CandidateRevisionArtefact, hash_entries,
 };
 use crate::workflows::artefacts::{
     ArtefactProducer, ArtefactProvenance, ArtefactRecord, ArtefactReference, ArtefactSummary,
@@ -10,7 +9,7 @@ use crate::workflows::artefacts::{
 use crate::workflows::definition::{ArtefactKind, PinnedWorkflowDefinition};
 
 #[test]
-fn manifest_pages_do_not_load_changed_blobs() {
+fn ordinary_directory_diff_pages_do_not_load_changed_blobs() {
     let store = WorkflowArtefactRepository::in_memory();
     let (run, base, target) = fixture(&store, 20, false);
 
@@ -66,6 +65,7 @@ fn fixture(
                 path: format!("file-{index:06}.txt"),
                 kind: CandidateEntryKind::Regular {
                     executable: false,
+                    mode: 0o644,
                     bytes,
                     blob: ObjectHash::of(format!("missing-{index}").as_bytes()),
                 },
@@ -83,12 +83,10 @@ fn candidate(entries: Vec<CandidateEntry>) -> CandidateRevisionArtefact {
     CandidateRevisionArtefact {
         format_version: crate::workflows::artefacts::candidate::CANDIDATE_SCHEMA,
         candidate_hash: hash_entries(&entries),
-        repository: RepositoryAnchor {
-            object_format: GitObjectFormat::Sha1,
-            head: None,
-        },
-        git_admin: GitAdministrativeFingerprint::parse(&ObjectHash::of(b"git").as_str())
-            .expect("git fingerprint"),
+        ordinary: true,
+        repository: None,
+        git_admin: None,
+        exclusions: Vec::new(),
         entries,
     }
 }

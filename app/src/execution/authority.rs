@@ -8,6 +8,7 @@ pub(crate) struct ProjectFreeAuthority {
     pub(crate) tools: Vec<ToolId>,
     pub(crate) network: NetworkAccess,
     pub(crate) policy: DirectoryPolicy,
+    pub(crate) reviewed_alias: Option<String>,
 }
 
 impl ProjectFreeAuthority {
@@ -19,10 +20,19 @@ impl ProjectFreeAuthority {
         for grant in &settings.directories {
             grant.revalidate()?;
         }
-        let primary_alias = settings
+        let reviewed_alias = settings
             .directories
-            .first()
-            .map(|grant| grant.alias.clone())
+            .iter()
+            .find(|grant| grant.access == super::DirectoryAccess::ReviewBeforeApply)
+            .map(|grant| grant.alias.clone());
+        let primary_alias = reviewed_alias
+            .clone()
+            .or_else(|| {
+                settings
+                    .directories
+                    .first()
+                    .map(|grant| grant.alias.clone())
+            })
             .unwrap_or_default();
         let grants = settings
             .directories
@@ -39,6 +49,7 @@ impl ProjectFreeAuthority {
             tools: settings.tools.clone(),
             network: settings.network.clone(),
             policy: DirectoryPolicy::from_grants_with_workspace(grants, primary_alias),
+            reviewed_alias,
         })
     }
 }

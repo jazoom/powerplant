@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::candidate::{
-    CandidateEntry, CandidateEntryKind, CandidateRevisionArtefact, CaptureError, hash_entries,
+    CandidateEntry, CandidateEntryKind, CandidateRevisionArtefact, CaptureError, hash_candidate,
 };
 use super::confine::{WorkspaceDir, WorkspaceKind, split_relative};
 use super::id::ObjectHash;
@@ -127,7 +127,7 @@ fn preflight(
                     return Err(ApplyError::Integrity);
                 }
             }
-            CandidateEntryKind::Gitlink { .. } => {}
+            CandidateEntryKind::Directory { .. } | CandidateEntryKind::Gitlink { .. } => {}
         }
     }
     Ok(())
@@ -179,6 +179,7 @@ fn write_entry(
     match &entry.kind {
         CandidateEntryKind::Regular {
             executable,
+            mode,
             bytes,
             blob,
         } => {
@@ -190,9 +191,12 @@ fn write_entry(
                 workspace
                     .replace_file(&entry.path, &data, *executable)
                     .map_err(map_capture)?;
+                workspace
+                    .set_entry_mode(&entry.path, *mode)
+                    .map_err(map_capture)?;
             } else {
                 workspace
-                    .write_file(&entry.path, &data, *executable)
+                    .write_file_mode(&entry.path, &data, *mode)
                     .map_err(map_capture)?;
             }
         }
@@ -203,6 +207,27 @@ fn write_entry(
             workspace
                 .create_symlink(&entry.path, target)
                 .map_err(map_capture)?;
+        }
+        CandidateEntryKind::Directory { mode } => {
+            if workspace.exists(&entry.path) {
+                if !matches!(
+                    workspace.kind(&entry.path).map_err(map_capture)?,
+                    WorkspaceKind::Directory
+                ) {
+                    workspace.remove_leaf(&entry.path).map_err(map_capture)?;
+                    workspace
+                        .create_directory_mode(&entry.path, *mode)
+                        .map_err(map_capture)?;
+                } else {
+                    workspace
+                        .set_entry_mode(&entry.path, *mode)
+                        .map_err(map_capture)?;
+                }
+            } else {
+                workspace
+                    .create_directory_mode(&entry.path, *mode)
+                    .map_err(map_capture)?;
+            }
         }
         CandidateEntryKind::Gitlink { .. } => {
             if workspace.exists(&entry.path) {
@@ -269,7 +294,7 @@ fn verify_target(
     for entry in &target.entries {
         reread.push(reread_entry(&workspace, store, entry)?);
     }
-    if hash_entries(&reread) != target.candidate_hash {
+    if hash_candidate(&reread, &target.exclusions) != target.candidate_hash {
         return Err(ApplyError::Drift);
     }
     Ok(())
@@ -292,6 +317,7 @@ fn reread_entry(
                 path: entry.path.clone(),
                 kind: CandidateEntryKind::Regular {
                     executable,
+                    mode: workspace.mode(&entry.path).map_err(map_capture)?,
                     bytes: size,
                     blob,
                 },
@@ -308,14 +334,18 @@ fn reread_entry(
             })
         }
         WorkspaceKind::Directory => {
-            let CandidateEntryKind::Gitlink { commit } = &entry.kind else {
-                return Err(ApplyError::Drift);
+            let kind = match &entry.kind {
+                CandidateEntryKind::Directory { .. } => CandidateEntryKind::Directory {
+                    mode: workspace.mode(&entry.path).map_err(map_capture)?,
+                },
+                CandidateEntryKind::Gitlink { commit } => CandidateEntryKind::Gitlink {
+                    commit: commit.clone(),
+                },
+                _ => return Err(ApplyError::Drift),
             };
             Ok(CandidateEntry {
                 path: entry.path.clone(),
-                kind: CandidateEntryKind::Gitlink {
-                    commit: commit.clone(),
-                },
+                kind,
             })
         }
         WorkspaceKind::Other => Err(ApplyError::Unsupported),
@@ -334,7 +364,9 @@ fn validate_artefact(
         artefact.format_version,
         &bytes,
     );
-    if hash != expected || hash_entries(&artefact.entries) != artefact.candidate_hash {
+    if hash != expected
+        || hash_candidate(&artefact.entries, &artefact.exclusions) != artefact.candidate_hash
+    {
         return Err(ApplyError::Integrity);
     }
     Ok(())

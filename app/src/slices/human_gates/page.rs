@@ -59,6 +59,8 @@ pub(super) struct GatePage {
     pub(super) revision_target: String,
     pub(super) revision_attempt_limit: u8,
     pub(super) host_unchanged: &'static str,
+    pub(super) ordinary: bool,
+    pub(super) exclusions: Vec<String>,
 }
 
 impl GatePage {
@@ -150,6 +152,11 @@ impl GatePage {
             String::new()
         };
         let quick_task = run.kind == RunKind::QuickTask;
+        let ordinary = diff.as_ref().is_some_and(CandidateDiff::ordinary);
+        let exclusions = diff
+            .as_ref()
+            .map(|diff| diff.exclusions().to_vec())
+            .unwrap_or_default();
         let revision_policy = run.human_revision_policy(&gate.step);
         let can_request_revision = revision_policy.is_some()
             && (run.kind != RunKind::QuickTask || run.conversation_id.is_some());
@@ -209,12 +216,12 @@ impl GatePage {
             awaiting: gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision,
             error,
             run_kind: run.kind.as_str(),
-            project_id: run.project_id.expect("project-backed gate").as_hex(),
+            project_id: run.project_id.map(|id| id.as_hex()).unwrap_or_default(),
             back_href: run.conversation_id.map_or_else(
                 || {
-                    format!(
-                        "/projects/{}",
-                        run.project_id.expect("project-backed gate").as_hex()
+                    run.project_id.map_or_else(
+                        || "/runs".to_owned(),
+                        |project| format!("/projects/{}", project.as_hex()),
                     )
                 },
                 |conversation| format!("/conversations/{}", conversation.as_hex()),
@@ -231,6 +238,8 @@ impl GatePage {
                 .unwrap_or_default(),
             revision_attempt_limit: revision_policy.map_or(0, |policy| policy.attempt_limit),
             host_unchanged: crate::workflows::HOST_UNCHANGED,
+            ordinary,
+            exclusions,
         })
     }
 }

@@ -139,23 +139,29 @@ fn candidate_run(
                 path: "AGENTS.md".to_owned(),
                 kind: crate::workflows::artefacts::candidate::CandidateEntryKind::Regular {
                     executable: false,
+                    mode: 0o644,
                     bytes: content.len() as u64,
                     blob: file,
                 },
             },
         ]),
-        repository: crate::workflows::artefacts::candidate::RepositoryAnchor {
+        ordinary: false,
+        repository: Some(crate::workflows::artefacts::candidate::RepositoryAnchor {
             object_format: crate::workflows::artefacts::candidate::GitObjectFormat::Sha1,
             head: None,
-        },
-        git_admin: crate::workflows::artefacts::candidate::GitAdministrativeFingerprint::parse(
-            &crate::workflows::artefacts::ObjectHash::of(b"git-admin").as_str(),
-        )
-        .expect("git fingerprint"),
+        }),
+        git_admin: Some(
+            crate::workflows::artefacts::candidate::GitAdministrativeFingerprint::parse(
+                &crate::workflows::artefacts::ObjectHash::of(b"git-admin").as_str(),
+            )
+            .expect("git fingerprint"),
+        ),
+        exclusions: Vec::new(),
         entries: vec![crate::workflows::artefacts::candidate::CandidateEntry {
             path: "AGENTS.md".to_owned(),
             kind: crate::workflows::artefacts::candidate::CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: content.len() as u64,
                 blob: file,
             },

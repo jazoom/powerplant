@@ -31,6 +31,55 @@ fn recursive_disposal_does_not_follow_a_symbolic_link() {
 }
 
 #[test]
+fn reviewed_capture_excludes_only_engine_paths_inside_the_root() {
+    let parent = tempfile::tempdir().expect("parent");
+    let data = parent.path().join("powerplant-data");
+    std::fs::create_dir(&data).expect("data");
+
+    let engine = data.join("workflow-workspaces");
+    std::fs::create_dir(&engine).expect("engine directory");
+    std::fs::write(engine.join("live"), b"execution").expect("live record");
+    std::fs::write(data.join("providers.json"), b"configuration").expect("configuration");
+    std::fs::create_dir(parent.path().join("workflow-workspaces")).expect("user directory");
+    std::fs::write(parent.path().join("workflow-workspaces/keep"), b"user file")
+        .expect("user file");
+    let store = crate::workflows::WorkflowArtefactRepository::in_memory();
+    let exclusions = super::reviewed_capture_exclusions(parent.path(), &data);
+    let captured = crate::workflows::artefacts::CandidateCapture::capture_directory(
+        parent.path(),
+        &exclusions,
+        &store,
+    )
+    .expect("capture");
+    assert!(
+        captured
+            .entries
+            .iter()
+            .any(|entry| entry.path == "powerplant-data/providers.json")
+    );
+    assert!(
+        captured
+            .entries
+            .iter()
+            .any(|entry| entry.path == "workflow-workspaces/keep")
+    );
+    assert!(!captured.entries.iter().any(|entry| {
+        entry
+            .path
+            .starts_with("powerplant-data/workflow-workspaces")
+    }));
+    let exclusions = super::reviewed_capture_exclusions(&engine, &data);
+    assert!(
+        crate::workflows::artefacts::CandidateCapture::capture_directory(
+            &engine,
+            &exclusions,
+            &store
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn recovery_retains_a_workspace_until_its_guest_is_absent() {
     let workspaces = WorkflowWorkspaces::in_memory();
     let run = RunId::generate().expect("run");

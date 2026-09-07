@@ -42,10 +42,29 @@ fn project_basename_does_not_use_the_reserved_workflow_alias() {
             vec![ToolId::Read],
             vec![crate::workflows::definition::GuestDirectoryAccess {
                 alias: grant.alias,
-                access: grant.access,
+                access: crate::agents::AccessMode::ReadOnly,
             }],
         )
         .is_ok()
+    );
+}
+
+#[test]
+fn only_one_directory_can_use_review_before_apply() {
+    let root = tempfile::tempdir().unwrap();
+    let first_path = root.path().join("first");
+    let second_path = root.path().join("second");
+    std::fs::create_dir(&first_path).unwrap();
+    std::fs::create_dir(&second_path).unwrap();
+    let mut first = super::DirectoryGrant::from_selected(&first_path, &[]).unwrap();
+    first.access = super::DirectoryAccess::ReviewBeforeApply;
+    let mut second =
+        super::DirectoryGrant::from_selected(&second_path, std::slice::from_ref(&first)).unwrap();
+    second.access = super::DirectoryAccess::ReviewBeforeApply;
+
+    assert_eq!(
+        super::validate_directories(&[first, second]),
+        Err(super::DirectoryGrantError::Invalid)
     );
 }
 

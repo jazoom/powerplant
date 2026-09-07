@@ -63,6 +63,10 @@ pub(super) fn router() -> Router<AppState> {
             post(directories::request_new),
         )
         .route(
+            "/conversations/new/directories/{grant_id}/access",
+            post(directories::update_new),
+        )
+        .route(
             "/conversations/new/directories/{grant_id}/remove",
             post(directories::remove_new),
         )
@@ -130,6 +134,10 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/directories/consent",
             post(directories::approve_saved),
+        )
+        .route(
+            "/conversations/{conversation_id}/directories/{grant_id}/access",
+            post(directories::update_saved),
         )
         .route(
             "/conversations/{conversation_id}/directories/{grant_id}/remove",
@@ -1843,21 +1851,23 @@ pub(super) async fn preflight_execution(
 ) -> Result<(), StartMessageError> {
     if let Some(conversation) = conversation
         && model.settings.directories.iter().any(|grant| {
-            crate::execution::authority::sensitive_directory(
-                &grant.host_path,
-                state.local_data.root(),
-            ) && (!state.sessions.contains_live(&session)
-                || !state.access_consent.authorised_conversation(
-                    session,
-                    conversation,
-                    &model.settings,
-                    grant,
+            (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                || crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
                 ))
+                && (!state.sessions.contains_live(&session)
+                    || !state.access_consent.authorised_conversation(
+                        session,
+                        conversation,
+                        &model.settings,
+                        grant,
+                    ))
         })
     {
         return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
-            crate::execution::DirectoryGrantError::Sensitive.message(),
+            "Directory review access needs explicit approval. Open Directories to approve it.",
         ));
     }
     if model.settings.tools.is_empty() {
@@ -1886,6 +1896,11 @@ pub(super) async fn preflight_execution(
         &model.settings.instructions,
         environment,
         directories,
+        model
+            .settings
+            .directories
+            .iter()
+            .any(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply),
     )
     .map_err(|error| StartMessageError::User(PatchStatus::UnprocessableEntity, error.message()))?;
     workflows::resolve_environments(
@@ -2017,6 +2032,7 @@ pub(super) async fn start_message(
                 &model.settings.instructions,
                 environment,
                 directories,
+                project_free.reviewed_alias.is_some(),
             )
         }
         .map_err(|error| {

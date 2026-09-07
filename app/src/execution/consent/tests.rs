@@ -1,4 +1,4 @@
-use crate::{agents::AccessMode, conversations::ConversationId, sessions};
+use crate::{conversations::ConversationId, sessions};
 
 use super::AccessConsentStore;
 
@@ -108,7 +108,7 @@ fn consent_rejects_another_session_strategy_or_root_identity() {
             .is_err()
     );
     let mut changed = grant.clone();
-    changed.access = AccessMode::ReadWrite;
+    changed.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
     assert!(
         store
             .approve_draft(&request, owner, "draft", &[changed.clone()], &changed)

@@ -1,5 +1,16 @@
 use super::*;
 
+impl CandidateCapture {
+    pub(crate) fn capture_worktree(
+        worktree: &Path,
+        git_dir: &Path,
+        expected_git: &GitAdministrativeFingerprint,
+        store: &WorkflowArtefactRepository,
+    ) -> Result<CandidateRevisionArtefact, CaptureError> {
+        capture_twice(worktree, git_dir, Some(expected_git), store)
+    }
+}
+
 fn git_init(dir: &Path) {
     assert!(
         std::process::Command::new("git")
@@ -107,6 +118,7 @@ fn path_kind_mode_and_blob_changes_create_different_hashes() {
         path: "a.txt".to_owned(),
         kind: CandidateEntryKind::Regular {
             executable: false,
+            mode: 0o644,
             bytes: 1,
             blob: ObjectHash::of(b"a"),
         },
@@ -115,6 +127,7 @@ fn path_kind_mode_and_blob_changes_create_different_hashes() {
         path: "a.txt".to_owned(),
         kind: CandidateEntryKind::Regular {
             executable: true,
+            mode: 0o755,
             bytes: 1,
             blob: ObjectHash::of(b"a"),
         },
@@ -233,6 +246,139 @@ fn gitlink_placeholders_reject_kind_and_content_changes() {
     assert!(deleted.entries.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn ordinary_capture_keeps_binary_links_modes_empty_directories_and_exclusions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("root");
+    std::fs::write(root.path().join("binary.bin"), [0, 1, 255]).expect("binary");
+    std::fs::set_permissions(
+        root.path().join("binary.bin"),
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .expect("mode");
+    std::fs::create_dir(root.path().join("empty")).expect("empty directory");
+    std::fs::set_permissions(
+        root.path().join("empty"),
+        std::fs::Permissions::from_mode(0o750),
+    )
+    .expect("directory mode");
+    let outside = tempfile::tempdir().expect("outside");
+    std::fs::write(outside.path().join("secret"), b"do not capture").expect("secret");
+    std::os::unix::fs::symlink(outside.path().join("secret"), root.path().join("link"))
+        .expect("link");
+    std::fs::create_dir(root.path().join("workflow-workspaces")).expect("excluded");
+    std::fs::write(root.path().join("workflow-workspaces/live"), b"live").expect("live");
+    let store = WorkflowArtefactRepository::in_memory();
+
+    let captured = CandidateCapture::capture_directory(
+        root.path(),
+        &["workflow-workspaces".to_owned()],
+        &store,
+    )
+    .expect("ordinary capture");
+
+    assert!(captured.ordinary);
+    assert!(captured.repository.is_none());
+    assert_eq!(captured.exclusions, vec!["workflow-workspaces"]);
+    assert!(captured.entries.iter().any(|entry| {
+        entry.path == "binary.bin"
+            && matches!(entry.kind, CandidateEntryKind::Regular { mode: 0o640, .. })
+    }));
+    assert!(captured.entries.iter().any(|entry| {
+        entry.path == "empty" && matches!(entry.kind, CandidateEntryKind::Directory { mode: 0o750 })
+    }));
+    assert!(captured.entries.iter().any(|entry| {
+        entry.path == "link" && matches!(entry.kind, CandidateEntryKind::Symlink { .. })
+    }));
+    assert!(
+        !captured
+            .entries
+            .iter()
+            .any(|entry| { entry.path.starts_with("workflow-workspaces") })
+    );
+    assert!(!captured.entries.iter().any(|entry| {
+        match &entry.kind {
+            CandidateEntryKind::Regular { blob, .. } => store
+                .get(blob)
+                .ok()
+                .is_some_and(|bytes| bytes == b"do not capture"),
+            _ => false,
+        }
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_capture_rejects_special_files() {
+    use std::os::unix::net::UnixListener;
+
+    let root = tempfile::tempdir().expect("root");
+    let _socket = UnixListener::bind(root.path().join("socket")).expect("socket");
+    let store = WorkflowArtefactRepository::in_memory();
+    assert_eq!(
+        CandidateCapture::capture_directory(root.path(), &[], &store).err(),
+        Some(CaptureError::SourceUnsupported)
+    );
+}
+
+#[test]
+fn ordinary_capture_rejects_oversized_files_and_new_git_administration() {
+    let store = WorkflowArtefactRepository::in_memory();
+    let root = tempfile::tempdir().expect("root");
+    let baseline = CandidateCapture::capture_directory(root.path(), &[], &store).expect("capture");
+    std::fs::create_dir(root.path().join(".git")).expect("git directory");
+    assert_eq!(
+        CandidateCapture::capture_isolated(
+            root.path(),
+            &baseline,
+            &root.path().join(".git"),
+            &store
+        )
+        .err(),
+        Some(CaptureError::SourceUnsupported)
+    );
+    std::fs::remove_dir(root.path().join(".git")).expect("remove git directory");
+    let file = std::fs::File::create(root.path().join("large")).expect("file");
+    file.set_len(MAXIMUM_FILE_BYTES + 1).expect("size");
+    assert!(CandidateCapture::capture_directory(root.path(), &[], &store).is_err());
+}
+
+#[test]
+fn ordinary_manifest_rejects_entries_inside_exclusions() {
+    let store = WorkflowArtefactRepository::in_memory();
+    let root = tempfile::tempdir().expect("root");
+    std::fs::create_dir(root.path().join("engine")).expect("directory");
+    std::fs::write(root.path().join("engine/live"), b"x").expect("file");
+    let mut captured =
+        CandidateCapture::capture_directory(root.path(), &[], &store).expect("capture");
+    captured.exclusions.push("engine".to_owned());
+    captured.candidate_hash = hash_candidate(&captured.entries, &captured.exclusions);
+    assert!(
+        CandidateRevisionArtefact::from_manifest_bytes(
+            &captured.manifest_bytes().expect("manifest")
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn ordinary_manifest_rejects_an_unbounded_or_inconsistent_mode() {
+    let store = WorkflowArtefactRepository::in_memory();
+    let root = tempfile::tempdir().expect("root");
+    std::fs::write(root.path().join("file"), b"x").expect("file");
+    let mut captured =
+        CandidateCapture::capture_directory(root.path(), &[], &store).expect("capture");
+    let CandidateEntryKind::Regular { mode, .. } = &mut captured.entries[0].kind else {
+        panic!("regular file");
+    };
+    *mode = 0o1777;
+    captured.candidate_hash = hash_candidate(&captured.entries, &captured.exclusions);
+    let bytes = captured.manifest_bytes().expect("manifest");
+    assert!(CandidateRevisionArtefact::from_manifest_bytes(&bytes).is_none());
+}
+
 #[test]
 fn comparison_reports_additions_and_mode_changes() {
     let blob = ObjectHash::of(b"x");
@@ -240,6 +386,7 @@ fn comparison_reports_additions_and_mode_changes() {
         path: "keep.txt".to_owned(),
         kind: CandidateEntryKind::Regular {
             executable: false,
+            mode: 0o644,
             bytes: 1,
             blob,
         },
@@ -249,6 +396,7 @@ fn comparison_reports_additions_and_mode_changes() {
             path: "keep.txt".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: true,
+                mode: 0o755,
                 bytes: 1,
                 blob,
             },
@@ -257,6 +405,7 @@ fn comparison_reports_additions_and_mode_changes() {
             path: "new.txt".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: 1,
                 blob,
             },
@@ -286,23 +435,24 @@ fn git_fingerprint_detects_admin_drift() {
     );
     let store = WorkflowArtefactRepository::in_memory();
     let first = CandidateCapture::capture_host(dir.path(), &store).expect("capture");
+    let first_git = first.git_admin.clone().expect("git admin");
     let git = dir.path().join(".git");
     let original_head = std::fs::read(git.join("HEAD")).expect("head");
     std::fs::write(git.join("HEAD"), b"ref: refs/heads/other\n").expect("head");
-    assert_ne!(git_fingerprint(&git).expect("fp"), first.git_admin);
+    assert_ne!(git_fingerprint(&git).expect("fp"), first_git);
     std::fs::write(git.join("HEAD"), original_head).expect("restore");
     let original_exclude = std::fs::read(git.join("info/exclude")).unwrap_or_default();
     std::fs::create_dir_all(git.join("info")).expect("info");
     std::fs::write(git.join("info/exclude"), b"secret\n").expect("exclude");
-    assert_ne!(git_fingerprint(&git).expect("fp"), first.git_admin);
+    assert_ne!(git_fingerprint(&git).expect("fp"), first_git);
     std::fs::write(git.join("info/exclude"), original_exclude).expect("restore exclude");
     let original_config = std::fs::read(git.join("config")).expect("config");
     let mut config = original_config.clone();
     config.extend_from_slice(b"\n[user]\n\tname = Drift\n");
     std::fs::write(git.join("config"), config).expect("config");
-    assert_ne!(git_fingerprint(&git).expect("fp"), first.git_admin);
+    assert_ne!(git_fingerprint(&git).expect("fp"), first_git);
     std::fs::write(git.join("config"), original_config).expect("restore config");
-    assert_eq!(git_fingerprint(&git).expect("fp"), first.git_admin);
+    assert_eq!(git_fingerprint(&git).expect("fp"), first_git);
 }
 
 #[test]
@@ -340,7 +490,7 @@ fn capture_does_not_follow_a_workspace_symlink_to_a_sentinel() {
     let recaptured = CandidateCapture::capture_worktree(
         &dest,
         &project.path().join(".git"),
-        &captured.git_admin,
+        captured.git_admin.as_ref().expect("git admin"),
         &store,
     );
     if let Ok(recaptured) = recaptured {

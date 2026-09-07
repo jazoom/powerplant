@@ -111,6 +111,35 @@ fn a_writable_definition_gates_and_commits_the_candidate() {
 }
 
 #[test]
+fn project_free_review_prepares_a_candidate_without_a_commit_step() {
+    let pinned = super::pin_project_free_quick_task_with_directories(
+        &[ToolId::Read, ToolId::Write],
+        "Change the file.",
+        test_environment_id(),
+        vec![crate::workflows::definition::GuestDirectoryAccess {
+            alias: "source".to_owned(),
+            access: AccessMode::ReadOnly,
+        }],
+        true,
+    )
+    .expect("reviewed quick task");
+
+    assert_eq!(pinned.definition.steps().len(), 2);
+    assert!(pinned.definition.steps()[0].writes_primary_source());
+    assert!(matches!(
+        pinned.definition.steps()[1].action,
+        StepAction::HumanGate(_)
+    ));
+    assert!(!pinned.definition.steps().iter().any(|step| {
+        matches!(
+            &step.action,
+            StepAction::SystemCommand(action)
+                if action.command == SystemCommandId::CommitCandidate
+        )
+    }));
+}
+
+#[test]
 fn pin_versions_are_stable_for_the_same_inputs() {
     let first = pin(AccessMode::ReadWrite, &ToolId::ALL);
     let second = pin(AccessMode::ReadWrite, &ToolId::ALL);

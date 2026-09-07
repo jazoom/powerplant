@@ -54,6 +54,8 @@ pub(super) struct DirectoryView {
     pub(super) sensitive: bool,
     pub(super) pending_approval: bool,
     pub(super) transient: bool,
+    pub(super) review_before_apply: bool,
+    pub(super) exclusions: Vec<String>,
 }
 
 pub(super) struct ProjectContextView {
@@ -80,6 +82,8 @@ pub(super) struct PendingCodeGateView {
     pub(super) diff_base: String,
     pub(super) diff_href: String,
     pub(super) review_href: String,
+    pub(super) ordinary: bool,
+    pub(super) exclusions: Vec<String>,
     pub(super) changes: Vec<CandidateChangeView>,
 }
 
@@ -408,6 +412,7 @@ pub(super) struct ConversationDetailView {
     pub(super) consent_request: String,
     pub(super) pending_directory: String,
     pub(super) consent_existing: bool,
+    pub(super) consent_reviewed: bool,
     pub(super) draft_nonce: String,
     pub(super) consent_reference: String,
     pub(super) model_summary: String,
@@ -457,7 +462,12 @@ impl ConversationDetailView {
                 &grant.host_path,
                 state.local_data.root(),
             );
-            view.pending_approval = view.sensitive
+            view.exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
+                &grant.host_path,
+                state.local_data.root(),
+            );
+            view.pending_approval = (view.sensitive
+                || grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
                 && !state.access_consent.authorised_draft(
                     &form.consent_reference,
                     session,
@@ -471,6 +481,9 @@ impl ConversationDetailView {
             .map(|grant| grant.host_path.to_string_lossy().into_owned())
             .unwrap_or_default();
         let consent_existing = form.consent_existing == "true";
+        let consent_reviewed = form.pending_directory().is_some_and(|grant| {
+            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+        });
         if !consent_existing && let Some(grant) = form.pending_directory() {
             let mut view = directory_view(&grant);
             view.sensitive = true;
@@ -525,6 +538,7 @@ impl ConversationDetailView {
             consent_request: form.consent_request,
             pending_directory: form.pending_directory,
             consent_existing,
+            consent_reviewed,
             draft_nonce: form.draft_nonce,
             consent_reference: form.consent_reference,
             model_summary: String::new(),
@@ -844,6 +858,7 @@ impl ConversationDetailView {
             consent_request: String::new(),
             pending_directory: String::new(),
             consent_existing: false,
+            consent_reviewed: false,
             draft_nonce: String::new(),
             consent_reference: String::new(),
             model_summary,
@@ -916,7 +931,12 @@ impl ConversationDetailView {
                     &grant.host_path,
                     state.local_data.root(),
                 );
-                view.pending_approval = view.sensitive
+                view.exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
+                    &grant.host_path,
+                    state.local_data.root(),
+                );
+                view.pending_approval = (view.sensitive
+                    || grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
                     && !state.access_consent.authorised_conversation(
                         session,
                         record.id,
@@ -941,12 +961,25 @@ impl ConversationDetailView {
                 .iter_mut()
                 .find(|view| view.id == grant.id.as_hex())
             {
-                view.sensitive = true;
+                view.sensitive = crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
+                );
                 view.pending_approval = true;
+                view.review_before_apply =
+                    grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply;
+                view.form_value = grant.form_value();
+                view.exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
+                    &grant.host_path,
+                    state.local_data.root(),
+                );
             }
         } else {
             let mut view = directory_view(&grant);
-            view.sensitive = true;
+            view.sensitive = crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            );
             view.pending_approval = true;
             view.transient = true;
             self.directories.push(view);
@@ -956,6 +989,8 @@ impl ConversationDetailView {
         self.consent_request = request;
         self.pending_directory = grant.form_value();
         self.consent_existing = existing;
+        self.consent_reviewed =
+            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply;
         self
     }
 
@@ -1051,6 +1086,8 @@ fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
         sensitive: false,
         pending_approval: false,
         transient: false,
+        review_before_apply: grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply,
+        exclusions: Vec::new(),
     }
 }
 
@@ -1305,6 +1342,8 @@ pub(super) fn pending_code_gate(
             gate.candidate.id.as_hex(),
             gate.diff_base.id.as_hex()
         ),
+        ordinary: diff.ordinary(),
+        exclusions: diff.exclusions().to_vec(),
         changes: changes
             .into_iter()
             .map(|change| CandidateChangeView {

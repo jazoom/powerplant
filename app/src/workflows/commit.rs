@@ -521,6 +521,7 @@ pub(crate) fn index_info_record(
             executable: true, ..
         } => ("100755", blob.to_owned()),
         CandidateEntryKind::Symlink { .. } => ("120000", blob.to_owned()),
+        CandidateEntryKind::Directory { .. } => return Err(CommitError::Command),
         CandidateEntryKind::Gitlink { commit } => ("160000", commit.0.clone()),
     };
     let mut record = format!("{mode} {object}\t{} ", entry.path).into_bytes();

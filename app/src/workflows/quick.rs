@@ -51,6 +51,7 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
     instructions: &str,
     environment: EnvironmentId,
     directories: Vec<GuestDirectoryAccess>,
+    reviewed: bool,
 ) -> Result<PinnedWorkflowDefinition, DefinitionError> {
     let role = RoleDefinition::new(
         RoleKey::parse(ROLE_KEY).expect("quick task role"),
@@ -60,23 +61,35 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
     )?;
     let work = StepDefinition {
         key: StepKey::parse(AGENT_STEP_KEY).expect("quick task step"),
-        name: "Work on task".to_owned(),
-        inputs: Vec::new(),
+        name: "Prepare changes".to_owned(),
+        inputs: reviewed.then(initial_candidate_input).into_iter().collect(),
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse(ROLE_KEY).expect("quick task role"),
             environment: StepEnvironment::WorkflowDefault,
-            candidate_authority: CandidateAuthority::ReadOnly,
+            candidate_authority: if reviewed {
+                CandidateAuthority::Edit
+            } else {
+                CandidateAuthority::ReadOnly
+            },
             authority: AgentAuthority::new(tools.to_vec(), directories)?,
-            required_outputs: vec![assistant_output()],
+            required_outputs: if reviewed {
+                vec![assistant_output(), candidate_revision_output()]
+            } else {
+                vec![assistant_output()]
+            },
         }),
         review: None,
     };
-    let definition = WorkflowDefinition::from_parts(
-        QUICK_TASK_NAME.to_owned(),
-        environment,
-        vec![role],
-        vec![work],
-    )?;
+    let mut steps = vec![work];
+    if reviewed {
+        let mut gate = gate_step();
+        if let StepAction::HumanGate(action) = &mut gate.action {
+            action.revision = None;
+        }
+        steps.push(gate);
+    }
+    let definition =
+        WorkflowDefinition::from_parts(QUICK_TASK_NAME.to_owned(), environment, vec![role], steps)?;
     Ok(PinnedWorkflowDefinition::pin(None, definition))
 }
 

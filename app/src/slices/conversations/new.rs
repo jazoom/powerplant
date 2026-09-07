@@ -361,19 +361,20 @@ pub(super) async fn save(
             form,
         );
     }
-    let sensitive_grants = model
+    let consent_grants = model
         .settings
         .directories
         .iter()
         .filter(|grant| {
-            crate::execution::authority::sensitive_directory(
-                &grant.host_path,
-                state.local_data.root(),
-            )
+            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                || crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
+                )
         })
         .cloned()
         .collect::<Vec<_>>();
-    if sensitive_grants.iter().any(|grant| {
+    if consent_grants.iter().any(|grant| {
         !state.sessions.contains_live(&session.0)
             || !state.access_consent.authorised_draft(
                 &form.consent_reference,
@@ -385,7 +386,7 @@ pub(super) async fn save(
     }) {
         return reject(
             PatchStatus::UnprocessableEntity,
-            crate::execution::DirectoryGrantError::Sensitive.message(),
+            "Directory review or sensitive access needs explicit approval.",
             form,
         );
     }
@@ -417,7 +418,7 @@ pub(super) async fn save(
         Ok(record) => record,
         Err(error) => return reject(status_for(error), error.message(), form),
     };
-    if !sensitive_grants.is_empty()
+    if !consent_grants.is_empty()
         && state
             .access_consent
             .consume_draft(
@@ -426,14 +427,14 @@ pub(super) async fn save(
                 &form.consent_nonce(),
                 &model.settings,
                 record.id,
-                &sensitive_grants,
+                &consent_grants,
             )
             .is_err()
     {
         let _ = state.conversations.delete(&id, 1);
         return reject(
             PatchStatus::UnprocessableEntity,
-            crate::execution::DirectoryGrantError::Sensitive.message(),
+            "Directory review or sensitive access needs explicit approval.",
             form,
         );
     }

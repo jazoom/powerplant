@@ -319,7 +319,10 @@ fn candidate_review_prompt(
         Some(crate::workflows::artefacts::candidate::CandidateEntryKind::Symlink { .. }) => {
             return Err("The selected candidate's AGENTS.md path is not a regular file.");
         }
-        Some(crate::workflows::artefacts::candidate::CandidateEntryKind::Gitlink { .. }) => {
+        Some(
+            crate::workflows::artefacts::candidate::CandidateEntryKind::Directory { .. }
+            | crate::workflows::artefacts::candidate::CandidateEntryKind::Gitlink { .. },
+        ) => {
             return Err("The selected candidate's AGENTS.md path is not a regular file.");
         }
     };

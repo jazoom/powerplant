@@ -317,7 +317,7 @@ struct DirectoryGrantFile {
     device: u64,
     inode: u64,
     alias: String,
-    access: AccessMode,
+    access: crate::execution::DirectoryAccess,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1009,6 +1009,35 @@ impl ConversationStore {
             let model = current.model.as_mut().ok_or(ConversationError::Selection)?;
             let mut directories = model.settings.directories.clone();
             directories.push(grant.clone());
+            model.settings = model
+                .settings
+                .clone()
+                .with_directories(directories)
+                .ok_or(ConversationError::Directories)?;
+            model.preset = None;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn update_directory(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        grant: crate::execution::DirectoryGrant,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            let model = current.model.as_mut().ok_or(ConversationError::Selection)?;
+            let index = model
+                .settings
+                .directories
+                .iter()
+                .position(|stored| stored.id == grant.id)
+                .ok_or(ConversationError::Directories)?;
+            let mut directories = model.settings.directories.clone();
+            directories[index] = grant.clone();
             model.settings = model
                 .settings
                 .clone()

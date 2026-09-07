@@ -65,6 +65,21 @@ impl WorkspaceDir {
         Ok(WorkspaceKind::Other)
     }
 
+    pub(crate) fn mode(&self, relative: &str) -> Result<u32, CaptureError> {
+        let meta = self
+            .dir
+            .symlink_metadata(relative)
+            .map_err(|_| CaptureError::SourceRead)?;
+        #[cfg(unix)]
+        {
+            use cap_std::fs::MetadataExt;
+            if meta.mode() & 0o7000 != 0 {
+                return Err(CaptureError::SourceUnsupported);
+            }
+        }
+        Ok(permission_mode(&meta))
+    }
+
     pub(crate) fn exists(&self, relative: &str) -> bool {
         self.dir.symlink_metadata(relative).is_ok()
     }
@@ -94,7 +109,7 @@ impl WorkspaceDir {
     pub(crate) fn read_link(&self, relative: &str) -> Result<String, CaptureError> {
         let target = self
             .dir
-            .read_link(relative)
+            .read_link_contents(relative)
             .map_err(|_| CaptureError::SourceRead)?;
         let text = target
             .to_str()
@@ -126,10 +141,42 @@ impl WorkspaceDir {
         Ok(())
     }
 
+    pub(crate) fn write_file_mode(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        mode: u32,
+    ) -> Result<(), CaptureError> {
+        self.write_file(relative, bytes, mode & 0o111 != 0)?;
+        self.set_entry_mode(relative, mode)
+    }
+
+    pub(crate) fn create_directory_mode(
+        &self,
+        relative: &str,
+        mode: u32,
+    ) -> Result<(), CaptureError> {
+        self.create_placeholder_dir(relative)?;
+        self.set_entry_mode(relative, mode)
+    }
+
+    pub(crate) fn set_entry_mode(&self, relative: &str, mode: u32) -> Result<(), CaptureError> {
+        #[cfg(unix)]
+        {
+            use cap_std::fs::{Permissions, PermissionsExt};
+            self.dir
+                .set_permissions(relative, Permissions::from_mode(mode & 0o777))
+                .map_err(|_| CaptureError::ArtefactWrite)?;
+        }
+        #[cfg(not(unix))]
+        let _ = (relative, mode);
+        Ok(())
+    }
+
     pub(crate) fn create_symlink(&self, relative: &str, target: &str) -> Result<(), CaptureError> {
         self.ensure_parents(relative)?;
         self.dir
-            .symlink(target, relative)
+            .symlink_contents(target, relative)
             .map_err(|_| CaptureError::ArtefactWrite)
     }
 
@@ -212,9 +259,26 @@ impl WorkspaceDir {
     }
 
     pub(crate) fn collect_leaf_paths(&self) -> Result<Vec<String>, CaptureError> {
+        self.collect_leaf_paths_excluding(&[])
+    }
+
+    pub(crate) fn collect_leaf_paths_excluding(
+        &self,
+        exclusions: &[String],
+    ) -> Result<Vec<String>, CaptureError> {
         let mut paths = Vec::new();
-        collect_leaves(&self.dir, Path::new(""), &mut paths)?;
-        paths.sort();
+        collect_leaves(&self.dir, Path::new(""), exclusions, false, &mut paths)?;
+        paths.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        Ok(paths)
+    }
+
+    pub(crate) fn collect_paths_excluding(
+        &self,
+        exclusions: &[String],
+    ) -> Result<Vec<String>, CaptureError> {
+        let mut paths = Vec::new();
+        collect_leaves(&self.dir, Path::new(""), exclusions, true, &mut paths)?;
+        paths.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
         Ok(paths)
     }
 
@@ -250,7 +314,13 @@ impl WorkspaceDir {
     }
 }
 
-fn collect_leaves(dir: &Dir, prefix: &Path, paths: &mut Vec<String>) -> Result<(), CaptureError> {
+fn collect_leaves(
+    dir: &Dir,
+    prefix: &Path,
+    exclusions: &[String],
+    include_directories: bool,
+    paths: &mut Vec<String>,
+) -> Result<(), CaptureError> {
     for entry in dir.entries().map_err(|_| CaptureError::SourceRead)? {
         let entry = entry.map_err(|_| CaptureError::SourceRead)?;
         let name = entry
@@ -262,16 +332,27 @@ fn collect_leaves(dir: &Dir, prefix: &Path, paths: &mut Vec<String>) -> Result<(
         } else {
             prefix.join(&name)
         };
+        let relative_text = relative.to_str().ok_or(CaptureError::SourceUnsupported)?;
+        if exclusions.iter().any(|excluded| excluded == relative_text) {
+            continue;
+        }
+        if relative_text.len() > super::candidate::MAXIMUM_PATH_BYTES
+            || paths.len() >= super::candidate::MAXIMUM_ENTRIES
+        {
+            return Err(CaptureError::SourceTooLarge);
+        }
         let file_type = entry.file_type().map_err(|_| CaptureError::SourceRead)?;
         if file_type.is_symlink() || file_type.is_file() {
             paths.push(relative.to_string_lossy().into_owned());
         } else if file_type.is_dir() {
             let nested = dir.open_dir(&name).map_err(|_| CaptureError::SourceRead)?;
             let mut children = nested.entries().map_err(|_| CaptureError::SourceRead)?;
-            if children.next().is_none() {
+            let empty = children.next().is_none();
+            if empty || include_directories {
                 paths.push(relative.to_string_lossy().into_owned());
-            } else {
-                collect_leaves(&nested, &relative, paths)?;
+            }
+            if !empty {
+                collect_leaves(&nested, &relative, exclusions, include_directories, paths)?;
             }
         } else {
             return Err(CaptureError::SourceUnsupported);
@@ -301,11 +382,23 @@ fn apply_nofollow(options: &mut OpenOptions) {
     }
 }
 
-fn is_executable(meta: &cap_std::fs::Metadata) -> bool {
+fn permission_mode(meta: &cap_std::fs::Metadata) -> u32 {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        meta.mode() & 0o111 != 0
+        meta.mode() & 0o777
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        0o644
+    }
+}
+
+fn is_executable(meta: &cap_std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        permission_mode(meta) & 0o111 != 0
     }
     #[cfg(not(unix))]
     {

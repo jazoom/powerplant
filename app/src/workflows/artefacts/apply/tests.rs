@@ -53,6 +53,7 @@ fn mixed_tree_reaches_the_target_and_keeps_ignored_files() {
         path: "added.txt".to_owned(),
         kind: CandidateEntryKind::Regular {
             executable: false,
+            mode: 0o644,
             bytes: 3,
             blob: added,
         },
@@ -65,6 +66,7 @@ fn mixed_tree_reaches_the_target_and_keeps_ignored_files() {
         let blob = store.publish(b"changed").expect("changed");
         entry.kind = CandidateEntryKind::Regular {
             executable: false,
+            mode: 0o644,
             bytes: 7,
             blob,
         };
@@ -119,6 +121,7 @@ fn reconciliation_rejects_source_drift_before_mutation() {
     let target_blob = store.publish(b"target").expect("target blob");
     target.entries[0].kind = CandidateEntryKind::Regular {
         executable: false,
+        mode: 0o644,
         bytes: 6,
         blob: target_blob,
     };
@@ -176,6 +179,7 @@ fn reconciliation_rejects_escape_conflicts_and_git_paths() {
         path: "clash.txt".to_owned(),
         kind: CandidateEntryKind::Regular {
             executable: false,
+            mode: 0o644,
             bytes: 2,
             blob,
         },

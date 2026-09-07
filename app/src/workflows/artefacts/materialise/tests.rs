@@ -78,8 +78,22 @@ fn mixed_manifest_round_trip_keeps_repository_context() {
     std::fs::create_dir(dir.path().join("module")).expect("placeholder");
     let store = WorkflowArtefactRepository::in_memory();
     let captured = CandidateCapture::capture_host(dir.path(), &store).expect("capture");
-    assert!(!captured.git_admin.as_str().is_empty());
-    assert_eq!(captured.repository.object_format, GitObjectFormat::Sha1);
+    assert!(
+        !captured
+            .git_admin
+            .as_ref()
+            .expect("git admin")
+            .as_str()
+            .is_empty()
+    );
+    assert_eq!(
+        captured
+            .repository
+            .as_ref()
+            .expect("repository")
+            .object_format,
+        GitObjectFormat::Sha1
+    );
     let dest = tempfile::tempdir().expect("dest");
     let project = dest.path().join("project");
     CandidateMaterialise::into_workspace(&project, &captured, hash_of(&captured), &store)
@@ -87,13 +101,57 @@ fn mixed_manifest_round_trip_keeps_repository_context() {
     let again = CandidateCapture::capture_worktree(
         &project,
         &dir.path().join(".git"),
-        &captured.git_admin,
+        captured.git_admin.as_ref().expect("git admin"),
         &store,
     )
     .expect("recapture");
     assert_eq!(again.candidate_hash, captured.candidate_hash);
     assert_eq!(again.repository, captured.repository);
     assert_eq!(again.git_admin, captured.git_admin);
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_workspace_changes_leave_host_files_unchanged() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let host = tempfile::tempdir().expect("host");
+    std::fs::create_dir(host.path().join("empty")).expect("empty directory");
+    std::fs::write(host.path().join("binary"), [0, 255]).expect("binary");
+    std::fs::set_permissions(
+        host.path().join("binary"),
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .expect("mode");
+    std::os::unix::fs::symlink("/outside/secret", host.path().join("link")).expect("link");
+    let store = WorkflowArtefactRepository::in_memory();
+    let baseline = CandidateCapture::capture_directory(host.path(), &[], &store).expect("capture");
+    let destination = tempfile::tempdir().expect("destination");
+    let workspace = destination.path().join("workspace");
+    CandidateMaterialise::into_workspace(&workspace, &baseline, hash_of(&baseline), &store)
+        .expect("materialise");
+    let unchanged = CandidateCapture::capture_isolated(
+        &workspace,
+        &baseline,
+        &host.path().join(".git"),
+        &store,
+    )
+    .expect("recapture");
+    assert_eq!(unchanged, baseline);
+    std::fs::write(workspace.join("binary"), b"new content").expect("edit");
+    let candidate = CandidateCapture::capture_isolated(
+        &workspace,
+        &baseline,
+        &host.path().join(".git"),
+        &store,
+    )
+    .expect("candidate");
+    assert_ne!(candidate.candidate_hash, baseline.candidate_hash);
+    std::fs::remove_dir_all(&workspace).expect("discard workspace");
+    assert_eq!(
+        CandidateCapture::capture_directory(host.path(), &[], &store).expect("host capture"),
+        baseline
+    );
 }
 
 #[test]
@@ -108,6 +166,7 @@ fn manifest_total_bytes_are_bounded_before_blob_reads() {
                 path: format!("{index}.bin"),
                 kind: CandidateEntryKind::Regular {
                     executable: false,
+                    mode: 0o644,
                     bytes: super::super::candidate::MAXIMUM_FILE_BYTES,
                     blob,
                 },
@@ -141,6 +200,7 @@ fn materialise_rejection_table() {
             path: "../escape".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: 1,
                 blob,
             },
@@ -163,6 +223,7 @@ fn materialise_rejection_table() {
             path: ".git/config".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: 1,
                 blob,
             },
@@ -185,6 +246,7 @@ fn materialise_rejection_table() {
             path: "/tmp/x".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: 1,
                 blob,
             },
@@ -206,6 +268,7 @@ fn materialise_rejection_table() {
             path: "a.txt".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: 1,
                 blob,
             },
@@ -233,6 +296,7 @@ fn materialise_rejection_table() {
                 path: "dir".to_owned(),
                 kind: CandidateEntryKind::Regular {
                     executable: false,
+                    mode: 0o644,
                     bytes: 1,
                     blob,
                 },
@@ -244,6 +308,7 @@ fn materialise_rejection_table() {
                 path: "dir/nested.txt".to_owned(),
                 kind: CandidateEntryKind::Regular {
                     executable: false,
+                    mode: 0o644,
                     bytes: 1,
                     blob,
                 },
@@ -268,6 +333,7 @@ fn materialise_rejection_table() {
             path: "bad.txt".to_owned(),
             kind: CandidateEntryKind::Regular {
                 executable: false,
+                mode: 0o644,
                 bytes: 1,
                 blob: ObjectHash::of(b"other"),
             },

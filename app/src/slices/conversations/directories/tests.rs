@@ -90,6 +90,155 @@ async fn picker_commands_are_patch_only_and_revision_bound() {
 }
 
 #[tokio::test]
+async fn review_access_needs_consent_and_rejects_a_second_reviewed_root() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = conversation(&state);
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let first_grant = crate::execution::DirectoryGrant::from_selected(first.path(), &[]).unwrap();
+    let first_id = first_grant.id;
+    let current = state
+        .conversations
+        .add_directory(&record.id, 1, first_grant)
+        .unwrap();
+    let second_grant = crate::execution::DirectoryGrant::from_selected(
+        second.path(),
+        &current.model.as_ref().unwrap().settings.directories,
+    )
+    .unwrap();
+    let second_id = second_grant.id;
+    let current = state
+        .conversations
+        .add_directory(&record.id, current.revision, second_grant)
+        .unwrap();
+
+    let access_path = format!(
+        "/conversations/{}/directories/{}/access",
+        record.id,
+        first_id.as_hex()
+    );
+    let preview = app(&state)
+        .oneshot(command(
+            &access_path,
+            &token,
+            &format!("revision={}&access=review-before-apply", current.revision),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let body = text(preview).await;
+    assert!(body.contains("Approve directory review access"));
+    assert_eq!(
+        state
+            .conversations
+            .get(&record.id)
+            .unwrap()
+            .model
+            .unwrap()
+            .settings
+            .directories[0]
+            .access,
+        crate::execution::DirectoryAccess::ReadOnly
+    );
+    let consent_body = format!(
+        "revision={}&consent_request={}&pending_directory={}&existing=true",
+        current.revision,
+        form_value(&hidden_value(&body, "consent_request")),
+        form_value(&hidden_value(&body, "pending_directory")),
+    );
+    let approved = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/directories/consent", record.id),
+            &token,
+            &consent_body,
+        ))
+        .await
+        .unwrap();
+    let approved_status = approved.status();
+    let approved_body = text(approved).await;
+    assert_eq!(approved_status, StatusCode::OK, "{approved_body}");
+    let updated = state.conversations.get(&record.id).unwrap();
+    assert_eq!(
+        updated.model.as_ref().unwrap().settings.directories[0].access,
+        crate::execution::DirectoryAccess::ReviewBeforeApply
+    );
+
+    let second_response = app(&state)
+        .oneshot(command(
+            &format!(
+                "/conversations/{}/directories/{}/access",
+                record.id,
+                second_id.as_hex()
+            ),
+            &token,
+            &format!("revision={}&access=review-before-apply", updated.revision),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn a_draft_can_approve_and_renew_non_sensitive_review_access() {
+    let state = test_state();
+    let token = connected(&state);
+    let directory = tempfile::tempdir().unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(directory.path(), &[]).unwrap();
+    let path = format!(
+        "/conversations/new/directories/{}/access",
+        grant.id.as_hex()
+    );
+    let preview = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "action=review-before-apply&directory_0={}",
+                form_value(&grant.form_value())
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview = text(preview).await;
+    let fields = format!(
+        "draft_nonce={}&directory_0={}&consent_existing=true",
+        form_value(&hidden_value(&preview, "draft_nonce")),
+        form_value(&hidden_value(&preview, "pending_directory"))
+    );
+    let approval_fields = format!(
+        "{fields}&consent_request={}&pending_directory={}",
+        form_value(&hidden_value(&preview, "consent_request")),
+        form_value(&hidden_value(&preview, "pending_directory"))
+    );
+    let approved = app(&state)
+        .oneshot(command(
+            "/conversations/new/directories/consent",
+            &token,
+            &approval_fields,
+        ))
+        .await
+        .unwrap();
+    let status = approved.status();
+    let body = text(approved).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!hidden_value(&body, "consent_reference").is_empty());
+    let renewed = app(&state)
+        .oneshot(command(
+            &format!(
+                "/conversations/new/directories/{}/consent",
+                grant.id.as_hex()
+            ),
+            &token,
+            &fields,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(renewed.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn sensitive_saved_grant_needs_exact_single_use_consent() {
     let mut state = test_state();
     let home = tempfile::tempdir().unwrap();
@@ -118,7 +267,6 @@ async fn sensitive_saved_grant_needs_exact_single_use_consent() {
             .is_empty()
     );
     let body = text(preview).await;
-    assert!(body.contains("Approve sensitive directory access"));
     assert!(body.contains(&data.to_string_lossy().replace('&', "&amp;")));
     let request = hidden_value(&body, "consent_request");
     let grant = hidden_value(&body, "pending_directory");

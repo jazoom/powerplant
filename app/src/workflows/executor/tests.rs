@@ -46,9 +46,10 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
                 .iter()
                 .map(|grant| GuestDirectoryAccess {
                     alias: grant.alias.clone(),
-                    access: grant.access,
+                    access: AccessMode::ReadOnly,
                 })
                 .collect(),
+            false,
         )
         .unwrap();
         let capabilities =

@@ -51,8 +51,13 @@
             </p>
           {% else if quick_task %}
             <p class="text-quiet mt-1 max-w-[70ch] text-sm">
-              Apply creates a local Git commit. Discard ends the task without
-              changing project files.
+              {% if ordinary %}
+                Review the prepared files or discard them. The host directory
+                stays unchanged. Apply is not available yet.
+              {% else %}
+                Apply creates a local Git commit. Discard ends the task without
+                changing project files.
+              {% endif %}
             </p>
           {% else %}
             <p class="text-quiet mt-1 max-w-[70ch] text-sm">
@@ -88,6 +93,19 @@
         <p class="text-quiet text-sm">
           Your decision applies only to the displayed candidate hash.
         </p>
+        {% if !exclusions.is_empty() %}
+          <div class="border-base-300 border-y py-3">
+            <h3 class="text-sm font-semibold">Excluded engine paths</h3>
+            <p class="text-quiet mt-1 text-sm">
+              Power Plant did not copy or change these generated paths.
+            </p>
+            <ul class="mt-2 space-y-1">
+              {% for exclusion in exclusions %}
+                <li class="font-mono text-xs break-all">{{ exclusion }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
         <a href="{{ review_href }}" data-graft class="link text-sm"
           >Review in a new conversation</a
         >
@@ -99,30 +117,32 @@
           <div
             class="{% if quick_task && !can_request_revision %}sm:grid-cols-2{% else %}lg:grid-cols-3{% endif %} grid gap-4 pt-2"
           >
-            <form
-              method="post"
-              action="/runs/{{ run_id }}/gates/{{ gate_id }}/approve"
-              data-graft
-              class="border-base-300 flex flex-col gap-3 border p-3"
-            >
-              <input
-                type="hidden"
-                name="gate-revision"
-                value="{{ revision }}"
-              />
-              <p class="text-sm">
-                {% if quick_task %}
-                  Commit these changes to the project.
-                {% else %}
-                  Accept this candidate and continue to the next step.
-                {% endif %}
-              </p>
-              <input type="hidden" name="candidate" value="{{ target }}" />
-              <button type="submit" class="btn btn-primary w-full">
-                {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
-              </button>
-            </form>
-            {% if can_request_revision %}
+            {% if !ordinary %}
+              <form
+                method="post"
+                action="/runs/{{ run_id }}/gates/{{ gate_id }}/approve"
+                data-graft
+                class="border-base-300 flex flex-col gap-3 border p-3"
+              >
+                <input
+                  type="hidden"
+                  name="gate-revision"
+                  value="{{ revision }}"
+                />
+                <p class="text-sm">
+                  {% if quick_task %}
+                    Commit these changes to the project.
+                  {% else %}
+                    Accept this candidate and continue to the next step.
+                  {% endif %}
+                </p>
+                <input type="hidden" name="candidate" value="{{ target }}" />
+                <button type="submit" class="btn btn-primary w-full">
+                  {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
+                </button>
+              </form>
+            {% endif %}
+            {% if can_request_revision && !ordinary %}
               <form
                 method="post"
                 action="/runs/{{ run_id }}/gates/{{ gate_id }}/request-revision"
@@ -169,7 +189,7 @@
               <input type="hidden" name="candidate" value="{{ target }}" />
               <p class="text-sm">
                 {% if quick_task %}
-                  End this task and leave project files unchanged.
+                  End this task and leave host files unchanged.
                 {% else %}
                   End this run. No later step will start.
                 {% endif %}

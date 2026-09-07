@@ -5,7 +5,7 @@ use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    agents::{AccessMode, NetworkAccess, ToolId},
+    agents::{NetworkAccess, ToolId},
     environments::EnvironmentId,
     providers::ModelSelection,
 };
@@ -31,7 +31,7 @@ pub(crate) struct DirectoryGrant {
     pub(crate) host_path: PathBuf,
     pub(crate) identity: CanonicalDirectoryIdentity,
     pub(crate) alias: String,
-    pub(crate) access: AccessMode,
+    pub(crate) access: DirectoryAccess,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -44,6 +44,30 @@ pub(crate) struct CanonicalDirectoryIdentity {
     pub(crate) inode: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DirectoryAccess {
+    ReadOnly,
+    ReviewBeforeApply,
+}
+
+impl DirectoryAccess {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::ReviewBeforeApply => "review-before-apply",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "read-only" => Some(Self::ReadOnly),
+            "review-before-apply" => Some(Self::ReviewBeforeApply),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirectoryGrantError {
     Random,
@@ -53,7 +77,6 @@ pub(crate) enum DirectoryGrantError {
     Overlap,
     Full,
     Invalid,
-    Sensitive,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -135,7 +158,7 @@ impl DirectoryGrant {
             host_path,
             identity,
             alias,
-            access: AccessMode::ReadOnly,
+            access: DirectoryAccess::ReadOnly,
         })
     }
 
@@ -176,7 +199,7 @@ impl DirectoryGrant {
             host_path: form.host_path,
             identity: form.identity,
             alias: form.alias,
-            access: AccessMode::parse(&form.access)?,
+            access: DirectoryAccess::parse(&form.access)?,
         };
         validate_directories(std::slice::from_ref(&grant)).ok()?;
         Some(grant)
@@ -211,9 +234,6 @@ impl DirectoryGrantError {
             Self::Overlap => "Directory grants cannot overlap.",
             Self::Full => "This conversation has the maximum of eight directories.",
             Self::Invalid => "That directory grant is not valid.",
-            Self::Sensitive => {
-                "Access to this sensitive directory needs explicit approval. Open Directories to approve it."
-            }
         }
     }
 }
@@ -227,7 +247,6 @@ pub(crate) fn validate_directories(
     for (index, grant) in directories.iter().enumerate() {
         if !valid_stored_path(&grant.host_path)
             || !valid_alias(&grant.alias)
-            || grant.access != AccessMode::ReadOnly
             || directories[..index].iter().any(|previous| {
                 previous.id == grant.id
                     || previous.alias == grant.alias
@@ -243,6 +262,18 @@ pub(crate) fn validate_directories(
         {
             return Err(DirectoryGrantError::Overlap);
         }
+    }
+    if directories
+        .iter()
+        .enumerate()
+        .any(|(index, grant)| index > 0 && grant.access == DirectoryAccess::ReviewBeforeApply)
+        || directories
+            .iter()
+            .filter(|grant| grant.access == DirectoryAccess::ReviewBeforeApply)
+            .count()
+            > 1
+    {
+        return Err(DirectoryGrantError::Invalid);
     }
     Ok(())
 }

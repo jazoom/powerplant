@@ -69,7 +69,13 @@ impl AttemptCapabilities {
         let StepAction::Agent(action) = &step.action else {
             return Err(CapabilityError::Authority);
         };
-        if action.candidate_authority != crate::workflows::definition::CandidateAuthority::ReadOnly
+        let reviewed = authority.reviewed_alias.as_deref();
+        let expected_candidate = if reviewed.is_some() {
+            crate::workflows::definition::CandidateAuthority::Edit
+        } else {
+            crate::workflows::definition::CandidateAuthority::ReadOnly
+        };
+        if action.candidate_authority != expected_candidate
             || !action
                 .authority
                 .tools
@@ -99,16 +105,23 @@ impl AttemptCapabilities {
                 .policy
                 .grants()
                 .iter()
-                .enumerate()
-                .map(|(index, grant)| CapabilityDirectory {
-                    alias: grant.alias.clone(),
-                    guest_path: grant.guest_path.clone(),
-                    access: AccessMode::ReadOnly,
-                    role: if index == 0 {
-                        DirectoryRole::PrimarySource
-                    } else {
-                        DirectoryRole::SecondaryContext
-                    },
+                .map(|grant| {
+                    let primary = Some(grant.alias.as_str()) == reviewed
+                        || reviewed.is_none() && grant.alias == authority.policy.primary_alias();
+                    CapabilityDirectory {
+                        alias: grant.alias.clone(),
+                        guest_path: grant.guest_path.clone(),
+                        access: if primary && reviewed.is_some() {
+                            AccessMode::ReadWrite
+                        } else {
+                            AccessMode::ReadOnly
+                        },
+                        role: if primary {
+                            DirectoryRole::PrimarySource
+                        } else {
+                            DirectoryRole::SecondaryContext
+                        },
+                    }
                 })
                 .collect()
         };
@@ -117,7 +130,11 @@ impl AttemptCapabilities {
             agent_revision: authority.revision,
             tools: action.authority.tools.clone(),
             directories,
-            source_location: PrimarySourceLocation::PrivateWorkspace,
+            source_location: if reviewed.is_some() {
+                PrimarySourceLocation::AttemptWorkspace
+            } else {
+                PrimarySourceLocation::PrivateWorkspace
+            },
             git_admin: AccessMode::ReadOnly,
             network: NetworkCapability::from_agent(&authority.network),
         })

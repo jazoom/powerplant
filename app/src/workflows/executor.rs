@@ -1113,24 +1113,11 @@ async fn isolate_and_run(
             .expect("candidate-backed attempt")
             .artefact
             .git_admin
-            != match crate::workflows::artefacts::candidate::git_fingerprint(&git_dir) {
-                Ok(value) => value,
-                Err(_) => {
-                    let (outcome, cleanup) = finish_workspace_only(
-                        workspace,
-                        StepOutcome::Failed {
-                            category: FailureCategory::Operational,
-                            error: Some("The Git directory changed before that step.".to_owned()),
-                        },
-                    );
-                    return IsolatedRun::Finished {
-                        outcome,
-                        cleanup,
-                        drafts,
-                        captured: None,
-                    };
-                }
-            }
+            .as_ref()
+            .is_some_and(|expected| {
+                crate::workflows::artefacts::candidate::git_fingerprint(&git_dir).as_ref()
+                    != Ok(expected)
+            })
     {
         let (outcome, cleanup) = finish_workspace_only(
             workspace,
@@ -1202,14 +1189,13 @@ async fn isolate_and_run(
             _ => None,
         }
     } else if stopped && !private_workspace {
-        crate::workflows::artefacts::CandidateCapture::capture_worktree(
+        crate::workflows::artefacts::CandidateCapture::capture_isolated(
             &workspace.project,
-            &git_dir,
             &candidate_input
                 .as_ref()
                 .expect("candidate-backed attempt")
-                .artefact
-                .git_admin,
+                .artefact,
+            &git_dir,
             &state.workflow_artefacts,
         )
         .ok()
@@ -1236,8 +1222,8 @@ async fn isolate_and_run(
                         .candidate_hash
                     && captured
                         .repository
-                        .head
                         .as_ref()
+                        .and_then(|repository| repository.head.as_ref())
                         .map(|head| head.0.as_str())
                         == Some(commit.as_str())
             });
@@ -1511,6 +1497,12 @@ async fn execute_commit_transaction(
         &target.artefact,
         &state.workflow_artefacts,
     )?;
+    let initial_repository = initial.repository.as_ref().ok_or(CommitError::Preflight)?;
+    let target_repository = target
+        .artefact
+        .repository
+        .as_ref()
+        .ok_or(CommitError::Preflight)?;
     let expected_reference = current_reference(user_project)?;
     let candidate = inputs
         .iter()
@@ -1542,8 +1534,7 @@ async fn execute_commit_transaction(
         reviews,
         approval,
         expected_reference,
-        old_object: initial
-            .repository
+        old_object: initial_repository
             .head
             .as_ref()
             .map(|object| object.0.clone()),
@@ -1601,16 +1592,16 @@ async fn execute_commit_transaction(
                     true,
                 )
                 .await?;
-                crate::workflows::commit::parse_object_id(
-                    &output,
-                    target.artefact.repository.object_format,
-                )?
-                .0
+                crate::workflows::commit::parse_object_id(&output, target_repository.object_format)?
+                    .0
+            }
+            crate::workflows::artefacts::candidate::CandidateEntryKind::Directory { .. } => {
+                return Err(CommitError::Preflight);
             }
             crate::workflows::artefacts::candidate::CandidateEntryKind::Gitlink { commit } => {
                 crate::workflows::commit::parse_object_id(
                     &commit.0,
-                    target.artefact.repository.object_format,
+                    target_repository.object_format,
                 )?
                 .0
             }
@@ -1631,9 +1622,7 @@ async fn execute_commit_transaction(
         true,
     )
     .await?;
-    let tree =
-        crate::workflows::commit::parse_object_id(&tree, target.artefact.repository.object_format)?
-            .0;
+    let tree = crate::workflows::commit::parse_object_id(&tree, target_repository.object_format)?.0;
     if let Some(old) = transaction.old_object.as_deref() {
         let old_tree = git_host_text(user_project, &["rev-parse", &format!("{old}^{{tree}}")])?;
         if old_tree == tree {
@@ -1653,11 +1642,8 @@ async fn execute_commit_transaction(
         true,
     )
     .await?;
-    let commit = crate::workflows::commit::parse_object_id(
-        &commit,
-        target.artefact.repository.object_format,
-    )?
-    .0;
+    let commit =
+        crate::workflows::commit::parse_object_id(&commit, target_repository.object_format)?.0;
     let target_index = std::fs::read(&index_host).map_err(|_| CommitError::Command)?;
     journal
         .write_index_backup("target.index", &target_index)
@@ -1683,7 +1669,7 @@ async fn execute_commit_transaction(
     persist_transaction(state, job.run_id, attempt_id, transaction.clone())?;
 
     let old_guard = transaction.old_object.as_deref().unwrap_or({
-        match target.artefact.repository.object_format {
+        match target_repository.object_format {
             crate::workflows::artefacts::candidate::GitObjectFormat::Sha1 => {
                 "0000000000000000000000000000000000000000"
             }
@@ -2646,17 +2632,16 @@ fn attempt_spec(
         read_only: !primary.access.is_writable(),
     });
     let git = user_project.join(".git");
-    if !git.is_dir() {
-        return Err("The project is not a supported Git worktree.");
+    if git.is_dir() {
+        // The guest cannot create a nested mount directory inside a read-only source mount.
+        std::fs::create_dir(workspace.project.join(".git"))
+            .map_err(|_| "Power Plant cannot create the Git mount directory.")?;
+        mounts.push(crate::sandbox::MountSpec {
+            guest: format!("{}/.git", primary.guest_path),
+            host: git,
+            read_only: true,
+        });
     }
-    // The guest cannot create a nested mount directory inside a read-only source mount.
-    std::fs::create_dir(workspace.project.join(".git"))
-        .map_err(|_| "Power Plant cannot create the Git mount directory.")?;
-    mounts.push(crate::sandbox::MountSpec {
-        guest: format!("{}/.git", primary.guest_path),
-        host: git,
-        read_only: true,
-    });
     for directory in &capabilities.directories {
         if directory.role != crate::workflows::capabilities::DirectoryRole::SecondaryContext {
             continue;
@@ -2694,16 +2679,18 @@ fn confirm_run_authority(
         };
         if record.model.as_ref().is_some_and(|model| {
             model.settings.directories.iter().any(|grant| {
-                crate::execution::authority::sensitive_directory(
-                    &grant.host_path,
-                    state.local_data.root(),
-                ) && (!state.sessions.contains_live(&job.session_id)
-                    || !state.access_consent.authorised_conversation(
-                        job.session_id,
-                        conversation_id,
-                        &model.settings,
-                        grant,
+                (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                    || crate::execution::authority::sensitive_directory(
+                        &grant.host_path,
+                        state.local_data.root(),
                     ))
+                    && (!state.sessions.contains_live(&job.session_id)
+                        || !state.access_consent.authorised_conversation(
+                            job.session_id,
+                            conversation_id,
+                            &model.settings,
+                            grant,
+                        ))
             })
         }) {
             return Err("Sensitive directory access needs explicit approval.".to_owned());
@@ -2719,7 +2706,18 @@ fn confirm_run_authority(
         {
             return Err("The conversation tool authority changed before dispatch.".to_owned());
         }
-        return Ok(std::path::PathBuf::new());
+        return authority
+            .reviewed_alias
+            .as_ref()
+            .and_then(|alias| {
+                authority
+                    .policy
+                    .grants()
+                    .iter()
+                    .find(|grant| &grant.alias == alias)
+                    .map(|grant| grant.host_path.clone())
+            })
+            .map_or_else(|| Ok(std::path::PathBuf::new()), Ok);
     }
     let Some(project) = job.project_id.and_then(|id| state.projects.get(&id)) else {
         return Err("That project is not in the catalogue.".to_owned());
@@ -2787,10 +2785,27 @@ fn confirm_run_authority(
 
 async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(), String> {
     let host_path = confirm_run_authority(state, job)?;
-    let captured = match crate::workflows::artefacts::CandidateCapture::capture_host(
-        &host_path,
-        &state.workflow_artefacts,
-    ) {
+    let captured = if job
+        .project_free_authority
+        .as_ref()
+        .is_some_and(|authority| authority.reviewed_alias.is_some())
+    {
+        let exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
+            &host_path,
+            state.local_data.root(),
+        );
+        crate::workflows::artefacts::CandidateCapture::capture_directory(
+            &host_path,
+            &exclusions,
+            &state.workflow_artefacts,
+        )
+    } else {
+        crate::workflows::artefacts::CandidateCapture::capture_host(
+            &host_path,
+            &state.workflow_artefacts,
+        )
+    };
+    let captured = match captured {
         Ok(captured) => captured,
         Err(error) => return Err(error.message().to_owned()),
     };
@@ -4086,8 +4101,8 @@ pub(crate) fn recover_commit_transactions(state: &AppState) -> Result<(), &'stat
         if captured.candidate_hash != target.candidate_hash
             || captured
                 .repository
-                .head
                 .as_ref()
+                .and_then(|repository| repository.head.as_ref())
                 .map(|head| head.0.as_str())
                 != Some(commit.as_str())
         {

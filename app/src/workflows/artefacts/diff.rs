@@ -77,6 +77,14 @@ impl CandidateDiff {
         })
     }
 
+    pub(crate) fn ordinary(&self) -> bool {
+        self.target_candidate.ordinary
+    }
+
+    pub(crate) fn exclusions(&self) -> &[String] {
+        &self.target_candidate.exclusions
+    }
+
     pub(crate) fn manifest_page(
         &self,
         start: usize,
@@ -125,7 +133,9 @@ impl CandidateDiff {
             CandidateEntryKind::Symlink { blob, target } => {
                 (blob, target.len() as u64, Some(target.as_bytes()))
             }
-            CandidateEntryKind::Gitlink { .. } => return Err(DiffError::Side),
+            CandidateEntryKind::Directory { .. } | CandidateEntryKind::Gitlink { .. } => {
+                return Err(DiffError::Side);
+            }
         };
         let bytes = store.get(hash).map_err(|_| DiffError::Integrity)?;
         if ObjectHash::of(&bytes) != *hash
@@ -315,6 +325,7 @@ fn facts(entry: &CandidateEntry) -> EntryFacts {
     match &entry.kind {
         CandidateEntryKind::Regular {
             executable,
+            mode,
             bytes,
             blob,
         } => EntryFacts {
@@ -322,7 +333,7 @@ fn facts(entry: &CandidateEntry) -> EntryFacts {
             executable: *executable,
             bytes: Some(*bytes),
             object: Some(*blob),
-            detail: String::new(),
+            detail: format!("mode {:04o}", mode),
         },
         CandidateEntryKind::Symlink { target, blob } => EntryFacts {
             kind: "Symbolic link",
@@ -330,6 +341,13 @@ fn facts(entry: &CandidateEntry) -> EntryFacts {
             bytes: Some(target.len() as u64),
             object: Some(*blob),
             detail: target.clone(),
+        },
+        CandidateEntryKind::Directory { mode } => EntryFacts {
+            kind: "Directory",
+            executable: false,
+            bytes: None,
+            object: None,
+            detail: format!("mode {:04o}", mode),
         },
         CandidateEntryKind::Gitlink { commit } => EntryFacts {
             kind: "Gitlink",

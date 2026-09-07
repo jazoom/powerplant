@@ -1235,6 +1235,7 @@ fn source_free_records_reject_source_and_identity_substitution() {
         "Use private scratch files.",
         environment,
         Vec::new(),
+        false,
     )
     .expect("source-free quick task");
     let run = WorkflowRun::create_source_free_for_conversation(

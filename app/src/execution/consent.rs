@@ -7,7 +7,7 @@ use std::{
 use rand::{rand_core::TryRng, rngs::SysRng};
 use sha2::{Digest, Sha256};
 
-use crate::{agents::AccessMode, conversations::ConversationId, sessions::SessionId};
+use crate::{conversations::ConversationId, sessions::SessionId};
 
 use super::{CanonicalDirectoryIdentity, DirectoryGrant};
 
@@ -18,7 +18,7 @@ const MAXIMUM_RUNTIME_RECORDS: usize = 1_024;
 struct GrantBinding {
     root: PathBuf,
     identity: CanonicalDirectoryIdentity,
-    access: AccessMode,
+    access: super::DirectoryAccess,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

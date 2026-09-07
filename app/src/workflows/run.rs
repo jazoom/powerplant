@@ -698,6 +698,11 @@ impl WorkflowRun {
         phase_models: Vec<PhaseModelSelection>,
     ) -> Self {
         let step = pinned.definition.first_step().clone();
+        let captures_source = pinned
+            .definition
+            .steps()
+            .iter()
+            .any(StepDefinition::writes_primary_source);
         Self {
             id,
             created_at_ms,
@@ -711,7 +716,11 @@ impl WorkflowRun {
             pinned,
             environments,
             state: RunState::Ready { step },
-            source: RunSource::None,
+            source: if captures_source {
+                RunSource::Pending
+            } else {
+                RunSource::None
+            },
             artefacts: Vec::new(),
             attempts: Vec::new(),
             gates: Vec::new(),
