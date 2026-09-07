@@ -24,6 +24,13 @@ async fn bounded_partial_reply_settles_and_observation_restores_commands() {
     state.chat = Arc::new(ChatBackend::Scripted(backend.clone()));
     let token = generate_session_token().expect("session");
     state.sessions.insert(token.id());
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::ACCEPT_LANGUAGE,
+        "en-US".parse().unwrap(),
+    );
+    let language = crate::sessions::BrowserLanguage::from_headers(&headers).unwrap();
+    state.sessions.set_language(&token.id(), language.clone());
     let connection = ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6");
     state.vault.put(connection.clone()).expect("provider");
     let record = state
@@ -61,7 +68,12 @@ async fn bounded_partial_reply_settles_and_observation_restores_commands() {
     assert!(saved.active_job.is_none());
     assert!(!state.sessions.busy(&token.id()));
     assert!(backend.last_tools().is_empty());
-    assert_eq!(backend.last_preamble().as_deref(), Some(""));
+    let mut instructions = String::new();
+    language.append_instructions(&mut instructions);
+    assert_eq!(
+        backend.last_preamble().as_deref(),
+        Some(instructions.as_str())
+    );
     let frame = super::final_frame(&state, &record.id, token.id(), &job, job.latest_seq());
     let body = String::from_utf8(frame.into_bytes()).expect("frame");
     assert!(body.contains("target=\"conversation-detail\""));
@@ -153,11 +165,17 @@ async fn cancellation_and_stale_settlement_cannot_release_another_command() {
 }
 
 #[tokio::test]
-async fn provider_failure_retains_partial_output() {
+async fn provider_failure_retains_partial_output_and_safe_error_details() {
     let mut state = crate::tests::test_state(RuntimeConfig::development());
+    let dir = tempfile::tempdir().expect("directory");
+    state.conversations = Arc::new(
+        crate::conversations::ConversationStore::open(dir.path().to_path_buf()).expect("store"),
+    );
     state.chat = Arc::new(ChatBackend::Scripted(ScriptedBackend::chunks([
         Ok("Partial".to_owned()),
-        Err(ProviderError::Unreachable),
+        Err(ProviderError::Detail(
+            "Request test-key failed: <script>alert(1)</script>\n".to_owned(),
+        )),
     ])));
     let token = generate_session_token().expect("session");
     state.sessions.insert(token.id());
@@ -188,13 +206,31 @@ async fn provider_failure_retains_partial_output() {
         record.id,
         record.clone(),
         connection,
-        job,
+        job.clone(),
     )
     .await;
     let record = state.conversations.get(&record.id).expect("record");
     assert_eq!(record.messages[1].text, "Partial");
     assert_eq!(record.messages[1].status, MessageStatus::Failed);
+    assert_eq!(
+        record.messages[1].error.as_deref(),
+        Some("Request [redacted] failed: <script>alert(1)</script>")
+    );
     assert!(record.active_job.is_none());
+    assert!(!state.sessions.busy(&token.id()));
+    assert_eq!(history(&record).last().unwrap().text, "Partial");
+    let frame = super::final_frame(&state, &record.id, token.id(), &job, job.latest_seq());
+    let body = String::from_utf8(frame.into_bytes()).expect("frame");
+    assert!(body.contains("[redacted]"));
+    assert!(!body.contains("test-key"));
+    assert!(!body.contains("<script>"));
+    assert!(body.contains("&#60;script&#62;"));
+    let reopened =
+        crate::conversations::ConversationStore::open(dir.path().to_path_buf()).expect("reopened");
+    assert_eq!(reopened.get(&record.id).unwrap().messages, record.messages);
+    let bytes =
+        std::fs::read_to_string(dir.path().join("catalogue.json")).expect("stored catalogue");
+    assert!(!bytes.contains("test-key"));
 }
 
 #[test]
@@ -221,24 +257,28 @@ fn pending_assistant_output_stays_out_of_the_next_request_history() {
                 role: MessageRole::User,
                 text: "First question".to_owned(),
                 status: MessageStatus::Complete,
+                error: None,
                 request: None,
             },
             ConversationMessage {
                 role: MessageRole::Assistant,
                 text: "First reply".to_owned(),
                 status: MessageStatus::Complete,
+                error: None,
                 request: Some(JobId::generate().expect("previous request")),
             },
             ConversationMessage {
                 role: MessageRole::User,
                 text: "Second question".to_owned(),
                 status: MessageStatus::Complete,
+                error: None,
                 request: None,
             },
             ConversationMessage {
                 role: MessageRole::Assistant,
                 text: String::new(),
                 status: MessageStatus::Pending,
+                error: None,
                 request: Some(request),
             },
         ],

@@ -243,6 +243,7 @@ pub(super) struct MessageView {
     pub(super) user: bool,
     pub(super) html: String,
     pub(super) status: &'static str,
+    pub(super) error: String,
     pub(super) streaming: bool,
     pub(super) saveable_plan: bool,
     pub(super) task_title: String,
@@ -915,7 +916,10 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
         index,
         user,
         html: if user {
-            plain_html(&message.text)
+            format!(
+                "<p class=\"whitespace-pre-wrap\">{}</p>",
+                ammonia::clean_text(&message.text)
+            )
         } else {
             reply_html(&message.text)
         },
@@ -925,6 +929,7 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
             MessageStatus::Interrupted => "Interrupted",
             MessageStatus::Failed => "Failed",
         },
+        error: message_error(message),
         streaming: message.status == MessageStatus::Pending,
         saveable_plan: !user
             && message.status == MessageStatus::Complete
@@ -934,6 +939,16 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
         plan_title: format!("Plan from response {}", index + 1),
         plan_action: String::new(),
         conversation_revision: String::new(),
+    }
+}
+
+pub(super) fn message_error(message: &ConversationMessage) -> String {
+    if message.status == MessageStatus::Failed {
+        message.error.clone().unwrap_or_else(|| {
+            "The reply failed. No error details are available for this message.".to_owned()
+        })
+    } else {
+        String::new()
     }
 }
 

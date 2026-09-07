@@ -61,6 +61,7 @@ pub(crate) struct ConversationKey {
 
 struct StoredSession {
     conversations: HashMap<ConversationKey, Conversation>,
+    language: Option<super::BrowserLanguage>,
     // Safe gates release this token without release of conversation ownership.
     active: Option<JobId>,
     expires_at: Instant,
@@ -96,10 +97,21 @@ impl SessionStore {
             id,
             StoredSession {
                 conversations: HashMap::new(),
+                language: None,
                 active: None,
                 expires_at,
             },
         );
+    }
+
+    pub(crate) fn set_language(&self, id: &SessionId, language: super::BrowserLanguage) {
+        if let Some(session) = live_mut(&mut self.lock(), id, self.clock.now()) {
+            session.language = Some(language);
+        }
+    }
+
+    pub(crate) fn language(&self, id: &SessionId) -> Option<super::BrowserLanguage> {
+        live(&mut self.lock(), id, self.clock.now()).and_then(|session| session.language.clone())
     }
 
     pub(crate) fn contains_live(&self, id: &SessionId) -> bool {

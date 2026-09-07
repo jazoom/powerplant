@@ -672,6 +672,7 @@ async fn observation_uses_the_page_route_and_cancel_needs_only_the_job_identity(
             job.id(),
             String::new(),
             crate::conversations::MessageStatus::Interrupted,
+            None,
         )
         .expect("settle");
     state
@@ -1462,6 +1463,7 @@ async fn full_plan_catalogue_and_transcript_fit_conversation_navigation() {
                 job,
                 "&".repeat(64 * 1024),
                 crate::conversations::MessageStatus::Complete,
+                None,
             )
             .expect("reply");
         record = state.conversations.get(&record.id).expect("conversation");
@@ -1514,6 +1516,7 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
             job.id(),
             "# First plan\n".to_owned(),
             crate::conversations::MessageStatus::Complete,
+            None,
         )
         .expect("reply");
     state
@@ -1628,6 +1631,7 @@ async fn plan_review_uses_the_selected_revision_without_inheriting_source_histor
             source_job.id(),
             "Source private thoughts must not cross the link".to_owned(),
             crate::conversations::MessageStatus::Complete,
+            None,
         )
         .expect("source reply");
     state

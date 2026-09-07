@@ -24,6 +24,7 @@ fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
             role: MessageRole::User,
             text: "\"".repeat(32 * 1024),
             status: MessageStatus::Complete,
+            error: None,
             request: None,
         })
         .collect();

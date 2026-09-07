@@ -158,6 +158,7 @@ pub(crate) struct ConversationMessage {
     pub(crate) role: MessageRole,
     pub(crate) text: String,
     pub(crate) status: MessageStatus,
+    pub(crate) error: Option<String>,
     pub(crate) request: Option<JobId>,
 }
 
@@ -342,6 +343,8 @@ struct MessageFile {
     role: MessageRole,
     text: String,
     status: MessageStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     request: Option<String>,
 }
@@ -384,10 +387,7 @@ impl ConversationStore {
             .transpose()?;
         let title = match title {
             Some(title) => normalise_title(&title)?,
-            None => message.as_ref().map_or_else(
-                || "New conversation".to_owned(),
-                |(_, text)| super::titles::excerpt(text),
-            ),
+            None => "New conversation".to_owned(),
         };
         let projects = project.into_iter().collect();
         let mut conversations = self.lock();
@@ -424,12 +424,14 @@ impl ConversationStore {
                     role: MessageRole::User,
                     text,
                     status: MessageStatus::Complete,
+                    error: None,
                     request: None,
                 },
                 ConversationMessage {
                     role: MessageRole::Assistant,
                     text: String::new(),
                     status: MessageStatus::Pending,
+                    error: None,
                     request: Some(job),
                 },
             ];
@@ -679,12 +681,10 @@ impl ConversationStore {
 
     pub(crate) fn claim_title(&self, id: &ConversationId) -> Option<ConversationRecord> {
         self.replace(id, 0, |record| {
-            if !record.title_pending
-                || record.messages.len() != 2
-                || record.messages[1].status != MessageStatus::Complete
-            {
+            if !record.title_pending {
                 return Err(ConversationError::Conflict);
             }
+            super::titles::exchange(record).ok_or(ConversationError::Conflict)?;
             record.title_pending = false;
             Ok(())
         })
@@ -948,19 +948,18 @@ impl ConversationStore {
             if let Some(model) = model {
                 current.model = Some(model);
             }
-            if current.title_pending && current.messages.is_empty() {
-                current.title = super::titles::excerpt(&text);
-            }
             current.messages.push(ConversationMessage {
                 role: MessageRole::User,
                 text,
                 status: MessageStatus::Complete,
+                error: None,
                 request: None,
             });
             current.messages.push(ConversationMessage {
                 role: MessageRole::Assistant,
                 text: String::new(),
                 status: MessageStatus::Pending,
+                error: None,
                 request: Some(request),
             });
             current.active_job = Some(request);
@@ -991,11 +990,14 @@ impl ConversationStore {
         request: JobId,
         text: String,
         status: MessageStatus,
+        error: Option<String>,
     ) -> Result<(), ConversationError> {
-        if !matches!(
-            status,
-            MessageStatus::Complete | MessageStatus::Interrupted | MessageStatus::Failed
-        ) || text.len() > MAXIMUM_REPLY_BYTES
+        if !valid_message_error(status, error.as_deref())
+            || !matches!(
+                status,
+                MessageStatus::Complete | MessageStatus::Interrupted | MessageStatus::Failed
+            )
+            || text.len() > MAXIMUM_REPLY_BYTES
             || text.contains('\0')
         {
             return Err(ConversationError::Message);
@@ -1004,6 +1006,7 @@ impl ConversationStore {
             let message = active_assistant(current, request)?;
             message.text = text;
             message.status = status;
+            message.error = error;
             current.active_job = None;
             Ok(())
         })
@@ -1064,6 +1067,7 @@ impl ConversationStore {
                 role: MessageRole::Assistant,
                 text: String::new(),
                 status: MessageStatus::Pending,
+                error: None,
                 request: Some(request),
             });
             current.active_job = Some(request);
@@ -1562,7 +1566,10 @@ fn message_from_file(file: MessageFile) -> Result<ConversationMessage, Conversat
         MessageRole::User => MAXIMUM_MESSAGE_BYTES,
         MessageRole::Assistant => MAXIMUM_REPLY_BYTES,
     };
-    if file.text.len() > limit || file.text.contains('\0') {
+    if file.text.len() > limit
+        || file.text.contains('\0')
+        || !valid_message_error(file.status, file.error.as_deref())
+    {
         return Err(ConversationError::Corrupt);
     }
     let request = file.request.as_deref().and_then(JobId::parse);
@@ -1578,7 +1585,17 @@ fn message_from_file(file: MessageFile) -> Result<ConversationMessage, Conversat
         role: file.role,
         text: file.text,
         status: file.status,
+        error: file.error,
         request,
+    })
+}
+
+fn valid_message_error(status: MessageStatus, error: Option<&str>) -> bool {
+    error.is_none_or(|text| {
+        status == MessageStatus::Failed
+            && !text.trim().is_empty()
+            && text.len() <= crate::providers::MAXIMUM_PROVIDER_DETAIL_BYTES
+            && !text.chars().any(char::is_control)
     })
 }
 
@@ -1602,7 +1619,9 @@ fn persist(
                 .last()
                 .map_or(0, |message| message.text.len());
             // JSON can encode one control byte as six bytes, including replies at safe gates.
-            6 * MAXIMUM_REPLY_BYTES.saturating_sub(used) + 64
+            6 * (MAXIMUM_REPLY_BYTES.saturating_sub(used)
+                + crate::providers::MAXIMUM_PROVIDER_DETAIL_BYTES)
+                + 64
         })
         .sum();
     if bytes.len().saturating_add(reserved) > MAXIMUM_CATALOGUE_BYTES {
@@ -1664,6 +1683,7 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
                 role: message.role,
                 text: message.text.clone(),
                 status: message.status,
+                error: message.error.clone(),
                 request: message.request.map(|request| request.as_hex()),
             })
             .collect(),

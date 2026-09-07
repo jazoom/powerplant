@@ -698,6 +698,7 @@ async fn stop_loop(
                         request,
                         String::new(),
                         crate::conversations::MessageStatus::Interrupted,
+                        None,
                     );
                 }
                 return command_success(&state, session, &record, &form);

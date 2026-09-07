@@ -2022,13 +2022,16 @@ async fn run_agent_step(
     } else {
         instructions.trim().to_owned()
     };
-    let composed = crate::agents::compose_role(
+    let mut composed = crate::agents::compose_role(
         &role.name,
         &role.expertise,
         &instructions,
         &action.authority.tools,
         &policy,
     );
+    if let Some(language) = state.sessions.language(&job.session_id) {
+        language.append_instructions(&mut composed);
+    }
     let request_tools =
         crate::tools::definitions_for_step(&action.authority.tools, &action.required_outputs);
     let model_context_limit = state
@@ -3625,8 +3628,13 @@ fn settle_with_reply(
             workflow.job.id(),
             conversation_reply.unwrap_or(reply.text),
             message_status,
+            None,
         );
-        crate::conversations::titles::start(state, conversation_id);
+        crate::conversations::titles::start(
+            state,
+            conversation_id,
+            state.sessions.language(&workflow.session_id),
+        );
         let _ = state.sessions.finish_conversation_job(
             &workflow.session_id,
             conversation_id,
@@ -3775,6 +3783,7 @@ pub(crate) fn recover_task_loops(state: &AppState) -> Result<(), &'static str> {
                         JobStatus::Completed => crate::conversations::MessageStatus::Complete,
                         _ => crate::conversations::MessageStatus::Interrupted,
                     },
+                    None,
                 );
             }
             continue;

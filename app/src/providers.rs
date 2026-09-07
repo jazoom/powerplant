@@ -386,7 +386,7 @@ impl ProviderError {
     pub(crate) fn message(&self) -> &str {
         match self {
             Self::Rejected => "That key was rejected. Check the provider and try again.",
-            Self::Reauthenticate => "This plan login expired. Sign in again on the connect page.",
+            Self::Reauthenticate => "This plan login expired. Sign in again from Providers.",
             Self::AccountInactive => {
                 "This provider account is not active. Check the subscription and try again."
             }
@@ -495,7 +495,7 @@ fn detail_from_json(value: &serde_json::Value) -> Option<String> {
     sanitise_detail(text)
 }
 
-fn sanitise_detail(text: &str) -> Option<String> {
+pub(crate) fn sanitise_detail(text: &str) -> Option<String> {
     let mut out = String::new();
     for character in text.chars() {
         if character.is_control() {

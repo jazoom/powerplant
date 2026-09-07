@@ -1,5 +1,6 @@
 mod cookies;
 mod job;
+mod language;
 mod live;
 mod store;
 mod tokens;
@@ -11,6 +12,7 @@ pub(crate) use cookies::CookieRead;
 #[cfg(test)]
 pub(crate) use job::JobEventKind;
 pub(crate) use job::{Job, JobId, JobOwner, JobSnapshot, JobStatus};
+pub(crate) use language::BrowserLanguage;
 pub(crate) use live::LiveSessionGuard;
 pub(crate) use store::{ConversationKey, SessionSnapshot, SessionStore};
 pub(crate) use tokens::{SessionId, ValidatedToken, generate as generate_session_token};
@@ -50,6 +52,11 @@ pub(crate) async fn resolve_session(
         CookieRead::Valid(token) => existing_or_restore(&state, &token),
     };
     let invalid = matches!(resolved, ResolvedSession::Invalid);
+    if let ResolvedSession::Present(id) = &resolved
+        && let Some(language) = BrowserLanguage::from_headers(request.headers())
+    {
+        state.sessions.set_language(id, language);
+    }
     request.extensions_mut().insert(resolved);
     let mut response = next.run(request).await;
     if let Some(token) = issued {

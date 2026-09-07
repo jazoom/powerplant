@@ -67,6 +67,45 @@ fn state_with_gate(name: &str) -> (AppState, ValidatedToken, SessionId, RunId) {
 }
 
 #[tokio::test]
+async fn browser_language_belongs_to_the_resolved_live_session() {
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    state
+        .vault
+        .put(ProviderConnection::with_key(
+            ProviderKind::Xai,
+            "key",
+            "model",
+        ))
+        .unwrap();
+    let token = super::generate_session_token().unwrap();
+    let other = super::generate_session_token().unwrap();
+    state.sessions.insert(token.id());
+    state.sessions.insert(other.id());
+    let app = axum::Router::new()
+        .route("/private", get(|| async { StatusCode::OK }))
+        .layer(from_fn_with_state(state.clone(), super::resolve_session))
+        .with_state(state.clone());
+    let request = Request::builder()
+        .uri("/private")
+        .header(
+            header::COOKIE,
+            format!("powerplant_session={}", token.raw().as_str()),
+        )
+        .header(header::ACCEPT_LANGUAGE, "en-GB,en;q=0.9")
+        .body(Body::empty())
+        .unwrap();
+    let language = super::BrowserLanguage::from_headers(request.headers()).unwrap();
+    assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(state.sessions.language(&token.id()), Some(language.clone()));
+    assert_eq!(state.sessions.language(&other.id()), None);
+    state
+        .sessions
+        .advance_clock(SESSION_LIFETIME + std::time::Duration::from_secs(1));
+    state.sessions.set_language(&token.id(), language);
+    assert_eq!(state.sessions.language(&token.id()), None);
+}
+
+#[tokio::test]
 async fn the_live_guard_rejects_anonymous_and_removed_sessions() {
     let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     state

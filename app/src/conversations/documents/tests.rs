@@ -21,6 +21,7 @@ fn conversation() -> ConversationRecord {
         role: MessageRole::Assistant,
         text: "# First plan\n\n- Inspect the change\n".to_owned(),
         status: MessageStatus::Complete,
+        error: None,
         request: None,
     });
     record

@@ -36,6 +36,7 @@ async fn title_request_excludes_tools_presets_and_later_history() {
             job,
             "Reply".repeat(1000),
             super::super::MessageStatus::Complete,
+            None,
         )
         .unwrap();
     let mut record = state.conversations.claim_title(&initial.id).unwrap();
@@ -44,20 +45,34 @@ async fn title_request_excludes_tools_presets_and_later_history() {
         role: super::super::MessageRole::User,
         text: "Later private message".to_owned(),
         status: super::super::MessageStatus::Complete,
+        error: None,
         request: None,
     });
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::ACCEPT_LANGUAGE,
+        "en-GB,en;q=0.9".parse().unwrap(),
+    );
+    let language = BrowserLanguage::from_headers(&headers).unwrap();
     assert_eq!(
-        request_title(&state, &connection, &record).await.as_deref(),
+        request_title(&state, &connection, &record, Some(&language))
+            .await
+            .as_deref(),
         Some("Parser repair")
     );
     assert!(backend.last_tools().is_empty());
     assert_eq!(backend.last_connection().unwrap().0, ProviderKind::Deepseek);
     assert_eq!(backend.last_connection().unwrap().1, "title-model");
-    assert_eq!(backend.last_preamble().as_deref(), Some(INSTRUCTIONS));
+    let mut instructions = INSTRUCTIONS.to_owned();
+    language.append_instructions(&mut instructions);
+    assert_eq!(
+        backend.last_preamble().as_deref(),
+        Some(instructions.as_str())
+    );
     let history = backend.last_history();
     assert_eq!(history.len(), 1);
     assert!(
-        history[0].text.len() + INSTRUCTIONS.len()
+        history[0].text.len() + instructions.len()
             <= crate::models::models_dev::TITLE_INPUT_TOKENS as usize
     );
     assert!(!history[0].text.contains("Later private"));
@@ -68,14 +83,22 @@ async fn title_request_excludes_tools_presets_and_later_history() {
         serde_json::json!({}),
         "bad",
     )));
-    assert!(request_title(&state, &connection, &record).await.is_none());
+    assert!(
+        request_title(&state, &connection, &record, None)
+            .await
+            .is_none()
+    );
     state.chat = std::sync::Arc::new(ChatBackend::Scripted(ScriptedBackend::chunks([Err(
         crate::providers::ProviderError::Rejected,
     )])));
-    assert!(request_title(&state, &connection, &record).await.is_none());
+    assert!(
+        request_title(&state, &connection, &record, None)
+            .await
+            .is_none()
+    );
     assert_eq!(
         state.conversations.get(&initial.id).unwrap().title,
-        "Fix the parser"
+        "New conversation"
     );
 }
 
@@ -95,6 +118,27 @@ fn generated_titles_reject_untrusted_output_and_credentials() {
         valid_title(" \"Fix the parser\" ", None).as_deref(),
         Some("Fix the parser")
     );
+}
+
+#[test]
+fn title_normalisation_preserves_quoted_words_and_strips_only_outer_wrappers() {
+    for (raw, expected) in [
+        ("Greeting with “cobber”", "Greeting with “cobber”"),
+        ("“Cobber” greeting", "“Cobber” greeting"),
+        ("“Cobber” and “mate”", "“Cobber” and “mate”"),
+        ("Greeting with \"cobber\"", "Greeting with \"cobber\""),
+        ("\"Cobber\" greeting", "\"Cobber\" greeting"),
+        ("\"Cobber\" and \"mate\"", "\"Cobber\" and \"mate\""),
+        (" \"Parser repair\" ", "Parser repair"),
+        (" “Parser repair” ", "Parser repair"),
+        ("\"Greeting with “cobber”\"", "Greeting with “cobber”"),
+        ("“Greeting with \"cobber\"”", "Greeting with \"cobber\""),
+    ] {
+        assert_eq!(valid_title(raw, None).as_deref(), Some(expected));
+    }
+    for raw in ["\"\"", "“”", "\" \""] {
+        assert!(valid_title(raw, None).is_none());
+    }
 }
 
 #[test]

@@ -1931,6 +1931,7 @@ async fn start_message(
                     job.id(),
                     String::new(),
                     crate::conversations::MessageStatus::Failed,
+                    Some(error.to_owned()),
                 );
                 let _ = state
                     .sessions
@@ -1977,6 +1978,7 @@ async fn start_message(
                 job.id(),
                 String::new(),
                 crate::conversations::MessageStatus::Failed,
+                None,
             );
             let _ = state
                 .sessions

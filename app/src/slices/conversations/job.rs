@@ -67,7 +67,11 @@ pub(super) async fn run(
     connection: ProviderConnection,
     job: Arc<Job>,
 ) {
-    let instructions = instructions(&state, &record);
+    let language = state.sessions.language(&session);
+    let mut instructions = instructions(&state, &record);
+    if let Some(language) = &language {
+        language.append_instructions(&mut instructions);
+    }
     let secret = match connection.auth {
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
@@ -133,12 +137,17 @@ pub(super) async fn run(
             Some(error.message().to_owned()),
         ),
     };
-    let settlement =
-        state
-            .conversations
-            .settle_message(&conversation, job.id(), reply, message_status);
+    let error = error
+        .and_then(|text| crate::providers::sanitise_detail(&crate::tools::redact(&text, secret)));
+    let settlement = state.conversations.settle_message(
+        &conversation,
+        job.id(),
+        reply,
+        message_status,
+        error.clone(),
+    );
     if settlement.is_ok() {
-        crate::conversations::titles::start(&state, conversation);
+        crate::conversations::titles::start(&state, conversation, language);
     }
     if settlement.is_ok() || settlement == Err(crate::conversations::ConversationError::Conflict) {
         job.finish(status, error.as_deref());
@@ -448,6 +457,7 @@ fn progress_frame(
         user: false,
         html: super::page::reply_html(text),
         status: "Replying",
+        error: String::new(),
         streaming: true,
         saveable_plan: false,
         task_title: String::new(),
@@ -515,6 +525,7 @@ fn final_frame(
                 MessageStatus::Failed => "Failed",
                 MessageStatus::Pending => "Replying",
             },
+            error: super::page::message_error(message),
             streaming: message.status == MessageStatus::Pending,
             saveable_plan: false,
             task_title: String::new(),

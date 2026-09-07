@@ -169,17 +169,56 @@ fn automatic_titles_preserve_manual_edits_and_command_revisions() {
             "Fix the parser".to_owned(),
         )
         .unwrap();
-    assert_eq!(started.title, "Fix the parser");
+    assert_eq!(started.title, "New conversation");
     assert!(store.claim_title(&record.id).is_none());
     store
-        .settle_message(&record.id, job, "Done".to_owned(), MessageStatus::Complete)
+        .settle_message(
+            &record.id,
+            job,
+            String::new(),
+            MessageStatus::Failed,
+            Some("The request failed.".to_owned()),
+        )
         .unwrap();
+    assert!(store.claim_title(&record.id).is_none());
+    let record = store.get(&record.id).unwrap();
+    assert_eq!(record.title, "New conversation");
+    let job = JobId::generate().unwrap();
+    store
+        .begin_message_with_model(
+            &record.id,
+            record.revision,
+            None,
+            job,
+            "Retry the parser repair".to_owned(),
+        )
+        .unwrap();
+    store
+        .settle_message(
+            &record.id,
+            job,
+            "Done".to_owned(),
+            MessageStatus::Complete,
+            None,
+        )
+        .unwrap();
+    let mut updates = store.subscribe_titles();
     let claimed = store.claim_title(&record.id).unwrap();
+    assert_eq!(claimed.title, "New conversation");
+    assert_eq!(store.get(&record.id).unwrap().title, "New conversation");
+    assert!(updates.try_recv().is_err());
+    assert_eq!(
+        super::super::titles::exchange(&claimed),
+        Some(("Retry the parser repair", "Done"))
+    );
     assert!(store.claim_title(&record.id).is_none());
     store
         .save_automatic_title(&record.id, claimed.revision, "Parser repair".to_owned())
         .unwrap();
     assert_eq!(store.get(&record.id).unwrap().revision, claimed.revision);
+    assert_eq!(store.get(&record.id).unwrap().title, "Parser repair");
+    assert!(updates.try_recv().is_ok());
+    assert!(updates.try_recv().is_err());
     let renamed = store
         .rename(&record.id, claimed.revision, "My title".to_owned())
         .unwrap();
@@ -634,6 +673,7 @@ fn active_request_rejects_stale_settlement() {
             JobId::generate().expect("stale request"),
             "Wrong reply".to_owned(),
             MessageStatus::Complete,
+            None,
         ),
         Err(ConversationError::Conflict)
     );
@@ -674,6 +714,7 @@ fn completed_and_interrupted_messages_survive_restart() {
                     request,
                     "Complete reply".to_owned(),
                     MessageStatus::Complete,
+                    None,
                 )
                 .expect("settle");
         }
@@ -692,7 +733,8 @@ fn completed_and_interrupted_messages_survive_restart() {
             &record.id,
             record.active_job.expect("old request"),
             "Stale".to_owned(),
-            MessageStatus::Complete
+            MessageStatus::Complete,
+            None,
         ),
         Err(ConversationError::Conflict)
     );
@@ -769,11 +811,50 @@ fn message_bounds_reserve_space_for_terminal_output() {
             request,
             reply.clone(),
             MessageStatus::Interrupted,
+            None,
         )
         .expect("terminal capacity");
     store
-        .settle_message(&other.id, other_request, reply, MessageStatus::Complete)
+        .settle_message(
+            &other.id,
+            other_request,
+            reply,
+            MessageStatus::Complete,
+            None,
+        )
         .expect("linked review terminal capacity");
+}
+
+#[test]
+fn invalid_message_errors_do_not_settle_the_request() {
+    let store = ConversationStore::in_memory();
+    let record = store.create_untitled(None).unwrap();
+    let request = JobId::generate().unwrap();
+    let started = store
+        .begin_message_with_model(
+            &record.id,
+            record.revision,
+            None,
+            request,
+            "Question".to_owned(),
+        )
+        .unwrap();
+    for (status, error) in [
+        (MessageStatus::Complete, "Unexpected error".to_owned()),
+        (MessageStatus::Failed, String::new()),
+        (MessageStatus::Failed, "   ".to_owned()),
+        (MessageStatus::Failed, "Bad\nerror".to_owned()),
+        (
+            MessageStatus::Failed,
+            "界".repeat(crate::providers::MAXIMUM_PROVIDER_DETAIL_BYTES / 3 + 1),
+        ),
+    ] {
+        assert_eq!(
+            store.settle_message(&record.id, request, String::new(), status, Some(error)),
+            Err(ConversationError::Message)
+        );
+        assert_eq!(store.get(&record.id).unwrap(), started);
+    }
 }
 
 #[test]

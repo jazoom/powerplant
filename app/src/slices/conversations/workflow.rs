@@ -745,6 +745,7 @@ pub(super) async fn launch(
             job.id(),
             String::new(),
             crate::conversations::MessageStatus::Failed,
+            None,
         );
         let _ = state
             .sessions
@@ -851,6 +852,7 @@ async fn launch_task_loop(
             job.id(),
             String::new(),
             crate::conversations::MessageStatus::Failed,
+            None,
         );
         let _ = state
             .sessions
@@ -865,6 +867,7 @@ async fn launch_task_loop(
                 job.id(),
                 message.to_owned(),
                 crate::conversations::MessageStatus::Failed,
+                None,
             );
             state
                 .sessions
