@@ -66,6 +66,19 @@ impl AttemptCapabilities {
         step: &StepDefinition,
         authority: &crate::execution::ProjectFreeAuthority,
     ) -> Result<Self, CapabilityError> {
+        if let StepAction::SystemCommand(action) = &step.action {
+            if action.command != SystemCommandId::ApplyChanges || authority.reviewed_alias.is_none()
+            {
+                return Err(CapabilityError::Authority);
+            }
+            return Ok(apply_capabilities(
+                authority.revision,
+                authority
+                    .reviewed_alias
+                    .as_deref()
+                    .expect("reviewed alias checked"),
+            ));
+        }
         let StepAction::Agent(action) = &step.action else {
             return Err(CapabilityError::Authority);
         };
@@ -341,8 +354,10 @@ fn derive_with_ceiling(
             })
         }
         StepAction::SystemCommand(action) => {
-            if action.command.contract().source_effect == CommandSourceEffect::Commit
-                && !primary.access.is_writable()
+            if matches!(
+                action.command.contract().source_effect,
+                CommandSourceEffect::Apply | CommandSourceEffect::Commit
+            ) && !primary.access.is_writable()
             {
                 return Err(CapabilityError::Authority);
             }
@@ -361,7 +376,10 @@ fn commit_or_read_only(
     revision: u32,
     primary_alias: &str,
 ) -> AttemptCapabilities {
-    if command.contract().source_effect == CommandSourceEffect::Commit {
+    if matches!(
+        command.contract().source_effect,
+        CommandSourceEffect::Apply | CommandSourceEffect::Commit
+    ) {
         AttemptCapabilities {
             schema: CAPABILITY_SCHEMA,
             agent_revision: revision,
@@ -373,7 +391,11 @@ fn commit_or_read_only(
                 role: DirectoryRole::PrimarySource,
             }],
             source_location: PrimarySourceLocation::UserProject,
-            git_admin: AccessMode::ReadWrite,
+            git_admin: if command.contract().source_effect == CommandSourceEffect::Commit {
+                AccessMode::ReadWrite
+            } else {
+                AccessMode::ReadOnly
+            },
             network: NetworkCapability::None,
         }
     } else {
@@ -386,6 +408,23 @@ fn commit_or_read_only(
             git_admin: AccessMode::ReadOnly,
             network: NetworkCapability::None,
         }
+    }
+}
+
+fn apply_capabilities(revision: u32, primary_alias: &str) -> AttemptCapabilities {
+    AttemptCapabilities {
+        schema: CAPABILITY_SCHEMA,
+        agent_revision: revision,
+        tools: Vec::new(),
+        directories: vec![CapabilityDirectory {
+            alias: primary_alias.to_owned(),
+            guest_path: format!("/access/{primary_alias}"),
+            access: AccessMode::ReadWrite,
+            role: DirectoryRole::PrimarySource,
+        }],
+        source_location: PrimarySourceLocation::UserProject,
+        git_admin: AccessMode::ReadOnly,
+        network: NetworkCapability::None,
     }
 }
 

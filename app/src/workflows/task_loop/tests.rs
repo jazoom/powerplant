@@ -98,6 +98,7 @@ pub(crate) fn completed_child(
         },
         initial_context: None,
         cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+        apply_transaction: None,
         commit_transaction: None,
         commit_result: Some(super::super::commit::CommitResult {
             commit: "a".repeat(40),

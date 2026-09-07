@@ -11,6 +11,12 @@ use crate::workflows::definition::ArtefactKind;
 
 pub(crate) struct CandidateApply;
 
+pub(crate) struct CandidateApplicationBinding<'a> {
+    pub(crate) initial_hash: ArtefactHash,
+    pub(crate) target_hash: ArtefactHash,
+    pub(crate) exclusions: &'a [String],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApplyError {
     Conflict,
@@ -29,7 +35,43 @@ impl CandidateApply {
         expected_target_hash: ArtefactHash,
         store: &WorkflowArtefactRepository,
     ) -> Result<(), ApplyError> {
-        preflight(project, initial, target, expected_target_hash, store)?;
+        let initial_bytes = initial
+            .manifest_bytes()
+            .map_err(|_| ApplyError::Integrity)?;
+        let expected_initial_hash = artefact_hash_for(
+            ArtefactKind::CandidateRevision,
+            initial.format_version,
+            &initial_bytes,
+        );
+        Self::apply_bound(
+            project,
+            initial,
+            expected_initial_hash,
+            target,
+            expected_target_hash,
+            &initial.exclusions,
+            store,
+        )
+    }
+
+    pub(crate) fn apply_bound(
+        project: &Path,
+        initial: &CandidateRevisionArtefact,
+        expected_initial_hash: ArtefactHash,
+        target: &CandidateRevisionArtefact,
+        expected_target_hash: ArtefactHash,
+        expected_exclusions: &[String],
+        store: &WorkflowArtefactRepository,
+    ) -> Result<(), ApplyError> {
+        preflight(
+            project,
+            initial,
+            expected_initial_hash,
+            target,
+            expected_target_hash,
+            expected_exclusions,
+            store,
+        )?;
         if let Err(error) = apply_changes(project, initial, target, store) {
             restore_after_failure(project, initial, target, store)?;
             return Err(error);
@@ -39,6 +81,117 @@ impl CandidateApply {
             return Err(error);
         }
         Ok(())
+    }
+
+    pub(crate) fn apply_journalled(
+        project: &Path,
+        initial: &CandidateRevisionArtefact,
+        target: &CandidateRevisionArtefact,
+        binding: CandidateApplicationBinding<'_>,
+        store: &WorkflowArtefactRepository,
+        mut progress: impl FnMut(usize, &str, bool) -> Result<(), ApplyError>,
+    ) -> Result<(), ApplyError> {
+        preflight(
+            project,
+            initial,
+            binding.initial_hash,
+            target,
+            binding.target_hash,
+            binding.exclusions,
+            store,
+        )?;
+        let operations = changed_paths(initial, target);
+        let mut expected_entries = initial.entries.clone();
+        for (index, path) in operations.iter().enumerate() {
+            let live = super::candidate::CandidateCapture::capture_directory(
+                project,
+                binding.exclusions,
+                store,
+            )
+            .map_err(map_capture)?;
+            if live.entries != expected_entries
+                || live.repository != initial.repository
+                || live.git_admin != initial.git_admin
+            {
+                return Err(ApplyError::Drift);
+            }
+            progress(index, path, false)?;
+            apply_path(project, path, target, store)?;
+            expected_entries.retain(|entry| entry.path != *path);
+            if let Some(entry) = target.entries.iter().find(|entry| entry.path == *path) {
+                expected_entries.push(entry.clone());
+                expected_entries
+                    .sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+            }
+            progress(index + 1, path, true)?;
+        }
+        verify_target(project, target, store)
+    }
+
+    pub(crate) fn recover_to_initial(
+        project: &Path,
+        initial: &CandidateRevisionArtefact,
+        target: &CandidateRevisionArtefact,
+        expected_exclusions: &[String],
+        started_paths: &[String],
+        store: &WorkflowArtefactRepository,
+    ) -> Result<(), ApplyError> {
+        if initial.exclusions != expected_exclusions || target.exclusions != expected_exclusions {
+            return Err(ApplyError::Integrity);
+        }
+        let live = super::candidate::CandidateCapture::capture_directory(
+            project,
+            expected_exclusions,
+            store,
+        )
+        .map_err(map_capture)?;
+        let mut paths: Vec<_> = initial
+            .entries
+            .iter()
+            .chain(&target.entries)
+            .map(|entry| entry.path.clone())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        for path in paths {
+            let current = live.entries.iter().find(|entry| entry.path == path);
+            let before = initial.entries.iter().find(|entry| entry.path == path);
+            let after = target.entries.iter().find(|entry| entry.path == path);
+            if current != before && (current != after || !started_paths.contains(&path)) {
+                return Err(ApplyError::Conflict);
+            }
+        }
+        for entry in &live.entries {
+            if initial.entries.iter().all(|item| item.path != entry.path)
+                && target.entries.iter().all(|item| item.path != entry.path)
+            {
+                return Err(ApplyError::Conflict);
+            }
+        }
+        let manifest = live.manifest_bytes().map_err(|_| ApplyError::Integrity)?;
+        let initial_manifest = initial
+            .manifest_bytes()
+            .map_err(|_| ApplyError::Integrity)?;
+        Self::apply_journalled(
+            project,
+            &live,
+            initial,
+            CandidateApplicationBinding {
+                initial_hash: artefact_hash_for(
+                    ArtefactKind::CandidateRevision,
+                    live.format_version,
+                    &manifest,
+                ),
+                target_hash: artefact_hash_for(
+                    ArtefactKind::CandidateRevision,
+                    initial.format_version,
+                    &initial_manifest,
+                ),
+                exclusions: expected_exclusions,
+            },
+            store,
+            |_, _, _| Ok(()),
+        )
     }
 
     pub(crate) fn rollback(
@@ -55,26 +208,31 @@ impl CandidateApply {
 fn preflight(
     project: &Path,
     initial: &CandidateRevisionArtefact,
+    expected_initial_hash: ArtefactHash,
     target: &CandidateRevisionArtefact,
     expected_target_hash: ArtefactHash,
+    expected_exclusions: &[String],
     store: &WorkflowArtefactRepository,
 ) -> Result<(), ApplyError> {
-    let initial_bytes = initial
-        .manifest_bytes()
-        .map_err(|_| ApplyError::Integrity)?;
-    validate_artefact(
-        initial,
-        artefact_hash_for(
-            ArtefactKind::CandidateRevision,
-            initial.format_version,
-            &initial_bytes,
-        ),
-    )?;
+    validate_artefact(initial, expected_initial_hash)?;
     validate_artefact(target, expected_target_hash)?;
-    let first =
-        super::candidate::CandidateCapture::capture_host(project, store).map_err(map_capture)?;
-    let second =
-        super::candidate::CandidateCapture::capture_host(project, store).map_err(map_capture)?;
+    if initial.ordinary != target.ordinary
+        || initial.repository != target.repository
+        || initial.git_admin != target.git_admin
+        || initial.exclusions != expected_exclusions
+        || target.exclusions != expected_exclusions
+    {
+        return Err(ApplyError::Integrity);
+    }
+    let capture = |root: &Path| {
+        if initial.ordinary {
+            super::candidate::CandidateCapture::capture_directory(root, expected_exclusions, store)
+        } else {
+            super::candidate::CandidateCapture::capture_host(root, store)
+        }
+    };
+    let first = capture(project).map_err(map_capture)?;
+    let second = capture(project).map_err(map_capture)?;
     if first != *initial || second != first {
         return Err(ApplyError::Drift);
     }
@@ -84,7 +242,9 @@ fn preflight(
         }
     }
     let workspace = WorkspaceDir::open(project).map_err(map_capture)?;
-    let host_leaves = workspace.collect_leaf_paths().map_err(map_capture)?;
+    let host_leaves = workspace
+        .collect_leaf_paths_excluding(expected_exclusions)
+        .map_err(map_capture)?;
     let initial_paths: Vec<_> = initial
         .entries
         .iter()
@@ -143,30 +303,57 @@ fn restore_after_failure(
     verify_target(project, initial, store).map_err(|_| ApplyError::Write)
 }
 
+pub(crate) fn changed_paths(
+    from: &CandidateRevisionArtefact,
+    to: &CandidateRevisionArtefact,
+) -> Vec<String> {
+    let mut removals: Vec<_> = from
+        .entries
+        .iter()
+        .filter(|entry| to.entries.iter().all(|item| item.path != entry.path))
+        .map(|entry| entry.path.clone())
+        .collect();
+    removals.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
+    let mut writes: Vec<_> = to
+        .entries
+        .iter()
+        .filter(|entry| from.entries.iter().find(|item| item.path == entry.path) != Some(*entry))
+        .map(|entry| entry.path.clone())
+        .collect();
+    writes.sort_by_key(|path| path.matches('/').count());
+    removals.extend(writes);
+    removals
+}
+
+fn apply_path(
+    project: &Path,
+    path: &str,
+    target: &CandidateRevisionArtefact,
+    store: &WorkflowArtefactRepository,
+) -> Result<(), ApplyError> {
+    let workspace = WorkspaceDir::open(project).map_err(map_capture)?;
+    if let Some(entry) = target.entries.iter().find(|entry| entry.path == path) {
+        write_entry(&workspace, store, entry)
+    } else {
+        if workspace.exists(path) {
+            workspace.remove_leaf(path).map_err(map_capture)?;
+            // Ordinary manifests contain directories as explicit journal operations.
+            if !target.ordinary {
+                prune_empty_parents(&workspace, path, target)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 fn apply_changes(
     project: &Path,
     from: &CandidateRevisionArtefact,
     to: &CandidateRevisionArtefact,
     store: &WorkflowArtefactRepository,
 ) -> Result<(), ApplyError> {
-    let workspace = WorkspaceDir::open(project).map_err(map_capture)?;
-    let mut removals: Vec<&str> = from
-        .entries
-        .iter()
-        .filter(|entry| to.entries.iter().all(|item| item.path != entry.path))
-        .map(|entry| entry.path.as_str())
-        .collect();
-    removals.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
-    for path in removals {
-        if workspace.exists(path) {
-            workspace.remove_leaf(path).map_err(map_capture)?;
-            prune_empty_parents(&workspace, path, to)?;
-        }
-    }
-    let mut additions = to.entries.clone();
-    additions.sort_by_key(|entry| entry.path.matches('/').count());
-    for entry in additions {
-        write_entry(&workspace, store, &entry)?;
+    for path in changed_paths(from, to) {
+        apply_path(project, &path, to, store)?;
     }
     Ok(())
 }
@@ -289,73 +476,30 @@ fn verify_target(
     target: &CandidateRevisionArtefact,
     store: &WorkflowArtefactRepository,
 ) -> Result<(), ApplyError> {
-    let workspace = WorkspaceDir::open(project).map_err(map_capture)?;
-    let mut reread = Vec::new();
-    for entry in &target.entries {
-        reread.push(reread_entry(&workspace, store, entry)?);
-    }
-    if hash_candidate(&reread, &target.exclusions) != target.candidate_hash {
+    let capture = || {
+        if target.ordinary {
+            super::candidate::CandidateCapture::capture_directory(
+                project,
+                &target.exclusions,
+                store,
+            )
+        } else {
+            super::candidate::CandidateCapture::capture_host(project, store)
+        }
+    };
+    let first = capture().map_err(map_capture)?;
+    let second = capture().map_err(map_capture)?;
+    if first != *target || second != first {
         return Err(ApplyError::Drift);
     }
     Ok(())
-}
-
-fn reread_entry(
-    workspace: &WorkspaceDir,
-    store: &WorkflowArtefactRepository,
-    entry: &CandidateEntry,
-) -> Result<CandidateEntry, ApplyError> {
-    match workspace.kind(&entry.path).map_err(map_capture)? {
-        WorkspaceKind::File { executable } => {
-            let (bytes, opened_executable, size) =
-                workspace.read_file(&entry.path).map_err(map_capture)?;
-            if opened_executable != executable {
-                return Err(ApplyError::Drift);
-            }
-            let blob = store.publish(&bytes).map_err(|_| ApplyError::Write)?;
-            Ok(CandidateEntry {
-                path: entry.path.clone(),
-                kind: CandidateEntryKind::Regular {
-                    executable,
-                    mode: workspace.mode(&entry.path).map_err(map_capture)?,
-                    bytes: size,
-                    blob,
-                },
-            })
-        }
-        WorkspaceKind::Symlink => {
-            let target = workspace.read_link(&entry.path).map_err(map_capture)?;
-            let blob = store
-                .publish(target.as_bytes())
-                .map_err(|_| ApplyError::Write)?;
-            Ok(CandidateEntry {
-                path: entry.path.clone(),
-                kind: CandidateEntryKind::Symlink { target, blob },
-            })
-        }
-        WorkspaceKind::Directory => {
-            let kind = match &entry.kind {
-                CandidateEntryKind::Directory { .. } => CandidateEntryKind::Directory {
-                    mode: workspace.mode(&entry.path).map_err(map_capture)?,
-                },
-                CandidateEntryKind::Gitlink { commit } => CandidateEntryKind::Gitlink {
-                    commit: commit.clone(),
-                },
-                _ => return Err(ApplyError::Drift),
-            };
-            Ok(CandidateEntry {
-                path: entry.path.clone(),
-                kind,
-            })
-        }
-        WorkspaceKind::Other => Err(ApplyError::Unsupported),
-    }
 }
 
 fn validate_artefact(
     artefact: &CandidateRevisionArtefact,
     expected: ArtefactHash,
 ) -> Result<(), ApplyError> {
+    super::candidate::validate_candidate_shape(artefact).map_err(|_| ApplyError::Integrity)?;
     let bytes = artefact
         .manifest_bytes()
         .map_err(|_| ApplyError::Integrity)?;

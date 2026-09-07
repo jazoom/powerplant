@@ -1382,7 +1382,10 @@ fn parse_file_parts(file: DefinitionFile) -> Result<FileParts, DefinitionError> 
 
 fn produces_candidate_revision(step: &StepDefinition) -> bool {
     step.writes_primary_source()
-        || step.command_source_effect() == Some(CommandSourceEffect::Commit)
+        || matches!(
+            step.command_source_effect(),
+            Some(CommandSourceEffect::Apply | CommandSourceEffect::Commit)
+        )
 }
 
 fn has_secondary_write(step: &StepDefinition) -> bool {

@@ -1154,6 +1154,7 @@ fn completed_output_attempt(
         },
         cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
         initial_context: None,
+        apply_transaction: None,
         commit_transaction: None,
         commit_result: None,
     }

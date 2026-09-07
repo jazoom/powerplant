@@ -49,6 +49,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         workflow_execution: Arc::new(WorkflowExecution::new()),
         gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),
         workflow_workspaces: Arc::new(WorkflowWorkspaces::in_memory()),
+        apply_journals: Arc::new(ApplyJournals::in_memory()),
         commit_journals: Arc::new(CommitJournals::in_memory()),
         environments,
         environment_snapshots,

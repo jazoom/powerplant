@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub(super) mod tests;
 
+pub(crate) mod apply;
 pub(crate) mod artefacts;
 pub(crate) mod capabilities;
 mod catalogue;
@@ -24,6 +25,7 @@ pub(crate) mod task_list;
 pub(crate) mod task_loop;
 pub(crate) mod workspace;
 
+pub(crate) use apply::ApplyJournals;
 pub(crate) use artefacts::WorkflowArtefactRepository;
 pub(crate) use catalogue::{
     CatalogueError, ResolveWorkflowError, WorkflowCatalogue, WorkflowRecord, WorkflowSelection,
@@ -35,8 +37,8 @@ pub(crate) use execution::{ExecutionGuard, WorkflowExecution};
 pub(crate) use executor::{
     PausedWorkflow, WorkflowContinuationRegistry, WorkflowJob, execute_run,
     interrupt_provider_continuations, interrupt_session_continuations, reconstruct_loop_job,
-    recover_commit_transactions, recover_task_loops, settle_cancelled_job, settle_terminal_job,
-    validate_phase_selection,
+    recover_apply_transactions, recover_commit_transactions, recover_task_loops,
+    settle_cancelled_job, settle_terminal_job, validate_phase_selection,
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, TaskLoopId, WorkflowId};
 #[cfg(test)]

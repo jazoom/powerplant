@@ -68,7 +68,9 @@ impl ProcessPhase {
                     SystemCommandId::RepositoryStatus => {
                         "Reads repository status. Does not change project files."
                     }
-                    SystemCommandId::CommitCandidate => command.consequence(),
+                    SystemCommandId::ApplyChanges | SystemCommandId::CommitCandidate => {
+                        command.consequence()
+                    }
                 },
                 "The current candidate and validated artefacts continue to the next phase. No model request occurs.",
             ),

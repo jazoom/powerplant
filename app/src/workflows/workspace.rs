@@ -139,6 +139,7 @@ pub(crate) fn reviewed_capture_exclusions(
     data_root: &std::path::Path,
 ) -> Vec<String> {
     const ENGINE_PATHS: &[&str] = &[
+        "workflow-apply-journals",
         "workflow-artefacts",
         "workflow-commit-journals",
         "workflow-evidence",

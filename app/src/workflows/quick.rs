@@ -87,6 +87,7 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
             action.revision = None;
         }
         steps.push(gate);
+        steps.push(apply_step());
     }
     let definition =
         WorkflowDefinition::from_parts(QUICK_TASK_NAME.to_owned(), environment, vec![role], steps)?;
@@ -176,6 +177,36 @@ fn gate_step() -> StepDefinition {
                 revision_target: StepKey::parse(AGENT_STEP_KEY).expect("quick task work"),
                 attempt_limit: 3,
             }),
+        }),
+        review: None,
+    }
+}
+
+fn apply_step() -> StepDefinition {
+    StepDefinition {
+        key: StepKey::parse("apply").expect("quick task apply"),
+        name: "Apply changes".to_owned(),
+        inputs: vec![
+            step_output(
+                "candidate",
+                ArtefactKind::CandidateRevision,
+                AGENT_STEP_KEY,
+                "candidate",
+            ),
+            step_output(
+                "decision",
+                ArtefactKind::HumanDecision,
+                GATE_STEP_KEY,
+                DECISION_OUTPUT_KEY,
+            ),
+        ],
+        action: StepAction::SystemCommand(SystemCommandStep {
+            command: SystemCommandId::ApplyChanges,
+            environment: StepEnvironment::WorkflowDefault,
+            required_outputs: vec![RequiredOutput {
+                key: OutputKey::parse("applied-candidate").expect("quick task applied"),
+                kind: OutputKind::CandidateRevision,
+            }],
         }),
         review: None,
     }

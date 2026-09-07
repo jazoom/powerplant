@@ -3,12 +3,14 @@ use super::definition::{ArtefactKind, OutputKind};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SystemCommandId {
     RepositoryStatus,
+    ApplyChanges,
     CommitCandidate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CommandSourceEffect {
     ReadOnly,
+    Apply,
     Commit,
 }
 
@@ -24,6 +26,9 @@ impl SystemCommandContract {
     pub(crate) fn accepts(&self, inputs: &[ArtefactKind], outputs: &[OutputKind]) -> bool {
         if !kinds_match(outputs, self.required_outputs) {
             return false;
+        }
+        if self.id == SystemCommandId::ApplyChanges {
+            return kinds_match(inputs, self.required_inputs);
         }
         if self.id == SystemCommandId::CommitCandidate {
             let candidates = inputs
@@ -51,6 +56,7 @@ impl SystemCommandId {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "repository-status" => Some(Self::RepositoryStatus),
+            "apply-changes" => Some(Self::ApplyChanges),
             "commit-candidate" => Some(Self::CommitCandidate),
             _ => None,
         }
@@ -59,6 +65,7 @@ impl SystemCommandId {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::RepositoryStatus => "repository-status",
+            Self::ApplyChanges => "apply-changes",
             Self::CommitCandidate => "commit-candidate",
         }
     }
@@ -66,6 +73,7 @@ impl SystemCommandId {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::RepositoryStatus => "Repository status",
+            Self::ApplyChanges => "Apply changes",
             Self::CommitCandidate => "Commit candidate",
         }
     }
@@ -73,6 +81,9 @@ impl SystemCommandId {
     pub(crate) fn consequence(self) -> &'static str {
         match self {
             Self::RepositoryStatus => "",
+            Self::ApplyChanges => {
+                "Applies the approved files to the authorised directory without a Git commit."
+            }
             Self::CommitCandidate => {
                 "Applies an approved candidate to the local project and creates a Git commit."
             }
@@ -87,6 +98,12 @@ impl SystemCommandId {
                 required_inputs: &[ArtefactKind::CandidateRevision],
                 required_outputs: &[],
             },
+            Self::ApplyChanges => SystemCommandContract {
+                id: self,
+                source_effect: CommandSourceEffect::Apply,
+                required_inputs: &[ArtefactKind::CandidateRevision, ArtefactKind::HumanDecision],
+                required_outputs: &[OutputKind::CandidateRevision],
+            },
             Self::CommitCandidate => SystemCommandContract {
                 id: self,
                 source_effect: CommandSourceEffect::Commit,
@@ -96,8 +113,12 @@ impl SystemCommandId {
         }
     }
 
-    pub(crate) fn all() -> [Self; 2] {
-        [Self::RepositoryStatus, Self::CommitCandidate]
+    pub(crate) fn all() -> [Self; 3] {
+        [
+            Self::RepositoryStatus,
+            Self::ApplyChanges,
+            Self::CommitCandidate,
+        ]
     }
 }
 

@@ -61,9 +61,11 @@ pub(super) struct GatePage {
     pub(super) host_unchanged: &'static str,
     pub(super) ordinary: bool,
     pub(super) exclusions: Vec<String>,
+    pub(super) application_destination: String,
 }
 
 impl GatePage {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         run: &WorkflowRun,
         gate: &HumanGateRecord,
@@ -72,6 +74,7 @@ impl GatePage {
         store: &crate::workflows::WorkflowArtefactRepository,
         query: super::forms::DiffQuery,
         error: &'static str,
+        application_destination: String,
     ) -> Option<Self> {
         let plan_gate = gate.candidate.kind == crate::workflows::definition::ArtefactKind::Plan;
         let root = format!("/runs/{}/gates/{}", run.id.as_hex(), gate.id.as_hex());
@@ -240,6 +243,7 @@ impl GatePage {
             host_unchanged: crate::workflows::HOST_UNCHANGED,
             ordinary,
             exclusions,
+            application_destination,
         })
     }
 }

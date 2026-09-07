@@ -9,6 +9,7 @@ use crate::environments::{
 use crate::projects::ProjectId;
 use crate::providers::{ModelSelection, ProviderKind, ThinkingEffort};
 
+use super::apply::{ApplyRoot, ApplyTransaction, ApplyTransactionState};
 use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::capabilities::{
     AttemptCapabilities, CapabilityDirectory, DirectoryRole, NetworkCapability,
@@ -209,6 +210,7 @@ pub(crate) struct AttemptRecord {
     pub(crate) sandbox: AttemptSandboxRecord,
     pub(crate) initial_context: Option<AttemptContextPacket>,
     pub(crate) cleanup: AttemptCleanupRecord,
+    pub(crate) apply_transaction: Option<ApplyTransaction>,
     pub(crate) commit_transaction: Option<CommitTransaction>,
     pub(crate) commit_result: Option<CommitResult>,
 }
@@ -238,6 +240,7 @@ pub(crate) enum FailureCategory {
     Definition,
     Cleanup,
     Assurance,
+    Apply,
     Commit,
 }
 
@@ -250,6 +253,7 @@ pub(crate) struct AttemptSandboxRecord {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttemptSandboxKind {
     IsolatedAttempt,
+    FileApplication,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -416,12 +420,32 @@ struct AttemptFile {
     sandbox: AttemptSandboxFile,
     initial_context: Option<AttemptContextPacket>,
     cleanup: AttemptCleanupFile,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    apply_transaction: Option<ApplyTransactionFile>,
     commit_transaction: Option<CommitTransactionFile>,
     commit_result: Option<CommitResultFile>,
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ApplyTransactionFile {
+    state: String,
+    completed: Option<usize>,
+    path: Option<String>,
+    grant_id: String,
+    host_path: std::path::PathBuf,
+    device: u64,
+    inode: u64,
+    baseline: ArtefactRefFile,
+    baseline_candidate: String,
+    candidate: ArtefactRefFile,
+    candidate_hash: String,
+    approval: ArtefactRefFile,
+    exclusions: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct CommitTransactionFile {
     state: String,
     candidate: ArtefactRefFile,
@@ -1413,6 +1437,7 @@ impl WorkflowRun {
             sandbox,
             initial_context: None,
             cleanup: AttemptCleanupRecord::Pending,
+            apply_transaction: None,
             commit_transaction: None,
             commit_result: None,
         });
@@ -1449,6 +1474,27 @@ impl WorkflowRun {
             };
         }
         attempt.initial_context = Some(context);
+        Ok(())
+    }
+
+    pub(crate) fn record_apply_transaction(
+        &mut self,
+        attempt_id: AttemptId,
+        transaction: ApplyTransaction,
+    ) -> Result<(), TransitionError> {
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id && attempt.state == AttemptState::Active)
+        else {
+            return Err(TransitionError::Invalid);
+        };
+        if let Some(current) = &attempt.apply_transaction
+            && !current.can_advance_to(&transaction)
+        {
+            return Err(TransitionError::Invalid);
+        }
+        attempt.apply_transaction = Some(transaction);
         Ok(())
     }
 
@@ -2014,7 +2060,21 @@ impl WorkflowRun {
             .checked_add(self.gates.len())
             .ok_or(RunRecordError::Corrupt)?;
         let source_free = matches!(self.source, RunSource::None);
-        if source_free != self.project_id.is_none()
+        let reviewed_project_free = self.project_id.is_none()
+            && matches!(self.source, RunSource::Captured { .. })
+            && self.kind == RunKind::QuickTask
+            && self.conversation_id.is_some()
+            && self.agent_id.is_none()
+            && self.pinned.definition.steps().iter().any(|step| {
+                matches!(
+                    &step.action,
+                    StepAction::SystemCommand(action)
+                        if action.command
+                            == crate::workflows::commands::SystemCommandId::ApplyChanges
+                )
+            });
+        if (source_free && self.project_id.is_some())
+            || (!source_free && self.project_id.is_none() && !reviewed_project_free)
             || (self.conversation_id.is_none() && self.agent_id.is_none())
             || (source_free
                 && (self.agent_id.is_some()
@@ -2187,6 +2247,10 @@ impl AttemptRecord {
             },
             initial_context: self.initial_context.clone(),
             cleanup: cleanup_to_file(&self.cleanup),
+            apply_transaction: self
+                .apply_transaction
+                .as_ref()
+                .map(apply_transaction_to_file),
             commit_transaction: self
                 .commit_transaction
                 .as_ref()
@@ -2233,6 +2297,10 @@ impl AttemptRecord {
             },
             initial_context: file.initial_context,
             cleanup: cleanup_from_file(file.cleanup)?,
+            apply_transaction: file
+                .apply_transaction
+                .map(apply_transaction_from_file)
+                .transpose()?,
             commit_transaction: file
                 .commit_transaction
                 .map(commit_transaction_from_file)
@@ -2323,6 +2391,7 @@ impl FailureCategory {
             "definition" => Some(Self::Definition),
             "cleanup" => Some(Self::Cleanup),
             "assurance" => Some(Self::Assurance),
+            "apply" => Some(Self::Apply),
             "commit" => Some(Self::Commit),
             _ => None,
         }
@@ -2338,6 +2407,7 @@ impl FailureCategory {
             Self::Definition => "definition",
             Self::Cleanup => "cleanup",
             Self::Assurance => "assurance",
+            Self::Apply => "apply",
             Self::Commit => "commit",
         }
     }
@@ -2352,6 +2422,7 @@ impl FailureCategory {
             Self::Definition => "definition",
             Self::Cleanup => "cleanup",
             Self::Assurance => "assurance",
+            Self::Apply => "file application",
             Self::Commit => "commit",
         }
     }
@@ -3410,6 +3481,72 @@ fn next_ordinal(attempts: &[AttemptRecord], step: &StepKey) -> u32 {
         + 1
 }
 
+fn apply_transaction_to_file(transaction: &ApplyTransaction) -> ApplyTransactionFile {
+    let (state, completed, path) = match &transaction.state {
+        ApplyTransactionState::Prepared => ("prepared", None, None),
+        ApplyTransactionState::Applying { completed, path } => {
+            ("applying", Some(*completed), Some(path.clone()))
+        }
+        ApplyTransactionState::Applied { completed } => ("applied", Some(*completed), None),
+        ApplyTransactionState::Verified => ("verified", None, None),
+        ApplyTransactionState::Recovered => ("recovered", None, None),
+        ApplyTransactionState::RecoveryUncertain => ("recovery-uncertain", None, None),
+    };
+    ApplyTransactionFile {
+        state: state.to_owned(),
+        completed,
+        path,
+        grant_id: transaction.root.grant_id.as_hex(),
+        host_path: transaction.root.host_path.clone(),
+        device: transaction.root.identity.device,
+        inode: transaction.root.identity.inode,
+        baseline: ref_to_file(&transaction.baseline),
+        baseline_candidate: transaction.baseline_candidate.as_str(),
+        candidate: ref_to_file(&transaction.candidate),
+        candidate_hash: transaction.candidate_hash.as_str(),
+        approval: ref_to_file(&transaction.approval),
+        exclusions: transaction.exclusions.clone(),
+    }
+}
+
+fn apply_transaction_from_file(
+    file: ApplyTransactionFile,
+) -> Result<ApplyTransaction, RunRecordError> {
+    let state = match (file.state.as_str(), file.completed, file.path) {
+        ("prepared", None, None) => ApplyTransactionState::Prepared,
+        ("applying", Some(completed), Some(path)) if !path.is_empty() => {
+            ApplyTransactionState::Applying { completed, path }
+        }
+        ("applied", Some(completed), None) => ApplyTransactionState::Applied { completed },
+        ("verified", None, None) => ApplyTransactionState::Verified,
+        ("recovered", None, None) => ApplyTransactionState::Recovered,
+        ("recovery-uncertain", None, None) => ApplyTransactionState::RecoveryUncertain,
+        _ => return Err(RunRecordError::Corrupt),
+    };
+    Ok(ApplyTransaction {
+        state,
+        root: ApplyRoot {
+            grant_id: crate::execution::DirectoryGrantId::parse(&file.grant_id)
+                .ok_or(RunRecordError::Corrupt)?,
+            host_path: file.host_path,
+            identity: crate::execution::CanonicalDirectoryIdentity {
+                device: file.device,
+                inode: file.inode,
+            },
+        },
+        baseline: ref_from_file(file.baseline)?,
+        baseline_candidate: crate::workflows::artefacts::CandidateHash::parse(
+            &file.baseline_candidate,
+        )
+        .ok_or(RunRecordError::Corrupt)?,
+        candidate: ref_from_file(file.candidate)?,
+        candidate_hash: crate::workflows::artefacts::CandidateHash::parse(&file.candidate_hash)
+            .ok_or(RunRecordError::Corrupt)?,
+        approval: ref_from_file(file.approval)?,
+        exclusions: file.exclusions,
+    })
+}
+
 fn commit_transaction_to_file(transaction: &CommitTransaction) -> CommitTransactionFile {
     CommitTransactionFile {
         state: transaction.state.encode(),
@@ -3642,7 +3779,14 @@ fn validate_attempt_isolation(
     step: &StepDefinition,
     run: &WorkflowRun,
 ) -> Result<(), RunRecordError> {
-    if attempt.sandbox.kind != AttemptSandboxKind::IsolatedAttempt {
+    let file_application = matches!(
+        &step.action,
+        StepAction::SystemCommand(action)
+            if action.command == crate::workflows::commands::SystemCommandId::ApplyChanges
+    );
+    if (file_application && attempt.sandbox.kind != AttemptSandboxKind::FileApplication)
+        || (!file_application && attempt.sandbox.kind != AttemptSandboxKind::IsolatedAttempt)
+    {
         return Err(RunRecordError::Corrupt);
     }
     let Some(binding) = run
@@ -3656,12 +3800,34 @@ fn validate_attempt_isolation(
     if attempt.sandbox.snapshot_digest != binding.snapshot_digest {
         return Err(RunRecordError::Corrupt);
     }
+    let apply = matches!(
+        &step.action,
+        StepAction::SystemCommand(action)
+            if action.command == crate::workflows::commands::SystemCommandId::ApplyChanges
+    );
     let commit = matches!(
         &step.action,
         StepAction::SystemCommand(action)
             if action.command == crate::workflows::commands::SystemCommandId::CommitCandidate
     );
-    if commit {
+    if apply {
+        if attempt.capabilities.git_admin != AccessMode::ReadOnly
+            || attempt.capabilities.source_location != PrimarySourceLocation::UserProject
+            || attempt.commit_transaction.is_some()
+            || attempt.commit_result.is_some()
+            || attempt
+                .apply_transaction
+                .as_ref()
+                .is_some_and(|transaction| !valid_apply_transaction(run, attempt, transaction))
+            || (attempt.state == AttemptState::Completed
+                && !attempt
+                    .apply_transaction
+                    .as_ref()
+                    .is_some_and(ApplyTransaction::is_verified))
+        {
+            return Err(RunRecordError::Corrupt);
+        }
+    } else if commit {
         if attempt.capabilities.git_admin != AccessMode::ReadWrite
             || attempt.capabilities.source_location != PrimarySourceLocation::UserProject
         {
@@ -3687,7 +3853,8 @@ fn validate_attempt_isolation(
         {
             return Err(RunRecordError::Corrupt);
         }
-    } else if attempt.commit_transaction.is_some()
+    } else if attempt.apply_transaction.is_some()
+        || attempt.commit_transaction.is_some()
         || attempt.commit_result.is_some()
         || attempt.capabilities.git_admin != AccessMode::ReadOnly
         || !matches!(
@@ -3732,6 +3899,71 @@ fn validate_attempt_isolation(
         _ => return Err(RunRecordError::Corrupt),
     }
     Ok(())
+}
+
+fn valid_apply_transaction(
+    run: &WorkflowRun,
+    attempt: &AttemptRecord,
+    transaction: &ApplyTransaction,
+) -> bool {
+    let candidate = attempt.inputs.iter().find(|input| {
+        input.artefact.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+    });
+    let approval = attempt.inputs.iter().find(|input| {
+        input.artefact.kind == crate::workflows::definition::ArtefactKind::HumanDecision
+    });
+    let source = match &run.source {
+        RunSource::Captured { source } => source,
+        RunSource::None | RunSource::Pending => return false,
+    };
+    let baseline_record = run.artefact(&transaction.baseline.id);
+    let candidate_record = run.artefact(&transaction.candidate.id);
+    let approval_record = run.artefact(&transaction.approval.id);
+    let summaries_match = matches!(
+        baseline_record.map(|record| &record.summary),
+        Some(crate::workflows::artefacts::ArtefactSummary::Candidate { candidate, .. })
+            if *candidate == transaction.baseline_candidate
+    ) && matches!(
+        candidate_record.map(|record| &record.summary),
+        Some(crate::workflows::artefacts::ArtefactSummary::Candidate { candidate, .. })
+            if *candidate == transaction.candidate_hash
+    ) && matches!(
+        approval_record.map(|record| &record.summary),
+        Some(crate::workflows::artefacts::ArtefactSummary::HumanDecision {
+            candidate,
+            diff_base,
+            decision: crate::workflows::gates::HumanDecisionKind::Approved,
+        }) if *candidate == transaction.candidate_hash
+            && *diff_base == transaction.baseline_candidate
+    );
+    if candidate.map(|input| &input.artefact) != Some(&transaction.candidate)
+        || approval.map(|input| &input.artefact) != Some(&transaction.approval)
+        || source.initial != transaction.baseline
+        || source.accepted != transaction.candidate
+        || !matches!(
+            &source.observed,
+            ObservedCandidate::Exact { artefact } if artefact == &transaction.candidate
+        )
+        || !summaries_match
+        || transaction.baseline.kind
+            != crate::workflows::definition::ArtefactKind::CandidateRevision
+        || transaction.root.host_path.as_os_str().is_empty()
+        || !transaction.root.host_path.is_absolute()
+        || transaction
+            .exclusions
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return false;
+    }
+    match &transaction.state {
+        ApplyTransactionState::Prepared
+        | ApplyTransactionState::Verified
+        | ApplyTransactionState::Recovered
+        | ApplyTransactionState::RecoveryUncertain => true,
+        ApplyTransactionState::Applying { path, .. } => !path.is_empty(),
+        ApplyTransactionState::Applied { .. } => true,
+    }
 }
 
 fn valid_commit_transaction(attempt: &AttemptRecord, transaction: &CommitTransaction) -> bool {
@@ -3861,13 +4093,14 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                 })
         }
         StepAction::SystemCommand(action) => {
+            let apply = action.command == crate::workflows::commands::SystemCommandId::ApplyChanges;
             let commit =
                 action.command == crate::workflows::commands::SystemCommandId::CommitCandidate;
             capabilities.tools.is_empty()
                 && capabilities.network == NetworkCapability::None
                 && capabilities.directories.iter().all(|directory| {
                     valid_guest_path(&directory.guest_path)
-                        && if commit {
+                        && if apply || commit {
                             directory.access == AccessMode::ReadWrite
                         } else {
                             directory.access == AccessMode::ReadOnly
@@ -3875,6 +4108,9 @@ fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefini
                 })
                 && if commit {
                     capabilities.git_admin == AccessMode::ReadWrite
+                        && capabilities.source_location == PrimarySourceLocation::UserProject
+                } else if apply {
+                    capabilities.git_admin == AccessMode::ReadOnly
                         && capabilities.source_location == PrimarySourceLocation::UserProject
                 } else {
                     capabilities.git_admin == AccessMode::ReadOnly
@@ -4006,12 +4242,14 @@ impl AttemptSandboxKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::IsolatedAttempt => "isolated-attempt",
+            Self::FileApplication => "file-application",
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value {
             "isolated-attempt" => Some(Self::IsolatedAttempt),
+            "file-application" => Some(Self::FileApplication),
             _ => None,
         }
     }

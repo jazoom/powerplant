@@ -3247,7 +3247,19 @@ fn detail_view(
             run.conversation_id == Some(record.id)
                 && (run.kind == workflows::RunKind::QuickTask || run.parent_loop.is_some())
         })
-        .and_then(|run| page::pending_code_gate(&run, &state.workflow_artefacts));
+        .and_then(|run| {
+            let destination = record
+                .model
+                .as_ref()
+                .and_then(|model| {
+                    model.settings.directories.iter().find(|grant| {
+                        grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                    })
+                })
+                .map(|grant| grant.host_path.display().to_string())
+                .unwrap_or_default();
+            page::pending_code_gate(&run, &state.workflow_artefacts, destination)
+        });
     let (source_review, linked_reviews, source_candidate_review, linked_candidate_reviews) =
         conversation_links(state, record);
     let latest_loop = state

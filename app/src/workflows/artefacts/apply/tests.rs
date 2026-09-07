@@ -170,7 +170,7 @@ fn reconciliation_rejects_escape_conflicts_and_git_paths() {
     git_path.candidate_hash = hash_entries(&git_path.entries);
     assert_eq!(
         CandidateApply::apply(dir.path(), &initial, &git_path, hash_of(&git_path), &store).err(),
-        Some(ApplyError::Escape)
+        Some(ApplyError::Integrity)
     );
 
     std::fs::write(dir.path().join("clash.txt"), b"host").expect("clash");
@@ -191,5 +191,226 @@ fn reconciliation_rejects_escape_conflicts_and_git_paths() {
     assert_eq!(
         CandidateApply::apply(dir.path(), &initial, &clash, hash_of(&clash), &store).err(),
         Some(ApplyError::Conflict)
+    );
+}
+
+#[test]
+fn ordinary_files_apply_without_git_and_keep_exclusions() {
+    let dir = tempfile::tempdir().expect("directory");
+    std::fs::write(dir.path().join("file.txt"), b"before").expect("file");
+    std::fs::create_dir(dir.path().join("engine")).expect("engine");
+    std::fs::write(dir.path().join("engine/live"), b"retained").expect("excluded");
+    let store = WorkflowArtefactRepository::in_memory();
+    let exclusions = vec!["engine".to_owned()];
+    let initial =
+        CandidateCapture::capture_directory(dir.path(), &exclusions, &store).expect("initial");
+    let mut target = initial.clone();
+    let blob = store.publish(b"after").expect("blob");
+    target.entries[0].kind = CandidateEntryKind::Regular {
+        executable: false,
+        mode: 0o644,
+        bytes: 5,
+        blob,
+    };
+    target.candidate_hash =
+        crate::workflows::artefacts::candidate::hash_candidate(&target.entries, &target.exclusions);
+
+    std::fs::write(dir.path().join("file.txt"), b"external").unwrap();
+    assert_eq!(
+        CandidateApply::apply_bound(
+            dir.path(),
+            &initial,
+            hash_of(&initial),
+            &target,
+            hash_of(&target),
+            &exclusions,
+            &store,
+        ),
+        Err(ApplyError::Drift)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("file.txt")).unwrap(),
+        b"external"
+    );
+    std::fs::write(dir.path().join("file.txt"), b"before").unwrap();
+    CandidateApply::apply_bound(
+        dir.path(),
+        &initial,
+        hash_of(&initial),
+        &target,
+        hash_of(&target),
+        &exclusions,
+        &store,
+    )
+    .expect("apply");
+
+    assert_eq!(
+        std::fs::read(dir.path().join("file.txt")).unwrap(),
+        b"after"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("engine/live")).unwrap(),
+        b"retained"
+    );
+    assert!(!dir.path().join(".git").exists());
+}
+
+#[test]
+fn recovery_restores_only_known_partial_application_states() {
+    let dir = tempfile::tempdir().expect("directory");
+    std::fs::write(dir.path().join("a.txt"), b"a0").expect("a");
+    std::fs::write(dir.path().join("b.txt"), b"b0").expect("b");
+    std::fs::write(dir.path().join("unrelated.txt"), b"original").expect("unrelated");
+    let store = WorkflowArtefactRepository::in_memory();
+    let initial = CandidateCapture::capture_directory(dir.path(), &[], &store).expect("initial");
+    let mut target = initial.clone();
+    for (path, bytes) in [("a.txt", b"a1".as_slice()), ("b.txt", b"b1".as_slice())] {
+        let entry = target
+            .entries
+            .iter_mut()
+            .find(|entry| entry.path == path)
+            .expect("entry");
+        entry.kind = CandidateEntryKind::Regular {
+            executable: false,
+            mode: 0o644,
+            bytes: 2,
+            blob: store.publish(bytes).expect("blob"),
+        };
+    }
+    target.candidate_hash =
+        crate::workflows::artefacts::candidate::hash_candidate(&target.entries, &target.exclusions);
+    let mut started = Vec::new();
+    assert_eq!(
+        CandidateApply::apply_journalled(
+            dir.path(),
+            &initial,
+            &target,
+            super::CandidateApplicationBinding {
+                initial_hash: hash_of(&initial),
+                target_hash: hash_of(&target),
+                exclusions: &[],
+            },
+            &store,
+            |_, path, applied| {
+                if path == "b.txt" {
+                    return Err(ApplyError::Write);
+                }
+                if !applied {
+                    started.push(path.to_owned());
+                }
+                Ok(())
+            },
+        ),
+        Err(ApplyError::Write)
+    );
+    assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"a1");
+    assert_eq!(std::fs::read(dir.path().join("b.txt")).unwrap(), b"b0");
+    std::fs::write(dir.path().join("unrelated.txt"), b"external").expect("external edit");
+    assert_eq!(
+        CandidateApply::recover_to_initial(dir.path(), &initial, &target, &[], &started, &store),
+        Err(ApplyError::Conflict)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("unrelated.txt")).unwrap(),
+        b"external"
+    );
+    assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"a1");
+    std::fs::write(dir.path().join("unrelated.txt"), b"original").expect("restore fixture");
+    assert_eq!(
+        CandidateApply::recover_to_initial(dir.path(), &initial, &target, &[], &[], &store),
+        Err(ApplyError::Conflict)
+    );
+    CandidateApply::recover_to_initial(dir.path(), &initial, &target, &[], &started, &store)
+        .expect("recover");
+    assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"a0");
+    assert_eq!(std::fs::read(dir.path().join("b.txt")).unwrap(), b"b0");
+
+    std::fs::write(dir.path().join("a.txt"), b"external").expect("external");
+    assert_eq!(
+        CandidateApply::recover_to_initial(dir.path(), &initial, &target, &[], &started, &store)
+            .err(),
+        Some(ApplyError::Conflict)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("a.txt")).unwrap(),
+        b"external"
+    );
+}
+
+#[test]
+fn journalled_directory_removal_tracks_each_entry_without_implicit_pruning() {
+    let dir = tempfile::tempdir().expect("directory");
+    std::fs::create_dir_all(dir.path().join("parent/child")).unwrap();
+    std::fs::write(dir.path().join("parent/child/file.txt"), b"before").unwrap();
+    let store = WorkflowArtefactRepository::in_memory();
+    let initial = CandidateCapture::capture_directory(dir.path(), &[], &store).unwrap();
+    let mut target = initial.clone();
+    target.entries.clear();
+    target.candidate_hash = crate::workflows::artefacts::candidate::hash_candidate(&[], &[]);
+    let mut completed = Vec::new();
+    CandidateApply::apply_journalled(
+        dir.path(),
+        &initial,
+        &target,
+        super::CandidateApplicationBinding {
+            initial_hash: hash_of(&initial),
+            target_hash: hash_of(&target),
+            exclusions: &[],
+        },
+        &store,
+        |_, path, applied| {
+            if applied {
+                completed.push(path.to_owned());
+            }
+            Ok(())
+        },
+    )
+    .expect("apply nested removals");
+    assert_eq!(
+        completed,
+        ["parent/child/file.txt", "parent/child", "parent"]
+    );
+    assert!(!dir.path().join("parent").exists());
+}
+
+#[test]
+fn malicious_manifest_cannot_write_inside_a_pinned_exclusion() {
+    let dir = tempfile::tempdir().expect("directory");
+    std::fs::create_dir(dir.path().join("engine")).expect("engine");
+    std::fs::write(dir.path().join("engine/live"), b"host").expect("file");
+    let store = WorkflowArtefactRepository::in_memory();
+    let exclusions = vec!["engine".to_owned()];
+    let initial =
+        CandidateCapture::capture_directory(dir.path(), &exclusions, &store).expect("initial");
+    let mut target = initial.clone();
+    let blob = store.publish(b"attack").expect("blob");
+    target.entries.push(CandidateEntry {
+        path: "engine/live".to_owned(),
+        kind: CandidateEntryKind::Regular {
+            executable: false,
+            mode: 0o644,
+            bytes: 6,
+            blob,
+        },
+    });
+    target.candidate_hash =
+        crate::workflows::artefacts::candidate::hash_candidate(&target.entries, &target.exclusions);
+
+    assert_eq!(
+        CandidateApply::apply_bound(
+            dir.path(),
+            &initial,
+            hash_of(&initial),
+            &target,
+            hash_of(&target),
+            &exclusions,
+            &store,
+        )
+        .err(),
+        Some(ApplyError::Integrity)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("engine/live")).unwrap(),
+        b"host"
     );
 }

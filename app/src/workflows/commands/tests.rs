@@ -7,7 +7,7 @@ fn command_contract_table() {
     let status_contract = status.contract();
     assert_eq!(status.as_str(), "repository-status");
     assert_eq!(status.label(), "Repository status");
-    assert_eq!(SystemCommandId::all().len(), 2);
+    assert_eq!(SystemCommandId::all().len(), 3);
     assert_eq!(
         status_contract.required_inputs,
         &[ArtefactKind::CandidateRevision]
@@ -16,6 +16,21 @@ fn command_contract_table() {
     assert!(matches!(
         status_contract.source_effect,
         super::CommandSourceEffect::ReadOnly
+    ));
+
+    let apply = SystemCommandId::parse("apply-changes").expect("apply");
+    assert_eq!(apply.label(), "Apply changes");
+    assert!(matches!(
+        apply.contract().source_effect,
+        super::CommandSourceEffect::Apply
+    ));
+    assert!(apply.contract().accepts(
+        &[ArtefactKind::CandidateRevision, ArtefactKind::HumanDecision,],
+        &[OutputKind::CandidateRevision],
+    ));
+    assert!(!apply.contract().accepts(
+        &[ArtefactKind::CandidateRevision, ArtefactKind::ReviewReport,],
+        &[OutputKind::CandidateRevision],
     ));
 
     let commit = SystemCommandId::parse("commit-candidate").expect("commit");

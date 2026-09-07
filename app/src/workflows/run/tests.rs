@@ -591,6 +591,7 @@ fn attempt_ordinals_count_repeated_step_attempts() {
         },
         cleanup: AttemptCleanupRecord::Complete,
         initial_context: None,
+        apply_transaction: None,
         commit_transaction: None,
         commit_result: None,
     };
@@ -617,6 +618,7 @@ fn attempt_ordinals_count_repeated_step_attempts() {
         },
         cleanup: AttemptCleanupRecord::Pending,
         initial_context: None,
+        apply_transaction: None,
         commit_transaction: None,
         commit_result: None,
     };
@@ -1041,6 +1043,7 @@ fn durable_commit_transactions_preserve_every_review_reference() {
         },
         cleanup: AttemptCleanupRecord::Pending,
         initial_context: None,
+        apply_transaction: None,
         commit_transaction: None,
         commit_result: None,
     };
@@ -1102,6 +1105,7 @@ fn durable_commit_transactions_record_an_approved_human_decision() {
         },
         cleanup: AttemptCleanupRecord::Pending,
         initial_context: None,
+        apply_transaction: None,
         commit_transaction: None,
         commit_result: None,
     };

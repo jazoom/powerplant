@@ -39,6 +39,12 @@ fn reviewed_capture_excludes_only_engine_paths_inside_the_root() {
     let engine = data.join("workflow-workspaces");
     std::fs::create_dir(&engine).expect("engine directory");
     std::fs::write(engine.join("live"), b"execution").expect("live record");
+    std::fs::create_dir(data.join("workflow-apply-journals")).expect("journals");
+    std::fs::write(
+        data.join("workflow-apply-journals/binding.json"),
+        b"approval",
+    )
+    .expect("binding");
     std::fs::write(data.join("providers.json"), b"configuration").expect("configuration");
     std::fs::create_dir(parent.path().join("workflow-workspaces")).expect("user directory");
     std::fs::write(parent.path().join("workflow-workspaces/keep"), b"user file")
@@ -67,6 +73,9 @@ fn reviewed_capture_excludes_only_engine_paths_inside_the_root() {
         entry
             .path
             .starts_with("powerplant-data/workflow-workspaces")
+            || entry
+                .path
+                .starts_with("powerplant-data/workflow-apply-journals")
     }));
     let exclusions = super::reviewed_capture_exclusions(&engine, &data);
     assert!(

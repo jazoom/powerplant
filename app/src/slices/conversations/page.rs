@@ -83,6 +83,7 @@ pub(super) struct PendingCodeGateView {
     pub(super) diff_href: String,
     pub(super) review_href: String,
     pub(super) ordinary: bool,
+    pub(super) application_destination: String,
     pub(super) exclusions: Vec<String>,
     pub(super) changes: Vec<CandidateChangeView>,
 }
@@ -1315,6 +1316,7 @@ fn workflow_result_label(state: &crate::workflows::run::RunState) -> &'static st
 pub(super) fn pending_code_gate(
     run: &WorkflowRun,
     store: &crate::workflows::WorkflowArtefactRepository,
+    application_destination: String,
 ) -> Option<PendingCodeGateView> {
     let gate = run
         .gates
@@ -1343,6 +1345,7 @@ pub(super) fn pending_code_gate(
             gate.diff_base.id.as_hex()
         ),
         ordinary: diff.ordinary(),
+        application_destination,
         exclusions: diff.exclusions().to_vec(),
         changes: changes
             .into_iter()

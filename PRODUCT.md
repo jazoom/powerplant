@@ -48,7 +48,13 @@ A tool-enabled conversation message starts the system-owned Quick task. Without 
 
 Scratch storage belongs to one attempt, not the conversation. Source-free tools create no Git candidate, code approval gate or commit.
 
-A writable project message creates an isolated candidate. The user reviews the exact candidate diff before Power Plant applies a local Git commit.
+A Review before apply message creates an isolated candidate. The user reviews the exact candidate before Power Plant updates ordinary host files.
+
+Generic application creates no Git commit. Power Plant checks the directory identity, baseline, candidate objects and pinned exclusions before each transaction.
+
+Recovery uses retained preimages and journal progress. Unrelated host edits cause a conflict instead of automatic restoration. Uncertain recovery retains evidence and blocks execution.
+
+Reviewed capture excludes the application journals and other listed engine paths. Generic application never writes to those exclusions or Git administration.
 
 ## Operating Context
 
@@ -186,10 +192,12 @@ Current capabilities:
 - Send a Quick task from an independent conversation with no workflow selection.
 - Use sandbox tools with private scratch storage and no project.
 - Set sandbox network access to Off, restricted domains or public internet.
-- Grant ad hoc Read only access to directories without project registration.
+- Grant ad hoc Read only or Review before apply access to directories without project registration.
 - Preserve stable guest aliases and canonical host identity for conversation directories.
 - Grant read-only or writable project authority from a conversation through the legacy project flow.
 - Review a candidate diff and Apply or Discard it from the owning conversation.
+- Apply reviewed ordinary-directory files without a Git commit.
+- Recover interrupted file application from retained preimages and transaction progress.
 - Launch a configured workflow from a conversation.
 - Stream the reply into the transcript as HTML.
 - Run sandbox-backed workflow steps in isolated guests.
@@ -221,7 +229,7 @@ Current constraints:
 - One unfinished operation can reserve a conversation.
 - One workflow execution can be active process-wide.
 - The project catalogue grants no file access. Conversation directory grants and saved-agent grants supply execution authority.
-- New directory grants are Read only. Sensitive home or Power Plant data grants remain unavailable until explicit consent exists.
+- Directory grants support Read only and one Review before apply root. Sensitive access requires explicit consent.
 - Tools cannot combine legacy project access with conversation directory grants.
 - Project paths cannot change. Project records cannot be deleted in this release.
 - Sandbox-backed Quick task needs the selected ready snapshot. The product does not fall back to another environment.

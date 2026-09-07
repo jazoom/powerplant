@@ -678,7 +678,8 @@ pub(crate) fn definition_fits_agent(
                 )
         }
         StepAction::SystemCommand(action) => {
-            action.command.contract().source_effect != super::commands::CommandSourceEffect::Commit
+            action.command.contract().source_effect
+                == super::commands::CommandSourceEffect::ReadOnly
                 || directories
                     .iter()
                     .any(|(alias, access)| alias == primary_directory && access.is_writable())

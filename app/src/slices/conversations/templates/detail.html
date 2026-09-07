@@ -752,13 +752,19 @@
                   id="conversation-candidate-heading"
                   class="text-lg font-semibold"
                 >
-                  {% if gate.ordinary %}Prepared changes{% else %}Candidate
-                  ready for approval{% endif %}
+                  {% if gate.ordinary %}
+                    Review before apply
+                  {% else %}
+                    Candidate ready for approval
+                  {% endif %}
                 </h2>
                 <p class="text-quiet mt-1 max-w-[65ch] text-sm">
                   {% if gate.ordinary %}
-                    The host directory remains unchanged. Review the prepared
-                    files or discard them. Apply is not available yet.
+                    The host directory remains unchanged. Apply writes only the
+                    reviewed files to
+                    <span class="font-mono break-all"
+                      >{{ gate.application_destination }}</span
+                    >. It creates no Git commit.
                   {% else %}
                     The host project remains unchanged. Review this exact
                     candidate before you apply it.
@@ -814,28 +820,26 @@
                 >
               </div>
               <div class="flex flex-wrap gap-3 border-t pt-4">
-                {% if !gate.ordinary %}
-                  <form
-                    data-graft
-                    method="post"
-                    action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/approve"
-                  >
-                    <input
-                      type="hidden"
-                      name="gate-revision"
-                      value="{{ gate.revision }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="candidate"
-                      value="{{ gate.candidate }}"
-                    />
-                    <input type="hidden" name="surface" value="conversation" />
-                    <button class="btn btn-primary" type="submit">
-                      Apply changes
-                    </button>
-                  </form>
-                {% endif %}
+                <form
+                  data-graft
+                  method="post"
+                  action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/approve"
+                >
+                  <input
+                    type="hidden"
+                    name="gate-revision"
+                    value="{{ gate.revision }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="candidate"
+                    value="{{ gate.candidate }}"
+                  />
+                  <input type="hidden" name="surface" value="conversation" />
+                  <button class="btn btn-primary" type="submit">
+                    Apply changes
+                  </button>
+                </form>
                 <form
                   data-graft
                   method="post"
@@ -923,8 +927,11 @@
                       Pending approval
                     {% else if directory.sensitive %}
                       Sensitive access ·
-                      {% if directory.review_before_apply %}Review before apply{% else %}Read
-                      only{% endif %}
+                      {% if directory.review_before_apply %}
+                        Review before apply
+                      {% else %}
+                        Read only
+                      {% endif %}
                     {% else if directory.review_before_apply %}
                       Review before apply
                     {% else %}
@@ -1086,7 +1093,7 @@
             </h2>
             <p class="text-quiet mt-1 max-w-[65ch] text-sm">
               Add folders for inspection or isolated changes. Review before
-              apply never writes to the host directory in this release.
+              apply writes to the host directory only after approval.
             </p>
           </div>
           <button
@@ -1117,7 +1124,7 @@
           <ul class="record-list" aria-label="Authorised directories">
             {% for directory in directories %}
               <li
-                class="record-row flex-col items-stretch gap-3 sm:flex-row sm:items-start"
+                class="record-row grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
               >
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1134,14 +1141,24 @@
                       <span class="badge badge-warning badge-sm"
                         >Sensitive access</span
                       >
-                      <span class="badge badge-success badge-sm">
-                        {% if directory.review_before_apply %}Review before
-                        apply{% else %}Read only{% endif %}
+                      <span
+                        class="badge badge-success badge-sm shrink-0 whitespace-nowrap"
+                      >
+                        {% if directory.review_before_apply %}
+                          Review before apply
+                        {% else %}
+                          Read only
+                        {% endif %}
                       </span>
                     {% else %}
-                      <span class="badge badge-success badge-sm">
-                        {% if directory.review_before_apply %}Review before
-                        apply{% else %}Read only{% endif %}
+                      <span
+                        class="badge badge-success badge-sm shrink-0 whitespace-nowrap"
+                      >
+                        {% if directory.review_before_apply %}
+                          Review before apply
+                        {% else %}
+                          Read only
+                        {% endif %}
                       </span>
                     {% endif %}
                   </div>
@@ -1195,8 +1212,11 @@
                         class="btn btn-secondary btn-sm min-h-11"
                         type="submit"
                       >
-                        {% if directory.review_before_apply %}Use read only{% else %}Prepare
-                        changes{% endif %}
+                        {% if directory.review_before_apply %}
+                          Use read only
+                        {% else %}
+                          Review before apply
+                        {% endif %}
                       </button>
                     {% endif %}
                     <button
@@ -1238,8 +1258,11 @@
                             formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/access"
                             {% if job_active || session_busy %}disabled{% endif %}
                           >
-                            {% if directory.review_before_apply %}Use read only{% else %}Prepare
-                            changes{% endif %}
+                            {% if directory.review_before_apply %}
+                              Use read only
+                            {% else %}
+                              Review before apply
+                            {% endif %}
                           </button>
                         {% endif %}
                         {% if directory.sensitive && directory.pending_approval && consent_request == "" %}
@@ -1272,8 +1295,11 @@
             <div class="min-w-0 space-y-3">
               <div class="space-y-1">
                 <h3 class="font-semibold">
-                  {% if consent_reviewed %}Approve directory review access{% else %}Approve
-                  sensitive directory access{% endif %}
+                  {% if consent_reviewed %}
+                    Approve directory review access
+                  {% else %}
+                    Approve sensitive directory access
+                  {% endif %}
                 </h3>
                 <p class="text-sm break-words">
                   The requested
@@ -1288,9 +1314,12 @@
                   conversations and other sensitive records through tool output.
                   Network off does not prevent this disclosure because provider
                   requests leave the host separately.
-                  {% if consent_reviewed %}The isolated copy can also propose
-                  changes to this directory. This release only permits preview
-                  and discard.{% endif %}
+                  {% if consent_reviewed %}
+                    The isolated copy can also propose changes to this
+                    directory, including Power Plant configuration. Apply
+                    changes writes the exact reviewed changes to the host
+                    directory.
+                  {% endif %}
                 </p>
               </div>
               {% if self.is_new() %}
@@ -1302,8 +1331,11 @@
                   type="submit"
                 >
                   Approve
-                  {% if consent_reviewed %}review access{% else %}read-only
-                  access{% endif %}
+                  {% if consent_reviewed %}
+                    review access
+                  {% else %}
+                    read-only access
+                  {% endif %}
                 </button>
               {% else if let Some(saved) = self.saved() %}
                 <form
@@ -1333,8 +1365,11 @@
                   />
                   <button class="btn btn-warning min-h-11" type="submit">
                     Approve
-                    {% if consent_reviewed %}review access{% else %}read-only
-                    access{% endif %}
+                    {% if consent_reviewed %}
+                      review access
+                    {% else %}
+                      read-only access
+                    {% endif %}
                   </button>
                 </form>
               {% endif %}

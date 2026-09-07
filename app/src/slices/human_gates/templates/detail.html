@@ -41,7 +41,8 @@
     <section class="border-base-300 space-y-4 border p-4">
       <div>
         <h2 class="font-heading text-lg font-semibold">
-          {% if plan_gate %}Review this plan{% else %}Review this candidate{% endif %}
+          {% if plan_gate %}Review this plan{% else if ordinary %}Review before
+          apply{% else %}Review this candidate{% endif %}
         </h2>
         {% if awaiting %}
           {% if plan_gate %}
@@ -52,8 +53,9 @@
           {% else if quick_task %}
             <p class="text-quiet mt-1 max-w-[70ch] text-sm">
               {% if ordinary %}
-                Review the prepared files or discard them. The host directory
-                stays unchanged. Apply is not available yet.
+                Review the prepared files before application. Apply writes only
+                these changes to the authorised directory. It creates no Git
+                commit.
               {% else %}
                 Apply creates a local Git commit. Discard ends the task without
                 changing project files.
@@ -117,31 +119,34 @@
           <div
             class="{% if quick_task && !can_request_revision %}sm:grid-cols-2{% else %}lg:grid-cols-3{% endif %} grid gap-4 pt-2"
           >
-            {% if !ordinary %}
-              <form
-                method="post"
-                action="/runs/{{ run_id }}/gates/{{ gate_id }}/approve"
-                data-graft
-                class="border-base-300 flex flex-col gap-3 border p-3"
-              >
-                <input
-                  type="hidden"
-                  name="gate-revision"
-                  value="{{ revision }}"
-                />
-                <p class="text-sm">
-                  {% if quick_task %}
-                    Commit these changes to the project.
-                  {% else %}
-                    Accept this candidate and continue to the next step.
-                  {% endif %}
-                </p>
-                <input type="hidden" name="candidate" value="{{ target }}" />
-                <button type="submit" class="btn btn-primary w-full">
-                  {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
-                </button>
-              </form>
-            {% endif %}
+            <form
+              method="post"
+              action="/runs/{{ run_id }}/gates/{{ gate_id }}/approve"
+              data-graft
+              class="border-base-300 flex flex-col gap-3 border p-3"
+            >
+              <input
+                type="hidden"
+                name="gate-revision"
+                value="{{ revision }}"
+              />
+              <p class="text-sm">
+                {% if ordinary %}
+                  Apply the exact reviewed files to
+                  <span class="font-mono break-all"
+                    >{{ application_destination }}</span
+                  >.
+                {% else if quick_task %}
+                  Commit these changes to the project.
+                {% else %}
+                  Accept this candidate and continue to the next step.
+                {% endif %}
+              </p>
+              <input type="hidden" name="candidate" value="{{ target }}" />
+              <button type="submit" class="btn btn-primary w-full">
+                {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
+              </button>
+            </form>
             {% if can_request_revision && !ordinary %}
               <form
                 method="post"

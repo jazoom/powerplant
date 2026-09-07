@@ -19,9 +19,9 @@ use crate::{
     sessions::SessionStore,
     vault::ProviderVault,
     workflows::{
-        CommitJournals, TaskLoopStore, WorkflowArtefactRepository, WorkflowCatalogue,
-        WorkflowContinuationRegistry, WorkflowEvidenceStore, WorkflowExecution, WorkflowRunStore,
-        workspace::WorkflowWorkspaces,
+        ApplyJournals, CommitJournals, TaskLoopStore, WorkflowArtefactRepository,
+        WorkflowCatalogue, WorkflowContinuationRegistry, WorkflowEvidenceStore, WorkflowExecution,
+        WorkflowRunStore, workspace::WorkflowWorkspaces,
     },
 };
 
@@ -52,6 +52,7 @@ pub(crate) struct AppState {
     pub(crate) workflow_execution: Arc<WorkflowExecution>,
     pub(crate) gate_continuations: Arc<WorkflowContinuationRegistry>,
     pub(crate) workflow_workspaces: Arc<WorkflowWorkspaces>,
+    pub(crate) apply_journals: Arc<ApplyJournals>,
     pub(crate) commit_journals: Arc<CommitJournals>,
     pub(crate) environments: Arc<EnvironmentCatalogue>,
     pub(crate) environment_snapshots: Arc<EnvironmentSnapshotRepository>,
@@ -120,6 +121,8 @@ pub(crate) async fn build(
     let environment_preparations =
         EnvironmentPreparationScheduler::start(environments.clone(), environment_snapshots.clone());
     environment_preparations.wake();
+    let apply_journals = ApplyJournals::open(data_dir.join("workflow-apply-journals"))
+        .map_err(|_| "The workflow application journal store is unreadable.".to_owned())?;
     let commit_journals = CommitJournals::open(data_dir.join("workflow-commit-journals"))
         .map_err(|_| "The workflow commit journal store is unreadable.".to_owned())?;
     let workflow_workspaces = WorkflowWorkspaces::open(data_dir.join("workflow-workspaces"))
@@ -154,6 +157,7 @@ pub(crate) async fn build(
         workflow_execution: Arc::new(WorkflowExecution::new()),
         gate_continuations: Arc::new(WorkflowContinuationRegistry::new()),
         workflow_workspaces: Arc::new(workflow_workspaces),
+        apply_journals: Arc::new(apply_journals),
         commit_journals: Arc::new(commit_journals),
         environments,
         environment_snapshots,
@@ -185,6 +189,7 @@ pub(crate) async fn build(
     {
         return Err("Power Plant could not recover a commit transaction.".to_owned());
     }
+    crate::workflows::recover_apply_transactions(&state).map_err(str::to_owned)?;
     crate::workflows::recover_commit_transactions(&state).map_err(str::to_owned)?;
     state
         .workflow_runs

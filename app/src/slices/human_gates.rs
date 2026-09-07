@@ -115,6 +115,7 @@ async fn detail(
         &state.workflow_artefacts,
         query,
         "",
+        application_destination(&state, &run),
     ) else {
         return static_error(
             PatchStatus::UnprocessableEntity,
@@ -221,6 +222,27 @@ async fn cancel(
         DecisionAction::Cancel,
     )
     .await
+}
+
+fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun) -> String {
+    let Some(conversation) = run
+        .conversation_id
+        .and_then(|id| state.conversations.get(&id))
+    else {
+        return String::new();
+    };
+    conversation
+        .model
+        .as_ref()
+        .and_then(|model| {
+            model
+                .settings
+                .directories
+                .iter()
+                .find(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
+                .map(|grant| grant.host_path.display().to_string())
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy)]
@@ -341,20 +363,6 @@ async fn decide(
         };
         Some(diff)
     };
-
-    if diff
-        .as_ref()
-        .is_some_and(crate::workflows::artefacts::CandidateDiff::ordinary)
-        && !matches!(action, DecisionAction::Cancel)
-    {
-        return command_error_for_run(
-            graft,
-            PatchStatus::Conflict,
-            "Prepared ordinary-directory changes can only be discarded in this release.",
-            &run,
-            form.conversation_surface,
-        );
-    }
 
     if matches!(action, DecisionAction::Revision) {
         let valid_route = run.human_revision_policy(&gate.step).is_some();
