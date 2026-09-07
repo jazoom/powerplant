@@ -39,6 +39,11 @@
       {% endif %}
     </div>
   </header>
+  {% if can_pause || can_continue || can_stop || pause_requested %}
+    <section id="loop-controls" class="mt-4 flex flex-col gap-3">
+      {% include "workflow_runs/templates/loop_controls.html" %}
+    </section>
+  {% endif %}
   <p class="mt-4 max-w-[65ch] text-sm">
     Each task is a child run with its own source, artefacts and approvals. The
     parent conversation stays reserved until this loop reaches a terminal state.

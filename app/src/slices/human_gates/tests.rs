@@ -1771,6 +1771,18 @@ async fn a_gate_object_download_stays_available() {
     );
 }
 
+pub(crate) fn loop_at_gate() -> (
+    AppState,
+    String,
+    sessions::SessionId,
+    crate::workflows::TaskLoop,
+) {
+    let fixture = conversation_awaiting_gate();
+    let id = attach_parent_loop(&fixture);
+    let record = fixture.state.task_loops.get(&id).expect("parent");
+    (fixture.state, fixture.token, fixture.session, record)
+}
+
 fn attach_parent_loop(fixture: &GateFixture) -> crate::workflows::TaskLoopId {
     use crate::workflows::definition::PinnedWorkflowDefinition;
     use crate::workflows::task_loop::{TaskListSnapshot, TaskLoopItem, TaskOutcome};

@@ -329,6 +329,13 @@ pub(super) struct WorkflowProgressView {
     pub(super) current_step: String,
     pub(super) result: &'static str,
     pub(super) task_progress: String,
+    pub(super) loop_id: String,
+    pub(super) command_token: String,
+    pub(super) can_pause: bool,
+    pub(super) can_continue: bool,
+    pub(super) can_stop: bool,
+    pub(super) pause_requested: bool,
+    pub(super) awaiting_gate: bool,
 }
 
 pub(super) struct ModelSources<'a> {
@@ -746,10 +753,20 @@ pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
             .unwrap_or_else(|| "Finished".to_owned()),
         result: workflow_result_label(&run.state),
         task_progress: String::new(),
+        loop_id: String::new(),
+        command_token: String::new(),
+        can_pause: false,
+        can_continue: false,
+        can_stop: false,
+        pause_requested: false,
+        awaiting_gate: false,
     }
 }
 
-pub(super) fn loop_progress(record: &crate::workflows::TaskLoop) -> WorkflowProgressView {
+pub(super) fn loop_progress(
+    record: &crate::workflows::TaskLoop,
+    awaiting_gate: bool,
+) -> WorkflowProgressView {
     WorkflowProgressView {
         run_href: format!("/runs/loops/{}", record.id.as_hex()),
         name: record.pinned.definition.name().to_owned(),
@@ -757,6 +774,20 @@ pub(super) fn loop_progress(record: &crate::workflows::TaskLoop) -> WorkflowProg
         current_step: record.progress_label(),
         result: loop_result_label(&record.state),
         task_progress: record.progress_label(),
+        loop_id: record.id.as_hex(),
+        command_token: record.command_token(),
+        can_pause: matches!(
+            record.state,
+            crate::workflows::task_loop::TaskLoopState::Active { .. }
+                | crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. }
+        ),
+        can_continue: matches!(
+            record.state,
+            crate::workflows::task_loop::TaskLoopState::Paused
+        ),
+        can_stop: !record.state.is_terminal(),
+        pause_requested: record.pause_requested(),
+        awaiting_gate,
     }
 }
 
@@ -769,14 +800,21 @@ fn loop_result_label(state: &crate::workflows::task_loop::TaskLoopState) -> &'st
         | crate::workflows::task_loop::TaskLoopState::Blocked => {
             "The task loop stopped. Earlier commits remain. Open the parent run for evidence."
         }
-        crate::workflows::task_loop::TaskLoopState::Cancelled => {
-            "The task loop was cancelled. Earlier commits remain."
+        crate::workflows::task_loop::TaskLoopState::Cancelled
+        | crate::workflows::task_loop::TaskLoopState::Stopped => {
+            "The task loop stopped. Earlier commits remain. This did not roll back the project."
         }
         crate::workflows::task_loop::TaskLoopState::Interrupted => {
             "The task loop was interrupted. Earlier commits remain."
         }
         crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. } => {
             "A task waits for a human decision. The conversation stays reserved."
+        }
+        crate::workflows::task_loop::TaskLoopState::PauseRequested { .. } => {
+            "A pause waits until this task finishes review and commit. Pause is not approval."
+        }
+        crate::workflows::task_loop::TaskLoopState::Paused => {
+            "The loop is paused after a completed task. Continue starts the next pending task."
         }
         _ => "Each task uses a fresh worker context. Earlier worker transcripts stay excluded.",
     }

@@ -47,5 +47,6 @@ pub(crate) use run::{
 };
 pub(crate) use store::{RunSummary, WorkflowRunStore};
 pub(crate) use task_loop::{
-    LoopSummary, TaskListSnapshot, TaskLoop, TaskLoopItem, TaskLoopStore, TaskOutcome,
+    LoopSummary, TaskListSnapshot, TaskLoop, TaskLoopError, TaskLoopItem, TaskLoopStore,
+    TaskOutcome,
 };

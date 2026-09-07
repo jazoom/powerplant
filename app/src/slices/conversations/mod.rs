@@ -396,6 +396,23 @@ async fn detail(
     )
 }
 
+pub(super) fn refresh_after_loop_command(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    id: &crate::conversations::ConversationId,
+) -> AppResult<Response> {
+    let Some(record) = state.conversations.get(id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    render_detail(
+        state,
+        session,
+        GraftRequest::Patch,
+        PatchStatus::Ok,
+        detail_view(state, session, &record, &record.title, ""),
+    )
+}
+
 async fn plan_review(
     State(state): State<AppState>,
     _session: RequiredSession,
@@ -3011,7 +3028,16 @@ fn detail_view(
                 .as_ref()
                 .is_none_or(|run| parent.created_at_ms >= run.created_at_ms) =>
         {
-            Some(page::loop_progress(&parent))
+            Some(page::loop_progress(
+                &parent,
+                parent.current_child().is_some_and(|child| {
+                    state.workflow_runs.get(&child).is_some_and(|run| {
+                        run.gates.iter().any(|gate| {
+                            gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision
+                        })
+                    })
+                }),
+            ))
         }
         (_, Some(run)) => Some(page::workflow_progress(&run)),
         _ => None,

@@ -76,9 +76,12 @@ pub(crate) enum TaskLoopState {
     Ready,
     Active { task_index: u32, child: RunId },
     AwaitingChild { task_index: u32, child: RunId },
+    PauseRequested { task_index: u32, child: RunId },
+    Paused,
     Completed,
     Failed,
     Cancelled,
+    Stopped,
     Interrupted,
     Blocked,
 }
@@ -87,6 +90,7 @@ pub(crate) enum TaskLoopState {
 pub(crate) enum LoopAdvance {
     Next,
     Complete,
+    Pause,
     Stopped,
 }
 
@@ -101,6 +105,9 @@ pub(crate) enum TaskLoopError {
     AttemptLimit,
     TaskLimit,
     Empty,
+    Stale,
+    Busy,
+    Uncertain,
 }
 
 impl TaskLoopError {
@@ -115,6 +122,11 @@ impl TaskLoopError {
             Self::AttemptLimit => "The task loop reached its attempt bound.",
             Self::TaskLimit => "The task list has too many remaining tasks.",
             Self::Empty => "The task list has no remaining tasks.",
+            Self::Stale => "That task loop command is stale. Reload it.",
+            Self::Busy => "Another command is active. The paused checkpoint is unchanged.",
+            Self::Uncertain => {
+                "A commit is still uncertain. Continue is unavailable until reconciliation finishes."
+            }
         }
     }
 }
@@ -133,9 +145,12 @@ impl TaskLoopState {
             Self::Ready => "Ready",
             Self::Active { .. } => "Active",
             Self::AwaitingChild { .. } => "Awaiting decision",
+            Self::PauseRequested { .. } => "Pause requested",
+            Self::Paused => "Paused",
             Self::Completed => "Completed",
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
+            Self::Stopped => "Stopped",
             Self::Interrupted => "Interrupted",
             Self::Blocked => "Blocked",
         }
@@ -144,7 +159,12 @@ impl TaskLoopState {
     pub(crate) fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted | Self::Blocked
+            Self::Completed
+                | Self::Failed
+                | Self::Cancelled
+                | Self::Stopped
+                | Self::Interrupted
+                | Self::Blocked
         )
     }
 }
@@ -203,10 +223,32 @@ impl TaskLoop {
 
     pub(crate) fn current_child(&self) -> Option<RunId> {
         match self.state {
-            TaskLoopState::Active { child, .. } | TaskLoopState::AwaitingChild { child, .. } => {
-                Some(child)
-            }
+            TaskLoopState::Active { child, .. }
+            | TaskLoopState::AwaitingChild { child, .. }
+            | TaskLoopState::PauseRequested { child, .. } => Some(child),
             _ => None,
+        }
+    }
+
+    pub(crate) fn pause_requested(&self) -> bool {
+        matches!(self.state, TaskLoopState::PauseRequested { .. })
+    }
+
+    pub(crate) fn command_token(&self) -> String {
+        match &self.state {
+            TaskLoopState::Active { child, .. } => format!("active:{}", child.as_hex()),
+            TaskLoopState::AwaitingChild { child, .. } => {
+                format!("awaiting:{}", child.as_hex())
+            }
+            TaskLoopState::PauseRequested { child, .. } => {
+                format!("pause-requested:{}", child.as_hex())
+            }
+            TaskLoopState::Paused => format!("paused:{}", self.completed_count()),
+            other => format!(
+                "{}:{}",
+                other.as_label().to_ascii_lowercase().replace(' ', "-"),
+                self.completed_count()
+            ),
         }
     }
 
@@ -229,13 +271,27 @@ impl TaskLoop {
     }
 
     pub(crate) fn progress_label(&self) -> String {
-        format!(
-            "Task {} of {}",
-            self.completed_count()
-                .saturating_add(usize::from(!self.state.is_terminal()))
-                .min(self.tasks.len()),
-            self.tasks.len()
-        )
+        match self.state {
+            TaskLoopState::Paused => format!(
+                "Paused after {} of {}",
+                self.completed_count(),
+                self.tasks.len()
+            ),
+            TaskLoopState::PauseRequested { .. } => format!(
+                "Pause after current task · {} of {}",
+                self.completed_count()
+                    .saturating_add(1)
+                    .min(self.tasks.len()),
+                self.tasks.len()
+            ),
+            _ => format!(
+                "Task {} of {}",
+                self.completed_count()
+                    .saturating_add(usize::from(!self.state.is_terminal()))
+                    .min(self.tasks.len()),
+                self.tasks.len()
+            ),
+        }
     }
 
     pub(crate) fn child_run(
@@ -347,8 +403,16 @@ impl TaskLoop {
             .collect();
         match self.state {
             TaskLoopState::Ready if !active.is_empty() => return Err(TaskLoopError::Corrupt),
+            TaskLoopState::Paused
+                if !active.is_empty()
+                    || self.pending_index().is_none()
+                    || self.completed_count() == 0 =>
+            {
+                return Err(TaskLoopError::Corrupt);
+            }
             TaskLoopState::Active { task_index, child }
-            | TaskLoopState::AwaitingChild { task_index, child } => {
+            | TaskLoopState::AwaitingChild { task_index, child }
+            | TaskLoopState::PauseRequested { task_index, child } => {
                 if active.len() != 1
                     || active[0].index != task_index
                     || active[0].child_id != Some(child)
@@ -460,7 +524,10 @@ impl TaskLoopStore {
         aggregate_attempts: usize,
     ) -> Result<(TaskLoop, RunId, TaskLoopItem), TaskLoopError> {
         let result = self.mutate(id, |record| {
-            if record.state != TaskLoopState::Ready {
+            if !matches!(
+                record.state,
+                TaskLoopState::Ready | TaskLoopState::Paused
+            ) {
                 return Err(TaskLoopError::DuplicateDispatch);
             }
             if record.tasks.iter().filter(|task| task.child_id.is_some()).count()
@@ -538,6 +605,12 @@ impl TaskLoopStore {
                 .find(|task| task.child_id == Some(child))
                 .map(|task| task.index)
                 .ok_or(TaskLoopError::Conflict)?;
+            if matches!(
+                record.state,
+                TaskLoopState::PauseRequested { child: current, .. } if current == child
+            ) {
+                return Ok(());
+            }
             if !matches!(
                 record.state,
                 TaskLoopState::Active { child: current, .. } if current == child
@@ -564,6 +637,12 @@ impl TaskLoopStore {
             if record.current_child() != Some(child) {
                 return Err(TaskLoopError::Conflict);
             }
+            if matches!(
+                record.state,
+                TaskLoopState::PauseRequested { child: current, .. } if current == child
+            ) {
+                return Ok(());
+            }
             let index = record
                 .tasks
                 .iter()
@@ -575,6 +654,27 @@ impl TaskLoopStore {
                 child,
             };
             Ok(())
+        })
+    }
+
+    pub(crate) fn request_pause(
+        &self,
+        id: &TaskLoopId,
+        token: &str,
+    ) -> Result<TaskLoop, TaskLoopError> {
+        self.mutate(id, |record| {
+            if record.command_token() != token {
+                return Err(TaskLoopError::Stale);
+            }
+            match record.state {
+                TaskLoopState::Active { task_index, child }
+                | TaskLoopState::AwaitingChild { task_index, child } => {
+                    record.state = TaskLoopState::PauseRequested { task_index, child };
+                    Ok(())
+                }
+                TaskLoopState::PauseRequested { .. } => Ok(()),
+                _ => Err(TaskLoopError::Conflict),
+            }
         })
     }
 
@@ -623,6 +723,7 @@ impl TaskLoopStore {
                 return Err(TaskLoopError::Conflict);
             }
             let outcome = child_outcome(child).ok_or(TaskLoopError::Conflict)?;
+            let pause_requested = matches!(record.state, TaskLoopState::PauseRequested { .. });
             let task = record.item_mut(child.id)?;
             if task.outcome != TaskOutcome::Dispatched
                 || selection.index != task.index
@@ -642,15 +743,20 @@ impl TaskLoopStore {
                 TaskOutcome::CompletedCommit | TaskOutcome::CompletedUnchanged
             ) {
                 if record.pending_index().is_some() {
-                    record.state = TaskLoopState::Ready;
-                    advance = LoopAdvance::Next;
+                    if pause_requested {
+                        record.state = TaskLoopState::Paused;
+                        advance = LoopAdvance::Pause;
+                    } else {
+                        record.state = TaskLoopState::Ready;
+                        advance = LoopAdvance::Next;
+                    }
                 } else {
                     record.state = TaskLoopState::Completed;
                     advance = LoopAdvance::Complete;
                 }
             } else {
                 record.state = match outcome {
-                    TaskOutcome::Cancelled => TaskLoopState::Cancelled,
+                    TaskOutcome::Cancelled => TaskLoopState::Stopped,
                     _ => TaskLoopState::Failed,
                 };
                 advance = LoopAdvance::Stopped;
@@ -673,13 +779,79 @@ impl TaskLoopStore {
     }
 
     pub(crate) fn cancel(&self, id: &TaskLoopId) -> Result<TaskLoop, TaskLoopError> {
+        self.stop(id)
+    }
+
+    pub(crate) fn stop(&self, id: &TaskLoopId) -> Result<TaskLoop, TaskLoopError> {
         self.mutate(id, |record| {
             if !record.state.is_terminal() {
                 if let Some(child) = record.current_child() {
                     record.item_mut(child)?.outcome = TaskOutcome::Cancelled;
                 }
-                record.state = TaskLoopState::Cancelled;
+                record.state = TaskLoopState::Stopped;
             }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn request_stop(
+        &self,
+        id: &TaskLoopId,
+        token: &str,
+        job: &crate::sessions::Job,
+    ) -> Result<(), TaskLoopError> {
+        let records = self.lock();
+        let record = records.get(id).ok_or(TaskLoopError::Conflict)?;
+        if record.command_token() != token {
+            return Err(TaskLoopError::Stale);
+        }
+        if record.current_child().is_none() {
+            return Err(TaskLoopError::Conflict);
+        }
+        job.request_cancel();
+        Ok(())
+    }
+
+    pub(crate) fn stop_if_token(
+        &self,
+        id: &TaskLoopId,
+        token: &str,
+    ) -> Result<TaskLoop, TaskLoopError> {
+        self.stop_with(id, token, |_| Ok(()))
+    }
+
+    pub(crate) fn stop_at_gate(
+        &self,
+        id: &TaskLoopId,
+        token: &str,
+        runs: &super::WorkflowRunStore,
+    ) -> Result<TaskLoop, TaskLoopError> {
+        self.stop_with(id, token, |record| {
+            let child = record.current_child().ok_or(TaskLoopError::Conflict)?;
+            runs.mutate(&child, |run| run.cancel(super::now_ms()))
+                .map_err(|_| TaskLoopError::Conflict)?;
+            Ok(())
+        })
+    }
+
+    fn stop_with(
+        &self,
+        id: &TaskLoopId,
+        token: &str,
+        before_stop: impl FnOnce(&TaskLoop) -> Result<(), TaskLoopError>,
+    ) -> Result<TaskLoop, TaskLoopError> {
+        self.mutate(id, |record| {
+            if record.command_token() != token {
+                return Err(TaskLoopError::Stale);
+            }
+            if record.state.is_terminal() {
+                return Err(TaskLoopError::Conflict);
+            }
+            before_stop(record)?;
+            if let Some(child) = record.current_child() {
+                record.item_mut(child)?.outcome = TaskOutcome::Cancelled;
+            }
+            record.state = TaskLoopState::Stopped;
             Ok(())
         })
     }
@@ -786,9 +958,12 @@ enum LoopStateFile {
     Ready,
     Active { task_index: u32, child: String },
     AwaitingChild { task_index: u32, child: String },
+    PauseRequested { task_index: u32, child: String },
+    Paused,
     Completed,
     Failed,
     Cancelled,
+    Stopped,
     Interrupted,
     Blocked,
 }
@@ -956,9 +1131,15 @@ fn state_to_file(state: &TaskLoopState) -> LoopStateFile {
             task_index: *task_index,
             child: child.as_hex(),
         },
+        TaskLoopState::PauseRequested { task_index, child } => LoopStateFile::PauseRequested {
+            task_index: *task_index,
+            child: child.as_hex(),
+        },
+        TaskLoopState::Paused => LoopStateFile::Paused,
         TaskLoopState::Completed => LoopStateFile::Completed,
         TaskLoopState::Failed => LoopStateFile::Failed,
         TaskLoopState::Cancelled => LoopStateFile::Cancelled,
+        TaskLoopState::Stopped => LoopStateFile::Stopped,
         TaskLoopState::Interrupted => LoopStateFile::Interrupted,
         TaskLoopState::Blocked => LoopStateFile::Blocked,
     }
@@ -975,9 +1156,15 @@ fn state_from_file(file: LoopStateFile) -> Result<TaskLoopState, TaskLoopError> 
             task_index,
             child: RunId::parse(&child).ok_or(TaskLoopError::Corrupt)?,
         },
+        LoopStateFile::PauseRequested { task_index, child } => TaskLoopState::PauseRequested {
+            task_index,
+            child: RunId::parse(&child).ok_or(TaskLoopError::Corrupt)?,
+        },
+        LoopStateFile::Paused => TaskLoopState::Paused,
         LoopStateFile::Completed => TaskLoopState::Completed,
         LoopStateFile::Failed => TaskLoopState::Failed,
         LoopStateFile::Cancelled => TaskLoopState::Cancelled,
+        LoopStateFile::Stopped => TaskLoopState::Stopped,
         LoopStateFile::Interrupted => TaskLoopState::Interrupted,
         LoopStateFile::Blocked => TaskLoopState::Blocked,
     })

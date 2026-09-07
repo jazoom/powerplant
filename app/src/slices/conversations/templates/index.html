@@ -254,6 +254,105 @@
               <dt class="text-quiet">Result</dt>
               <dd>{{ run.result }}</dd>
             </dl>
+            {% if run.loop_id != "" && (run.can_pause || run.can_continue || run.can_stop || run.pause_requested) %}
+              <div id="loop-controls" class="flex flex-col gap-3">
+                {% if run.pause_requested %}
+                  <p class="text-sm">
+                    {% if run.awaiting_gate %}
+                      A pause waits until you decide this task. Pause is not
+                      approval. The required decision stays visible.
+                    {% else %}
+                      A pause waits until this task finishes implementation,
+                      review and commit. Pause is not approval.
+                    {% endif %}
+                  </p>
+                {% else if run.can_pause %}
+                  <p class="text-quiet text-sm">
+                    Pause after task finishes this task's implementation, review
+                    and commit before the next task. Pause is not approval.
+                  </p>
+                {% else if run.can_continue %}
+                  <p class="text-quiet text-sm">
+                    Continue starts the next pending task. It does not repeat a
+                    completed task.
+                  </p>
+                {% endif %}
+                {% if run.can_stop %}
+                  <p class="text-quiet text-sm">
+                    Stop now cancels the current task. Earlier commits remain.
+                    This does not roll back the project.
+                  </p>
+                {% endif %}
+                <div class="flex flex-wrap gap-2">
+                  {% if run.can_pause %}
+                    <form
+                      data-graft
+                      method="post"
+                      action="/runs/loops/{{ run.loop_id }}/pause"
+                      class="inline"
+                    >
+                      <input
+                        type="hidden"
+                        name="token"
+                        value="{{ run.command_token }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="surface"
+                        value="conversation"
+                      />
+                      <button class="btn btn-secondary btn-sm" type="submit">
+                        Pause after task
+                      </button>
+                    </form>
+                  {% endif %}
+                  {% if run.can_continue %}
+                    <form
+                      data-graft
+                      method="post"
+                      action="/runs/loops/{{ run.loop_id }}/continue"
+                      class="inline"
+                    >
+                      <input
+                        type="hidden"
+                        name="token"
+                        value="{{ run.command_token }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="surface"
+                        value="conversation"
+                      />
+                      <button class="btn btn-primary btn-sm" type="submit">
+                        Continue
+                      </button>
+                    </form>
+                  {% endif %}
+                  {% if run.can_stop %}
+                    <form
+                      data-graft
+                      method="post"
+                      action="/runs/loops/{{ run.loop_id }}/stop"
+                      class="inline"
+                    >
+                      <input
+                        type="hidden"
+                        name="token"
+                        value="{{ run.command_token }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="surface"
+                        value="conversation"
+                      />
+                      <button class="btn btn-ghost btn-sm" type="submit">
+                        Stop now
+                      </button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
           </section>
         {% endif %}
         {% if let Some(review) = source_review %}

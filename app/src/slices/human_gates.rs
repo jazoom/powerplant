@@ -2,7 +2,7 @@ mod forms;
 mod page;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use axum::{
     Form, Router,

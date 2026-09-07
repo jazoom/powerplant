@@ -271,3 +271,116 @@ fn a_substituted_child_cannot_advance_the_parent() {
     );
     assert_eq!(store.get(&parent.id).expect("parent").completed_count(), 0);
 }
+
+#[test]
+fn pause_after_a_completed_task_does_not_dispatch_the_next_child() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("first");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let token = parent.command_token();
+    let parent = store.request_pause(&parent.id, &token).expect("pause");
+    assert!(matches!(
+        parent.state,
+        TaskLoopState::PauseRequested { child, .. } if child == first_id
+    ));
+    assert_eq!(
+        store.request_pause(&parent.id, &token).err(),
+        Some(TaskLoopError::Stale)
+    );
+    let first = completed_child(&parent, first_id, source(1));
+    let (parent, advance) = store.complete_child(&parent.id, &first).expect("complete");
+    assert_eq!(advance, LoopAdvance::Pause);
+    assert_eq!(parent.state, TaskLoopState::Paused);
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::CompletedCommit);
+    assert_eq!(parent.tasks[1].child_id, None);
+    assert_eq!(parent.tasks[1].outcome, TaskOutcome::Pending);
+    let stale = parent.command_token().replace("paused", "active");
+    assert_eq!(
+        store.stop_if_token(&parent.id, &stale).err(),
+        Some(TaskLoopError::Stale)
+    );
+    assert_eq!(
+        store.get(&parent.id).expect("paused").state,
+        TaskLoopState::Paused
+    );
+    let (parent, second_id, second) = store
+        .reserve_next_child(&parent.id, 1)
+        .expect("continue next");
+    assert_eq!(second.index, 1);
+    assert_ne!(second_id, first_id);
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::CompletedCommit);
+    assert_eq!(parent.current_child(), Some(second_id));
+}
+
+#[test]
+fn pause_at_an_awaiting_child_is_not_approval() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("first");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    store.mark_awaiting(&parent.id, first_id).expect("await");
+    let parent = store.get(&parent.id).expect("awaiting");
+    let parent = store
+        .request_pause(&parent.id, &parent.command_token())
+        .expect("pause");
+    assert!(matches!(
+        parent.state,
+        TaskLoopState::PauseRequested { child, .. } if child == first_id
+    ));
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::Dispatched);
+    assert_eq!(parent.completed_count(), 0);
+    store
+        .mark_awaiting(&parent.id, first_id)
+        .expect("keep pause");
+    assert!(matches!(
+        store.get(&parent.id).expect("still pause").state,
+        TaskLoopState::PauseRequested { .. }
+    ));
+}
+
+#[test]
+fn a_stale_stop_cannot_cancel_the_current_worker() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("parent");
+    let (parent, child, _) = store.reserve_next_child(&parent.id, 0).expect("child");
+    let job = crate::sessions::Job::new(crate::sessions::JobId::generate().expect("job"), child, 0);
+    let token = parent.command_token();
+    let paused = store.request_pause(&parent.id, &token).expect("pause");
+    assert_eq!(
+        store.request_stop(&parent.id, &token, &job),
+        Err(TaskLoopError::Stale)
+    );
+    assert!(!job.cancel_requested());
+    store
+        .request_stop(&parent.id, &paused.command_token(), &job)
+        .expect("stop");
+    assert!(job.cancel_requested());
+    assert_eq!(store.get(&parent.id).expect("parent"), paused);
+}
+
+#[test]
+fn stop_preserves_completed_tasks() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("first");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let first = completed_child(&parent, first_id, source(1));
+    let (parent, _) = store.complete_child(&parent.id, &first).expect("complete");
+    let (parent, second_id, _) = store.reserve_next_child(&parent.id, 1).expect("second");
+    store
+        .mark_dispatched(&parent.id, second_id)
+        .expect("dispatch second");
+    let parent = store
+        .stop_if_token(&parent.id, &parent.command_token())
+        .expect("stop");
+    assert_eq!(parent.state, TaskLoopState::Stopped);
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::CompletedCommit);
+    assert_eq!(parent.tasks[1].outcome, TaskOutcome::Cancelled);
+}

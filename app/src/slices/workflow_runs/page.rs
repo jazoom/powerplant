@@ -259,6 +259,15 @@ pub(super) struct LoopDetailView {
     pub(super) conversation_href: String,
     pub(super) current_child_href: String,
     pub(super) tasks: Vec<LoopTaskView>,
+    pub(super) loop_id: String,
+    pub(super) command_token: String,
+    pub(super) can_pause: bool,
+    pub(super) can_continue: bool,
+    pub(super) can_stop: bool,
+    pub(super) pause_requested: bool,
+    pub(super) awaiting_gate: bool,
+    pub(super) command_error: &'static str,
+    pub(super) conversation_surface: bool,
 }
 
 pub(super) struct LoopTaskView {
@@ -268,8 +277,23 @@ pub(super) struct LoopTaskView {
     pub(super) href: String,
 }
 
+#[derive(Template)]
+#[template(path = "workflow_runs/templates/loop_controls.html")]
+pub(super) struct LoopControlsView {
+    pub(super) loop_id: String,
+    pub(super) command_token: String,
+    pub(super) can_pause: bool,
+    pub(super) can_continue: bool,
+    pub(super) can_stop: bool,
+    pub(super) pause_requested: bool,
+    pub(super) awaiting_gate: bool,
+    pub(super) command_error: &'static str,
+    pub(super) conversation_surface: bool,
+}
+
 impl LoopDetailView {
-    pub(super) fn from_loop(record: &crate::workflows::TaskLoop) -> Self {
+    pub(super) fn from_loop(record: &crate::workflows::TaskLoop, awaiting_gate: bool) -> Self {
+        let controls = loop_controls(record, awaiting_gate, "", false);
         Self {
             name: record.pinned.definition.name().to_owned(),
             state: record.state.as_label(),
@@ -277,6 +301,15 @@ impl LoopDetailView {
             progress: record.progress_label(),
             conversation_href: format!("/conversations/{}", record.conversation_id.as_hex()),
             current_child_href: record.child_href(),
+            loop_id: controls.loop_id,
+            command_token: controls.command_token,
+            can_pause: controls.can_pause,
+            can_continue: controls.can_continue,
+            can_stop: controls.can_stop,
+            pause_requested: controls.pause_requested,
+            awaiting_gate: controls.awaiting_gate,
+            command_error: "",
+            conversation_surface: false,
             tasks: record
                 .tasks
                 .iter()
@@ -299,6 +332,32 @@ impl LoopDetailView {
                 })
                 .collect(),
         }
+    }
+}
+
+pub(super) fn loop_controls(
+    record: &crate::workflows::TaskLoop,
+    awaiting_gate: bool,
+    command_error: &'static str,
+    conversation_surface: bool,
+) -> LoopControlsView {
+    LoopControlsView {
+        loop_id: record.id.as_hex(),
+        command_token: record.command_token(),
+        can_pause: matches!(
+            record.state,
+            crate::workflows::task_loop::TaskLoopState::Active { .. }
+                | crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. }
+        ),
+        can_continue: matches!(
+            record.state,
+            crate::workflows::task_loop::TaskLoopState::Paused
+        ),
+        can_stop: !record.state.is_terminal(),
+        pause_requested: record.pause_requested(),
+        awaiting_gate,
+        command_error,
+        conversation_surface,
     }
 }
 

@@ -30,14 +30,42 @@ const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 
 pub(crate) struct WorkflowContinuationRegistry {
     inner: std::sync::Mutex<std::collections::BTreeMap<RunId, WorkflowJob>>,
+    paused: std::sync::Mutex<std::collections::BTreeMap<TaskLoopId, PausedWorkflow>>,
     // An uncertain commit retains execution protection until startup reconciliation.
     recovery_protection: std::sync::Mutex<Option<(Option<LeaseGuard>, ExecutionGuard)>>,
+}
+
+pub(crate) struct PausedWorkflow {
+    pub(crate) job: WorkflowJob,
+    pub(crate) source: crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+}
+
+enum ParkedWorkflow {
+    Gate(WorkflowJob),
+    Paused(TaskLoopId, PausedWorkflow),
+}
+
+impl ParkedWorkflow {
+    fn job(&self) -> &WorkflowJob {
+        match self {
+            Self::Gate(job) => job,
+            Self::Paused(_, checkpoint) => &checkpoint.job,
+        }
+    }
+
+    fn restore(self, registry: &WorkflowContinuationRegistry) {
+        match self {
+            Self::Gate(job) => registry.put_back(job),
+            Self::Paused(id, checkpoint) => registry.put_back_paused(id, checkpoint),
+        }
+    }
 }
 
 impl WorkflowContinuationRegistry {
     pub(crate) fn new() -> Self {
         Self {
             inner: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            paused: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             recovery_protection: std::sync::Mutex::new(None),
         }
     }
@@ -92,36 +120,77 @@ impl WorkflowContinuationRegistry {
             .insert(job.run_id, job);
     }
 
-    fn take_provider(&self, provider: crate::providers::ProviderKind) -> Vec<WorkflowJob> {
-        let mut inner = self
-            .inner
+    pub(crate) fn park_paused(
+        &self,
+        loop_id: TaskLoopId,
+        job: WorkflowJob,
+        source: crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+    ) -> bool {
+        let mut paused = self
+            .paused
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let ids: Vec<_> = inner
-            .iter()
-            .filter(|(_, job)| {
-                (!job.phase_providers.is_empty() && job.phase_providers.contains(&provider))
-                    || (job.phase_providers.is_empty() && job.connection.kind == provider)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        ids.into_iter().filter_map(|id| inner.remove(&id)).collect()
+        if paused.contains_key(&loop_id) {
+            return false;
+        }
+        paused.insert(loop_id, PausedWorkflow { job, source });
+        true
     }
 
-    fn take_session(&self, session: SessionId) -> Vec<WorkflowJob> {
+    pub(crate) fn take_paused(&self, loop_id: &TaskLoopId) -> Option<PausedWorkflow> {
+        self.paused
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(loop_id)
+    }
+
+    pub(crate) fn put_back_paused(&self, loop_id: TaskLoopId, job: PausedWorkflow) {
+        self.paused
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(loop_id, job);
+    }
+
+    pub(crate) fn commit_recovery_locked(&self) -> bool {
+        self.recovery_protection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    fn take_provider(&self, provider: crate::providers::ProviderKind) -> Vec<ParkedWorkflow> {
+        self.take_matching(|job| {
+            (!job.phase_providers.is_empty() && job.phase_providers.contains(&provider))
+                || (job.phase_providers.is_empty() && job.connection.kind == provider)
+        })
+    }
+
+    fn take_session(&self, session: SessionId) -> Vec<ParkedWorkflow> {
+        self.take_matching(|job| job.session_id == session)
+    }
+
+    fn take_matching(&self, predicate: impl Fn(&WorkflowJob) -> bool) -> Vec<ParkedWorkflow> {
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let ids: Vec<_> = inner
-            .iter()
-            .filter(|(_, job)| job.session_id == session)
-            .map(|(id, _)| *id)
-            .collect();
-        ids.into_iter().filter_map(|id| inner.remove(&id)).collect()
+        let mut paused = self
+            .paused
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner
+            .extract_if(.., |_, job| predicate(job))
+            .map(|(_, job)| ParkedWorkflow::Gate(job))
+            .chain(
+                paused
+                    .extract_if(.., |_, checkpoint| predicate(&checkpoint.job))
+                    .map(|(id, checkpoint)| ParkedWorkflow::Paused(id, checkpoint)),
+            )
+            .collect()
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct WorkflowJob {
     pub(crate) run_id: RunId,
     pub(crate) session_id: SessionId,
@@ -271,23 +340,30 @@ pub(crate) fn interrupt_session_continuations(
     interrupt_continuations(state, state.gate_continuations.take_session(session))
 }
 
-fn interrupt_continuations(state: &AppState, jobs: Vec<WorkflowJob>) -> Result<(), StoreError> {
+fn interrupt_continuations(state: &AppState, jobs: Vec<ParkedWorkflow>) -> Result<(), StoreError> {
     let mut jobs = jobs.into_iter();
-    while let Some(job) = jobs.next() {
+    while let Some(continuation) = jobs.next() {
+        let job = continuation.job();
         if state
             .workflow_runs
-            .mutate(&job.run_id, |run| run.interrupt(now_ms()))
+            .mutate(&job.run_id, |run| {
+                if matches!(continuation, ParkedWorkflow::Paused(..)) && run.is_terminal() {
+                    Ok(())
+                } else {
+                    run.interrupt(now_ms())
+                }
+            })
             .is_err()
         {
-            state.gate_continuations.put_back(job);
+            continuation.restore(&state.gate_continuations);
             for unprocessed in jobs {
-                state.gate_continuations.put_back(unprocessed);
+                unprocessed.restore(&state.gate_continuations);
             }
             return Err(StoreError::Persist);
         }
         settle_with_reply(
             state,
-            &job,
+            job,
             JobStatus::Cancelled,
             None,
             &crate::providers::AssistantReply::default(),
@@ -3285,9 +3361,15 @@ fn finish_driven_job(
     }
     match status {
         JobStatus::Completed => match continue_task_loop(state, job) {
-            Ok(true) => false,
-            Ok(false) => {
+            Ok(TaskLoopDrive::Next) => false,
+            Ok(TaskLoopDrive::Complete) => {
                 settle_completed_job(state, job);
+                true
+            }
+            Ok(TaskLoopDrive::Pause) => {
+                if let Err(error) = park_paused_job(state, job) {
+                    settle_job(state, job, JobStatus::Failed, Some(error));
+                }
                 true
             }
             Err(error) => {
@@ -3334,7 +3416,47 @@ fn task_loop_attempts(
         })
 }
 
-fn continue_task_loop(state: &AppState, job: &mut WorkflowJob) -> Result<bool, &'static str> {
+enum TaskLoopDrive {
+    Next,
+    Complete,
+    Pause,
+}
+
+fn park_paused_job(state: &AppState, job: &WorkflowJob) -> Result<(), &'static str> {
+    let loop_id = job.task_loop.ok_or(OPERATIONAL_STORE_ERROR)?;
+    let project = state
+        .projects
+        .get(&job.project_id)
+        .ok_or(OPERATIONAL_STORE_ERROR)?;
+    // A successful commit changes HEAD and the index. The next command must compare
+    // against this post-commit checkpoint, not the pre-commit candidate manifest.
+    let source = crate::workflows::artefacts::CandidateCapture::capture_host(
+        &project.host_path,
+        &state.workflow_artefacts,
+    )
+    .map_err(|_| OPERATIONAL_STORE_ERROR)?;
+    job.job.set_step_label("Paused after task".to_owned());
+    let _ = job.job.set_awaiting_decision();
+    if job.conversation_id.is_some() {
+        let _ = state.sessions.release_job_reservation(
+            &job.session_id,
+            job.conversation_id,
+            job.job.id(),
+        );
+    }
+    if !state
+        .gate_continuations
+        .park_paused(loop_id, job.clone(), source)
+    {
+        return Err(OPERATIONAL_STORE_ERROR);
+    }
+    Ok(())
+}
+
+fn continue_task_loop(
+    state: &AppState,
+    job: &mut WorkflowJob,
+) -> Result<TaskLoopDrive, &'static str> {
     let loop_id = job.task_loop.ok_or(OPERATIONAL_STORE_ERROR)?;
     let child = state
         .workflow_runs
@@ -3345,7 +3467,8 @@ fn continue_task_loop(state: &AppState, job: &mut WorkflowJob) -> Result<bool, &
         .complete_child(&loop_id, &child)
         .map_err(|error| error.message())?;
     match advance {
-        super::task_loop::LoopAdvance::Complete => return Ok(false),
+        super::task_loop::LoopAdvance::Complete => return Ok(TaskLoopDrive::Complete),
+        super::task_loop::LoopAdvance::Pause => return Ok(TaskLoopDrive::Pause),
         super::task_loop::LoopAdvance::Stopped => {
             return Err("The task loop stopped before completion.");
         }
@@ -3372,7 +3495,7 @@ fn continue_task_loop(state: &AppState, job: &mut WorkflowJob) -> Result<bool, &
         reply.clear();
     }
     job.job.set_step_label("Source capture".to_owned());
-    Ok(true)
+    Ok(TaskLoopDrive::Next)
 }
 
 pub(crate) fn settle_completed_job(state: &AppState, workflow: &WorkflowJob) {
@@ -3434,7 +3557,21 @@ fn settle_with_reply(
     }
     let reply = crate::slices::bound_reply(reply);
     let conversation_reply = if let Some(loop_id) = workflow.task_loop {
-        Some(conversation_loop_result(loop_id, status, &reply.text))
+        let stopped = state.task_loops.get(&loop_id).is_some_and(|parent| {
+            matches!(
+                parent.state,
+                super::task_loop::TaskLoopState::Stopped
+                    | super::task_loop::TaskLoopState::Cancelled
+            )
+        });
+        Some(if stopped && status == JobStatus::Cancelled {
+            format!(
+                "The task loop stopped. Earlier commits remain. This did not roll back the project.\n\n[Open the run record](/runs/loops/{}) for detailed activity, changes and result.",
+                loop_id.as_hex()
+            )
+        } else {
+            conversation_loop_result(loop_id, status, &reply.text)
+        })
     } else {
         state
             .workflow_runs
