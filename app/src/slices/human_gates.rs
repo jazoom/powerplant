@@ -234,13 +234,17 @@ fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun
     conversation
         .model
         .as_ref()
-        .and_then(|model| {
+        .map(|model| {
             model
                 .settings
                 .directories
                 .iter()
-                .find(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
-                .map(|grant| grant.host_path.display().to_string())
+                .filter(|grant| {
+                    grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                })
+                .map(|grant| format!("{} ({})", grant.alias, grant.host_path.display()))
+                .collect::<Vec<_>>()
+                .join(", ")
         })
         .unwrap_or_default()
 }
@@ -1026,6 +1030,46 @@ fn continuation_authority(
         })
     {
         return ContinuationAuthority::Stale;
+    }
+    if run.project_id.is_none() {
+        let (Some(conversation_id), Some(pinned)) = (
+            run.conversation_id,
+            continuation.project_free_authority.as_ref(),
+        ) else {
+            return ContinuationAuthority::Stale;
+        };
+        let Some(record) = state.conversations.get(&conversation_id) else {
+            return ContinuationAuthority::Stale;
+        };
+        let Ok(current) =
+            crate::conversations::resolve_project_free_authority(&record, &state.agents)
+        else {
+            return ContinuationAuthority::Stale;
+        };
+        if current != *pinned {
+            return ContinuationAuthority::Stale;
+        }
+        let Some(model) = record.model.as_ref() else {
+            return ContinuationAuthority::Stale;
+        };
+        for grant in
+            model.settings.directories.iter().filter(|grant| {
+                grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+            })
+        {
+            if grant.revalidate().is_err() {
+                return ContinuationAuthority::Unavailable;
+            }
+            if !state.access_consent.authorised_conversation(
+                continuation.session_id,
+                conversation_id,
+                &model.settings,
+                grant,
+            ) {
+                return ContinuationAuthority::Stale;
+            }
+        }
+        return ContinuationAuthority::Ready;
     }
     let Some(project) = run.project_id.and_then(|id| state.projects.get(&id)) else {
         return ContinuationAuthority::Stale;

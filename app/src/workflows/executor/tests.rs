@@ -275,6 +275,7 @@ fn fixing_review_publication_is_atomic_across_failures() {
             Failure::RunMutation => state.workflow_runs.fail_next_mutation(),
         }
 
+        let captured = crate::workflows::artefacts::CandidatePayload::Revision(captured);
         assert!(
             publish_success(
                 &state,

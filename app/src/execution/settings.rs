@@ -263,18 +263,6 @@ pub(crate) fn validate_directories(
             return Err(DirectoryGrantError::Overlap);
         }
     }
-    if directories
-        .iter()
-        .enumerate()
-        .any(|(index, grant)| index > 0 && grant.access == DirectoryAccess::ReviewBeforeApply)
-        || directories
-            .iter()
-            .filter(|grant| grant.access == DirectoryAccess::ReviewBeforeApply)
-            .count()
-            > 1
-    {
-        return Err(DirectoryGrantError::Invalid);
-    }
     Ok(())
 }
 
@@ -351,7 +339,7 @@ fn available_alias(path: &Path, existing: &[DirectoryGrant]) -> String {
     unreachable!("the grant bound leaves an alias available")
 }
 
-fn valid_alias(alias: &str) -> bool {
+pub(crate) fn valid_alias(alias: &str) -> bool {
     // Workflow authority reserves this alias for its legacy primary source.
     alias != "project"
         && !alias.is_empty()

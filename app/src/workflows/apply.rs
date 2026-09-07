@@ -28,28 +28,39 @@ pub(crate) enum ApplyTransactionState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyRoot {
     pub(crate) grant_id: DirectoryGrantId,
+    pub(crate) alias: String,
     pub(crate) host_path: PathBuf,
     pub(crate) identity: CanonicalDirectoryIdentity,
+    pub(crate) baseline_candidate: CandidateHash,
+    pub(crate) candidate_hash: CandidateHash,
+    pub(crate) exclusions: Vec<String>,
+    pub(crate) outcome: ApplyRootOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApplyRootOutcome {
+    Pending,
+    Unchanged,
+    Applied,
+    Conflicted,
+    Uncertain,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyTransaction {
     pub(crate) state: ApplyTransactionState,
-    pub(crate) root: ApplyRoot,
+    pub(crate) roots: Vec<ApplyRoot>,
     pub(crate) baseline: ArtefactReference,
-    pub(crate) baseline_candidate: CandidateHash,
     pub(crate) candidate: ArtefactReference,
-    pub(crate) candidate_hash: CandidateHash,
     pub(crate) approval: ArtefactReference,
-    pub(crate) exclusions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApprovedApplication {
     pub(crate) baseline_reference: ArtefactReference,
-    pub(crate) baseline: super::artefacts::candidate::CandidateRevisionArtefact,
+    pub(crate) baseline: super::artefacts::candidate::CandidatePayload,
     pub(crate) candidate_reference: ArtefactReference,
-    pub(crate) candidate: super::artefacts::candidate::CandidateRevisionArtefact,
+    pub(crate) candidate: super::artefacts::candidate::CandidatePayload,
     pub(crate) approval: ArtefactReference,
 }
 
@@ -157,17 +168,12 @@ pub(crate) fn require_bound_approval(
         {
             return Err(ApplyExecutionError::Integrity);
         }
-        super::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(&bytes)
+        super::artefacts::candidate::CandidatePayload::from_manifest_bytes(&bytes)
             .ok_or(ApplyExecutionError::Integrity)
     };
     let baseline = load_candidate(baseline_record)?;
     let candidate = load_candidate(candidate_record)?;
-    if !baseline.ordinary
-        || !candidate.ordinary
-        || baseline.repository != candidate.repository
-        || baseline.git_admin != candidate.git_admin
-        || baseline.exclusions != candidate.exclusions
-    {
+    if !candidate_payloads_match(&baseline, &candidate) {
         return Err(ApplyExecutionError::Assurance);
     }
     let decision_bytes = store
@@ -189,7 +195,7 @@ pub(crate) fn require_bound_approval(
     ) != approval_record.artefact_hash
         || decision.decision != super::gates::HumanDecisionKind::Approved
         || super::gates::hashes(&decision)
-            != Some((candidate.candidate_hash, baseline.candidate_hash))
+            != Some((candidate.candidate_hash(), baseline.candidate_hash()))
     {
         return Err(ApplyExecutionError::Assurance);
     }
@@ -229,21 +235,195 @@ pub(crate) fn require_bound_approval(
     })
 }
 
+fn candidate_payloads_match(
+    baseline: &super::artefacts::candidate::CandidatePayload,
+    candidate: &super::artefacts::candidate::CandidatePayload,
+) -> bool {
+    match (baseline, candidate) {
+        (
+            super::artefacts::candidate::CandidatePayload::Revision(left),
+            super::artefacts::candidate::CandidatePayload::Revision(right),
+        ) => {
+            left.ordinary
+                && right.ordinary
+                && left.repository == right.repository
+                && left.git_admin == right.git_admin
+                && left.exclusions == right.exclusions
+        }
+        (
+            super::artefacts::candidate::CandidatePayload::Set(left),
+            super::artefacts::candidate::CandidatePayload::Set(right),
+        ) => {
+            left.roots.len() == right.roots.len()
+                && left.roots.iter().zip(&right.roots).all(|(left, right)| {
+                    left.grant_id == right.grant_id
+                        && left.alias == right.alias
+                        && left.identity == right.identity
+                        && left.candidate.repository == right.candidate.repository
+                        && left.candidate.git_admin == right.candidate.git_admin
+                        && left.candidate.exclusions == right.candidate.exclusions
+                })
+        }
+        _ => false,
+    }
+}
+
+fn apply_failure_outcome(error: super::artefacts::apply::ApplyError) -> ApplyRootOutcome {
+    use super::artefacts::apply::ApplyError;
+    match error {
+        ApplyError::Conflict | ApplyError::Drift => ApplyRootOutcome::Conflicted,
+        _ => ApplyRootOutcome::Uncertain,
+    }
+}
+
+fn map_file_apply_error(error: super::artefacts::apply::ApplyError) -> ApplyExecutionError {
+    use super::artefacts::apply::ApplyError;
+    match error {
+        ApplyError::Conflict | ApplyError::Drift => ApplyExecutionError::Conflict,
+        ApplyError::Integrity => ApplyExecutionError::Integrity,
+        ApplyError::Escape | ApplyError::Unsupported | ApplyError::Write => {
+            ApplyExecutionError::Write
+        }
+    }
+}
+
+fn root_outcome_can_advance(left: ApplyRootOutcome, right: ApplyRootOutcome) -> bool {
+    left == right
+        || matches!(
+            (left, right),
+            (ApplyRootOutcome::Pending, ApplyRootOutcome::Unchanged)
+                | (ApplyRootOutcome::Pending, ApplyRootOutcome::Applied)
+                | (ApplyRootOutcome::Pending, ApplyRootOutcome::Conflicted)
+                | (ApplyRootOutcome::Pending, ApplyRootOutcome::Uncertain)
+                | (ApplyRootOutcome::Applied, ApplyRootOutcome::Uncertain)
+                | (ApplyRootOutcome::Applied, ApplyRootOutcome::Unchanged)
+                | (ApplyRootOutcome::Unchanged, ApplyRootOutcome::Uncertain)
+                | (ApplyRootOutcome::Unchanged, ApplyRootOutcome::Conflicted)
+                | (
+                    ApplyRootOutcome::Conflicted | ApplyRootOutcome::Uncertain,
+                    ApplyRootOutcome::Applied
+                        | ApplyRootOutcome::Unchanged
+                        | ApplyRootOutcome::Uncertain
+                )
+        )
+}
+
 impl ApplyTransaction {
+    pub(crate) fn apply_roots(
+        &mut self,
+        baseline: &super::artefacts::candidate::CandidateSetArtefact,
+        candidate: &super::artefacts::candidate::CandidateSetArtefact,
+        store: &WorkflowArtefactRepository,
+        journal: &ApplyJournal,
+        mut persist: impl FnMut(&Self) -> Result<(), ApplyExecutionError>,
+    ) -> Result<(), ApplyExecutionError> {
+        use super::artefacts::{
+            CandidateApply,
+            apply::{ApplyError, CandidateApplicationBinding, changed_paths},
+        };
+        let child_hash = |value: &super::artefacts::candidate::CandidateRevisionArtefact| {
+            let bytes = value
+                .manifest_bytes()
+                .map_err(|_| ApplyExecutionError::Integrity)?;
+            Ok(artefact_hash_for(
+                super::definition::ArtefactKind::CandidateRevision,
+                value.format_version,
+                &bytes,
+            ))
+        };
+        // Every root must pass preflight before any root can change.
+        for index in 0..self.roots.len() {
+            let root = &self.roots[index];
+            let before = &baseline.roots[index].candidate;
+            let after = &candidate.roots[index].candidate;
+            if let Err(error) = CandidateApply::preflight_bound(
+                &root.host_path,
+                before,
+                child_hash(before)?,
+                after,
+                child_hash(after)?,
+                &root.exclusions,
+                store,
+            ) {
+                self.roots[index].outcome = apply_failure_outcome(error);
+                self.state = ApplyTransactionState::Recovered;
+                persist(self)?;
+                return Err(map_file_apply_error(error));
+            }
+        }
+        let mut completed = 0usize;
+        for index in 0..self.roots.len() {
+            if self.roots[index].outcome == ApplyRootOutcome::Unchanged {
+                continue;
+            }
+            let root = self.roots[index].clone();
+            let before = &baseline.roots[index].candidate;
+            let after = &candidate.roots[index].candidate;
+            let result = CandidateApply::apply_journalled(
+                &root.host_path,
+                before,
+                after,
+                CandidateApplicationBinding {
+                    initial_hash: child_hash(before)?,
+                    target_hash: child_hash(after)?,
+                    exclusions: &root.exclusions,
+                },
+                store,
+                |root_completed, path, applied| {
+                    let qualified = format!("{}/{}", root.alias, path);
+                    journal
+                        .record_progress(completed + root_completed, &qualified, applied)
+                        .map_err(|_| ApplyError::Write)?;
+                    self.state = if applied {
+                        ApplyTransactionState::Applied {
+                            completed: completed + root_completed,
+                        }
+                    } else {
+                        ApplyTransactionState::Applying {
+                            completed: completed + root_completed,
+                            path: qualified,
+                        }
+                    };
+                    persist(self).map_err(|_| ApplyError::Write)
+                },
+            );
+            if let Err(error) = result {
+                self.roots[index].outcome = apply_failure_outcome(error);
+                self.state = ApplyTransactionState::RecoveryUncertain;
+                persist(self)?;
+                return Err(map_file_apply_error(error));
+            }
+            completed += changed_paths(before, after).len();
+            self.roots[index].outcome = ApplyRootOutcome::Applied;
+            persist(self)?;
+        }
+        self.state = ApplyTransactionState::Verified;
+        persist(self)
+    }
+
     pub(crate) fn can_advance_to(&self, next: &Self) -> bool {
-        if self.root != next.root
+        if self.roots.len() != next.roots.len()
+            || self.roots.iter().zip(&next.roots).any(|(left, right)| {
+                left.grant_id != right.grant_id
+                    || left.alias != right.alias
+                    || left.host_path != right.host_path
+                    || left.identity != right.identity
+                    || left.baseline_candidate != right.baseline_candidate
+                    || left.candidate_hash != right.candidate_hash
+                    || left.exclusions != right.exclusions
+                    || !root_outcome_can_advance(left.outcome, right.outcome)
+            })
             || self.baseline != next.baseline
-            || self.baseline_candidate != next.baseline_candidate
             || self.candidate != next.candidate
-            || self.candidate_hash != next.candidate_hash
             || self.approval != next.approval
-            || self.exclusions != next.exclusions
         {
             return false;
         }
+        if self.state == next.state {
+            return true;
+        }
         match (&self.state, &next.state) {
-            (ApplyTransactionState::Prepared, ApplyTransactionState::Prepared)
-            | (
+            (
                 ApplyTransactionState::Prepared,
                 ApplyTransactionState::Applying { completed: 0, .. },
             ) => true,
@@ -261,10 +441,96 @@ impl ApplyTransaction {
             | (ApplyTransactionState::Prepared, ApplyTransactionState::Verified)
             | (ApplyTransactionState::Applied { .. }, ApplyTransactionState::Verified)
             | (ApplyTransactionState::Verified, ApplyTransactionState::Verified)
+            | (ApplyTransactionState::RecoveryUncertain, ApplyTransactionState::Verified)
             | (_, ApplyTransactionState::Recovered) => true,
             (_, ApplyTransactionState::RecoveryUncertain) => true,
             _ => false,
         }
+    }
+
+    pub(crate) fn recover_roots(
+        &mut self,
+        baseline: &super::artefacts::candidate::CandidateSetArtefact,
+        candidate: &super::artefacts::candidate::CandidateSetArtefact,
+        started_paths: &[String],
+        store: &WorkflowArtefactRepository,
+    ) {
+        let mut all_targets = true;
+        for ((root, before), after) in self
+            .roots
+            .iter_mut()
+            .zip(&baseline.roots)
+            .zip(&candidate.roots)
+        {
+            let grant = crate::execution::DirectoryGrant {
+                id: root.grant_id,
+                host_path: root.host_path.clone(),
+                identity: root.identity,
+                alias: root.alias.clone(),
+                access: crate::execution::DirectoryAccess::ReviewBeforeApply,
+            };
+            let live = grant.revalidate().ok().and_then(|()| {
+                super::artefacts::CandidateCapture::capture_directory(
+                    &root.host_path,
+                    &root.exclusions,
+                    store,
+                )
+                .ok()
+            });
+            let Some(live) = live else {
+                root.outcome = ApplyRootOutcome::Uncertain;
+                all_targets = false;
+                continue;
+            };
+            if live == before.candidate {
+                root.outcome = ApplyRootOutcome::Unchanged;
+                all_targets &= before.candidate == after.candidate;
+            } else if live == after.candidate {
+                let started =
+                    super::artefacts::apply::changed_paths(&before.candidate, &after.candidate)
+                        .iter()
+                        .all(|path| started_paths.contains(&format!("{}/{}", root.alias, path)));
+                root.outcome = if started {
+                    ApplyRootOutcome::Applied
+                } else {
+                    ApplyRootOutcome::Uncertain
+                };
+                all_targets &= started;
+            } else {
+                let prefix = format!("{}/", root.alias);
+                let root_started = started_paths
+                    .iter()
+                    .filter_map(|path| path.strip_prefix(&prefix).map(str::to_owned))
+                    .collect::<Vec<_>>();
+                root.outcome = if super::artefacts::CandidateApply::recover_to_initial(
+                    &root.host_path,
+                    &before.candidate,
+                    &after.candidate,
+                    &root.exclusions,
+                    &root_started,
+                    store,
+                )
+                .is_ok()
+                {
+                    ApplyRootOutcome::Unchanged
+                } else {
+                    ApplyRootOutcome::Uncertain
+                };
+                all_targets = false;
+            }
+        }
+        self.state = if all_targets {
+            ApplyTransactionState::Verified
+        } else if self
+            .roots
+            .iter()
+            .any(|root| root.outcome == ApplyRootOutcome::Uncertain)
+        {
+            ApplyTransactionState::RecoveryUncertain
+        } else {
+            // A known partial result releases recovery, but never completes the run.
+            ApplyTransactionState::Recovered
+        };
     }
 
     pub(crate) fn is_verified(&self) -> bool {
@@ -455,34 +721,47 @@ fn binding_bytes(transaction: &ApplyTransaction) -> Result<Vec<u8>, PersistError
     #[derive(serde::Serialize)]
     #[serde(rename_all = "kebab-case")]
     struct Binding<'a> {
+        roots: Vec<BindingRoot<'a>>,
+        baseline_id: String,
+        baseline: String,
+        candidate_id: String,
+        candidate: String,
+        approval_id: String,
+        approval: String,
+    }
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct BindingRoot<'a> {
         grant_id: String,
+        alias: &'a str,
         host_path: &'a Path,
         device: u64,
         inode: u64,
-        baseline_id: String,
-        baseline: String,
         baseline_candidate: String,
-        candidate_id: String,
-        candidate: String,
         candidate_hash: String,
-        approval_id: String,
-        approval: String,
         exclusions: &'a [String],
     }
     serde_json::to_vec(&Binding {
-        grant_id: transaction.root.grant_id.as_hex(),
-        host_path: &transaction.root.host_path,
-        device: transaction.root.identity.device,
-        inode: transaction.root.identity.inode,
+        roots: transaction
+            .roots
+            .iter()
+            .map(|root| BindingRoot {
+                grant_id: root.grant_id.as_hex(),
+                alias: &root.alias,
+                host_path: &root.host_path,
+                device: root.identity.device,
+                inode: root.identity.inode,
+                baseline_candidate: root.baseline_candidate.as_str(),
+                candidate_hash: root.candidate_hash.as_str(),
+                exclusions: &root.exclusions,
+            })
+            .collect(),
         baseline_id: transaction.baseline.id.as_hex(),
         baseline: transaction.baseline.artefact_hash.as_str(),
-        baseline_candidate: transaction.baseline_candidate.as_str(),
         candidate_id: transaction.candidate.id.as_hex(),
         candidate: transaction.candidate.artefact_hash.as_str(),
-        candidate_hash: transaction.candidate_hash.as_str(),
         approval_id: transaction.approval.id.as_hex(),
         approval: transaction.approval.artefact_hash.as_str(),
-        exclusions: &transaction.exclusions,
     })
     .map_err(|_| PersistError)
 }

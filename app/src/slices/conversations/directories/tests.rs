@@ -90,7 +90,7 @@ async fn picker_commands_are_patch_only_and_revision_bound() {
 }
 
 #[tokio::test]
-async fn review_access_needs_consent_and_rejects_a_second_reviewed_root() {
+async fn each_reviewed_root_needs_its_own_consent() {
     let state = test_state();
     let token = connected(&state);
     let record = conversation(&state);
@@ -176,7 +176,21 @@ async fn review_access_needs_consent_and_rejects_a_second_reviewed_root() {
         ))
         .await
         .unwrap();
-    assert_eq!(second_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = text(second_response).await;
+    assert!(second_body.contains("Approve directory review access"));
+    assert_eq!(
+        state
+            .conversations
+            .get(&record.id)
+            .unwrap()
+            .model
+            .unwrap()
+            .settings
+            .directories[1]
+            .access,
+        crate::execution::DirectoryAccess::ReadOnly
+    );
 }
 
 #[tokio::test]

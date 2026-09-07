@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests;
 
-use super::candidate::{CandidateEntry, CandidateEntryKind, CandidateRevisionArtefact};
+use super::candidate::{
+    CandidateEntry, CandidateEntryKind, CandidatePayload, CandidateRevisionArtefact,
+};
 use super::{ArtefactReference, CandidateHash, ObjectHash, WorkflowArtefactRepository};
 use crate::workflows::WorkflowRun;
 
@@ -14,12 +16,20 @@ const MAXIMUM_TEXT_INPUT_BYTES: usize = 256 * 1024;
 pub(crate) struct CandidateDiff {
     pub(crate) base: CandidateHash,
     pub(crate) target: CandidateHash,
-    base_candidate: CandidateRevisionArtefact,
-    target_candidate: CandidateRevisionArtefact,
+    roots: Vec<DiffRoot>,
+    exclusions: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct DiffRoot {
+    directory: String,
+    base: CandidateRevisionArtefact,
+    target: CandidateRevisionArtefact,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DiffChange {
+    pub(crate) directory: String,
     pub(crate) path: String,
     pub(crate) status: &'static str,
     pub(crate) old: Option<EntryFacts>,
@@ -69,20 +79,60 @@ impl CandidateDiff {
         }
         let base_candidate = load_candidate(run, base, store)?;
         let target_candidate = load_candidate(run, target, store)?;
+        let (roots, exclusions) = match (&base_candidate, &target_candidate) {
+            (CandidatePayload::Revision(base), CandidatePayload::Revision(target)) => (
+                vec![DiffRoot {
+                    directory: String::new(),
+                    base: base.clone(),
+                    target: target.clone(),
+                }],
+                target.exclusions.clone(),
+            ),
+            (CandidatePayload::Set(base), CandidatePayload::Set(target)) => {
+                if base.roots.len() != target.roots.len() {
+                    return Err(DiffError::Integrity);
+                }
+                let mut roots = Vec::new();
+                let mut exclusions = Vec::new();
+                for (left, right) in base.roots.iter().zip(&target.roots) {
+                    if left.grant_id != right.grant_id
+                        || left.alias != right.alias
+                        || left.identity != right.identity
+                        || left.candidate.exclusions != right.candidate.exclusions
+                    {
+                        return Err(DiffError::Integrity);
+                    }
+                    exclusions.extend(
+                        right
+                            .candidate
+                            .exclusions
+                            .iter()
+                            .map(|path| format!("{}/{}", right.alias, path)),
+                    );
+                    roots.push(DiffRoot {
+                        directory: right.alias.clone(),
+                        base: left.candidate.clone(),
+                        target: right.candidate.clone(),
+                    });
+                }
+                (roots, exclusions)
+            }
+            _ => return Err(DiffError::Integrity),
+        };
         Ok(Self {
-            base: base_candidate.candidate_hash,
-            target: target_candidate.candidate_hash,
-            base_candidate,
-            target_candidate,
+            base: base_candidate.candidate_hash(),
+            target: target_candidate.candidate_hash(),
+            roots,
+            exclusions,
         })
     }
 
     pub(crate) fn ordinary(&self) -> bool {
-        self.target_candidate.ordinary
+        self.roots.iter().all(|root| root.target.ordinary)
     }
 
     pub(crate) fn exclusions(&self) -> &[String] {
-        &self.target_candidate.exclusions
+        &self.exclusions
     }
 
     pub(crate) fn manifest_page(
@@ -93,9 +143,9 @@ impl CandidateDiff {
         let end = start.checked_add(limit).ok_or(DiffError::Index)?;
         let mut total = 0;
         let mut page = Vec::with_capacity(limit);
-        self.for_each_change(|old, new| {
+        self.for_each_change(|directory, old, new| {
             if (start..end).contains(&total) {
-                page.push(change(old, new, None)?);
+                page.push(change(directory, old, new, None)?);
             }
             total += 1;
             Ok(())
@@ -111,8 +161,8 @@ impl CandidateDiff {
         index: usize,
         store: &WorkflowArtefactRepository,
     ) -> Result<DiffChange, DiffError> {
-        let (old, new) = self.change_entries(index)?;
-        change(old, new, Some(store))
+        let (directory, old, new) = self.change_entries(index)?;
+        change(directory, old, new, Some(store))
     }
 
     pub(crate) fn object(
@@ -121,7 +171,7 @@ impl CandidateDiff {
         side: &str,
         store: &WorkflowArtefactRepository,
     ) -> Result<(String, Vec<u8>), DiffError> {
-        let (old, new) = self.change_entries(index)?;
+        let (_, old, new) = self.change_entries(index)?;
         let entry = match side {
             "base" => old,
             "target" => new,
@@ -157,12 +207,12 @@ impl CandidateDiff {
     fn change_entries(
         &self,
         index: usize,
-    ) -> Result<(Option<&CandidateEntry>, Option<&CandidateEntry>), DiffError> {
+    ) -> Result<(&str, Option<&CandidateEntry>, Option<&CandidateEntry>), DiffError> {
         let mut current = 0;
         let mut found = None;
-        self.for_each_change(|old, new| {
+        self.for_each_change(|directory, old, new| {
             if current == index {
-                found = Some((old, new));
+                found = Some((directory, old, new));
             }
             current += 1;
             Ok(())
@@ -173,40 +223,43 @@ impl CandidateDiff {
     fn for_each_change<'a>(
         &'a self,
         mut visit: impl FnMut(
+            &'a str,
             Option<&'a CandidateEntry>,
             Option<&'a CandidateEntry>,
         ) -> Result<(), DiffError>,
     ) -> Result<(), DiffError> {
-        let mut left = 0;
-        let mut right = 0;
-        let base = &self.base_candidate.entries;
-        let target = &self.target_candidate.entries;
-        while left < base.len() || right < target.len() {
-            match (base.get(left), target.get(right)) {
-                (Some(old), Some(new)) if old.path == new.path => {
-                    if old.kind != new.kind {
-                        visit(Some(old), Some(new))?;
+        for root in &self.roots {
+            let mut left = 0;
+            let mut right = 0;
+            let base = &root.base.entries;
+            let target = &root.target.entries;
+            while left < base.len() || right < target.len() {
+                match (base.get(left), target.get(right)) {
+                    (Some(old), Some(new)) if old.path == new.path => {
+                        if old.kind != new.kind {
+                            visit(&root.directory, Some(old), Some(new))?;
+                        }
+                        left += 1;
+                        right += 1;
                     }
-                    left += 1;
-                    right += 1;
+                    (Some(old), Some(new)) if old.path.as_bytes() < new.path.as_bytes() => {
+                        visit(&root.directory, Some(old), None)?;
+                        left += 1;
+                    }
+                    (Some(_), Some(new)) => {
+                        visit(&root.directory, None, Some(new))?;
+                        right += 1;
+                    }
+                    (Some(old), None) => {
+                        visit(&root.directory, Some(old), None)?;
+                        left += 1;
+                    }
+                    (None, Some(new)) => {
+                        visit(&root.directory, None, Some(new))?;
+                        right += 1;
+                    }
+                    (None, None) => break,
                 }
-                (Some(old), Some(new)) if old.path.as_bytes() < new.path.as_bytes() => {
-                    visit(Some(old), None)?;
-                    left += 1;
-                }
-                (Some(_), Some(new)) => {
-                    visit(None, Some(new))?;
-                    right += 1;
-                }
-                (Some(old), None) => {
-                    visit(Some(old), None)?;
-                    left += 1;
-                }
-                (None, Some(new)) => {
-                    visit(None, Some(new))?;
-                    right += 1;
-                }
-                (None, None) => break,
             }
         }
         Ok(())
@@ -217,7 +270,7 @@ fn load_candidate(
     run: &WorkflowRun,
     reference: &ArtefactReference,
     store: &WorkflowArtefactRepository,
-) -> Result<CandidateRevisionArtefact, DiffError> {
+) -> Result<CandidatePayload, DiffError> {
     let record = run.artefact(&reference.id).ok_or(DiffError::Missing)?;
     if record.artefact_hash != reference.artefact_hash || record.provenance.run_id != run.id {
         return Err(DiffError::CrossRun);
@@ -228,9 +281,8 @@ fn load_candidate(
     if ObjectHash::of(&bytes) != record.object_hash {
         return Err(DiffError::Integrity);
     }
-    let candidate =
-        CandidateRevisionArtefact::from_manifest_bytes(&bytes).ok_or(DiffError::Integrity)?;
-    let hash = super::artefact_hash_for(record.kind, candidate.format_version, &bytes);
+    let candidate = CandidatePayload::from_manifest_bytes(&bytes).ok_or(DiffError::Integrity)?;
+    let hash = super::artefact_hash_for(record.kind, super::CANDIDATE_SCHEMA, &bytes);
     if hash != record.artefact_hash {
         return Err(DiffError::Integrity);
     }
@@ -238,6 +290,7 @@ fn load_candidate(
 }
 
 fn change(
+    directory: &str,
     old: Option<&CandidateEntry>,
     new: Option<&CandidateEntry>,
     store: Option<&WorkflowArtefactRepository>,
@@ -288,6 +341,7 @@ fn change(
         }
     }
     Ok(DiffChange {
+        directory: directory.to_owned(),
         path,
         status,
         old: old_facts,

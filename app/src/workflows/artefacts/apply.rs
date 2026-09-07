@@ -28,6 +28,26 @@ pub(crate) enum ApplyError {
 }
 
 impl CandidateApply {
+    pub(crate) fn preflight_bound(
+        project: &Path,
+        initial: &CandidateRevisionArtefact,
+        expected_initial_hash: ArtefactHash,
+        target: &CandidateRevisionArtefact,
+        expected_target_hash: ArtefactHash,
+        expected_exclusions: &[String],
+        store: &WorkflowArtefactRepository,
+    ) -> Result<(), ApplyError> {
+        preflight(
+            project,
+            initial,
+            expected_initial_hash,
+            target,
+            expected_target_hash,
+            expected_exclusions,
+            store,
+        )
+    }
+
     pub(crate) fn apply(
         project: &Path,
         initial: &CandidateRevisionArtefact,

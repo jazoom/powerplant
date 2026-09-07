@@ -7,6 +7,7 @@ use crate::workflows::{RunKind, WorkflowRun};
 pub(super) const TITLE: &str = "Human gate | Power Plant";
 
 pub(super) struct ChangeRow {
+    pub(super) directory: String,
     pub(super) path: String,
     pub(super) status: &'static str,
     pub(super) old: String,
@@ -88,6 +89,7 @@ impl GatePage {
                 .map(|(offset, change)| {
                     let index = start + offset;
                     ChangeRow {
+                        directory: change.directory.clone(),
                         path: change.path.clone(),
                         status: change.status,
                         old: facts(change.old.as_ref()),
@@ -111,7 +113,11 @@ impl GatePage {
         if let Some(index) = query.change {
             let diff = diff.as_ref()?;
             let change = diff.change(index, store).ok()?;
-            selected_path = change.path.clone();
+            selected_path = if change.directory.is_empty() {
+                change.path.clone()
+            } else {
+                format!("{}/{}", change.directory, change.path)
+            };
             binary = change.binary;
             text_too_large = change.text_too_large;
             if let Some(fragments) = &change.text {

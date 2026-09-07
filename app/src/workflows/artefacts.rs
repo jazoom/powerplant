@@ -12,7 +12,8 @@ mod store;
 pub(crate) use apply::CandidateApply;
 pub(crate) use assurance::status_against;
 pub(crate) use candidate::{
-    CANDIDATE_SCHEMA, CandidateCapture, CandidateEntryKind, inspect_supported_worktree,
+    CANDIDATE_SCHEMA, CandidateCapture, CandidateEntryKind, CandidatePayload,
+    inspect_supported_worktree,
 };
 pub(crate) use diff::CandidateDiff;
 pub(crate) use id::{ArtefactHash, CandidateHash, ObjectHash};

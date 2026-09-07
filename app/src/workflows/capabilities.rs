@@ -67,23 +67,21 @@ impl AttemptCapabilities {
         authority: &crate::execution::ProjectFreeAuthority,
     ) -> Result<Self, CapabilityError> {
         if let StepAction::SystemCommand(action) = &step.action {
-            if action.command != SystemCommandId::ApplyChanges || authority.reviewed_alias.is_none()
+            if action.command != SystemCommandId::ApplyChanges
+                || authority.reviewed_aliases.is_empty()
             {
                 return Err(CapabilityError::Authority);
             }
             return Ok(apply_capabilities(
                 authority.revision,
-                authority
-                    .reviewed_alias
-                    .as_deref()
-                    .expect("reviewed alias checked"),
+                &authority.reviewed_aliases,
             ));
         }
         let StepAction::Agent(action) = &step.action else {
             return Err(CapabilityError::Authority);
         };
-        let reviewed = authority.reviewed_alias.as_deref();
-        let expected_candidate = if reviewed.is_some() {
+        let reviewed = &authority.reviewed_aliases;
+        let expected_candidate = if !reviewed.is_empty() {
             crate::workflows::definition::CandidateAuthority::Edit
         } else {
             crate::workflows::definition::CandidateAuthority::ReadOnly
@@ -119,12 +117,13 @@ impl AttemptCapabilities {
                 .grants()
                 .iter()
                 .map(|grant| {
-                    let primary = Some(grant.alias.as_str()) == reviewed
-                        || reviewed.is_none() && grant.alias == authority.policy.primary_alias();
+                    let reviewed_root = reviewed.contains(&grant.alias);
+                    let primary = reviewed.first() == Some(&grant.alias)
+                        || reviewed.is_empty() && grant.alias == authority.policy.primary_alias();
                     CapabilityDirectory {
                         alias: grant.alias.clone(),
                         guest_path: grant.guest_path.clone(),
-                        access: if primary && reviewed.is_some() {
+                        access: if reviewed_root {
                             AccessMode::ReadWrite
                         } else {
                             AccessMode::ReadOnly
@@ -143,7 +142,7 @@ impl AttemptCapabilities {
             agent_revision: authority.revision,
             tools: action.authority.tools.clone(),
             directories,
-            source_location: if reviewed.is_some() {
+            source_location: if !reviewed.is_empty() {
                 PrimarySourceLocation::AttemptWorkspace
             } else {
                 PrimarySourceLocation::PrivateWorkspace
@@ -411,17 +410,25 @@ fn commit_or_read_only(
     }
 }
 
-fn apply_capabilities(revision: u32, primary_alias: &str) -> AttemptCapabilities {
+fn apply_capabilities(revision: u32, aliases: &[String]) -> AttemptCapabilities {
     AttemptCapabilities {
         schema: CAPABILITY_SCHEMA,
         agent_revision: revision,
         tools: Vec::new(),
-        directories: vec![CapabilityDirectory {
-            alias: primary_alias.to_owned(),
-            guest_path: format!("/access/{primary_alias}"),
-            access: AccessMode::ReadWrite,
-            role: DirectoryRole::PrimarySource,
-        }],
+        directories: aliases
+            .iter()
+            .enumerate()
+            .map(|(index, alias)| CapabilityDirectory {
+                alias: alias.clone(),
+                guest_path: format!("/access/{alias}"),
+                access: AccessMode::ReadWrite,
+                role: if index == 0 {
+                    DirectoryRole::PrimarySource
+                } else {
+                    DirectoryRole::SecondaryContext
+                },
+            })
+            .collect(),
         source_location: PrimarySourceLocation::UserProject,
         git_admin: AccessMode::ReadOnly,
         network: NetworkCapability::None,

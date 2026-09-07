@@ -910,6 +910,10 @@ fn candidate_review_preview(
         preview.push_str("- ");
         preview.push_str(change.status);
         preview.push(' ');
+        if !change.directory.is_empty() {
+            preview.push_str(&change.directory);
+            preview.push('/');
+        }
         preview.push_str(&change.path);
         preview.push('\n');
         for (side, facts) in [("Before", &change.old), ("After", &change.new)] {
@@ -2032,7 +2036,7 @@ pub(super) async fn start_message(
                 &model.settings.instructions,
                 environment,
                 directories,
-                project_free.reviewed_alias.is_some(),
+                !project_free.reviewed_aliases.is_empty(),
             )
         }
         .map_err(|error| {
@@ -3251,12 +3255,18 @@ fn detail_view(
             let destination = record
                 .model
                 .as_ref()
-                .and_then(|model| {
-                    model.settings.directories.iter().find(|grant| {
-                        grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-                    })
+                .map(|model| {
+                    model
+                        .settings
+                        .directories
+                        .iter()
+                        .filter(|grant| {
+                            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                        })
+                        .map(|grant| format!("{} ({})", grant.alias, grant.host_path.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 })
-                .map(|grant| grant.host_path.display().to_string())
                 .unwrap_or_default();
             page::pending_code_gate(&run, &state.workflow_artefacts, destination)
         });

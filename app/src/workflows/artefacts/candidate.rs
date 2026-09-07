@@ -13,6 +13,7 @@ pub(crate) const MAXIMUM_PREVIEW_PATHS: usize = 200;
 pub(crate) const MAXIMUM_PREVIEW_BYTES: usize = 1024 * 1024;
 const CANDIDATE_DOMAIN: &[u8] = b"powerplant.candidate.v1";
 const GIT_ADMIN_DOMAIN: &[u8] = b"powerplant.git-admin.v1";
+const CANDIDATE_SET_DOMAIN: &[u8] = b"powerplant.candidate-set.v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CandidateRevisionArtefact {
@@ -287,9 +288,269 @@ impl CandidateRevisionArtefact {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CandidateSetArtefact {
+    pub(crate) format_version: u32,
+    pub(crate) candidate_hash: CandidateHash,
+    pub(crate) roots: Vec<CandidateSetRoot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CandidateSetRoot {
+    pub(crate) grant_id: crate::execution::DirectoryGrantId,
+    pub(crate) alias: String,
+    pub(crate) identity: crate::execution::CanonicalDirectoryIdentity,
+    pub(crate) candidate: CandidateRevisionArtefact,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct CandidateSetFile {
+    format_version: u32,
+    candidate_hash: String,
+    roots: Vec<CandidateSetRootFile>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct CandidateSetRootFile {
+    grant_id: String,
+    alias: String,
+    identity: crate::execution::CanonicalDirectoryIdentity,
+    candidate: serde_json::Value,
+}
+
+impl CandidateSetArtefact {
+    pub(crate) fn from_roots(roots: Vec<CandidateSetRoot>) -> Result<Self, CaptureError> {
+        if roots.is_empty() || roots.len() > 8 {
+            return Err(CaptureError::SourceUnsupported);
+        }
+        for (index, root) in roots.iter().enumerate() {
+            validate_candidate_shape(&root.candidate)?;
+            if !root.candidate.ordinary
+                || !crate::execution::valid_alias(&root.alias)
+                || roots[..index].iter().any(|previous| {
+                    previous.grant_id == root.grant_id
+                        || previous.alias == root.alias
+                        || previous.identity == root.identity
+                })
+            {
+                return Err(CaptureError::SourceUnsupported);
+            }
+        }
+        let candidate_hash = hash_candidate_set(&roots);
+        Ok(Self {
+            format_version: CANDIDATE_SCHEMA,
+            candidate_hash,
+            roots,
+        })
+    }
+
+    pub(crate) fn manifest_bytes(&self) -> Result<Vec<u8>, CaptureError> {
+        if self.format_version != CANDIDATE_SCHEMA
+            || self.candidate_hash != hash_candidate_set(&self.roots)
+        {
+            return Err(CaptureError::ArtefactIntegrity);
+        }
+        let roots = self
+            .roots
+            .iter()
+            .map(|root| {
+                let bytes = root.candidate.manifest_bytes()?;
+                let candidate =
+                    serde_json::from_slice(&bytes).map_err(|_| CaptureError::ArtefactWrite)?;
+                Ok(CandidateSetRootFile {
+                    grant_id: root.grant_id.as_hex(),
+                    alias: root.alias.clone(),
+                    identity: root.identity,
+                    candidate,
+                })
+            })
+            .collect::<Result<Vec<_>, CaptureError>>()?;
+        let bytes = serde_json::to_vec(&CandidateSetFile {
+            format_version: self.format_version,
+            candidate_hash: self.candidate_hash.as_str(),
+            roots,
+        })
+        .map_err(|_| CaptureError::ArtefactWrite)?;
+        if bytes.len() > MAXIMUM_MANIFEST_BYTES {
+            return Err(CaptureError::SourceTooLarge);
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn from_manifest_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > MAXIMUM_MANIFEST_BYTES {
+            return None;
+        }
+        let file: CandidateSetFile = serde_json::from_slice(bytes).ok()?;
+        if file.format_version != CANDIDATE_SCHEMA {
+            return None;
+        }
+        let roots = file
+            .roots
+            .into_iter()
+            .map(|root| {
+                let bytes = serde_json::to_vec(&root.candidate).ok()?;
+                Some(CandidateSetRoot {
+                    grant_id: crate::execution::DirectoryGrantId::parse(&root.grant_id)?,
+                    alias: root.alias,
+                    identity: root.identity,
+                    candidate: CandidateRevisionArtefact::from_manifest_bytes(&bytes)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let artefact = Self::from_roots(roots).ok()?;
+        (artefact.candidate_hash.as_str() == file.candidate_hash).then_some(artefact)
+    }
+
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&str, &CandidateEntry)> {
+        self.roots.iter().flat_map(|root| {
+            root.candidate
+                .entries
+                .iter()
+                .map(move |entry| (root.alias.as_str(), entry))
+        })
+    }
+}
+
+fn hash_candidate_set(roots: &[CandidateSetRoot]) -> CandidateHash {
+    let mut encoded = Vec::from(CANDIDATE_SET_DOMAIN);
+    encoded.push(0);
+    encoded.extend_from_slice(&CANDIDATE_SCHEMA.to_be_bytes());
+    encoded.extend_from_slice(&(roots.len() as u64).to_be_bytes());
+    for root in roots {
+        push_len_bytes(&mut encoded, root.grant_id.as_hex().as_bytes());
+        push_len_bytes(&mut encoded, root.alias.as_bytes());
+        encoded.extend_from_slice(&root.identity.device.to_be_bytes());
+        encoded.extend_from_slice(&root.identity.inode.to_be_bytes());
+        push_len_bytes(
+            &mut encoded,
+            root.candidate.candidate_hash.as_str().as_bytes(),
+        );
+    }
+    CandidateHash::of(&encoded)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CandidatePayload {
+    Revision(CandidateRevisionArtefact),
+    Set(CandidateSetArtefact),
+}
+
+impl CandidatePayload {
+    pub(crate) fn from_manifest_bytes(bytes: &[u8]) -> Option<Self> {
+        CandidateSetArtefact::from_manifest_bytes(bytes)
+            .map(Self::Set)
+            .or_else(|| CandidateRevisionArtefact::from_manifest_bytes(bytes).map(Self::Revision))
+    }
+
+    pub(crate) fn manifest_bytes(&self) -> Result<Vec<u8>, CaptureError> {
+        match self {
+            Self::Revision(value) => value.manifest_bytes(),
+            Self::Set(value) => value.manifest_bytes(),
+        }
+    }
+
+    pub(crate) fn revision(&self) -> Option<&CandidateRevisionArtefact> {
+        match self {
+            Self::Revision(value) => Some(value),
+            Self::Set(_) => None,
+        }
+    }
+
+    pub(crate) fn candidate_hash(&self) -> CandidateHash {
+        match self {
+            Self::Revision(value) => value.candidate_hash,
+            Self::Set(value) => value.candidate_hash,
+        }
+    }
+
+    pub(crate) fn entry_count(&self) -> u64 {
+        match self {
+            Self::Revision(value) => value.entries.len() as u64,
+            Self::Set(value) => value.entries().count() as u64,
+        }
+    }
+
+    pub(crate) fn byte_count(&self) -> u64 {
+        let bytes = |entry: &CandidateEntry| match entry.kind {
+            CandidateEntryKind::Regular { bytes, .. } => bytes,
+            _ => 0,
+        };
+        match self {
+            Self::Revision(value) => value.entries.iter().map(bytes).sum(),
+            Self::Set(value) => value.entries().map(|(_, entry)| bytes(entry)).sum(),
+        }
+    }
+}
+
 pub(crate) struct CandidateCapture;
 
 impl CandidateCapture {
+    pub(crate) fn capture_set(
+        grants: &[crate::execution::DirectoryGrant],
+        data_root: &Path,
+        store: &WorkflowArtefactRepository,
+    ) -> Result<CandidateSetArtefact, CaptureError> {
+        let mut roots = Vec::new();
+        for grant in grants
+            .iter()
+            .filter(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
+        {
+            grant
+                .revalidate()
+                .map_err(|_| CaptureError::SourceChanged)?;
+            let exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
+                &grant.host_path,
+                data_root,
+            );
+            roots.push(CandidateSetRoot {
+                grant_id: grant.id,
+                alias: grant.alias.clone(),
+                identity: grant.identity,
+                candidate: Self::capture_directory(&grant.host_path, &exclusions, store)?,
+            });
+        }
+        CandidateSetArtefact::from_roots(roots)
+    }
+
+    pub(crate) fn capture_isolated_set(
+        workspace: &crate::workflows::workspace::AttemptWorkspace,
+        baseline: &CandidateSetArtefact,
+        grants: &[crate::execution::DirectoryGrant],
+        store: &WorkflowArtefactRepository,
+    ) -> Result<CandidateSetArtefact, CaptureError> {
+        let mut roots = Vec::new();
+        for source in &baseline.roots {
+            let grant = grants
+                .iter()
+                .find(|grant| grant.id == source.grant_id && grant.alias == source.alias)
+                .ok_or(CaptureError::SourceChanged)?;
+            grant
+                .revalidate()
+                .map_err(|_| CaptureError::SourceChanged)?;
+            if grant.identity != source.identity {
+                return Err(CaptureError::SourceChanged);
+            }
+            let isolated = workspace
+                .reviewed_root(&source.alias)
+                .map_err(|_| CaptureError::SourceRead)?;
+            roots.push(CandidateSetRoot {
+                grant_id: source.grant_id,
+                alias: source.alias.clone(),
+                identity: source.identity,
+                candidate: Self::capture_isolated(
+                    &isolated,
+                    &source.candidate,
+                    &grant.host_path.join(".git"),
+                    store,
+                )?,
+            });
+        }
+        CandidateSetArtefact::from_roots(roots)
+    }
+
     pub(crate) fn capture_host(
         root: &Path,
         store: &WorkflowArtefactRepository,

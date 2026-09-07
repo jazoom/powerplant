@@ -57,6 +57,13 @@ pub(super) struct AttemptView {
     pub(super) changes_href: String,
     pub(super) result_href: String,
     pub(super) evidence_state: &'static str,
+    pub(super) apply_roots: Vec<ApplyRootView>,
+}
+
+pub(super) struct ApplyRootView {
+    pub(super) directory: String,
+    pub(super) path: String,
+    pub(super) outcome: &'static str,
 }
 
 pub(super) struct AttemptActivityItem {
@@ -683,6 +690,27 @@ impl RunDetailView {
                     } else {
                         "Unavailable"
                     },
+                    apply_roots: attempt
+                        .apply_transaction
+                        .as_ref()
+                        .map(|transaction| {
+                            transaction
+                                .roots
+                                .iter()
+                                .map(|root| ApplyRootView {
+                                    directory: root.alias.clone(),
+                                    path: root.host_path.display().to_string(),
+                                    outcome: match root.outcome {
+                                        crate::workflows::apply::ApplyRootOutcome::Pending => "Pending",
+                                        crate::workflows::apply::ApplyRootOutcome::Unchanged => "Unchanged",
+                                        crate::workflows::apply::ApplyRootOutcome::Applied => "Applied",
+                                        crate::workflows::apply::ApplyRootOutcome::Conflicted => "Conflicted",
+                                        crate::workflows::apply::ApplyRootOutcome::Uncertain => "Uncertain",
+                                    },
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 })
                 .collect(),
             artefacts: artefact_rows(run),
@@ -1353,33 +1381,50 @@ fn candidate_preview(
         return (String::new(), false);
     };
     let Some(after) =
-        crate::workflows::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(
-            &after_bytes,
-        )
+        crate::workflows::artefacts::CandidatePayload::from_manifest_bytes(&after_bytes)
     else {
         return (String::new(), false);
     };
-    let before_entries = record
-        .provenance
-        .inputs
-        .iter()
-        .find_map(|input| {
-            if input.kind != crate::workflows::definition::ArtefactKind::CandidateRevision {
-                return None;
+    let before = record.provenance.inputs.iter().find_map(|input| {
+        if input.kind != crate::workflows::definition::ArtefactKind::CandidateRevision {
+            return None;
+        }
+        let parent = run.artefact(&input.id)?;
+        let bytes = state.workflow_artefacts.get(&parent.object_hash).ok()?;
+        crate::workflows::artefacts::CandidatePayload::from_manifest_bytes(&bytes)
+    });
+    let mut text = String::new();
+    let mut truncated = false;
+    match (before.as_ref(), &after) {
+        (
+            Some(crate::workflows::artefacts::CandidatePayload::Revision(before)),
+            crate::workflows::artefacts::CandidatePayload::Revision(after),
+        ) => {
+            (text, truncated) = crate::workflows::artefacts::candidate::preview_plain(
+                &state.workflow_artefacts,
+                &before.entries,
+                &after.entries,
+            );
+        }
+        (
+            Some(crate::workflows::artefacts::CandidatePayload::Set(before)),
+            crate::workflows::artefacts::CandidatePayload::Set(after),
+        ) => {
+            for (left, right) in before.roots.iter().zip(&after.roots) {
+                let (root_text, root_truncated) =
+                    crate::workflows::artefacts::candidate::preview_plain(
+                        &state.workflow_artefacts,
+                        &left.candidate.entries,
+                        &right.candidate.entries,
+                    );
+                if !root_text.is_empty() {
+                    text.push_str(&format!("Directory {}\n{}", right.alias, root_text));
+                }
+                truncated |= root_truncated;
             }
-            let parent = run.artefact(&input.id)?;
-            let bytes = state.workflow_artefacts.get(&parent.object_hash).ok()?;
-            crate::workflows::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(
-                &bytes,
-            )
-            .map(|artefact| artefact.entries)
-        })
-        .unwrap_or_default();
-    let (text, truncated) = crate::workflows::artefacts::candidate::preview_plain(
-        &state.workflow_artefacts,
-        &before_entries,
-        &after.entries,
-    );
+        }
+        _ => return (String::new(), false),
+    }
     (crate::markdown::escape_plain(&text), truncated)
 }
 

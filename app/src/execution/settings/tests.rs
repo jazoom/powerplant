@@ -50,7 +50,7 @@ fn project_basename_does_not_use_the_reserved_workflow_alias() {
 }
 
 #[test]
-fn only_one_directory_can_use_review_before_apply() {
+fn multiple_directories_can_use_review_before_apply() {
     let root = tempfile::tempdir().unwrap();
     let first_path = root.path().join("first");
     let second_path = root.path().join("second");
@@ -62,10 +62,7 @@ fn only_one_directory_can_use_review_before_apply() {
         super::DirectoryGrant::from_selected(&second_path, std::slice::from_ref(&first)).unwrap();
     second.access = super::DirectoryAccess::ReviewBeforeApply;
 
-    assert_eq!(
-        super::validate_directories(&[first, second]),
-        Err(super::DirectoryGrantError::Invalid)
-    );
+    assert_eq!(super::validate_directories(&[first, second]), Ok(()));
 }
 
 #[test]

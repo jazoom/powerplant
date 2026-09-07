@@ -9,7 +9,7 @@ use crate::environments::{
 use crate::projects::ProjectId;
 use crate::providers::{ModelSelection, ProviderKind, ThinkingEffort};
 
-use super::apply::{ApplyRoot, ApplyTransaction, ApplyTransactionState};
+use super::apply::{ApplyRoot, ApplyRootOutcome, ApplyTransaction, ApplyTransactionState};
 use super::artefacts::{ArtefactRecord, ArtefactReference};
 use super::capabilities::{
     AttemptCapabilities, CapabilityDirectory, DirectoryRole, NetworkCapability,
@@ -432,16 +432,24 @@ struct ApplyTransactionFile {
     state: String,
     completed: Option<usize>,
     path: Option<String>,
+    roots: Vec<ApplyRootFile>,
+    baseline: ArtefactRefFile,
+    candidate: ArtefactRefFile,
+    approval: ArtefactRefFile,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ApplyRootFile {
     grant_id: String,
+    alias: String,
     host_path: std::path::PathBuf,
     device: u64,
     inode: u64,
-    baseline: ArtefactRefFile,
     baseline_candidate: String,
-    candidate: ArtefactRefFile,
     candidate_hash: String,
-    approval: ArtefactRefFile,
     exclusions: Vec<String>,
+    outcome: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -3496,16 +3504,31 @@ fn apply_transaction_to_file(transaction: &ApplyTransaction) -> ApplyTransaction
         state: state.to_owned(),
         completed,
         path,
-        grant_id: transaction.root.grant_id.as_hex(),
-        host_path: transaction.root.host_path.clone(),
-        device: transaction.root.identity.device,
-        inode: transaction.root.identity.inode,
+        roots: transaction
+            .roots
+            .iter()
+            .map(|root| ApplyRootFile {
+                grant_id: root.grant_id.as_hex(),
+                alias: root.alias.clone(),
+                host_path: root.host_path.clone(),
+                device: root.identity.device,
+                inode: root.identity.inode,
+                baseline_candidate: root.baseline_candidate.as_str(),
+                candidate_hash: root.candidate_hash.as_str(),
+                exclusions: root.exclusions.clone(),
+                outcome: match root.outcome {
+                    ApplyRootOutcome::Pending => "pending",
+                    ApplyRootOutcome::Unchanged => "unchanged",
+                    ApplyRootOutcome::Applied => "applied",
+                    ApplyRootOutcome::Conflicted => "conflicted",
+                    ApplyRootOutcome::Uncertain => "uncertain",
+                }
+                .to_owned(),
+            })
+            .collect(),
         baseline: ref_to_file(&transaction.baseline),
-        baseline_candidate: transaction.baseline_candidate.as_str(),
         candidate: ref_to_file(&transaction.candidate),
-        candidate_hash: transaction.candidate_hash.as_str(),
         approval: ref_to_file(&transaction.approval),
-        exclusions: transaction.exclusions.clone(),
     }
 }
 
@@ -3525,25 +3548,42 @@ fn apply_transaction_from_file(
     };
     Ok(ApplyTransaction {
         state,
-        root: ApplyRoot {
-            grant_id: crate::execution::DirectoryGrantId::parse(&file.grant_id)
-                .ok_or(RunRecordError::Corrupt)?,
-            host_path: file.host_path,
-            identity: crate::execution::CanonicalDirectoryIdentity {
-                device: file.device,
-                inode: file.inode,
-            },
-        },
+        roots: file
+            .roots
+            .into_iter()
+            .map(|root| {
+                Ok(ApplyRoot {
+                    grant_id: crate::execution::DirectoryGrantId::parse(&root.grant_id)
+                        .ok_or(RunRecordError::Corrupt)?,
+                    alias: root.alias,
+                    host_path: root.host_path,
+                    identity: crate::execution::CanonicalDirectoryIdentity {
+                        device: root.device,
+                        inode: root.inode,
+                    },
+                    baseline_candidate: crate::workflows::artefacts::CandidateHash::parse(
+                        &root.baseline_candidate,
+                    )
+                    .ok_or(RunRecordError::Corrupt)?,
+                    candidate_hash: crate::workflows::artefacts::CandidateHash::parse(
+                        &root.candidate_hash,
+                    )
+                    .ok_or(RunRecordError::Corrupt)?,
+                    exclusions: root.exclusions,
+                    outcome: match root.outcome.as_str() {
+                        "pending" => ApplyRootOutcome::Pending,
+                        "unchanged" => ApplyRootOutcome::Unchanged,
+                        "applied" => ApplyRootOutcome::Applied,
+                        "conflicted" => ApplyRootOutcome::Conflicted,
+                        "uncertain" => ApplyRootOutcome::Uncertain,
+                        _ => return Err(RunRecordError::Corrupt),
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, RunRecordError>>()?,
         baseline: ref_from_file(file.baseline)?,
-        baseline_candidate: crate::workflows::artefacts::CandidateHash::parse(
-            &file.baseline_candidate,
-        )
-        .ok_or(RunRecordError::Corrupt)?,
         candidate: ref_from_file(file.candidate)?,
-        candidate_hash: crate::workflows::artefacts::CandidateHash::parse(&file.candidate_hash)
-            .ok_or(RunRecordError::Corrupt)?,
         approval: ref_from_file(file.approval)?,
-        exclusions: file.exclusions,
     })
 }
 
@@ -3919,23 +3959,25 @@ fn valid_apply_transaction(
     let baseline_record = run.artefact(&transaction.baseline.id);
     let candidate_record = run.artefact(&transaction.candidate.id);
     let approval_record = run.artefact(&transaction.approval.id);
-    let summaries_match = matches!(
+    let summaries_match = match (
         baseline_record.map(|record| &record.summary),
-        Some(crate::workflows::artefacts::ArtefactSummary::Candidate { candidate, .. })
-            if *candidate == transaction.baseline_candidate
-    ) && matches!(
         candidate_record.map(|record| &record.summary),
-        Some(crate::workflows::artefacts::ArtefactSummary::Candidate { candidate, .. })
-            if *candidate == transaction.candidate_hash
-    ) && matches!(
         approval_record.map(|record| &record.summary),
-        Some(crate::workflows::artefacts::ArtefactSummary::HumanDecision {
-            candidate,
-            diff_base,
-            decision: crate::workflows::gates::HumanDecisionKind::Approved,
-        }) if *candidate == transaction.candidate_hash
-            && *diff_base == transaction.baseline_candidate
-    );
+    ) {
+        (
+            Some(crate::workflows::artefacts::ArtefactSummary::Candidate {
+                candidate: baseline,
+                ..
+            }),
+            Some(crate::workflows::artefacts::ArtefactSummary::Candidate { candidate, .. }),
+            Some(crate::workflows::artefacts::ArtefactSummary::HumanDecision {
+                candidate: approved,
+                diff_base,
+                decision: crate::workflows::gates::HumanDecisionKind::Approved,
+            }),
+        ) => candidate == approved && baseline == diff_base,
+        _ => false,
+    };
     if candidate.map(|input| &input.artefact) != Some(&transaction.candidate)
         || approval.map(|input| &input.artefact) != Some(&transaction.approval)
         || source.initial != transaction.baseline
@@ -3947,20 +3989,39 @@ fn valid_apply_transaction(
         || !summaries_match
         || transaction.baseline.kind
             != crate::workflows::definition::ArtefactKind::CandidateRevision
-        || transaction.root.host_path.as_os_str().is_empty()
-        || !transaction.root.host_path.is_absolute()
-        || transaction
-            .exclusions
-            .windows(2)
-            .any(|pair| pair[0] >= pair[1])
+        || transaction.roots.is_empty()
+        || transaction.roots.iter().enumerate().any(|(index, root)| {
+            root.alias.is_empty()
+                || root.host_path.as_os_str().is_empty()
+                || !root.host_path.is_absolute()
+                || root.exclusions.windows(2).any(|pair| pair[0] >= pair[1])
+                || transaction.roots[..index].iter().any(|previous| {
+                    previous.grant_id == root.grant_id || previous.alias == root.alias
+                })
+        })
     {
         return false;
     }
     match &transaction.state {
-        ApplyTransactionState::Prepared
-        | ApplyTransactionState::Verified
-        | ApplyTransactionState::Recovered
-        | ApplyTransactionState::RecoveryUncertain => true,
+        ApplyTransactionState::Prepared => transaction.roots.iter().all(|root| {
+            matches!(
+                root.outcome,
+                ApplyRootOutcome::Pending | ApplyRootOutcome::Unchanged
+            )
+        }),
+        ApplyTransactionState::Verified => transaction.roots.iter().all(|root| {
+            matches!(
+                root.outcome,
+                ApplyRootOutcome::Applied | ApplyRootOutcome::Unchanged
+            )
+        }),
+        ApplyTransactionState::Recovered => true,
+        ApplyTransactionState::RecoveryUncertain => transaction.roots.iter().any(|root| {
+            matches!(
+                root.outcome,
+                ApplyRootOutcome::Conflicted | ApplyRootOutcome::Uncertain
+            )
+        }),
         ApplyTransactionState::Applying { path, .. } => !path.is_empty(),
         ApplyTransactionState::Applied { .. } => true,
     }

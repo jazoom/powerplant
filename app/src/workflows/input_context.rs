@@ -993,18 +993,17 @@ fn verify_one(
     }
     let (text, candidate) = match record.kind {
         ArtefactKind::CandidateRevision => {
-            let artefact =
-                super::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(&bytes)
-                    .ok_or(InputContextError::Changed)?;
+            let artefact = super::artefacts::CandidatePayload::from_manifest_bytes(&bytes)
+                .ok_or(InputContextError::Changed)?;
             let hash = super::artefacts::artefact_hash_for(
                 ArtefactKind::CandidateRevision,
-                artefact.format_version,
+                super::artefacts::CANDIDATE_SCHEMA,
                 &bytes,
             );
             if hash != record.artefact_hash {
                 return Err(InputContextError::Changed);
             }
-            (None, Some(artefact.candidate_hash))
+            (None, Some(artefact.candidate_hash()))
         }
         ArtefactKind::Plan
         | ArtefactKind::ReviewReport

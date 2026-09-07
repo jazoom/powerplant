@@ -41,8 +41,13 @@
     <section class="border-base-300 space-y-4 border p-4">
       <div>
         <h2 class="font-heading text-lg font-semibold">
-          {% if plan_gate %}Review this plan{% else if ordinary %}Review before
-          apply{% else %}Review this candidate{% endif %}
+          {% if plan_gate %}
+            Review this plan
+          {% else if ordinary %}
+            Review before apply
+          {% else %}
+            Review this candidate
+          {% endif %}
         </h2>
         {% if awaiting %}
           {% if plan_gate %}
@@ -54,8 +59,8 @@
             <p class="text-quiet mt-1 max-w-[70ch] text-sm">
               {% if ordinary %}
                 Review the prepared files before application. Apply writes only
-                these changes to the authorised directory. It creates no Git
-                commit.
+                these changes to the listed authorised directories. It creates
+                no Git commit. Writes across filesystems are not atomic.
               {% else %}
                 Apply creates a local Git commit. Discard ends the task without
                 changing project files.
@@ -135,7 +140,7 @@
                   Apply the exact reviewed files to
                   <span class="font-mono break-all"
                     >{{ application_destination }}</span
-                  >.
+                  >. Power Plant checks every directory before the first write.
                 {% else if quick_task %}
                   Commit these changes to the project.
                 {% else %}
@@ -147,7 +152,7 @@
                 {% if quick_task %}Apply changes{% else %}Approve candidate{% endif %}
               </button>
             </form>
-            {% if can_request_revision && !ordinary %}
+            {% if can_request_revision %}
               <form
                 method="post"
                 action="/runs/{{ run_id }}/gates/{{ gate_id }}/request-revision"
@@ -339,12 +344,19 @@
             {% for change in changes %}
               <li class="border-base-300 rounded-sm border p-3">
                 <div class="flex flex-wrap items-start justify-between gap-2">
-                  <a
-                    href="{{ change.href }}"
-                    data-graft
-                    class="link font-mono text-sm break-all"
-                    >{{ change.path }}</a
-                  >
+                  <div class="min-w-0">
+                    {% if change.directory != "" %}
+                      <p class="text-quiet text-xs break-all">
+                        Directory {{ change.directory }}
+                      </p>
+                    {% endif %}
+                    <a
+                      href="{{ change.href }}"
+                      data-graft
+                      class="link font-mono text-sm break-all"
+                      >{{ change.path }}</a
+                    >
+                  </div>
                   <span class="badge badge-outline badge-sm"
                     >{{ change.status }}</span
                   >

@@ -1082,7 +1082,7 @@ enum IsolatedRun {
         outcome: StepOutcome,
         cleanup: crate::workflows::run::AttemptCleanupRecord,
         drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
-        captured: Option<crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
+        captured: Option<crate::workflows::artefacts::CandidatePayload>,
     },
 }
 
@@ -1152,8 +1152,8 @@ async fn isolate_and_run(
         }
     };
     if candidate_input.as_ref().is_some_and(|candidate_input| {
-        crate::workflows::artefacts::CandidateMaterialise::into_workspace(
-            &workspace.project,
+        materialise_candidate(
+            &workspace,
             &candidate_input.artefact,
             candidate_input.artefact_hash,
             &state.workflow_artefacts,
@@ -1205,16 +1205,24 @@ async fn isolate_and_run(
         &step.action,
         StepAction::SystemCommand(action) if action.command == SystemCommandId::ApplyChanges
     ) {
-        let outcome = run_apply_transaction(state, job, step, attempt_id, inputs, &user_project);
+        let outcome = run_apply_transaction(state, job, step, attempt_id, inputs);
         let captured = if matches!(outcome, StepOutcome::Completed) {
-            candidate_input.as_ref().and_then(|candidate| {
-                crate::workflows::artefacts::CandidateCapture::capture_directory(
-                    &user_project,
-                    &candidate.artefact.exclusions,
-                    &state.workflow_artefacts,
-                )
-                .ok()
-            })
+            candidate_input
+                .as_ref()
+                .and_then(|candidate| match &candidate.artefact {
+                    crate::workflows::artefacts::CandidatePayload::Revision(candidate) => {
+                        crate::workflows::artefacts::CandidateCapture::capture_directory(
+                            &user_project,
+                            &candidate.exclusions,
+                            &state.workflow_artefacts,
+                        )
+                        .ok()
+                        .map(crate::workflows::artefacts::CandidatePayload::Revision)
+                    }
+                    crate::workflows::artefacts::CandidatePayload::Set(candidate) => Some(
+                        crate::workflows::artefacts::CandidatePayload::Set(candidate.clone()),
+                    ),
+                })
         } else {
             None
         };
@@ -1231,9 +1239,8 @@ async fn isolate_and_run(
         && candidate_input
             .as_ref()
             .expect("candidate-backed attempt")
-            .artefact
-            .git_admin
-            .as_ref()
+            .revision()
+            .and_then(|candidate| candidate.git_admin.as_ref())
             .is_some_and(|expected| {
                 crate::workflows::artefacts::candidate::git_fingerprint(&git_dir).as_ref()
                     != Ok(expected)
@@ -1305,20 +1312,22 @@ async fn isolate_and_run(
         )
         .ok();
         match (first, second) {
-            (Some(first), Some(second)) if first == second => Some(first),
+            (Some(first), Some(second)) if first == second => Some(
+                crate::workflows::artefacts::CandidatePayload::Revision(first),
+            ),
             _ => None,
         }
     } else if stopped && !private_workspace {
-        crate::workflows::artefacts::CandidateCapture::capture_isolated(
-            &workspace.project,
+        capture_isolated_candidate(
+            state,
+            job,
+            &workspace,
             &candidate_input
                 .as_ref()
                 .expect("candidate-backed attempt")
                 .artefact,
             &git_dir,
-            &state.workflow_artefacts,
         )
-        .ok()
     } else {
         None
     };
@@ -1334,15 +1343,15 @@ async fn isolate_and_run(
             .as_ref()
             .zip(commit.as_ref())
             .is_some_and(|(captured, commit)| {
-                captured.candidate_hash
+                captured.candidate_hash()
                     == candidate_input
                         .as_ref()
                         .expect("commit candidate")
                         .artefact
-                        .candidate_hash
+                        .candidate_hash()
                     && captured
-                        .repository
-                        .as_ref()
+                        .revision()
+                        .and_then(|candidate| candidate.repository.as_ref())
                         .and_then(|repository| repository.head.as_ref())
                         .map(|head| head.0.as_str())
                         == Some(commit.as_str())
@@ -1445,6 +1454,79 @@ async fn isolate_and_run(
     }
 }
 
+fn materialise_candidate(
+    workspace: &crate::workflows::workspace::AttemptWorkspace,
+    payload: &crate::workflows::artefacts::CandidatePayload,
+    artefact_hash: crate::workflows::artefacts::ArtefactHash,
+    store: &crate::workflows::WorkflowArtefactRepository,
+) -> Result<(), ()> {
+    match payload {
+        crate::workflows::artefacts::CandidatePayload::Revision(candidate) => {
+            crate::workflows::artefacts::CandidateMaterialise::into_workspace(
+                &workspace.project,
+                candidate,
+                artefact_hash,
+                store,
+            )
+            .map_err(|_| ())
+        }
+        crate::workflows::artefacts::CandidatePayload::Set(set) => {
+            for root in &set.roots {
+                let destination = workspace.reviewed_root(&root.alias).map_err(|_| ())?;
+                let bytes = root.candidate.manifest_bytes().map_err(|_| ())?;
+                let hash = crate::workflows::artefacts::artefact_hash_for(
+                    crate::workflows::definition::ArtefactKind::CandidateRevision,
+                    root.candidate.format_version,
+                    &bytes,
+                );
+                crate::workflows::artefacts::CandidateMaterialise::into_workspace(
+                    &destination,
+                    &root.candidate,
+                    hash,
+                    store,
+                )
+                .map_err(|_| ())?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn capture_isolated_candidate(
+    state: &AppState,
+    job: &WorkflowJob,
+    workspace: &crate::workflows::workspace::AttemptWorkspace,
+    baseline: &crate::workflows::artefacts::CandidatePayload,
+    git_dir: &std::path::Path,
+) -> Option<crate::workflows::artefacts::CandidatePayload> {
+    match baseline {
+        crate::workflows::artefacts::CandidatePayload::Revision(candidate) => {
+            crate::workflows::artefacts::CandidateCapture::capture_isolated(
+                &workspace.project,
+                candidate,
+                git_dir,
+                &state.workflow_artefacts,
+            )
+            .ok()
+            .map(crate::workflows::artefacts::CandidatePayload::Revision)
+        }
+        crate::workflows::artefacts::CandidatePayload::Set(set) => {
+            let conversation = job
+                .conversation_id
+                .and_then(|id| state.conversations.get(&id))?;
+            let grants = &conversation.model.as_ref()?.settings.directories;
+            crate::workflows::artefacts::CandidateCapture::capture_isolated_set(
+                workspace,
+                set,
+                grants,
+                &state.workflow_artefacts,
+            )
+            .ok()
+            .map(crate::workflows::artefacts::CandidatePayload::Set)
+        }
+    }
+}
+
 fn finish_workspace_only(
     workspace: crate::workflows::workspace::AttemptWorkspace,
     outcome: StepOutcome,
@@ -1509,7 +1591,15 @@ fn fail_for_orphan(
 
 struct LoadedCandidate {
     artefact_hash: crate::workflows::artefacts::ArtefactHash,
-    artefact: crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+    artefact: crate::workflows::artefacts::CandidatePayload,
+}
+
+impl LoadedCandidate {
+    fn revision(
+        &self,
+    ) -> Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact> {
+        self.artefact.revision()
+    }
 }
 
 fn load_candidate_input(
@@ -1523,10 +1613,7 @@ fn load_candidate_input(
     let run = state.workflow_runs.get(&job.run_id)?;
     let record = run.artefact(&input.artefact.id)?;
     let bytes = state.workflow_artefacts.get(&record.object_hash).ok()?;
-    let artefact =
-        crate::workflows::artefacts::candidate::CandidateRevisionArtefact::from_manifest_bytes(
-            &bytes,
-        )?;
+    let artefact = crate::workflows::artefacts::CandidatePayload::from_manifest_bytes(&bytes)?;
     Some(LoadedCandidate {
         artefact_hash: record.artefact_hash,
         artefact,
@@ -1539,9 +1626,8 @@ fn run_apply_transaction(
     step: &StepDefinition,
     attempt_id: AttemptId,
     inputs: &[super::run::AttemptArtefactInput],
-    host_root: &std::path::Path,
 ) -> StepOutcome {
-    match execute_apply_transaction(state, job, step, attempt_id, inputs, host_root) {
+    match execute_apply_transaction(state, job, step, attempt_id, inputs) {
         Ok(()) => StepOutcome::Completed,
         Err(error) => StepOutcome::Failed {
             category: match error {
@@ -1569,7 +1655,6 @@ fn execute_apply_transaction(
     step: &StepDefinition,
     attempt_id: AttemptId,
     inputs: &[super::run::AttemptArtefactInput],
-    host_root: &std::path::Path,
 ) -> Result<(), crate::workflows::apply::ApplyExecutionError> {
     use crate::workflows::apply::{
         ApplyExecutionError, ApplyRoot, ApplyTransaction, ApplyTransactionState,
@@ -1580,30 +1665,56 @@ fn execute_apply_transaction(
     let conversation = state
         .conversations
         .get(&conversation_id)
+        .and_then(|record| record.model)
         .ok_or(ApplyExecutionError::Authority)?;
-    let grant =
-        conversation
-            .model
-            .as_ref()
-            .and_then(|model| {
-                model.settings.directories.iter().find(|grant| {
-                    grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-                })
-            })
-            .ok_or(ApplyExecutionError::Authority)?;
-    grant
-        .revalidate()
-        .map_err(|_| ApplyExecutionError::Authority)?;
-    if grant.host_path != host_root {
-        return Err(ApplyExecutionError::Authority);
-    }
     let run = state
         .workflow_runs
         .get(&job.run_id)
         .ok_or(ApplyExecutionError::Operational)?;
     let approved =
         crate::workflows::apply::require_approval(&run, step, inputs, &state.workflow_artefacts)?;
-    if approved.baseline.exclusions != approved.candidate.exclusions {
+    let (
+        crate::workflows::artefacts::CandidatePayload::Set(baseline),
+        crate::workflows::artefacts::CandidatePayload::Set(candidate),
+    ) = (&approved.baseline, &approved.candidate)
+    else {
+        return Err(ApplyExecutionError::Integrity);
+    };
+    let mut roots = Vec::new();
+    for (before, after) in baseline.roots.iter().zip(&candidate.roots) {
+        let grant = conversation
+            .settings
+            .directories
+            .iter()
+            .find(|grant| {
+                grant.id == before.grant_id
+                    && grant.alias == before.alias
+                    && grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+            })
+            .ok_or(ApplyExecutionError::Authority)?;
+        grant
+            .revalidate()
+            .map_err(|_| ApplyExecutionError::Authority)?;
+        if grant.identity != before.identity || before.identity != after.identity {
+            return Err(ApplyExecutionError::Authority);
+        }
+        let outcome = if before.candidate == after.candidate {
+            crate::workflows::apply::ApplyRootOutcome::Unchanged
+        } else {
+            crate::workflows::apply::ApplyRootOutcome::Pending
+        };
+        roots.push(ApplyRoot {
+            grant_id: grant.id,
+            alias: grant.alias.clone(),
+            host_path: grant.host_path.clone(),
+            identity: grant.identity,
+            baseline_candidate: before.candidate.candidate_hash,
+            candidate_hash: after.candidate.candidate_hash,
+            exclusions: before.candidate.exclusions.clone(),
+            outcome,
+        });
+    }
+    if roots.len() != baseline.roots.len() || roots.is_empty() {
         return Err(ApplyExecutionError::Integrity);
     }
     let baseline_manifest = approved
@@ -1612,17 +1723,10 @@ fn execute_apply_transaction(
         .map_err(|_| ApplyExecutionError::Integrity)?;
     let mut transaction = ApplyTransaction {
         state: ApplyTransactionState::Prepared,
-        root: ApplyRoot {
-            grant_id: grant.id,
-            host_path: grant.host_path.clone(),
-            identity: grant.identity,
-        },
+        roots,
         baseline: approved.baseline_reference,
-        baseline_candidate: approved.baseline.candidate_hash,
         candidate: approved.candidate_reference,
-        candidate_hash: approved.candidate.candidate_hash,
         approval: approved.approval,
-        exclusions: approved.baseline.exclusions.clone(),
     };
     let journal = state
         .apply_journals
@@ -1635,49 +1739,22 @@ fn execute_apply_transaction(
         )
         .map_err(|_| ApplyExecutionError::Operational)?;
     persist_apply_transaction(state, job.run_id, attempt_id, transaction.clone())?;
-    grant
-        .revalidate()
-        .map_err(|_| ApplyExecutionError::Authority)?;
-    let exclusions = transaction.exclusions.clone();
-    crate::workflows::artefacts::CandidateApply::apply_journalled(
-        host_root,
-        &approved.baseline,
-        &approved.candidate,
-        crate::workflows::artefacts::apply::CandidateApplicationBinding {
-            initial_hash: transaction.baseline.artefact_hash,
-            target_hash: transaction.candidate.artefact_hash,
-            exclusions: &exclusions,
-        },
+    transaction.apply_roots(
+        baseline,
+        candidate,
         &state.workflow_artefacts,
-        |completed, path, applied| {
-            if !applied {
-                grant
-                    .revalidate()
-                    .map_err(|_| crate::workflows::artefacts::apply::ApplyError::Drift)?;
-                confirm_run_authority(state, job)
-                    .map_err(|_| crate::workflows::artefacts::apply::ApplyError::Drift)?;
+        &journal,
+        |transaction| {
+            persist_apply_transaction(state, job.run_id, attempt_id, transaction.clone())?;
+            if matches!(transaction.state, ApplyTransactionState::Applying { .. }) {
+                confirm_run_authority(state, job).map_err(|_| ApplyExecutionError::Authority)?;
                 if job.job.cancel_requested() {
-                    return Err(crate::workflows::artefacts::apply::ApplyError::Write);
+                    return Err(ApplyExecutionError::Write);
                 }
             }
-            journal
-                .record_progress(completed, path, applied)
-                .map_err(|_| crate::workflows::artefacts::apply::ApplyError::Write)?;
-            transaction.state = if applied {
-                ApplyTransactionState::Applied { completed }
-            } else {
-                ApplyTransactionState::Applying {
-                    completed,
-                    path: path.to_owned(),
-                }
-            };
-            persist_apply_transaction(state, job.run_id, attempt_id, transaction.clone())
-                .map_err(|_| crate::workflows::artefacts::apply::ApplyError::Write)
+            Ok(())
         },
     )
-    .map_err(map_file_apply_error)?;
-    transaction.state = ApplyTransactionState::Verified;
-    persist_apply_transaction(state, job.run_id, attempt_id, transaction)
 }
 
 fn persist_apply_transaction(
@@ -1693,25 +1770,6 @@ fn persist_apply_transaction(
         })
         .map(|_| ())
         .map_err(|_| crate::workflows::apply::ApplyExecutionError::Operational)
-}
-
-fn map_file_apply_error(
-    error: crate::workflows::artefacts::apply::ApplyError,
-) -> crate::workflows::apply::ApplyExecutionError {
-    match error {
-        crate::workflows::artefacts::apply::ApplyError::Conflict
-        | crate::workflows::artefacts::apply::ApplyError::Drift => {
-            crate::workflows::apply::ApplyExecutionError::Conflict
-        }
-        crate::workflows::artefacts::apply::ApplyError::Integrity => {
-            crate::workflows::apply::ApplyExecutionError::Integrity
-        }
-        crate::workflows::artefacts::apply::ApplyError::Escape
-        | crate::workflows::artefacts::apply::ApplyError::Unsupported
-        | crate::workflows::artefacts::apply::ApplyError::Write => {
-            crate::workflows::apply::ApplyExecutionError::Write
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1792,15 +1850,15 @@ async fn execute_commit_transaction(
             &initial_bytes,
         )
         .ok_or(CommitError::Operational)?;
+    let target_revision = target.revision().ok_or(CommitError::Preflight)?;
     crate::workflows::commit::require_unchanged_project(
         user_project,
         &initial,
-        &target.artefact,
+        target_revision,
         &state.workflow_artefacts,
     )?;
     let initial_repository = initial.repository.as_ref().ok_or(CommitError::Preflight)?;
-    let target_repository = target
-        .artefact
+    let target_repository = target_revision
         .repository
         .as_ref()
         .ok_or(CommitError::Preflight)?;
@@ -1874,7 +1932,7 @@ async fn execute_commit_transaction(
     )
     .await?;
     let mut index_info = Vec::new();
-    for entry in &target.artefact.entries {
+    for entry in &target_revision.entries {
         let object = match &entry.kind {
             crate::workflows::artefacts::candidate::CandidateEntryKind::Regular {
                 blob, ..
@@ -1961,7 +2019,7 @@ async fn execute_commit_transaction(
     crate::workflows::artefacts::CandidateApply::apply(
         user_project,
         &initial,
-        &target.artefact,
+        target_revision,
         target.artefact_hash,
         &state.workflow_artefacts,
     )
@@ -1993,7 +2051,7 @@ async fn execute_commit_transaction(
     .await
     .is_err()
     {
-        restore_before_reference(state, user_project, &initial, &target.artefact, &journal)?;
+        restore_before_reference(state, user_project, &initial, target_revision, &journal)?;
         return Err(CommitError::Command);
     }
     transaction.state = CommitTransactionState::ReferenceUpdated {
@@ -2878,10 +2936,17 @@ fn project_free_attempt_spec(
                 grant.alias == directory.alias && grant.guest_path == directory.guest_path
             })
             .ok_or("The pinned step authority exceeds the current directory policy.")?;
+        let reviewed = directory.access.is_writable();
         mounts.push(crate::sandbox::MountSpec {
             guest: grant.guest_path.clone(),
-            host: grant.host_path.clone(),
-            read_only: true,
+            host: if reviewed {
+                workspace
+                    .reviewed_root(&directory.alias)
+                    .map_err(|_| "Power Plant cannot create a reviewed root workspace.")?
+            } else {
+                grant.host_path.clone()
+            },
+            read_only: !reviewed,
         });
     }
     Ok(crate::sandbox::SandboxSpec {
@@ -3014,8 +3079,8 @@ fn confirm_run_authority(
             return Err("The conversation tool authority changed before dispatch.".to_owned());
         }
         return authority
-            .reviewed_alias
-            .as_ref()
+            .reviewed_aliases
+            .first()
             .and_then(|alias| {
                 authority
                     .policy
@@ -3095,22 +3160,25 @@ async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(
     let captured = if job
         .project_free_authority
         .as_ref()
-        .is_some_and(|authority| authority.reviewed_alias.is_some())
+        .is_some_and(|authority| !authority.reviewed_aliases.is_empty())
     {
-        let exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
-            &host_path,
+        let conversation = job
+            .conversation_id
+            .and_then(|id| state.conversations.get(&id))
+            .and_then(|record| record.model)
+            .ok_or_else(|| "The reviewed directories are unavailable.".to_owned())?;
+        crate::workflows::artefacts::CandidateCapture::capture_set(
+            &conversation.settings.directories,
             state.local_data.root(),
-        );
-        crate::workflows::artefacts::CandidateCapture::capture_directory(
-            &host_path,
-            &exclusions,
             &state.workflow_artefacts,
         )
+        .map(crate::workflows::artefacts::CandidatePayload::Set)
     } else {
         crate::workflows::artefacts::CandidateCapture::capture_host(
             &host_path,
             &state.workflow_artefacts,
         )
+        .map(crate::workflows::artefacts::CandidatePayload::Revision)
     };
     let captured = match captured {
         Ok(captured) => captured,
@@ -3143,16 +3211,9 @@ async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(
             inputs: Vec::new(),
         },
         summary: crate::workflows::artefacts::ArtefactSummary::Candidate {
-            candidate: captured.candidate_hash,
-            entries: captured.entries.len() as u64,
-            bytes: captured
-                .entries
-                .iter()
-                .map(|entry| match entry.kind {
-                    crate::workflows::artefacts::CandidateEntryKind::Regular { bytes, .. } => bytes,
-                    _ => 0,
-                })
-                .sum(),
+            candidate: captured.candidate_hash(),
+            entries: captured.entry_count(),
+            bytes: captured.byte_count(),
             disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
         },
     };
@@ -3328,7 +3389,7 @@ async fn finalise_attempt(
     step: &StepDefinition,
     attempt_id: AttemptId,
     inputs: &[super::run::AttemptArtefactInput],
-    captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
+    captured: Option<&crate::workflows::artefacts::CandidatePayload>,
     outcome: &StepOutcome,
     published: bool,
 ) -> Result<(), StoreError> {
@@ -3359,7 +3420,7 @@ fn record_observed(
     attempt_id: AttemptId,
     step: &StepDefinition,
     inputs: &[super::run::AttemptArtefactInput],
-    captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
+    captured: Option<&crate::workflows::artefacts::CandidatePayload>,
 ) -> Result<(), &'static str> {
     let Some(captured) = captured else {
         return record_unknown_observed(state, &job.run_id, attempt_id)
@@ -3424,7 +3485,7 @@ fn publish_success(
     attempt: SuccessAttempt,
     inputs: &[super::run::AttemptArtefactInput],
     drafts: &std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>,
-    captured: Option<&crate::workflows::artefacts::candidate::CandidateRevisionArtefact>,
+    captured: Option<&crate::workflows::artefacts::CandidatePayload>,
 ) -> Result<(), &'static str> {
     let SuccessAttempt {
         id: attempt_id,
@@ -3458,7 +3519,7 @@ fn publish_success(
         })
         .and_then(|record| candidate_hash_of(&record));
     if !produces_candidate
-        && expected.is_some_and(|hash| captured.is_none_or(|value| hash != value.candidate_hash))
+        && expected.is_some_and(|hash| captured.is_none_or(|value| hash != value.candidate_hash()))
     {
         return Err("The project changed during that step.");
     }
@@ -3506,7 +3567,7 @@ fn publish_success(
         });
         artefacts.push(record);
     }
-    let candidate_hash = captured.map(|value| value.candidate_hash);
+    let candidate_hash = captured.map(|value| value.candidate_hash());
     let connection = job.active_connection();
     let secret = match &connection.auth {
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
@@ -3591,7 +3652,7 @@ fn publish_success(
 fn publish_candidate(
     state: &AppState,
     job: &WorkflowJob,
-    captured: &crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+    captured: &crate::workflows::artefacts::CandidatePayload,
     producer: crate::workflows::artefacts::ArtefactProducer,
     inputs: &[super::run::AttemptArtefactInput],
 ) -> Result<crate::workflows::artefacts::ArtefactRecord, &'static str> {
@@ -3621,16 +3682,9 @@ fn publish_candidate(
             inputs: inputs.iter().map(|input| input.artefact.clone()).collect(),
         },
         summary: crate::workflows::artefacts::ArtefactSummary::Candidate {
-            candidate: captured.candidate_hash,
-            entries: captured.entries.len() as u64,
-            bytes: captured
-                .entries
-                .iter()
-                .map(|entry| match entry.kind {
-                    crate::workflows::artefacts::CandidateEntryKind::Regular { bytes, .. } => bytes,
-                    _ => 0,
-                })
-                .sum(),
+            candidate: captured.candidate_hash(),
+            entries: captured.entry_count(),
+            bytes: captured.byte_count(),
             disposition: match producer {
                 crate::workflows::artefacts::ArtefactProducer::StepAttempt {
                     disposition, ..
@@ -4350,7 +4404,7 @@ pub(crate) fn recover_apply_transactions(state: &AppState) -> Result<(), &'stati
         let Some(attempt) = run.attempts.iter().find(|attempt| attempt.id == attempt_id) else {
             return Err(ERROR);
         };
-        let Some(transaction) = attempt.apply_transaction.clone() else {
+        let Some(mut transaction) = attempt.apply_transaction.clone() else {
             continue;
         };
         let journal = state
@@ -4358,23 +4412,54 @@ pub(crate) fn recover_apply_transactions(state: &AppState) -> Result<(), &'stati
             .load(run.id, attempt_id)
             .map_err(|_| ERROR)?;
         journal.make_sure_binding(&transaction).map_err(|_| ERROR)?;
-        let baseline = load_candidate_reference(state, &run, &transaction.baseline)?;
-        let candidate = load_candidate_reference(state, &run, &transaction.candidate)?;
+        let baseline = load_candidate_payload_reference(state, &run, &transaction.baseline)?;
+        let candidate = load_candidate_payload_reference(state, &run, &transaction.candidate)?;
         let baseline_manifest = baseline.manifest_bytes().map_err(|_| ERROR)?;
         journal
             .make_sure_baseline(&baseline_manifest, transaction.baseline.artefact_hash)
             .map_err(|_| ERROR)?;
-        if baseline.candidate_hash != transaction.baseline_candidate
-            || candidate.candidate_hash != transaction.candidate_hash
-            || baseline.exclusions != transaction.exclusions
-            || candidate.exclusions != transaction.exclusions
-            || !baseline.ordinary
-            || !candidate.ordinary
+        let (
+            crate::workflows::artefacts::CandidatePayload::Set(baseline),
+            crate::workflows::artefacts::CandidatePayload::Set(candidate),
+        ) = (&baseline, &candidate)
+        else {
+            mark_apply_uncertain(state, run.id, attempt_id, transaction)?;
+            return Err(ERROR);
+        };
+        if baseline.roots.len() != transaction.roots.len()
+            || candidate.roots.len() != transaction.roots.len()
         {
             mark_apply_uncertain(state, run.id, attempt_id, transaction)?;
             return Err(ERROR);
         }
-        let operations = crate::workflows::artefacts::apply::changed_paths(&baseline, &candidate);
+        let mut operations = Vec::new();
+        for ((root, before), after) in transaction
+            .roots
+            .iter()
+            .zip(&baseline.roots)
+            .zip(&candidate.roots)
+        {
+            if root.grant_id != before.grant_id
+                || root.grant_id != after.grant_id
+                || root.identity != before.identity
+                || root.identity != after.identity
+                || root.baseline_candidate != before.candidate.candidate_hash
+                || root.candidate_hash != after.candidate.candidate_hash
+                || root.exclusions != before.candidate.exclusions
+                || root.exclusions != after.candidate.exclusions
+            {
+                mark_apply_uncertain(state, run.id, attempt_id, transaction)?;
+                return Err(ERROR);
+            }
+            operations.extend(
+                crate::workflows::artefacts::apply::changed_paths(
+                    &before.candidate,
+                    &after.candidate,
+                )
+                .into_iter()
+                .map(|path| format!("{}/{}", root.alias, path)),
+            );
+        }
         let started_paths = journal.started_paths(&operations).map_err(|_| ERROR)?;
         if started_paths.is_empty() {
             let mut recovered = transaction;
@@ -4387,85 +4472,37 @@ pub(crate) fn recover_apply_transactions(state: &AppState) -> Result<(), &'stati
                 .map_err(|_| ERROR)?;
             continue;
         }
-        let step = run.pinned.definition.step(&attempt.step).ok_or(ERROR)?;
-        if !crate::workflows::apply::require_bound_approval(
-            &run,
-            step,
-            &attempt.inputs,
+        transaction.recover_roots(
+            baseline,
+            candidate,
+            &started_paths,
             &state.workflow_artefacts,
-        )
-        .is_ok_and(|approved| {
-            approved.baseline_reference == transaction.baseline
-                && approved.candidate_reference == transaction.candidate
-                && approved.approval == transaction.approval
-        }) {
-            mark_apply_uncertain(state, run.id, attempt_id, transaction)?;
+        );
+        state
+            .workflow_runs
+            .mutate(&run.id, |run| {
+                run.record_apply_transaction(attempt_id, transaction.clone())
+            })
+            .map_err(|_| ERROR)?;
+        if !transaction.is_settled() {
             return Err(ERROR);
         }
-        let root_check = crate::execution::DirectoryGrant {
-            id: transaction.root.grant_id,
-            host_path: transaction.root.host_path.clone(),
-            identity: transaction.root.identity,
-            alias: "recovery".to_owned(),
-            access: crate::execution::DirectoryAccess::ReviewBeforeApply,
-        };
-        if root_check.revalidate().is_err() {
-            mark_apply_uncertain(state, run.id, attempt_id, transaction)?;
-            return Err(ERROR);
+        if !transaction.is_verified() {
+            continue;
         }
-        let live = crate::workflows::artefacts::CandidateCapture::capture_directory(
-            &transaction.root.host_path,
-            &transaction.exclusions,
-            &state.workflow_artefacts,
-        )
-        .map_err(|_| ERROR)?;
-        if live == candidate && started_paths == operations {
-            let mut verified = transaction;
-            verified.state = crate::workflows::apply::ApplyTransactionState::Verified;
-            state
-                .workflow_runs
-                .mutate(&run.id, |run| {
-                    run.record_apply_transaction(attempt_id, verified)
-                })
-                .map_err(|_| ERROR)?;
-            publish_recovered_commit(state, &run, attempt_id, &live)?;
-            state
-                .workflow_runs
-                .mutate(&run.id, |run| {
-                    run.record_cleanup(
-                        attempt_id,
-                        crate::workflows::run::AttemptCleanupRecord::Complete,
-                    )
-                })
-                .map_err(|_| ERROR)?;
-            state
-                .workflow_runs
-                .mutate(&run.id, |run| run.complete_attempt(attempt_id, now_ms()))
-                .map_err(|_| ERROR)?;
-        } else {
-            if live != baseline
-                && crate::workflows::artefacts::CandidateApply::recover_to_initial(
-                    &transaction.root.host_path,
-                    &baseline,
-                    &candidate,
-                    &transaction.exclusions,
-                    &started_paths,
-                    &state.workflow_artefacts,
+        state
+            .workflow_runs
+            .mutate(&run.id, |run| {
+                run.record_cleanup(
+                    attempt_id,
+                    crate::workflows::run::AttemptCleanupRecord::Complete,
                 )
-                .is_err()
-            {
-                mark_apply_uncertain(state, run.id, attempt_id, transaction)?;
-                return Err(ERROR);
-            }
-            let mut recovered = transaction;
-            recovered.state = crate::workflows::apply::ApplyTransactionState::Recovered;
-            state
-                .workflow_runs
-                .mutate(&run.id, |run| {
-                    run.record_apply_transaction(attempt_id, recovered)
-                })
-                .map_err(|_| ERROR)?;
-        }
+            })
+            .map_err(|_| ERROR)?;
+        state
+            .workflow_runs
+            .mutate(&run.id, |run| run.complete_attempt(attempt_id, now_ms()))
+            .map_err(|_| ERROR)?;
     }
     Ok(())
 }
@@ -4477,6 +4514,11 @@ fn mark_apply_uncertain(
     mut transaction: crate::workflows::apply::ApplyTransaction,
 ) -> Result<(), &'static str> {
     transaction.state = crate::workflows::apply::ApplyTransactionState::RecoveryUncertain;
+    for root in &mut transaction.roots {
+        if root.outcome == crate::workflows::apply::ApplyRootOutcome::Pending {
+            root.outcome = crate::workflows::apply::ApplyRootOutcome::Uncertain;
+        }
+    }
     state
         .workflow_runs
         .mutate(&run_id, |run| {
@@ -4603,6 +4645,23 @@ pub(crate) fn recover_commit_transactions(state: &AppState) -> Result<(), &'stat
             .map_err(|_| "Power Plant could not recover a commit transaction.")?;
     }
     Ok(())
+}
+
+fn load_candidate_payload_reference(
+    state: &AppState,
+    run: &crate::workflows::WorkflowRun,
+    reference: &crate::workflows::artefacts::ArtefactReference,
+) -> Result<crate::workflows::artefacts::CandidatePayload, &'static str> {
+    let record = run
+        .artefact(&reference.id)
+        .filter(|record| record.artefact_hash == reference.artefact_hash)
+        .ok_or("Power Plant could not recover the transaction candidate.")?;
+    let bytes = state
+        .workflow_artefacts
+        .get(&record.object_hash)
+        .map_err(|_| "Power Plant could not recover the transaction candidate.")?;
+    crate::workflows::artefacts::CandidatePayload::from_manifest_bytes(&bytes)
+        .ok_or("Power Plant could not recover the transaction candidate.")
 }
 
 fn load_candidate_reference(

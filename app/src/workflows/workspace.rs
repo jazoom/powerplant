@@ -167,6 +167,14 @@ pub(crate) fn reviewed_capture_exclusions(
 }
 
 impl AttemptWorkspace {
+    pub(crate) fn reviewed_root(&self, alias: &str) -> Result<PathBuf, PersistError> {
+        let roots = storage::confined_child(&self.root, "reviewed")?;
+        storage::ensure_private_dir(&roots)?;
+        let root = storage::confined_child(&roots, alias)?;
+        storage::ensure_private_dir(&root)?;
+        Ok(root)
+    }
+
     pub(crate) fn destroy(self) -> Result<(), PersistError> {
         storage::remove_tree_nofollow(&self.root)
     }

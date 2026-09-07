@@ -358,6 +358,33 @@
                     {% if attempt.result != "" %}
                       <p>{{ attempt.result }}</p>
                     {% endif %}
+                    {% if !attempt.apply_roots.is_empty() %}
+                      <dl
+                        class="border-base-300 my-3 grid gap-2 border-y py-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+                      >
+                        {% for root in attempt.apply_roots %}
+                          <div class="min-w-0">
+                            <dt class="font-semibold break-all">
+                              {{ root.directory }}
+                            </dt>
+                            <dd class="text-quiet font-mono text-xs break-all">
+                              {{ root.path }}
+                            </dd>
+                          </div>
+                          <dd>
+                            <span
+                              class="badge state-badge badge-sm"
+                              data-state="{{ root.outcome }}"
+                              >{{ root.outcome }}</span
+                            >
+                          </dd>
+                        {% endfor %}
+                      </dl>
+                      <p class="text-quiet text-xs">
+                        Writes across filesystems are not atomic. An uncertain
+                        outcome blocks completion.
+                      </p>
+                    {% endif %}
                     <p class="text-quiet">
                       Tools: {{ attempt.tools }} · Source:
                       {{ attempt.primary_access }} ·

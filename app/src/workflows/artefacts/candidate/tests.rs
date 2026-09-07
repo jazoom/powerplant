@@ -456,6 +456,63 @@ fn git_fingerprint_detects_admin_drift() {
 }
 
 #[test]
+fn candidate_set_keeps_duplicate_relative_paths_bound_to_distinct_roots() {
+    let parent = tempfile::tempdir().expect("parent");
+    let first_path = parent.path().join("first");
+    let second_path = parent.path().join("second");
+    std::fs::create_dir(&first_path).expect("first");
+    std::fs::create_dir(&second_path).expect("second");
+    std::fs::write(first_path.join("same.txt"), b"first").expect("first file");
+    std::fs::write(second_path.join("same.txt"), b"second").expect("second file");
+    let mut first =
+        crate::execution::DirectoryGrant::from_selected(&first_path, &[]).expect("first grant");
+    first.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let mut second =
+        crate::execution::DirectoryGrant::from_selected(&second_path, std::slice::from_ref(&first))
+            .expect("second grant");
+    second.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let store = WorkflowArtefactRepository::in_memory();
+    let set = CandidateCapture::capture_set(&[first, second], &parent.path().join("data"), &store)
+        .expect("candidate set");
+
+    assert_eq!(set.roots.len(), 2);
+    assert_eq!(
+        set.entries()
+            .filter(|(_, entry)| entry.path == "same.txt")
+            .count(),
+        2
+    );
+    let bytes = set.manifest_bytes().expect("manifest");
+    assert_eq!(CandidateSetArtefact::from_manifest_bytes(&bytes), Some(set));
+}
+
+#[test]
+fn candidate_set_rejects_tampered_root_identity() {
+    let parent = tempfile::tempdir().expect("parent");
+    let path = parent.path().join("root");
+    std::fs::create_dir(&path).expect("root");
+    let mut grant = crate::execution::DirectoryGrant::from_selected(&path, &[]).expect("grant");
+    grant.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let store = WorkflowArtefactRepository::in_memory();
+    let set = CandidateCapture::capture_set(&[grant], &parent.path().join("data"), &store)
+        .expect("candidate set");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&set.manifest_bytes().expect("manifest")).expect("json");
+    value["roots"][0]["identity"]["inode"] = serde_json::json!(999_999_u64);
+    let bytes = serde_json::to_vec(&value).expect("tampered manifest");
+
+    assert!(CandidateSetArtefact::from_manifest_bytes(&bytes).is_none());
+
+    let mut roots = set.roots.clone();
+    roots[0].alias = "../escape".to_owned();
+    assert!(CandidateSetArtefact::from_roots(roots).is_err());
+    let mut duplicate = set.roots[0].clone();
+    duplicate.grant_id = crate::execution::DirectoryGrantId::generate().unwrap();
+    duplicate.alias = "another".to_owned();
+    assert!(CandidateSetArtefact::from_roots(vec![set.roots[0].clone(), duplicate]).is_err());
+}
+
+#[test]
 fn capture_does_not_follow_a_workspace_symlink_to_a_sentinel() {
     let project = tempfile::tempdir().expect("project");
     git_init(project.path());
