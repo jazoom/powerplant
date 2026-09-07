@@ -32,6 +32,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         models_dev: Arc::new(ModelsDevCatalogue::bundled()),
         plan_login: Arc::new(PlanLogin::new()),
         preferences: Arc::new(Preferences::in_memory()),
+        presets: Arc::new(crate::presets::PresetStore::in_memory()),
         agents: Arc::new(AgentStore::in_memory()),
         conversations: Arc::new(crate::conversations::ConversationStore::in_memory()),
         documents,

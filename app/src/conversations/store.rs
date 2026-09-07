@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AccessMode, AgentId, AgentRecord, ToolId};
+use crate::agents::{AccessMode, AgentRecord, ToolId};
 use crate::projects::ProjectId;
 use crate::workflows::artefacts::{ArtefactHash, ArtefactReference, ObjectHash};
 use crate::workflows::{ArtefactId, RunId};
@@ -109,7 +109,7 @@ pub(crate) struct ConversationModelConfiguration {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AppliedPreset {
-    pub(crate) id: AgentId,
+    pub(crate) id: crate::presets::PresetId,
     pub(crate) revision: u32,
     pub(crate) name: String,
 }
@@ -131,7 +131,18 @@ impl ConversationModelConfiguration {
         }
     }
 
-    pub(crate) fn from_preset(
+    pub(crate) fn from_preset(record: &crate::presets::PresetRecord) -> Self {
+        Self {
+            settings: record.settings.clone(),
+            preset: Some(AppliedPreset {
+                id: record.id,
+                revision: record.revision,
+                name: record.name.clone(),
+            }),
+        }
+    }
+
+    pub(crate) fn from_agent_snapshot(
         record: &AgentRecord,
         selection: ModelSelection,
         environment: crate::environments::EnvironmentId,
@@ -145,11 +156,7 @@ impl ConversationModelConfiguration {
             )
             .and_then(|settings| settings.with_network(record.network.clone()))
             .expect("stored agent settings are valid"),
-            preset: Some(AppliedPreset {
-                id: record.id,
-                revision: record.revision,
-                name: record.name.clone(),
-            }),
+            preset: None,
         }
     }
 }
@@ -945,15 +952,18 @@ impl ConversationStore {
         &self,
         id: &ConversationId,
         expected_revision: u32,
-        preset: &AgentRecord,
-        selection: ModelSelection,
-        environment: crate::environments::EnvironmentId,
+        preset: &crate::presets::PresetRecord,
     ) -> Result<ConversationRecord, ConversationError> {
-        self.select_model_configuration(
-            id,
-            expected_revision,
-            ConversationModelConfiguration::from_preset(preset, selection, environment),
-        )
+        self.replace(id, expected_revision, |current| {
+            if current.active_job.is_some() {
+                return Err(ConversationError::Active);
+            }
+            current.grants.clear();
+            current.execution_target = None;
+            current.network = preset.settings.network.clone();
+            current.model = Some(ConversationModelConfiguration::from_preset(preset));
+            Ok(())
+        })
     }
 
     pub(crate) fn select_model_configuration(
@@ -1594,7 +1604,8 @@ fn model_from_file(
                 && !preset.name.chars().any(char::is_control) =>
         {
             Some(AppliedPreset {
-                id: AgentId::parse(&preset.id).ok_or(ConversationError::Corrupt)?,
+                id: crate::presets::PresetId::parse(&preset.id)
+                    .ok_or(ConversationError::Corrupt)?,
                 revision: preset.revision,
                 name: preset.name,
             })

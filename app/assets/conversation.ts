@@ -156,12 +156,9 @@ export function initConversation(
         const field = (name: string) =>
             form.elements.namedItem(name) as
                 HTMLInputElement | HTMLSelectElement | null;
-        const preset = field("preset") as HTMLSelectElement | null;
         const model = root.querySelector("[data-conversation-model-summary]");
         if (model) {
-            model.textContent = preset?.value
-                ? `Preset: ${preset.selectedOptions[0].text}`
-                : field("model")?.value || "Choose a model";
+            model.textContent = field("model")?.value || "Choose a model";
         }
         const networkSummary = root.querySelector(
             "[data-conversation-network-summary]",
@@ -491,6 +488,8 @@ export function initConversation(
                     [
                         "conversation-settings-form",
                         "conversation-preset-form",
+                        "conversation-preset-save-form",
+                        "conversation-preset-apply-form",
                     ].includes(context.detail.form.id)) ||
                 (context.cause === "patch" &&
                     context.detail.form.id === "conversation-composer" &&

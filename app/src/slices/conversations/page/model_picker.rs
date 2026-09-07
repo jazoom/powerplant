@@ -15,6 +15,7 @@ pub(super) struct ModelOption {
 
 pub(super) struct ModelPicker {
     pub(super) providers: Vec<ProviderOption>,
+    pub(super) unavailable_provider: Option<crate::providers::ProviderKind>,
     pub(super) catalogue: String,
     pub(super) models: Vec<ModelOption>,
     pub(super) efforts: Vec<EffortOption>,
@@ -67,6 +68,15 @@ impl ModelPicker {
             .find(|option| option.id == model)
             .map(|option| option.efforts.clone())
             .unwrap_or_default();
+        if thinking.is_empty() && !efforts.is_empty() {
+            efforts.insert(
+                0,
+                EffortOption {
+                    value: String::new(),
+                    label: "Default".to_owned(),
+                },
+            );
+        }
         if !thinking.is_empty() && !efforts.iter().any(|effort| effort.value == thinking) {
             efforts.push(EffortOption {
                 value: thinking.to_owned(),
@@ -74,6 +84,11 @@ impl ModelPicker {
             });
         }
         Self {
+            unavailable_provider: crate::providers::ProviderKind::parse(provider).filter(|kind| {
+                !connections
+                    .iter()
+                    .any(|connection| connection.kind == *kind)
+            }),
             catalogue: serde_json::to_string(&catalogue_models)
                 .expect("catalogue options contain only strings"),
             providers: connections

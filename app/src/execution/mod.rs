@@ -8,7 +8,7 @@ pub(crate) use consent::{AccessConsentStore, draft_nonce};
 pub(crate) use folder_picker::{FolderPick, FolderPicker};
 pub(crate) use settings::{
     CanonicalDirectoryIdentity, DirectoryAccess, DirectoryGrant, DirectoryGrantError,
-    DirectoryGrantId, ExecutionSettings, valid_alias, validate_directories,
+    DirectoryGrantId, ExecutionSettings, ExecutionSettingsFile, valid_alias, validate_directories,
 };
 
 pub(crate) const GUEST_WORKSPACE: &str = "/workspace";

@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::RuntimeConfig;
+use crate::{agents::NetworkAccess, config::RuntimeConfig};
 use askama::Template;
 
 #[test]
@@ -38,6 +38,7 @@ fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
             environment_snapshots: &state.environment_snapshots,
             projects: &[],
             documents: &[],
+            presets: &[],
         },
         &[],
         None,
@@ -62,7 +63,7 @@ fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
 }
 
 #[test]
-fn network_form_preserves_domains_and_shows_the_narrower_preset_ceiling() {
+fn network_form_preserves_domains_without_a_live_preset_ceiling() {
     let state = crate::tests::test_state(RuntimeConfig::development());
     let mut record = state
         .conversations
@@ -80,6 +81,7 @@ fn network_form_preserves_domains_and_shows_the_narrower_preset_ceiling() {
             environment_snapshots: &state.environment_snapshots,
             projects: &[],
             documents: &[],
+            presets: &[],
         },
         &[],
         None,
@@ -92,14 +94,6 @@ fn network_form_preserves_domains_and_shows_the_narrower_preset_ceiling() {
             .expect("resubmitted domains"),
         record.network
     );
-    let effective = NetworkAccess::Restricted(vec![
-        "api.example.com".to_owned(),
-        "api.example.org".to_owned(),
-    ]);
-    let summary = format_network_summary(&record.network, &effective);
-    assert!(summary.contains(
-        "Effective with preset ceiling: Restricted domains: api.example.com, api.example.org"
-    ));
 }
 
 #[test]

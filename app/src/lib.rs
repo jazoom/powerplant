@@ -13,6 +13,7 @@ mod markdown;
 mod models;
 mod plan_login;
 mod preferences;
+mod presets;
 mod projects;
 mod providers;
 mod responses;

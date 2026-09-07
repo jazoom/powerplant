@@ -1,7 +1,10 @@
 use axum::http::StatusCode;
 use tower::ServiceExt;
 
-use crate::providers::ProviderKind;
+use crate::{
+    agents::{NetworkAccess, ToolId},
+    providers::{ModelSelection, ProviderKind},
+};
 
 use super::super::tests::{app, command, connected, test_state, text};
 
@@ -230,4 +233,173 @@ async fn settings_update_validates_the_complete_form_and_revision() {
     assert!(text(response).await.contains("could not clean up the task"));
     assert_eq!(state.conversations.get(&active.id).unwrap(), active);
     assert!(state.sessions.busy(&owner));
+}
+
+#[tokio::test]
+async fn draft_preset_replacement_retains_its_reference_without_creating_a_conversation() {
+    let state = test_state();
+    let token = connected(&state);
+    let owner = super::super::tests::session_id(&token);
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Deepseek, "deepseek-chat".to_owned(), None).unwrap(),
+        "Keep these instructions.".to_owned(),
+        Vec::new(),
+        crate::environments::EnvironmentId::generate().unwrap(),
+    )
+    .unwrap();
+    let preset = state
+        .presets
+        .create(
+            "Unavailable resources",
+            settings,
+            crate::presets::PresetProvenance::Draft,
+        )
+        .unwrap();
+    let form = super::super::new::NewForm {
+        preset: preset.id.as_hex(),
+        draft_nonce: "test-draft".to_owned(),
+        ..Default::default()
+    };
+    let preview = state
+        .presets
+        .preview(
+            owner,
+            preset.id,
+            crate::presets::PresetDestination::Draft(form.consent_nonce()),
+        )
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            "/conversations/new/settings/presets/apply",
+            &token,
+            &format!(
+                "preset={}&draft_nonce=test-draft&preset_preview={}",
+                preset.id, preview.token
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains(&preview.token));
+    assert!(body.contains("Unavailable · DeepSeek"));
+    assert!(body.contains("Keep these instructions."));
+    assert!(state.conversations.list().is_empty());
+    assert!(state.presets.applied_draft(owner, &preview.token).is_some());
+}
+
+#[tokio::test]
+async fn preset_application_uses_the_preview_snapshot_and_requires_fresh_access_approval() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state.conversations.create("Saved".to_owned()).unwrap();
+    let project = crate::projects::ProjectId::generate().unwrap();
+    let record = state
+        .conversations
+        .attach_project(&record.id, record.revision, project)
+        .unwrap();
+    let record = state
+        .conversations
+        .grant_writable(&record.id, record.revision, project, 1)
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut grant = crate::execution::DirectoryGrant::from_selected(directory.path(), &[]).unwrap();
+    grant.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            state
+                .models_dev
+                .effective_effort(ProviderKind::Xai, "grok-4.6", None),
+        )
+        .unwrap(),
+        "Pinned instructions".to_owned(),
+        vec![ToolId::Read],
+        crate::environments::EnvironmentId::generate().unwrap(),
+    )
+    .unwrap()
+    .with_network(NetworkAccess::Public)
+    .unwrap()
+    .with_directories(vec![grant])
+    .unwrap();
+    let preset = state
+        .presets
+        .create(
+            "Pinned",
+            settings.clone(),
+            crate::presets::PresetProvenance::Draft,
+        )
+        .unwrap();
+    let owner = super::super::tests::session_id(&token);
+    let grant = &settings.directories[0];
+    let request = state
+        .access_consent
+        .request_conversation(owner, record.id, &settings, grant)
+        .unwrap();
+    state
+        .access_consent
+        .approve_conversation(&request, owner, record.id, &settings, grant)
+        .unwrap();
+    assert!(
+        state
+            .access_consent
+            .authorised_conversation(owner, record.id, &settings, grant)
+    );
+    let preview = state
+        .presets
+        .preview(
+            owner,
+            preset.id,
+            crate::presets::PresetDestination::Conversation(record.id, record.revision),
+        )
+        .unwrap();
+    let path = format!("/conversations/{}/settings/presets/apply", record.id);
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!("revision={}&preset_preview=tampered", record.revision),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(state.conversations.get(&record.id).unwrap().model.is_none());
+
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&preset_preview={}",
+                record.revision, preview.token
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Selected environment unavailable"));
+    assert!(body.contains("Pending approval"));
+    let applied = state.conversations.get(&record.id).unwrap();
+    assert_eq!(applied.model.as_ref().unwrap().settings, settings);
+    assert!(applied.grants.is_empty());
+    assert!(applied.execution_target.is_none());
+    assert!(
+        !state
+            .access_consent
+            .authorised_conversation(owner, record.id, &settings, grant)
+    );
+    assert_eq!(
+        applied
+            .model
+            .as_ref()
+            .unwrap()
+            .preset
+            .as_ref()
+            .unwrap()
+            .name,
+        "Pinned"
+    );
 }

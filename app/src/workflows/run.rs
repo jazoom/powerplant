@@ -61,11 +61,12 @@ pub(crate) struct PhaseModelSelection {
     pub(crate) selection: ModelSelection,
     pub(crate) instructions: String,
     pub(crate) preset: Option<PinnedPreset>,
+    pub(crate) settings: Option<crate::execution::ExecutionSettings>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PinnedPreset {
-    pub(crate) id: AgentId,
+    pub(crate) id: crate::presets::PresetId,
     pub(crate) revision: u32,
     pub(crate) name: String,
 }
@@ -351,6 +352,8 @@ struct PhaseModelFile {
     instructions: String,
     #[serde(deserialize_with = "crate::storage::required_option")]
     preset: Option<PinnedPresetFile>,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    settings: Option<crate::execution::ExecutionSettingsFile>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2535,6 +2538,19 @@ fn validate_phase_models(run: &WorkflowRun) -> Result<(), RunRecordError> {
     let mut seen = Vec::new();
     for selection in &run.phase_models {
         if !seen.iter().all(|step: &StepKey| step != &selection.step)
+            || selection.preset.is_some() != selection.settings.is_some()
+            || selection.settings.as_ref().is_some_and(|settings| {
+                settings.model != selection.selection
+                    || settings.instructions != selection.instructions
+                    || run
+                        .pinned
+                        .definition
+                        .step(&selection.step)
+                        .is_none_or(|step| {
+                            settings.environment
+                                != run.pinned.definition.effective_environment(step)
+                        })
+            })
             || !matches!(
                 run.pinned.definition.step(&selection.step),
                 Some(StepDefinition {
@@ -2748,6 +2764,10 @@ fn phase_model_to_file(selection: &PhaseModelSelection) -> PhaseModelFile {
             revision: preset.revision,
             name: preset.name.clone(),
         }),
+        settings: selection
+            .settings
+            .as_ref()
+            .map(crate::execution::ExecutionSettings::to_file),
     }
 }
 
@@ -2813,7 +2833,7 @@ fn phase_model_from_file(file: PhaseModelFile) -> Result<PhaseModelSelection, Ru
         .preset
         .map(|preset| {
             Ok(PinnedPreset {
-                id: AgentId::parse(&preset.id).ok_or(RunRecordError::Corrupt)?,
+                id: crate::presets::PresetId::parse(&preset.id).ok_or(RunRecordError::Corrupt)?,
                 revision: preset.revision,
                 name: preset.name,
             })
@@ -2824,6 +2844,13 @@ fn phase_model_from_file(file: PhaseModelFile) -> Result<PhaseModelSelection, Ru
         selection,
         instructions: file.instructions,
         preset,
+        settings: match file.settings {
+            Some(settings) => Some(
+                crate::execution::ExecutionSettings::from_file(settings)
+                    .ok_or(RunRecordError::Corrupt)?,
+            ),
+            None => None,
+        },
     })
 }
 

@@ -7,7 +7,11 @@
     {% if job_active %}disabled{% endif %}
     class="select select-bordered"
   >
-    {% if model_picker.providers.is_empty() %}
+    {% if let Some(provider) = model_picker.unavailable_provider %}
+      <option value="{{ provider.as_str() }}" selected>
+        Unavailable · {{ provider.label() }}
+      </option>
+    {% else if model_picker.providers.is_empty() %}
       <option value="" disabled>No connected providers</option>
     {% endif %}
     {% for provider in model_picker.providers %}
@@ -40,7 +44,7 @@
     {% if job_active || model_picker.models.is_empty() %}disabled{% endif %}
   >
     <span id="conversation-model-value" class="min-w-0 break-all"
-      >{% if model_picker.models.is_empty() %}No models available{% else %}{{ model_picker.model }}{% endif %}</span
+      >{% if model_picker.model.is_empty() %}No models available{% else %}{{ model_picker.model }}{% endif %}</span
     >
   </button>
   <div

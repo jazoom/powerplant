@@ -1146,26 +1146,45 @@ fn configured_conversation_records_reject_missing_phase_selections() {
 fn run_records_round_trip() {
     let mut run = new_run();
     let phase = run.pinned.definition.first_step().clone();
+    let selection = crate::providers::ModelSelection::new(
+        crate::providers::ProviderKind::Xai,
+        "grok-4.6".to_owned(),
+        None,
+    )
+    .expect("selection");
+    let settings = crate::execution::ExecutionSettings::new(
+        selection.clone(),
+        "Pinned instructions".to_owned(),
+        Vec::new(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap();
     run.phase_models = vec![crate::workflows::PhaseModelSelection {
         step: phase,
-        selection: crate::providers::ModelSelection::new(
-            crate::providers::ProviderKind::Xai,
-            "grok-4.6".to_owned(),
-            None,
-        )
-        .expect("selection"),
+        selection,
         instructions: "Pinned instructions".to_owned(),
         preset: Some(crate::workflows::PinnedPreset {
-            id: crate::agents::AgentId::generate().expect("preset"),
+            id: crate::presets::PresetId::generate().expect("preset"),
             revision: 3,
             name: "Pinned preset".to_owned(),
         }),
+        settings: Some(settings),
     }];
     let attempt = start(&mut run);
     complete(&mut run, attempt, 12);
     let loaded = WorkflowRun::from_file(run.to_file()).expect("round trip");
     assert_eq!(loaded, run);
     assert_eq!(loaded.attempts[0].review_route, None);
+    let mut altered = run.clone();
+    altered.phase_models[0]
+        .settings
+        .as_mut()
+        .unwrap()
+        .environment = crate::environments::EnvironmentId::generate().unwrap();
+    assert_eq!(
+        WorkflowRun::from_file(altered.to_file()),
+        Err(super::RunRecordError::Corrupt)
+    );
 
     let mut reviewed = review_loop_run();
     complete_implementation(&mut reviewed, 11);

@@ -34,6 +34,18 @@ The user registers projects, agents, environments and workflows on this machine.
 
 A conversation does not require a named agent or project. The user selects a model directly or applies an optional preset. Project attachments provide context references only until the user grants access.
 
+A preset stores one complete snapshot of the implemented conversation settings. It includes the model, instructions, tools, environment, network policy and directory grants.
+
+Preset application replaces the conversation settings after a full preview. It does not merge hidden permissions or copy sensitive-access consent.
+
+A preset retains descriptive source provenance. Later source changes do not alter conversations or workflow phases that already copied its values.
+
+Preset previews expire after 30 minutes. Each preview binds its replacement to the session and the destination settings revision or draft digest.
+
+Preset application removes legacy project permissions. Missing providers, environments and directories remain requested values without substitutions or access approval.
+
+Configured workflow phases reject preset access expansions and environment differences. Project-backed phases also reject presets that omit their required source directory.
+
 A conversation can grant ad hoc Read only access to as many as eight host directories. A directory needs no project or Git registration.
 
 Each grant stores the canonical directory identity and a stable `/access/<alias>` guest path. Duplicate and overlapping roots are invalid.
@@ -199,6 +211,8 @@ Current capabilities:
 - Edit and delete environment recipes.
 - Prepare environment snapshots for workflow use.
 - Select an environment for each conversation and its later tool attempts.
+- Save conversation or draft settings as a named preset.
+- Preview and apply a preset as a complete settings replacement.
 - Stop active work or discard reviewed changes before an environment switch.
 - Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
@@ -237,7 +251,7 @@ Current constraints:
 - The product does not create user accounts.
 - A conversation stays a transcript plus composer with explicit project controls.
 - Agent tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig.
-- Conversation history, project records, run records and artefacts persist locally. The old project desk routes no longer exist.
+- Conversation history, presets, project records, run records and artefacts persist locally. The old project desk routes no longer exist.
 - One session command can be active at a time.
 - One unfinished operation can reserve a conversation.
 - One workflow execution can be active process-wide.

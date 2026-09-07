@@ -1659,7 +1659,7 @@ async fn a_wrong_candidate_decision_is_rejected() {
 }
 
 #[tokio::test]
-async fn a_revoked_phase_preset_cannot_approve_at_a_non_model_gate() {
+async fn a_pinned_phase_snapshot_does_not_require_a_live_preset() {
     let fixture = conversation_awaiting_gate();
     let agent = fixture.state.agents.get(&fixture.agent_id).expect("preset");
     fixture
@@ -1682,11 +1682,8 @@ async fn a_revoked_phase_preset_cannot_approve_at_a_non_model_gate() {
                 )
                 .expect("model"),
                 instructions: agent.instructions.clone(),
-                preset: Some(workflows::PinnedPreset {
-                    id: agent.id,
-                    revision: agent.revision,
-                    name: agent.name.clone(),
-                }),
+                preset: None,
+                settings: None,
             }];
             Ok(())
         })
@@ -1721,9 +1718,7 @@ async fn a_revoked_phase_preset_cannot_approve_at_a_non_model_gate() {
         .workflow_runs
         .get(&fixture.run_id)
         .expect("run");
-    assert!(matches!(run.state, workflows::run::RunState::Interrupted));
-    assert!(!git_has_head(&fixture.host));
-    assert!(run.gates.iter().all(|gate| gate.decision.is_none()));
+    assert!(!matches!(run.state, workflows::run::RunState::Interrupted));
 }
 
 #[tokio::test]

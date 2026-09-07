@@ -860,19 +860,6 @@ fn revalidate_paused_loop(
         crate::workflows::validate_phase_selection(state, &phase.selection)
             .map_err(|_| "A selected phase provider or model is no longer available.")?;
     }
-    if record
-        .phase_models
-        .iter()
-        .filter_map(|phase| phase.preset.as_ref())
-        .any(|preset| {
-            state
-                .agents
-                .get(&preset.id)
-                .is_none_or(|agent| agent.revision != preset.revision)
-        })
-    {
-        return Err("A pinned preset is no longer available.");
-    }
     if !crate::workflows::artefacts::CandidateCapture::capture_host(
         &project.host_path,
         &state.workflow_artefacts,

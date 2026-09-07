@@ -240,77 +240,83 @@ describe.each(["new", "saved"])("%s conversation", (state) => {
         expect(document.activeElement).toBe(toggle);
     });
 
-    test("unrelated patches retain unsaved settings without replacing authoritative settings responses", () => {
-        const root = document.querySelector<HTMLElement>(
-            "#conversation-detail",
-        )!;
-        const formId =
-            state === "new"
-                ? "conversation-composer"
-                : "conversation-settings-form";
-        root.insertAdjacentHTML(
-            "beforeend",
-            `<textarea name="instructions" form="${formId}"></textarea><input type="checkbox" name="tool_read" value="read" form="${formId}">
+    test.each(["conversation-settings-form", "conversation-preset-apply-form"])(
+        "unrelated patches retain unsaved settings but accept %s responses",
+        (responseFormId) => {
+            const root = document.querySelector<HTMLElement>(
+                "#conversation-detail",
+            )!;
+            const formId =
+                state === "new"
+                    ? "conversation-composer"
+                    : "conversation-settings-form";
+            root.insertAdjacentHTML(
+                "beforeend",
+                `<textarea name="instructions" form="${formId}"></textarea><input type="checkbox" name="tool_read" value="read" form="${formId}">
             <input type="radio" name="network" value="none" checked form="${formId}">
             <input type="radio" name="network" value="restricted" form="${formId}">
             <textarea name="network_domains" form="${formId}"></textarea>
             <select name="environment" form="${formId}"><option value="starter">Starter</option><option value="custom">Custom</option></select>`,
-        );
-        const original = root.innerHTML;
-        const instructions = root.querySelector<HTMLTextAreaElement>(
-            '[name="instructions"]',
-        )!;
-        instructions.value = "Keep my draft";
-        instructions.dispatchEvent(new Event("input", { bubbles: true }));
-        const read =
-            root.querySelector<HTMLInputElement>('[name="tool_read"]')!;
-        read.checked = true;
-        read.dispatchEvent(new Event("input", { bubbles: true }));
-        const network = root.querySelector<HTMLInputElement>(
-            '[name="network"][value="restricted"]',
-        )!;
-        network.checked = true;
-        network.dispatchEvent(new Event("input", { bubbles: true }));
-        const domains = root.querySelector<HTMLTextAreaElement>(
-            '[name="network_domains"]',
-        )!;
-        domains.value = "example.com";
-        domains.dispatchEvent(new Event("input", { bubbles: true }));
-        select("environment", "custom");
-        select("provider", "two");
-        const unrelated = document.createElement("form");
-        unrelated.id = "conversation-rename";
-        root.innerHTML = original;
-        const detail = {
-            requestKind: "patch" as const,
-            form: unrelated,
-            url: "/conversations/example/rename",
-            outcome: "applied-patch" as const,
-            status: 200 as const,
-            targetIds: ["conversation-detail"],
-        };
-        island.reconcile?.({ cause: "patch", detail });
-        expect(value("network")).toBe("restricted");
-        expect(value("environment")).toBe("custom");
-        expect(value("network_domains")).toBe("example.com");
-        expect(value("instructions")).toBe("Keep my draft");
-        expect(value("tool_read")).toBe("read");
-        expect(value("provider")).toBe("two");
-        expect(value("model")).toBe("Other");
-        expect(value("thinking")).toBe("low");
-        const submitted = root.querySelector<HTMLFormElement>(`#${formId}`)!;
-        root.innerHTML = original;
-        island.reconcile?.({
-            cause: "patch",
-            detail: { ...detail, form: submitted },
-        });
-        expect(value("instructions")).toBe("");
-        expect(value("environment")).toBe("starter");
-        expect(value("network")).toBe("none");
-        expect(value("network_domains")).toBe("");
-        expect(value("tool_read")).toBeNull();
-        expect(value("model")).toBe("Alpha");
-    });
+            );
+            const original = root.innerHTML;
+            const instructions = root.querySelector<HTMLTextAreaElement>(
+                '[name="instructions"]',
+            )!;
+            instructions.value = "Keep my draft";
+            instructions.dispatchEvent(new Event("input", { bubbles: true }));
+            const read =
+                root.querySelector<HTMLInputElement>('[name="tool_read"]')!;
+            read.checked = true;
+            read.dispatchEvent(new Event("input", { bubbles: true }));
+            const network = root.querySelector<HTMLInputElement>(
+                '[name="network"][value="restricted"]',
+            )!;
+            network.checked = true;
+            network.dispatchEvent(new Event("input", { bubbles: true }));
+            const domains = root.querySelector<HTMLTextAreaElement>(
+                '[name="network_domains"]',
+            )!;
+            domains.value = "example.com";
+            domains.dispatchEvent(new Event("input", { bubbles: true }));
+            select("environment", "custom");
+            select("provider", "two");
+            const unrelated = document.createElement("form");
+            unrelated.id = "conversation-rename";
+            root.innerHTML = original;
+            const detail = {
+                requestKind: "patch" as const,
+                form: unrelated,
+                url: "/conversations/example/rename",
+                outcome: "applied-patch" as const,
+                status: 200 as const,
+                targetIds: ["conversation-detail"],
+            };
+            island.reconcile?.({ cause: "patch", detail });
+            expect(value("network")).toBe("restricted");
+            expect(value("environment")).toBe("custom");
+            expect(value("network_domains")).toBe("example.com");
+            expect(value("instructions")).toBe("Keep my draft");
+            expect(value("tool_read")).toBe("read");
+            expect(value("provider")).toBe("two");
+            expect(value("model")).toBe("Other");
+            expect(value("thinking")).toBe("low");
+            const submitted = root.querySelector<HTMLFormElement>(
+                `#${formId}`,
+            )!;
+            if (state !== "new") submitted.id = responseFormId;
+            root.innerHTML = original;
+            island.reconcile?.({
+                cause: "patch",
+                detail: { ...detail, form: submitted },
+            });
+            expect(value("instructions")).toBe("");
+            expect(value("environment")).toBe("starter");
+            expect(value("network")).toBe("none");
+            expect(value("network_domains")).toBe("");
+            expect(value("tool_read")).toBeNull();
+            expect(value("model")).toBe("Alpha");
+        },
+    );
 
     test("a validation patch retains server choices and the island stops after abort", () => {
         const root = document.querySelector<HTMLElement>(

@@ -322,7 +322,7 @@ fn phase_connection(
 }
 
 fn phase_authority(
-    state: &AppState,
+    _state: &AppState,
     job: &WorkflowJob,
     run: &crate::workflows::WorkflowRun,
     step: &crate::workflows::definition::StepKey,
@@ -333,29 +333,10 @@ fn phase_authority(
     let Some(selection) = run.phase_model(step) else {
         return Ok(Some(base));
     };
-    let Some(preset) = selection.preset.as_ref() else {
+    let Some(settings) = selection.settings.as_ref() else {
         return Ok(Some(base));
     };
-    let Some(conversation_id) = job.conversation_id else {
-        return Err("The phase preset is not bound to a conversation.".to_owned());
-    };
-    let Some(record) = state.conversations.get(&conversation_id) else {
-        return Err("That conversation is not in the catalogue.".to_owned());
-    };
-    let Some(record_preset) = state.agents.get(&preset.id) else {
-        return Err("The selected phase preset is no longer available.".to_owned());
-    };
-    if record_preset.revision != preset.revision {
-        return Err("The selected phase preset changed after launch.".to_owned());
-    }
-    if record
-        .projects
-        .iter()
-        .all(|project| *project != base.project_id)
-    {
-        return Err("The phase project access changed after launch.".to_owned());
-    }
-    crate::conversations::apply_preset_ceiling(&base, &record_preset)
+    crate::conversations::apply_settings_ceiling(&base, settings)
         .map(Some)
         .map_err(|error| error.message().to_owned())
 }
@@ -3120,19 +3101,6 @@ fn confirm_run_authority(
         return Err("That project is not in the catalogue.".to_owned());
     };
     if let Some(authority) = job.authority.as_ref() {
-        let run = state
-            .workflow_runs
-            .get(&job.run_id)
-            .ok_or_else(|| OPERATIONAL_STORE_ERROR.to_owned())?;
-        for preset in run.model_phases().filter_map(|phase| phase.preset.as_ref()) {
-            if state
-                .agents
-                .get(&preset.id)
-                .is_none_or(|record| record.revision != preset.revision)
-            {
-                return Err("A phase preset changed or lost authority after launch.".to_owned());
-            }
-        }
         let Some(conversation_id) = job.conversation_id else {
             return Err("The conversation authority is missing its identity.".to_owned());
         };
@@ -3147,7 +3115,7 @@ fn confirm_run_authority(
         .map_err(|error| error.message().to_owned())?
         .ok_or_else(|| "Project access was revoked before dispatch.".to_owned())?;
         if resolved.effective != *authority {
-            return Err("Project access or the applied preset changed before dispatch.".to_owned());
+            return Err("Project access changed before dispatch.".to_owned());
         }
         authority
             .revalidate_project(&project)

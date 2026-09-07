@@ -1007,6 +1007,11 @@
                 name="consent_existing"
                 value="{% if consent_existing %}true{% else %}false{% endif %}"
               />
+              <input
+                type="hidden"
+                name="preset_preview"
+                value="{% if let Some(preview) = preset_preview %}{{ preview.token }}{% else %}{{ draft_preset_reference }}{% endif %}"
+              />
             {% endif %}
             <label class="sr-only" for="composer-message">Message</label>
             <textarea
@@ -1749,17 +1754,38 @@
             <input type="hidden" name="revision" value="{{ saved.revision }}" />
           </form>
           <p class="text-quiet mt-3 text-sm break-words">{{ model_summary }}</p>
-          {% if !presets.is_empty() %}
+          <form
+            id="conversation-preset-form"
+            data-graft
+            method="post"
+            action="/conversations/{{ saved.id }}/settings/presets/preview"
+          >
+            <input type="hidden" name="revision" value="{{ saved.revision }}" />
+          </form>
+          <form
+            id="conversation-preset-save-form"
+            data-graft
+            method="post"
+            action="/conversations/{{ saved.id }}/settings/presets/save"
+          >
+            <input type="hidden" name="revision" value="{{ saved.revision }}" />
+          </form>
+          {% if let Some(preview) = preset_preview %}
             <form
-              id="conversation-preset-form"
+              id="conversation-preset-apply-form"
               data-graft
               method="post"
-              action="/conversations/{{ saved.id }}/preset"
+              action="/conversations/{{ saved.id }}/settings/presets/apply"
             >
               <input
                 type="hidden"
                 name="revision"
                 value="{{ saved.revision }}"
+              />
+              <input
+                type="hidden"
+                name="preset_preview"
+                value="{{ preview.token }}"
               />
             </form>
           {% endif %}
@@ -1784,7 +1810,147 @@
         {% endif %}
 
         <section
-          class="mt-5 space-y-3"
+          class="mt-5 space-y-4"
+          aria-labelledby="conversation-preset-heading"
+        >
+          <div>
+            <h3 id="conversation-preset-heading" class="text-sm font-semibold">
+              Preset
+            </h3>
+            <p class="text-quiet mt-1 text-xs">
+              A preset copies these settings. It copies no access approval or
+              provider credential.
+            </p>
+          </div>
+          {% if !presets.is_empty() %}
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <label
+                class="flex min-w-0 flex-1 flex-col gap-1"
+                for="conversation-preset"
+              >
+                <span class="text-sm">Saved preset</span>
+                <select
+                  id="conversation-preset"
+                  name="preset"
+                  form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
+                  class="select select-bordered w-full"
+                  {% if job_active %}disabled{% endif %}
+                >
+                  <option value="">Choose a preset</option>
+                  {% for preset in presets %}
+                    <option
+                      value="{{ preset.id }}"
+                      {% if preset.selected %}selected{% endif %}
+                    >
+                      {{ preset.name }} — {{ preset.description }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button
+                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
+                formaction="{% if self.is_new() %}/conversations/new/settings/presets/preview{% endif %}"
+                formmethod="post"
+                class="btn btn-secondary"
+                type="submit"
+                {% if job_active || session_busy %}disabled{% endif %}
+              >
+                Preview preset
+              </button>
+            </div>
+          {% else %}
+            <p class="text-quiet text-sm">No presets are saved yet.</p>
+          {% endif %}
+
+          {% if let Some(preview) = preset_preview %}
+            <div
+              class="border-base-300 space-y-3 border p-4"
+              data-preset-preview
+            >
+              <div>
+                <h4 class="font-semibold">
+                  Replace settings with {{ preview.name }}
+                </h4>
+                <p class="text-quiet mt-1 text-xs">
+                  Review the complete replacement, including removal of existing
+                  directory and project permissions. Sensitive access needs
+                  fresh approval.
+                </p>
+              </div>
+              <dl class="grid gap-2 text-sm sm:grid-cols-[7rem_1fr]">
+                <dt class="text-quiet">Model</dt>
+                <dd>{{ preview.model }}</dd>
+                <dt class="text-quiet">Reasoning effort</dt>
+                <dd>{{ preview.thinking }}</dd>
+                <dt class="text-quiet">Instructions</dt>
+                <dd
+                  class="max-h-48 overflow-auto break-words whitespace-pre-wrap"
+                >
+                  {% if preview.instructions.is_empty() %}None{% else %}{{ preview.instructions }}{% endif %}
+                </dd>
+                <dt class="text-quiet">Environment</dt>
+                <dd>{{ preview.environment }}</dd>
+                <dt class="text-quiet">Tools</dt>
+                <dd>{{ preview.tools }}</dd>
+                <dt class="text-quiet">Network</dt>
+                <dd>{{ preview.network }}</dd>
+                <dt class="text-quiet">Directories</dt>
+                <dd>
+                  {% if preview.directories.is_empty() %}
+                    None
+                  {% else %}
+                    <ul class="space-y-1">
+                      {% for directory in preview.directories %}
+                        <li class="break-all">{{ directory }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </dd>
+              </dl>
+              <button
+                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-apply-form{% endif %}"
+                formaction="{% if self.is_new() %}/conversations/new/settings/presets/apply{% endif %}"
+                formmethod="post"
+                class="btn btn-warning"
+                type="submit"
+              >
+                Apply replacement
+              </button>
+            </div>
+          {% endif %}
+
+          <div
+            class="border-base-300 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end"
+          >
+            <label
+              class="flex min-w-0 flex-1 flex-col gap-1"
+              for="conversation-preset-name"
+            >
+              <span class="text-sm">Preset name</span>
+              <input
+                id="conversation-preset-name"
+                name="{% if self.is_new() %}preset_name{% else %}name{% endif %}"
+                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-save-form{% endif %}"
+                class="input input-bordered"
+                value="{{ preset_name }}"
+                maxlength="80"
+              />
+            </label>
+            <button
+              form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-save-form{% endif %}"
+              formaction="{% if self.is_new() %}/conversations/new/settings/presets/save{% endif %}"
+              formmethod="post"
+              class="btn btn-secondary"
+              type="submit"
+              {% if job_active || session_busy %}disabled{% endif %}
+            >
+              Save as preset
+            </button>
+          </div>
+        </section>
+
+        <section
+          class="border-base-300 mt-6 space-y-3 border-t pt-5"
           aria-labelledby="conversation-model-heading"
         >
           <h3 id="conversation-model-heading" class="text-sm font-semibold">
@@ -2095,51 +2261,6 @@
             </span>
           </label>
         </section>
-
-        {% if !presets.is_empty() %}
-          <section
-            class="border-base-300 mt-6 space-y-3 border-t pt-5"
-            aria-labelledby="conversation-preset-heading"
-          >
-            <h3 id="conversation-preset-heading" class="text-sm font-semibold">
-              Agent preset
-            </h3>
-            <label class="flex flex-col gap-1" for="conversation-preset">
-              <span class="sr-only">Agent preset</span>
-              <select
-                id="conversation-preset"
-                name="preset"
-                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
-                class="select select-bordered"
-                {% if job_active %}disabled{% endif %}
-              >
-                {% if self.is_new() %}
-                  <option value="">Use conversation settings</option>
-                {% endif %}
-                {% for preset in presets %}
-                  <option
-                    value="{{ preset.id }}"
-                    {% if preset.selected %}selected{% endif %}
-                  >
-                    {{ preset.name }}{% if !preset.description.is_empty() %}
-                      — {{ preset.description }}
-                    {% endif %}
-                  </option>
-                {% endfor %}
-              </select>
-            </label>
-            {% if !self.is_new() %}
-              <button
-                form="conversation-preset-form"
-                class="btn btn-secondary"
-                type="submit"
-                {% if job_active %}disabled{% endif %}
-              >
-                Apply preset
-              </button>
-            {% endif %}
-          </section>
-        {% endif %}
 
         <div
           class="border-base-300 mt-6 flex items-center justify-between gap-3 border-t pt-5"

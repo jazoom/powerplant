@@ -118,7 +118,8 @@ pub(crate) fn resolve_authority(
     projects: &ProjectStore,
     agents: &AgentStore,
 ) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
-    resolve_authority_inner(record, projects, agents, true)
+    let _ = agents;
+    resolve_authority_inner(record, projects)
 }
 
 pub(crate) fn resolve_workflow_authority(
@@ -126,14 +127,13 @@ pub(crate) fn resolve_workflow_authority(
     projects: &ProjectStore,
     agents: &AgentStore,
 ) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
-    resolve_authority_inner(record, projects, agents, false)
+    let _ = agents;
+    resolve_authority_inner(record, projects)
 }
 
 fn resolve_authority_inner(
     record: &crate::conversations::ConversationRecord,
     projects: &ProjectStore,
-    agents: &AgentStore,
-    apply_conversation_preset: bool,
 ) -> Result<Option<ConversationAuthority>, ConversationAccessError> {
     let Some(project_id) = record.execution_target else {
         return Ok(None);
@@ -155,24 +155,6 @@ fn resolve_authority_inner(
     let project = projects
         .get(&project_id)
         .ok_or(ConversationAccessError::MissingProject)?;
-    let preset = apply_conversation_preset
-        .then(|| {
-            record
-                .model
-                .as_ref()
-                .and_then(|model| model.preset.as_ref())
-        })
-        .flatten()
-        .map(|preset| {
-            let agent = agents
-                .get(&preset.id)
-                .ok_or(ConversationAccessError::Preset)?;
-            if agent.revision != preset.revision {
-                return Err(ConversationAccessError::Stale);
-            }
-            Ok(agent)
-        })
-        .transpose()?;
     let mut paths = vec![project.host_path.clone()];
     let mut aliases = vec!["project".to_owned()];
     let mut secondary = Vec::new();
@@ -205,7 +187,7 @@ fn resolve_authority_inner(
             access: AccessMode::ReadOnly,
         });
     }
-    let network = intersect_network(&record.network, preset.as_ref().map(|agent| &agent.network));
+    let network = record.network.clone();
     let mut authority = resolve_grant_with_context(
         grant,
         &project,
@@ -213,7 +195,7 @@ fn resolve_authority_inner(
         grant.authority_revision,
         network,
         secondary,
-        preset.as_ref(),
+        None,
     )?;
     if let Some(selected) = record
         .model
@@ -230,59 +212,55 @@ fn resolve_authority_inner(
 
 pub(crate) fn resolve_project_free_authority(
     record: &crate::conversations::ConversationRecord,
-    agents: &AgentStore,
+    _agents: &AgentStore,
 ) -> Result<crate::execution::ProjectFreeAuthority, ConversationAccessError> {
     let model = record
         .model
         .as_ref()
         .ok_or(ConversationAccessError::Preset)?;
-    let mut authority =
-        crate::execution::ProjectFreeAuthority::from_settings(record.revision, &model.settings)
-            .map_err(|_| ConversationAccessError::Path)?;
-    if let Some(applied) = &model.preset {
-        let preset = agents
-            .get(&applied.id)
-            .ok_or(ConversationAccessError::Preset)?;
-        if preset.revision != applied.revision {
-            return Err(ConversationAccessError::Stale);
-        }
-        authority.network = intersect_network(&authority.network, Some(&preset.network));
-        authority.tools.retain(|tool| preset.tools.contains(tool));
-    }
-    Ok(authority)
+    crate::execution::ProjectFreeAuthority::from_settings(record.revision, &model.settings)
+        .map_err(|_| ConversationAccessError::Path)
 }
 
-pub(crate) fn apply_preset_ceiling(
+pub(crate) fn apply_settings_ceiling(
     base: &EffectiveAuthority,
-    preset: &crate::agents::AgentRecord,
+    settings: &crate::execution::ExecutionSettings,
 ) -> Result<EffectiveAuthority, ConversationAccessError> {
-    let tools = base
-        .tools
-        .iter()
-        .copied()
-        .filter(|tool| preset.tools.contains(tool))
-        .collect();
-    let network = intersect_network(&base.network, Some(&preset.network));
-    let grants = if preset.directories.is_empty() {
-        base.policy.grants().to_vec()
-    } else {
-        base.policy
+    if settings.tools.iter().any(|tool| !base.tools.contains(tool))
+        || intersect_network(&settings.network, Some(&base.network)) != settings.network
+    {
+        return Err(ConversationAccessError::Preset);
+    }
+    let mut grants = Vec::new();
+    for requested in &settings.directories {
+        if !requested.is_available() {
+            return Err(ConversationAccessError::Path);
+        }
+        let Some(grant) = base
+            .policy
             .grants()
             .iter()
-            .filter_map(|grant| {
-                let ceiling = preset
-                    .directories
-                    .iter()
-                    .find(|directory| directory.host_path == grant.host_path)?;
-                Some(PolicyGrant {
-                    alias: grant.alias.clone(),
-                    guest_path: grant.guest_path.clone(),
-                    host_path: grant.host_path.clone(),
-                    access: min_access(grant.access, ceiling.access),
-                })
-            })
-            .collect()
-    };
+            .find(|grant| grant.host_path == requested.host_path)
+        else {
+            return Err(ConversationAccessError::Preset);
+        };
+        let access = match requested.access {
+            crate::execution::DirectoryAccess::ReadOnly => AccessMode::ReadOnly,
+            crate::execution::DirectoryAccess::ReviewBeforeApply if grant.access.is_writable() => {
+                AccessMode::ReadWrite
+            }
+            crate::execution::DirectoryAccess::ReviewBeforeApply => {
+                return Err(ConversationAccessError::Preset);
+            }
+        };
+        grants.push(PolicyGrant {
+            alias: grant.alias.clone(),
+            guest_path: grant.guest_path.clone(),
+            host_path: grant.host_path.clone(),
+            access,
+        });
+    }
+    // Project-backed workflows require their source. An empty preset must not restore an omitted grant.
     if !grants.iter().any(|grant| grant.alias == base.grant_alias) {
         return Err(ConversationAccessError::Preset);
     }
@@ -302,18 +280,10 @@ pub(crate) fn apply_preset_ceiling(
         project_revision: base.project_revision,
         grant_alias: base.grant_alias.clone(),
         grant_access,
-        tools,
-        network,
+        tools: settings.tools.clone(),
+        network: settings.network.clone(),
         policy,
     })
-}
-
-fn min_access(left: AccessMode, right: AccessMode) -> AccessMode {
-    if left.is_writable() && right.is_writable() {
-        AccessMode::ReadWrite
-    } else {
-        AccessMode::ReadOnly
-    }
 }
 
 fn resolve_grant_with_context(

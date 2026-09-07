@@ -13,6 +13,7 @@ use crate::{
     models::models_dev::ModelsDevCatalogue,
     plan_login::PlanLogin,
     preferences::Preferences,
+    presets::PresetStore,
     projects::ProjectStore,
     providers::ChatBackend,
     sandbox::SandboxFleet,
@@ -35,6 +36,7 @@ pub(crate) struct AppState {
     pub(crate) models_dev: Arc<ModelsDevCatalogue>,
     pub(crate) plan_login: Arc<PlanLogin>,
     pub(crate) preferences: Arc<Preferences>,
+    pub(crate) presets: Arc<PresetStore>,
     pub(crate) agents: Arc<AgentStore>,
     pub(crate) conversations: Arc<ConversationStore>,
     pub(crate) documents: Arc<PlanDocumentStore>,
@@ -73,6 +75,8 @@ pub(crate) async fn build(
         .map_err(|error| error.message().to_owned())?;
     let conversations = ConversationStore::open(data_dir.join("conversations"))
         .map_err(|error| error.message().to_owned())?;
+    let presets =
+        PresetStore::open(data_dir.join("presets")).map_err(|error| error.message().to_owned())?;
     let environments = EnvironmentCatalogue::open(
         data_dir.join("environments.json"),
         data_dir.join("environment-preparation-logs"),
@@ -140,6 +144,7 @@ pub(crate) async fn build(
         models_dev: Arc::new(models_dev),
         plan_login: Arc::new(PlanLogin::new()),
         preferences: Arc::new(preferences),
+        presets: Arc::new(presets),
         agents: Arc::new(agents),
         conversations: Arc::new(conversations),
         documents: Arc::new(documents),

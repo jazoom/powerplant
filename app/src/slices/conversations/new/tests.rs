@@ -204,7 +204,6 @@ async fn invalid_first_submissions_preserve_all_local_choices_and_unsent_text() 
         assert!(body.contains("value=\"grok-4.6\""));
         for value in [
             project.id.as_hex(),
-            preset.id.as_hex(),
             "xai".to_owned(),
             effort.as_str().to_owned(),
         ] {

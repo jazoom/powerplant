@@ -7,7 +7,7 @@ use model_picker::ModelPicker;
 mod tests;
 
 use crate::{
-    agents::{AgentRecord, NetworkAccess, ToolId},
+    agents::{AgentRecord, ToolId},
     conversations::{
         ConversationMessage, ConversationModelConfiguration, ConversationRecord,
         MAXIMUM_PROJECT_ASSOCIATIONS, MessageRole, MessageStatus, PlanDocument, PlanSource,
@@ -339,6 +339,7 @@ pub(super) struct ModelSources<'a> {
     pub(super) environment_snapshots: &'a EnvironmentSnapshotRepository,
     pub(super) projects: &'a [ProjectRecord],
     pub(super) documents: &'a [PlanDocument],
+    pub(super) presets: &'a [crate::presets::PresetRecord],
 }
 
 pub(super) struct PresetOption {
@@ -346,6 +347,18 @@ pub(super) struct PresetOption {
     pub(super) name: String,
     pub(super) description: String,
     pub(super) selected: bool,
+}
+
+pub(super) struct PresetPreviewView {
+    pub(super) token: String,
+    pub(super) name: String,
+    pub(super) model: String,
+    pub(super) thinking: String,
+    pub(super) instructions: String,
+    pub(super) environment: String,
+    pub(super) tools: String,
+    pub(super) network: String,
+    pub(super) directories: Vec<String>,
 }
 
 pub(super) struct ProviderOption {
@@ -424,6 +437,8 @@ pub(super) struct ConversationDetailView {
     pub(super) omitted_messages: usize,
     model_picker: ModelPicker,
     pub(super) presets: Vec<PresetOption>,
+    pub(super) preset_name: String,
+    pub(super) preset_preview: Option<PresetPreviewView>,
     pub(super) attached_projects: Vec<ProjectContextView>,
     pub(super) attachable_projects: Vec<CatalogueProjectOption>,
     pub(super) directories: Vec<DirectoryView>,
@@ -434,6 +449,7 @@ pub(super) struct ConversationDetailView {
     pub(super) consent_existing: bool,
     pub(super) consent_reviewed: bool,
     pub(super) draft_nonce: String,
+    pub(super) draft_preset_reference: String,
     pub(super) consent_reference: String,
     pub(super) model_summary: String,
     pub(super) instructions: String,
@@ -525,16 +541,26 @@ impl ConversationDetailView {
                 &form.thinking,
             ),
             presets: state
-                .agents
+                .presets
                 .list()
                 .into_iter()
-                .map(|agent| PresetOption {
-                    id: agent.id.as_hex(),
-                    name: agent.name,
-                    description: String::new(),
-                    selected: agent.id.as_hex() == form.preset,
+                .map(|preset| PresetOption {
+                    id: preset.id.as_hex(),
+                    name: preset.name,
+                    description: preset_summary(&preset.settings),
+                    selected: preset.id.as_hex() == form.preset,
                 })
                 .collect(),
+            preset_name: if form.preset_name.trim().is_empty() {
+                draft_directories
+                    .first()
+                    .and_then(|grant| grant.host_path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled preset".to_owned())
+            } else {
+                form.preset_name.clone()
+            },
+            preset_preview: None,
             attachable_projects: state
                 .projects
                 .list()
@@ -561,6 +587,7 @@ impl ConversationDetailView {
             consent_existing,
             consent_reviewed,
             draft_nonce: form.draft_nonce,
+            draft_preset_reference: form.preset_preview,
             consent_reference: form.consent_reference,
             model_summary: String::new(),
             instructions: form.instructions.clone(),
@@ -719,14 +746,10 @@ impl ConversationDetailView {
         let selected_environment = configuration.map(|model| model.settings.environment);
         let network_options = network_options(record.network.as_str());
         let network_domains = record.network.domains().join("\n");
-        let preset_network = configuration
-            .and_then(|configuration| configuration.preset.as_ref())
-            .and_then(|selected| agents.iter().find(|agent| agent.id == selected.id))
-            .map(|agent| &agent.network);
-        let effective_network =
-            crate::conversations::intersect_network(&record.network, preset_network);
+        let _ = agents;
+        let effective_network = &record.network;
         let network_summary = network_summary_from_form(effective_network.as_str());
-        let network_detail = format_network_summary(&record.network, &effective_network);
+        let network_detail = String::new();
         let model_picker = ModelPicker::new(
             sources.vault,
             sources.preferences,
@@ -737,18 +760,16 @@ impl ConversationDetailView {
                 .and_then(|selection| selection.thinking.as_ref())
                 .map_or("", |effort| effort.as_str()),
         );
-        let presets = agents
+        let presets = sources
+            .presets
             .iter()
-            .map(|agent| PresetOption {
-                id: agent.id.as_hex(),
-                name: agent.name.clone(),
-                description: agent.selection.as_ref().map_or_else(
-                    || "Keep the current model".to_owned(),
-                    |selection| format!("{} · {}", selection.provider.label(), selection.model),
-                ),
+            .map(|record| PresetOption {
+                id: record.id.as_hex(),
+                name: record.name.clone(),
+                description: preset_summary(&record.settings),
                 selected: configuration
                     .and_then(|configuration| configuration.preset.as_ref())
-                    .is_some_and(|preset| preset.id == agent.id),
+                    .is_some_and(|preset| preset.id == record.id),
             })
             .collect();
         let plans: Vec<_> = sources
@@ -870,6 +891,10 @@ impl ConversationDetailView {
             model_available: selection.is_some(),
             model_picker,
             presets,
+            preset_name: configuration
+                .map(|configuration| crate::presets::suggested_name(&configuration.settings))
+                .unwrap_or_else(|| "Untitled preset".to_owned()),
+            preset_preview: None,
             attached_projects,
             attachable_projects,
             directories: configuration
@@ -882,6 +907,7 @@ impl ConversationDetailView {
             consent_existing: false,
             consent_reviewed: false,
             draft_nonce: String::new(),
+            draft_preset_reference: String::new(),
             consent_reference: String::new(),
             model_summary,
             instructions: configuration
@@ -935,6 +961,12 @@ impl ConversationDetailView {
                 workflow_progress: None,
             })),
         }
+    }
+
+    pub(super) fn with_preset_preview(mut self, preview: PresetPreviewView) -> Self {
+        self.preset_preview = Some(preview);
+        self.settings_open = true;
+        self
     }
 
     pub(super) fn with_access_status(
@@ -1117,6 +1149,19 @@ impl ConversationDetailView {
     pub(super) fn contents(&self) -> impl Template + '_ {
         self.as_conversation_detail()
     }
+}
+
+fn preset_summary(settings: &crate::execution::ExecutionSettings) -> String {
+    let directory_count = settings.directories.len();
+    format!(
+        "{} · {} · {} tool{} · {} director{}",
+        settings.model.provider.label(),
+        settings.model.model,
+        settings.tools.len(),
+        if settings.tools.len() == 1 { "" } else { "s" },
+        directory_count,
+        if directory_count == 1 { "y" } else { "ies" },
+    )
 }
 
 fn directory_views(grants: &[crate::execution::DirectoryGrant]) -> Vec<DirectoryView> {
@@ -1710,28 +1755,6 @@ pub(super) fn reply_html(text: &str) -> String {
         plain_html(text)
     } else {
         html
-    }
-}
-
-fn format_network_summary(selected: &NetworkAccess, effective: &NetworkAccess) -> String {
-    if selected == effective {
-        format!("Effective network: {}", network_label(effective))
-    } else {
-        format!(
-            "Selected network: {} · Effective with preset ceiling: {}",
-            network_label(selected),
-            network_label(effective)
-        )
-    }
-}
-
-fn network_label(access: &NetworkAccess) -> String {
-    match access {
-        NetworkAccess::None => "No network".to_owned(),
-        NetworkAccess::Restricted(domains) => {
-            format!("Restricted domains: {}", domains.join(", "))
-        }
-        NetworkAccess::Public => "Public internet".to_owned(),
     }
 }
 

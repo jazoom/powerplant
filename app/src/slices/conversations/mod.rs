@@ -51,6 +51,18 @@ pub(super) fn router() -> Router<AppState> {
         .route("/conversations/new", get(new::show).post(new::save))
         .route("/conversations/new/model", post(new::remember_model))
         .route(
+            "/conversations/new/settings/presets/save",
+            post(settings::save_draft_preset),
+        )
+        .route(
+            "/conversations/new/settings/presets/preview",
+            post(settings::preview_draft_preset),
+        )
+        .route(
+            "/conversations/new/settings/presets/apply",
+            post(settings::apply_draft_preset),
+        )
+        .route(
             "/conversations/new/directories/pick",
             post(directories::pick_new),
         )
@@ -128,6 +140,18 @@ pub(super) fn router() -> Router<AppState> {
             post(settings::preview_environment_switch),
         )
         .route(
+            "/conversations/{conversation_id}/settings/presets/save",
+            post(settings::save_preset),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings/presets/preview",
+            post(settings::preview_preset),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings/presets/apply",
+            post(settings::apply_preset),
+        )
+        .route(
             "/conversations/{conversation_id}/settings/environment/stop-and-switch",
             post(settings::stop_and_switch_environment),
         )
@@ -152,10 +176,6 @@ pub(super) fn router() -> Router<AppState> {
             post(directories::remove_saved),
         )
         .route("/conversations/{conversation_id}/model", post(select_model))
-        .route(
-            "/conversations/{conversation_id}/preset",
-            post(apply_preset),
-        )
         .route(
             "/conversations/{conversation_id}/projects",
             post(attach_project),
@@ -294,12 +314,6 @@ struct ModelForm {
     model: String,
     #[serde(default)]
     thinking: String,
-}
-
-#[derive(Deserialize)]
-struct PresetForm {
-    revision: String,
-    preset: String,
 }
 
 #[derive(Deserialize)]
@@ -1025,7 +1039,7 @@ fn candidate_review_model(
         let preset = AgentId::parse(form.preset.trim())
             .and_then(|id| state.agents.get(&id))
             .ok_or("Choose an available reviewer preset.")?;
-        Ok(ConversationModelConfiguration::from_preset(
+        Ok(ConversationModelConfiguration::from_agent_snapshot(
             &preset,
             selection,
             environment,
@@ -1983,29 +1997,7 @@ pub(super) async fn start_message(
             .then(|| crate::conversations::resolve_project_free_authority(&record, &state.agents))
             .transpose()
             .map_err(|error| StartMessageError::User(PatchStatus::Conflict, error.message()))?;
-        let phase_authority = if let Some(authority) = authority.as_ref() {
-            Some(if let Some(applied) = model.preset.as_ref() {
-                let Some(preset) = state.agents.get(&applied.id) else {
-                    return Err(StartMessageError::User(
-                        PatchStatus::Conflict,
-                        "The applied preset is no longer available.",
-                    ));
-                };
-                if preset.revision != applied.revision {
-                    return Err(StartMessageError::User(
-                        PatchStatus::Conflict,
-                        "The applied preset changed. Reload the conversation.",
-                    ));
-                }
-                crate::conversations::apply_preset_ceiling(authority, &preset).map_err(|error| {
-                    StartMessageError::User(PatchStatus::Conflict, error.message())
-                })?
-            } else {
-                authority.clone()
-            })
-        } else {
-            None
-        };
+        let phase_authority = authority.clone();
         let environment = model.settings.environment;
         let pinned = if let Some(authority) = authority.as_ref() {
             let phase_authority = phase_authority.as_ref().expect("project authority");
@@ -2146,6 +2138,10 @@ pub(super) async fn start_message(
                         revision: preset.revision,
                         name: preset.name.clone(),
                     }),
+                settings: phase_model
+                    .preset
+                    .as_ref()
+                    .map(|_| phase_model.settings.clone()),
             })
             .collect::<Vec<_>>();
         let mut run = match authority.as_ref() {
@@ -2407,91 +2403,6 @@ async fn select_model(
         }
         Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
             Err(AppError::new("store model selection", error))
-        }
-        Err(error) => render_detail_command(
-            graft,
-            status_for(error),
-            detail_view(&state, session.0, &record, &record.title, error.message()),
-        ),
-    }
-}
-
-async fn apply_preset(
-    State(state): State<AppState>,
-    session: RequiredSession,
-    graft: PatchGraft,
-    Path(conversation_id): Path<String>,
-    Form(form): Form<PresetForm>,
-) -> AppResult<Response> {
-    let Some(record) = load_conversation(&state, &conversation_id) else {
-        return Ok(responses::command_navigation("/conversations"));
-    };
-    let Some(revision) = parse_revision(&form.revision) else {
-        return render_detail_command(
-            graft,
-            PatchStatus::UnprocessableEntity,
-            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
-        );
-    };
-    let Some(preset) = AgentId::parse(&form.preset).and_then(|id| state.agents.get(&id)) else {
-        return render_detail_command(
-            graft,
-            PatchStatus::UnprocessableEntity,
-            detail_view(
-                &state,
-                session.0,
-                &record,
-                &record.title,
-                "Choose an available preset.",
-            ),
-        );
-    };
-    let Some(selection) = preset
-        .selection
-        .clone()
-        .or_else(|| effective_model(&state, &record).map(|model| model.settings.model))
-    else {
-        return render_detail_command(
-            graft,
-            PatchStatus::UnprocessableEntity,
-            detail_view(
-                &state,
-                session.0,
-                &record,
-                &record.title,
-                "Choose a model before you apply a preset without a model preference.",
-            ),
-        );
-    };
-    if let Err(error) = valid_selection(&state, &selection) {
-        return render_detail_command(
-            graft,
-            PatchStatus::UnprocessableEntity,
-            detail_view(&state, session.0, &record, &record.title, error),
-        );
-    }
-    let environment = record
-        .model
-        .as_ref()
-        .map(|model| model.settings.environment)
-        .or_else(|| default_environment(&state).ok())
-        .ok_or_else(|| {
-            AppError::new(
-                "select conversation environment",
-                std::io::Error::other("starter environment unavailable"),
-            )
-        })?;
-    match state
-        .conversations
-        .apply_preset(&record.id, revision, &preset, selection, environment)
-    {
-        Ok(updated) => render_detail_command(
-            graft,
-            PatchStatus::Ok,
-            detail_view(&state, session.0, &updated, &updated.title, "").open_settings(),
-        ),
-        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
-            Err(AppError::new("store conversation preset", error))
         }
         Err(error) => render_detail_command(
             graft,
@@ -3320,6 +3231,7 @@ fn detail_view(
             environment_snapshots: &state.environment_snapshots,
             projects: &state.projects.list(),
             documents: &state.documents.list_for_conversation(record.id),
+            presets: &state.presets.list(),
         },
         &state.agents.list(),
         snapshot.as_ref(),
@@ -3437,7 +3349,7 @@ fn review_model(
         let preset = AgentId::parse(form.preset.trim())
             .and_then(|id| state.agents.get(&id))
             .ok_or("Choose an available reviewer preset.")?;
-        Ok(ConversationModelConfiguration::from_preset(
+        Ok(ConversationModelConfiguration::from_agent_snapshot(
             &preset,
             selection,
             environment,

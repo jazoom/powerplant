@@ -51,6 +51,60 @@ fn preset(path: &std::path::Path, tools: Vec<ToolId>, network: NetworkAccess) ->
 }
 
 #[test]
+fn phase_snapshots_reject_expansions_omitted_sources_and_replaced_roots() {
+    let tree = tempfile::tempdir().unwrap();
+    let path = tree.path().join("source");
+    std::fs::create_dir(&path).unwrap();
+    let project = project(&path);
+    let grant = ConversationGrant {
+        project_id: project.id,
+        project_revision: project.revision,
+        authority_revision: 1,
+        access: AccessMode::ReadOnly,
+    };
+    let authority = resolve_grant(
+        &grant,
+        &project,
+        crate::conversations::ConversationId::generate().unwrap(),
+        1,
+        None,
+    )
+    .unwrap()
+    .effective;
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        vec![ToolId::Read],
+        crate::environments::EnvironmentId::generate().unwrap(),
+    )
+    .unwrap();
+    assert!(apply_settings_ceiling(&authority, &settings).is_err());
+    let settings = settings
+        .with_directories(vec![
+            crate::execution::DirectoryGrant::from_selected(&path, &[]).unwrap(),
+        ])
+        .unwrap();
+    assert!(apply_settings_ceiling(&authority, &settings).is_ok());
+    let mut expanded = settings.clone();
+    expanded.network = NetworkAccess::Public;
+    assert!(apply_settings_ceiling(&authority, &expanded).is_err());
+    expanded = settings.clone();
+    expanded.tools.push(ToolId::Write);
+    assert!(apply_settings_ceiling(&authority, &expanded).is_err());
+    expanded = settings.clone();
+    expanded.directories[0].access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    assert!(apply_settings_ceiling(&authority, &expanded).is_err());
+    std::fs::rename(&path, tree.path().join("original")).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(apply_settings_ceiling(&authority, &settings).is_err());
+}
+
+#[test]
 fn a_direct_conversation_grant_has_the_read_only_ceiling() {
     let directory = tempfile::tempdir().expect("directory");
     let project = project(directory.path());
@@ -303,7 +357,7 @@ fn secondary_alias_and_canonical_path_collisions_are_rejected() {
 }
 
 #[test]
-fn private_workspace_keeps_live_preset_ceilings_without_mounting_preset_directories() {
+fn private_workspace_uses_the_copied_settings_without_a_live_preset_ceiling() {
     let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     let preset = state
         .agents
@@ -323,14 +377,14 @@ fn private_workspace_keeps_live_preset_ceilings_without_mounting_preset_director
         None,
     )
     .unwrap();
-    let mut model = crate::conversations::ConversationModelConfiguration::from_preset(
+    let mut model = crate::conversations::ConversationModelConfiguration::from_agent_snapshot(
         &preset,
         selection,
         crate::tests::test_environment_id(),
     );
     model.settings.network = NetworkAccess::Public;
     model.settings.tools.push(ToolId::Write);
-    let mut record = state
+    let record = state
         .conversations
         .create_saved(
             crate::conversations::ConversationId::generate().unwrap(),
@@ -341,21 +395,10 @@ fn private_workspace_keeps_live_preset_ceilings_without_mounting_preset_director
         )
         .unwrap();
     let authority = resolve_project_free_authority(&record, &state.agents).unwrap();
-    assert_eq!(authority.network, NetworkAccess::None);
-    assert_eq!(authority.tools, vec![ToolId::Run]);
+    assert_eq!(authority.network, NetworkAccess::Public);
+    assert_eq!(authority.tools, vec![ToolId::Run, ToolId::Write]);
     assert!(authority.policy.grants().is_empty());
-    record
-        .model
-        .as_mut()
-        .unwrap()
-        .preset
-        .as_mut()
-        .unwrap()
-        .revision += 1;
-    assert_eq!(
-        resolve_project_free_authority(&record, &state.agents).err(),
-        Some(ConversationAccessError::Stale)
-    );
+    assert!(record.model.as_ref().unwrap().preset.is_none());
 }
 
 #[test]

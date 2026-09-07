@@ -6,7 +6,7 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
-    agents::{AgentDraft, NetworkAccess, ToolId},
+    agents::{NetworkAccess, ToolId},
     config::RuntimeConfig,
     providers::{ModelSelection, ProviderConnection, ProviderKind},
     sessions,
@@ -817,39 +817,63 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
             .effective_effort(ProviderKind::Xai, &model, None),
     )
     .expect("selection");
+    let settings = crate::execution::ExecutionSettings::new(
+        selection.clone(),
+        "Review only the supplied discussion.".to_owned(),
+        Vec::new(),
+        super::default_environment(&state).unwrap(),
+    )
+    .unwrap()
+    .with_network(NetworkAccess::Public)
+    .unwrap();
     let preset = state
-        .agents
-        .create(AgentDraft {
-            name: "Review preset".to_owned(),
-            instructions: "Review only the supplied discussion.".to_owned(),
-            selection: Some(selection.clone()),
-            tools: Vec::new(),
-            network: NetworkAccess::Public,
-            directories: vec![crate::agents::DirectoryGrant {
-                alias: "project".to_owned(),
-                host_path: std::env::current_dir().expect("checkout"),
-                access: crate::agents::AccessMode::ReadWrite,
-            }],
-            primary_directory: "project".to_owned(),
-        })
+        .presets
+        .create(
+            "Review preset",
+            settings,
+            crate::presets::PresetProvenance::Draft,
+        )
         .expect("preset");
-    let path = format!("/conversations/{}/preset", conversation.id);
+    let path = format!("/conversations/{}/settings/presets/apply", conversation.id);
+    let owner = session_id(&token);
+    let preview = state
+        .presets
+        .preview(
+            owner,
+            preset.id,
+            crate::presets::PresetDestination::Conversation(conversation.id, conversation.revision),
+        )
+        .unwrap();
 
     let response = app(&state)
         .oneshot(command(
             &path,
             &token,
-            &format!("revision={}&preset={}", conversation.revision, preset.id),
+            &format!(
+                "revision={}&preset_preview={}",
+                conversation.revision, preview.token
+            ),
         ))
         .await
         .expect("apply preset");
     assert_eq!(response.status(), StatusCode::OK);
     let updated = state.conversations.get(&conversation.id).expect("updated");
+    let stale_preview = state
+        .presets
+        .preview(
+            owner,
+            preset.id,
+            crate::presets::PresetDestination::Conversation(conversation.id, conversation.revision),
+        )
+        .unwrap();
     let response = app(&state)
         .oneshot(command(
             &path,
             &token,
-            &format!("revision={}&preset={}", conversation.revision, preset.id),
+            &format!(
+                "revision={}&preset_preview={}",
+                conversation.revision, stale_preview.token
+            ),
         ))
         .await
         .expect("stale apply");
@@ -896,26 +920,37 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
     );
     assert!(backend.last_tools().is_empty());
 
+    let concise_settings = crate::execution::ExecutionSettings::new(
+        selection.clone(),
+        "Reply briefly.".to_owned(),
+        Vec::new(),
+        super::default_environment(&state).unwrap(),
+    )
+    .unwrap();
     let instructions_only = state
-        .agents
-        .create(AgentDraft {
-            name: "Concise".to_owned(),
-            instructions: "Reply briefly.".to_owned(),
-            selection: None,
-            tools: Vec::new(),
-            network: NetworkAccess::None,
-            directories: Vec::new(),
-            primary_directory: String::new(),
-        })
+        .presets
+        .create(
+            "Concise",
+            concise_settings,
+            crate::presets::PresetProvenance::Draft,
+        )
         .expect("instructions-only preset");
     let current = state.conversations.get(&conversation.id).expect("current");
+    let concise_preview = state
+        .presets
+        .preview(
+            owner,
+            instructions_only.id,
+            crate::presets::PresetDestination::Conversation(current.id, current.revision),
+        )
+        .unwrap();
     let response = app(&state)
         .oneshot(command(
             &path,
             &token,
             &format!(
-                "revision={}&preset={}",
-                current.revision, instructions_only.id
+                "revision={}&preset_preview={}",
+                current.revision, concise_preview.token
             ),
         ))
         .await
@@ -956,7 +991,7 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
 }
 
 #[tokio::test]
-async fn unavailable_preset_models_do_not_replace_conversation_configuration() {
+async fn unavailable_preset_models_apply_without_substitution() {
     let state = test_state();
     let token = connected(&state);
     let conversation = state
@@ -973,32 +1008,46 @@ async fn unavailable_preset_models_do_not_replace_conversation_configuration() {
         )
         .unwrap(),
     ];
+    let owner = session_id(&token);
+    let mut current = conversation;
     for selection in selections {
+        let settings = crate::execution::ExecutionSettings::new(
+            selection.clone(),
+            String::new(),
+            Vec::new(),
+            super::default_environment(&state).unwrap(),
+        )
+        .unwrap();
         let preset = state
-            .agents
-            .create(AgentDraft {
-                name: "Unavailable".to_owned(),
-                instructions: String::new(),
-                selection: Some(selection),
-                tools: Vec::new(),
-                network: NetworkAccess::None,
-                directories: Vec::new(),
-                primary_directory: String::new(),
-            })
+            .presets
+            .create(
+                "Unavailable",
+                settings,
+                crate::presets::PresetProvenance::Draft,
+            )
             .expect("preset");
+        let preview = state
+            .presets
+            .preview(
+                owner,
+                preset.id,
+                crate::presets::PresetDestination::Conversation(current.id, current.revision),
+            )
+            .unwrap();
         let response = app(&state)
             .oneshot(command(
-                &format!("/conversations/{}/preset", conversation.id),
+                &format!("/conversations/{}/settings/presets/apply", current.id),
                 &token,
-                &format!("revision={}&preset={}", conversation.revision, preset.id),
+                &format!(
+                    "revision={}&preset_preview={}",
+                    current.revision, preview.token
+                ),
             ))
             .await
             .expect("apply");
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(
-            state.conversations.get(&conversation.id).as_ref(),
-            Some(&conversation)
-        );
+        assert_eq!(response.status(), StatusCode::OK);
+        current = state.conversations.get(&current.id).unwrap();
+        assert_eq!(current.model.as_ref().unwrap().settings.model, selection);
     }
 }
 
@@ -1367,7 +1416,7 @@ async fn read_only_access_is_explicit_revisioned_and_selects_one_target() {
         .expect("detail");
     let detail_body = text(detail).await;
     assert!(detail_body.contains("Grant effect: List, Read and Run"));
-    assert!(detail_body.contains("Effective network: No network"));
+    assert!(detail_body.contains("Network off"));
     let path = format!("/conversations/{}/access", conversation.id);
 
     let response = app(&state)

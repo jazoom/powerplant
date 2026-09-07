@@ -79,6 +79,28 @@ pub(crate) enum DirectoryGrantError {
     Invalid,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct ExecutionSettingsFile {
+    model: ModelSelection,
+    instructions: String,
+    tools: Vec<String>,
+    environment: String,
+    network: String,
+    network_domains: Vec<String>,
+    directories: Vec<DirectoryGrantFile>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct DirectoryGrantFile {
+    id: String,
+    host_path: PathBuf,
+    identity: CanonicalDirectoryIdentity,
+    alias: String,
+    access: DirectoryAccess,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DirectoryGrantForm {
@@ -127,6 +149,59 @@ impl ExecutionSettings {
         validate_directories(&directories).ok()?;
         self.directories = directories;
         Some(self)
+    }
+
+    pub(crate) fn to_file(&self) -> ExecutionSettingsFile {
+        ExecutionSettingsFile {
+            model: self.model.clone(),
+            instructions: self.instructions.clone(),
+            tools: self
+                .tools
+                .iter()
+                .map(|tool| tool.as_str().to_owned())
+                .collect(),
+            environment: self.environment.as_hex(),
+            network: self.network.as_str().to_owned(),
+            network_domains: self.network.domains().to_vec(),
+            directories: self
+                .directories
+                .iter()
+                .map(|grant| DirectoryGrantFile {
+                    id: grant.id.as_hex(),
+                    host_path: grant.host_path.clone(),
+                    identity: grant.identity,
+                    alias: grant.alias.clone(),
+                    access: grant.access,
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn from_file(file: ExecutionSettingsFile) -> Option<Self> {
+        let tools = file
+            .tools
+            .into_iter()
+            .map(|tool| ToolId::parse(&tool))
+            .collect::<Option<Vec<_>>>()?;
+        let environment = EnvironmentId::parse(&file.environment)?;
+        let network =
+            NetworkAccess::parse_form(&file.network, &file.network_domains.join("\n")).ok()?;
+        let directories = file
+            .directories
+            .into_iter()
+            .map(|grant| {
+                Some(DirectoryGrant {
+                    id: DirectoryGrantId::parse(&grant.id)?,
+                    host_path: grant.host_path,
+                    identity: grant.identity,
+                    alias: grant.alias,
+                    access: grant.access,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Self::new(file.model, file.instructions, tools, environment)?
+            .with_network(network)?
+            .with_directories(directories)
     }
 }
 

@@ -1289,6 +1289,7 @@ struct PhaseModelFile {
     thinking: Option<String>,
     instructions: String,
     preset: Option<PinnedPresetFile>,
+    settings: Option<crate::execution::ExecutionSettingsFile>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1515,6 +1516,10 @@ fn phase_model_to_file(selection: &PhaseModelSelection) -> PhaseModelFile {
             revision: preset.revision,
             name: preset.name.clone(),
         }),
+        settings: selection
+            .settings
+            .as_ref()
+            .map(crate::execution::ExecutionSettings::to_file),
     }
 }
 
@@ -1535,10 +1540,17 @@ fn phase_model_from_file(file: PhaseModelFile) -> Result<PhaseModelSelection, Ta
         instructions: file.instructions,
         preset: match file.preset {
             Some(preset) => Some(super::run::PinnedPreset {
-                id: AgentId::parse(&preset.id).ok_or(TaskLoopError::Corrupt)?,
+                id: crate::presets::PresetId::parse(&preset.id).ok_or(TaskLoopError::Corrupt)?,
                 revision: preset.revision,
                 name: preset.name,
             }),
+            None => None,
+        },
+        settings: match file.settings {
+            Some(settings) => Some(
+                crate::execution::ExecutionSettings::from_file(settings)
+                    .ok_or(TaskLoopError::Corrupt)?,
+            ),
             None => None,
         },
     })

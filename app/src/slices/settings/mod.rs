@@ -138,6 +138,7 @@ async fn reset_local_data(
             &state.projects,
             &state.agents,
             &state.conversations,
+            &state.presets,
         )
         .await
     {

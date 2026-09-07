@@ -8,7 +8,7 @@ use hypergraft::{GraftRequest, PatchGraft, PatchStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    agents::{AccessMode, AgentId},
+    agents::AccessMode,
     conversations::{ConversationRecord, DocumentId, PlanRevisionReference},
     error::{AppError, AppResult},
     projects::ProjectId,
@@ -1254,7 +1254,7 @@ async fn launch_readiness(
 fn phase_choice_token(
     step: &str,
     selection: &ModelSelection,
-    preset: Option<&crate::agents::AgentRecord>,
+    preset: Option<&crate::presets::PresetRecord>,
 ) -> String {
     serde_json::to_string(&PhaseChoiceToken {
         step: step.to_owned(),
@@ -1273,7 +1273,7 @@ fn phase_choice_token(
 fn parse_phase_choice(
     raw: &str,
     step: &str,
-    agents: &[crate::agents::AgentRecord],
+    presets: &[crate::presets::PresetRecord],
 ) -> Result<PhaseModelSelection, &'static str> {
     let token: PhaseChoiceToken =
         serde_json::from_str(raw).map_err(|_| "Choose a model for every model phase.")?;
@@ -1291,14 +1291,12 @@ fn parse_phase_choice(
     let preset = match (token.preset, token.preset_revision) {
         (None, None) => None,
         (Some(id), Some(revision)) => {
-            let id = AgentId::parse(&id).ok_or("Choose an available preset.")?;
-            let record = agents
+            let id = crate::presets::PresetId::parse(&id).ok_or("Choose an available preset.")?;
+            let record = presets
                 .iter()
                 .find(|record| record.id == id && record.revision == revision)
                 .ok_or("That preset changed. Reload the launch sheet.")?;
-            if let Some(preset_selection) = &record.selection
-                && preset_selection != &selection
-            {
+            if record.settings.model != selection {
                 return Err("Use the model selected by that preset.");
             }
             Some(PinnedPreset {
@@ -1309,10 +1307,13 @@ fn parse_phase_choice(
         }
         _ => return Err("Choose an available preset."),
     };
-    let instructions = preset
+    let settings = preset
         .as_ref()
-        .and_then(|pinned| agents.iter().find(|record| record.id == pinned.id))
-        .map(|record| record.instructions.clone())
+        .and_then(|pinned| presets.iter().find(|record| record.id == pinned.id))
+        .map(|record| record.settings.clone());
+    let instructions = settings
+        .as_ref()
+        .map(|settings| settings.instructions.clone())
         .unwrap_or_default();
     Ok(PhaseModelSelection {
         step: workflows::definition::StepKey::parse(step)
@@ -1320,6 +1321,7 @@ fn parse_phase_choice(
         selection,
         instructions,
         preset,
+        settings,
     })
 }
 
@@ -1345,7 +1347,7 @@ fn selected_phase_model_options(
     let Ok(resolved) = state.workflows.resolve(&selection) else {
         return Vec::new();
     };
-    let agents = state.agents.list();
+    let presets = state.presets.list();
     let selected = super::effective_model(state, record).map(|model| model.settings.model);
     let direct_models: Vec<ModelSelection> = state
         .preferences
@@ -1388,19 +1390,16 @@ fn selected_phase_model_options(
                     selected: selected.as_ref() == Some(selection),
                 });
             }
-            let default_direct = direct_models.first();
-            for agent in &agents {
-                let Some(selection) = agent.selection.as_ref().or(default_direct) else {
-                    continue;
-                };
+            for preset in &presets {
+                let selection = &preset.settings.model;
                 choices.push(PhaseChoice {
-                    value: phase_choice_token(step.key.as_str(), selection, Some(agent)),
-                    label: format!("Preset · {}", agent.name),
+                    value: phase_choice_token(step.key.as_str(), selection, Some(preset)),
+                    label: format!("Preset · {}", preset.name),
                     detail: format!(
                         "{} · {}{}",
                         selection.provider.label(),
                         selection.model,
-                        if agent.instructions.is_empty() {
+                        if preset.settings.instructions.is_empty() {
                             String::new()
                         } else {
                             " · Saved instructions".to_owned()
@@ -1444,7 +1443,7 @@ fn resolve_phase_models(
     definition: &workflows::definition::WorkflowDefinition,
     phase_raw: &[String],
 ) -> Result<Vec<PhaseModelSelection>, &'static str> {
-    let agents = state.agents.list();
+    let presets = state.presets.list();
     let mut models = Vec::new();
     for step in phase_steps(definition) {
         let mut matches = phase_raw.iter().filter(|raw| {
@@ -1457,7 +1456,7 @@ fn resolve_phase_models(
         if matches.next().is_some() {
             return Err("Choose one model for every model phase.");
         }
-        let model = parse_phase_choice(raw, step.key.as_str(), &agents)?;
+        let model = parse_phase_choice(raw, step.key.as_str(), &presets)?;
         super::valid_selection(state, &model.selection)?;
         models.push(model);
     }
@@ -1468,7 +1467,7 @@ fn resolve_phase_models(
 }
 
 fn validate_phase_models(
-    state: &AppState,
+    _state: &AppState,
     definition: &workflows::definition::WorkflowDefinition,
     base: &crate::agents::EffectiveAuthority,
     models: &[PhaseModelSelection],
@@ -1477,14 +1476,14 @@ fn validate_phase_models(
         let step = definition
             .step(&model.step)
             .ok_or("Choose a valid workflow phase.")?;
-        let authority = if let Some(preset) = &model.preset {
-            let record = state
-                .agents
-                .get(&preset.id)
-                .filter(|record| record.revision == preset.revision)
-                .ok_or("That preset changed. Reload the launch sheet.")?;
-            crate::conversations::apply_preset_ceiling(base, &record)
-                .map_err(|error| error.message())?
+        let authority = if let Some(settings) = &model.settings {
+            if settings.environment != definition.effective_environment(step) {
+                return Err(
+                    "That preset requests a different environment. Choose the workflow environment before launch.",
+                );
+            }
+            crate::conversations::apply_settings_ceiling(base, settings)
+                .map_err(|_| "That preset requests access outside the conversation settings.")?
         } else {
             base.clone()
         };

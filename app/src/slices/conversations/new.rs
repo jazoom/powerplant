@@ -8,6 +8,8 @@ pub(super) struct NewForm {
     pub(super) model: String,
     pub(super) thinking: String,
     pub(super) preset: String,
+    pub(super) preset_preview: String,
+    pub(super) preset_name: String,
     pub(super) instructions: String,
     pub(super) tool_list: String,
     pub(super) tool_read: String,
@@ -187,80 +189,80 @@ fn project(state: &AppState, raw: &str) -> Result<Option<ProjectId>, &'static st
         .ok_or("Choose an available project.")
 }
 
-fn model(
+pub(super) fn model(
     state: &AppState,
+    session: crate::sessions::SessionId,
     form: &NewForm,
 ) -> Result<Option<ConversationModelConfiguration>, &'static str> {
-    if form.provider.is_empty() && form.model.is_empty() && form.preset.is_empty() {
+    let configuration = settings_snapshot(state, session, form)?;
+    if let Some(configuration) = &configuration {
+        valid_selection(state, &configuration.settings.model)?;
+    }
+    Ok(configuration)
+}
+
+pub(super) fn settings_snapshot(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    form: &NewForm,
+) -> Result<Option<ConversationModelConfiguration>, &'static str> {
+    if form.provider.is_empty() && form.model.is_empty() {
         return Ok(None);
     }
-    let preset = if form.preset.is_empty() {
+    let provider = ProviderKind::parse(&form.provider).ok_or("Choose a stored provider.")?;
+    let thinking = if form.thinking.trim().is_empty() {
         None
     } else {
         Some(
-            AgentId::parse(&form.preset)
-                .and_then(|id| state.agents.get(&id))
-                .ok_or("Choose an available preset.")?,
+            ThinkingEffort::new(form.thinking.clone())
+                .ok_or("Choose an available thinking effort.")?,
         )
     };
-    let selection = if let Some(selection) =
-        preset.as_ref().and_then(|preset| preset.selection.clone())
-    {
-        selection
+    let selection = ModelSelection::new(provider, form.model.clone(), thinking)
+        .ok_or("Enter a valid model name.")?;
+    let environment = if form.environment.trim().is_empty() {
+        super::default_environment(state).map_err(|_| "Choose an environment.")?
     } else {
-        let provider = ProviderKind::parse(&form.provider).ok_or("Choose a stored provider.")?;
-        let thinking = if form.thinking.trim().is_empty() {
-            None
-        } else {
-            Some(
-                ThinkingEffort::new(form.thinking.clone())
-                    .ok_or("Choose an available thinking effort.")?,
-            )
-        };
-        ModelSelection::new(provider, form.model.clone(), thinking)
-            .ok_or("Enter a valid model name.")?
+        EnvironmentId::parse(form.environment.trim()).ok_or("Choose a valid environment.")?
     };
-    valid_selection(state, &selection)?;
-    let environment = super::selected_environment(state, &form.environment)?;
-    let mut configuration = match preset {
-        Some(preset) => {
-            ConversationModelConfiguration::from_preset(&preset, selection, environment)
-        }
-        None => ConversationModelConfiguration::direct(selection, environment),
+    let network_mode = if form.network.trim().is_empty() {
+        "none"
+    } else {
+        form.network.as_str()
     };
-    if configuration.preset.is_none() {
-        let tools = super::settings::parse_tools(&form.tool_values())?;
-        let network_mode = if form.network.trim().is_empty() {
-            "none"
-        } else {
-            form.network.as_str()
-        };
-        let network = crate::agents::NetworkAccess::parse_form(network_mode, &form.network_domains)
-            .map_err(|_| "Choose valid network access. Restricted access needs 1 to 32 domains.")?;
-        configuration.settings = crate::execution::ExecutionSettings::new(
-            configuration.settings.model,
-            form.instructions.clone(),
-            tools,
-            environment,
-        )
-        .and_then(|settings| settings.with_network(network))
-        .ok_or("Enter instructions within 32 KiB without unsupported control characters.")?;
-    }
-    configuration.settings = configuration
-        .settings
-        .with_directories(form.directories()?)
-        .ok_or("Choose valid non-overlapping directories.")?;
-    Ok(Some(configuration))
+    let network = crate::agents::NetworkAccess::parse_form(network_mode, &form.network_domains)
+        .map_err(|_| "Choose valid network access. Restricted access needs 1 to 32 domains.")?;
+    let settings = crate::execution::ExecutionSettings::new(
+        selection,
+        form.instructions.clone(),
+        super::settings::parse_tools(&form.tool_values())?,
+        environment,
+    )
+    .and_then(|settings| settings.with_network(network))
+    .and_then(|settings| settings.with_directories(form.directories().ok()?))
+    .ok_or("Enter valid conversation settings.")?;
+    let preset = state
+        .presets
+        .applied_draft(session, &form.preset_preview)
+        .filter(|preset| preset.id.as_hex() == form.preset && preset.settings == settings);
+    Ok(Some(match preset {
+        Some(preset) => ConversationModelConfiguration::from_preset(&preset),
+        None => ConversationModelConfiguration {
+            settings,
+            preset: None,
+        },
+    }))
 }
 
 pub(super) async fn remember_model(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     _graft: PatchGraft,
     Form(mut form): Form<NewForm>,
 ) -> AppResult<Response> {
     form.preset.clear();
-    let (status, message) = match model(&state, &form) {
+    form.preset_preview.clear();
+    let (status, message) = match model(&state, session.0, &form) {
         Ok(Some(model)) => match remember_selection(&state, model.settings.model) {
             Ok(()) => (PatchStatus::Ok, ""),
             Err(error) => (PatchStatus::UnprocessableEntity, error),
@@ -313,7 +315,7 @@ pub(super) async fn save(
         Ok(project) => project,
         Err(error) => return reject(PatchStatus::UnprocessableEntity, error, form),
     };
-    let model = match model(&state, &form) {
+    let model = match model(&state, session.0, &form) {
         Ok(model) => model,
         Err(error) => {
             return reject_settings(PatchStatus::UnprocessableEntity, error, form);

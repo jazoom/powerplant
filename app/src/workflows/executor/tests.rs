@@ -613,6 +613,7 @@ async fn a_configured_phase_uses_its_pinned_provider_model() {
                 selection,
                 instructions: "Pinned phase instructions".to_owned(),
                 preset: None,
+                settings: None,
             }];
             Ok(())
         })

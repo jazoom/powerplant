@@ -31,6 +31,7 @@ pub(crate) enum CatalogueResetConflict {
     Project,
     AgentGrant,
     ConversationGrant,
+    PresetGrant,
 }
 
 #[derive(Debug)]
@@ -48,6 +49,7 @@ impl CatalogueResetConflict {
             Self::ConversationGrant => {
                 "A conversation grant is inside the Power Plant data directory."
             }
+            Self::PresetGrant => "A preset grant is inside the Power Plant data directory.",
         }
     }
 }
@@ -143,6 +145,7 @@ impl LocalDataReset {
         projects: &ProjectStore,
         agents: &AgentStore,
         conversations: &ConversationStore,
+        presets: &crate::presets::PresetStore,
     ) -> Result<ResetRequest, ResetError> {
         if self.is_pending() {
             return Ok(ResetRequest::Pending);
@@ -156,9 +159,12 @@ impl LocalDataReset {
         if self.is_pending() {
             return Ok(ResetRequest::Pending);
         }
-        if let Some(conflict) =
-            self.catalogue_conflict(&projects.list(), &agents.list(), &conversations.list())
-        {
+        if let Some(conflict) = self.catalogue_conflict(
+            &projects.list(),
+            &agents.list(),
+            &conversations.list(),
+            &presets.list(),
+        ) {
             return Err(ResetError::Catalogue(conflict));
         }
         let mut inner = lock(&self.inner);
@@ -172,6 +178,7 @@ impl LocalDataReset {
         projects: &[ProjectRecord],
         agents: &[AgentRecord],
         conversations: &[ConversationRecord],
+        presets: &[crate::presets::PresetRecord],
     ) -> Option<CatalogueResetConflict> {
         if projects
             .iter()
@@ -197,6 +204,15 @@ impl LocalDataReset {
             })
         }) {
             return Some(CatalogueResetConflict::ConversationGrant);
+        }
+        if presets.iter().any(|preset| {
+            preset
+                .settings
+                .directories
+                .iter()
+                .any(|grant| path_under_root(&self.root, &grant.host_path))
+        }) {
+            return Some(CatalogueResetConflict::PresetGrant);
         }
         None
     }

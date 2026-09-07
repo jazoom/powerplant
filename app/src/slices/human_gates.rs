@@ -1180,18 +1180,6 @@ fn continuation_authority(
     {
         return ContinuationAuthority::Stale;
     }
-    if run
-        .model_phases()
-        .filter_map(|phase| phase.preset.as_ref())
-        .any(|preset| {
-            state
-                .agents
-                .get(&preset.id)
-                .is_none_or(|record| record.revision != preset.revision)
-        })
-    {
-        return ContinuationAuthority::Stale;
-    }
     if run.project_id.is_none() {
         let (Some(conversation_id), Some(pinned)) = (
             run.conversation_id,
