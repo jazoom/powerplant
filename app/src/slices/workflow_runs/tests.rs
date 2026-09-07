@@ -954,3 +954,61 @@ async fn assert_connect_redirect(
         );
     }
 }
+
+#[test]
+fn failed_loop_releases_the_session_but_retains_its_conversation() {
+    let (state, _, session, parent) = crate::slices::human_gates::tests::loop_at_gate();
+    let child = parent.current_child().expect("child");
+    let job = state.gate_continuations.take(&child).expect("job");
+    state
+        .sessions
+        .acquire_job_reservation(&session, job.conversation_id, job.job.id())
+        .expect("session reservation");
+    assert!(job.job.resume());
+    let run = state
+        .workflow_runs
+        .mutate(&child, |run| run.interrupt(crate::workflows::now_ms()))
+        .expect("interrupted child");
+    crate::workflows::settle_terminal_job(&state, &job, &run);
+    assert_eq!(
+        state.task_loops.get(&parent.id).expect("parent").state,
+        crate::workflows::task_loop::TaskLoopState::Failed
+    );
+    assert_eq!(
+        state
+            .conversations
+            .get(&parent.conversation_id)
+            .expect("conversation")
+            .active_job,
+        Some(job.job.id())
+    );
+    let other = state
+        .conversations
+        .create("Other work".to_owned())
+        .expect("conversation");
+    state
+        .sessions
+        .begin_conversation_job(&session, other.id, 0)
+        .expect("session released");
+}
+
+#[test]
+fn recovered_retry_uses_the_recorded_base_not_a_new_host_capture() {
+    let (state, _, _, parent) = crate::slices::human_gates::tests::loop_at_gate();
+    let failed = state.task_loops.fail(&parent.id).expect("failed task");
+    let before = super::loop_checkpoint_source(&state, &failed).expect("recorded base");
+    let project = state.projects.get(&parent.project_id).expect("project");
+    std::fs::write(
+        project.host_path.join("external-change.txt"),
+        "outside edit",
+    )
+    .expect("drift");
+    let after = super::loop_checkpoint_source(&state, &failed).expect("recorded base");
+    assert_eq!(before, after);
+    let live = crate::workflows::artefacts::CandidateCapture::capture_host(
+        &project.host_path,
+        &state.workflow_artefacts,
+    )
+    .expect("host");
+    assert_ne!(after, live);
+}

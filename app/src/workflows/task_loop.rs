@@ -57,6 +57,7 @@ pub(crate) struct TaskLoopItem {
     pub(crate) index: u32,
     pub(crate) markdown: String,
     pub(crate) child_id: Option<RunId>,
+    pub(crate) previous_child_ids: Vec<RunId>,
     pub(crate) outcome: TaskOutcome,
 }
 
@@ -125,7 +126,7 @@ impl TaskLoopError {
             Self::Stale => "That task loop command is stale. Reload it.",
             Self::Busy => "Another command is active. The paused checkpoint is unchanged.",
             Self::Uncertain => {
-                "A commit is still uncertain. Continue is unavailable until reconciliation finishes."
+                "A commit is still uncertain. Continuation and retry stay unavailable until reconciliation finishes."
             }
         }
     }
@@ -159,12 +160,7 @@ impl TaskLoopState {
     pub(crate) fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Completed
-                | Self::Failed
-                | Self::Cancelled
-                | Self::Stopped
-                | Self::Interrupted
-                | Self::Blocked
+            Self::Completed | Self::Cancelled | Self::Stopped | Self::Blocked
         )
     }
 }
@@ -230,8 +226,54 @@ impl TaskLoop {
         }
     }
 
+    pub(crate) fn occupied_child(&self) -> Option<RunId> {
+        self.current_child()
+            .or_else(|| self.retryable_task().and_then(|task| task.child_id))
+    }
+
     pub(crate) fn pause_requested(&self) -> bool {
         matches!(self.state, TaskLoopState::PauseRequested { .. })
+    }
+
+    pub(crate) fn allows_continue(&self) -> bool {
+        matches!(self.state, TaskLoopState::Paused | TaskLoopState::Ready)
+    }
+
+    pub(crate) fn allows_retry(&self) -> bool {
+        matches!(
+            self.state,
+            TaskLoopState::Failed | TaskLoopState::Interrupted
+        ) && self.retryable_task().is_some()
+    }
+
+    pub(crate) fn keeps_conversation_reservation(&self) -> bool {
+        !matches!(
+            self.state,
+            TaskLoopState::Completed | TaskLoopState::Cancelled | TaskLoopState::Stopped
+        )
+    }
+
+    pub(crate) fn retryable_task(&self) -> Option<&TaskLoopItem> {
+        if !matches!(
+            self.state,
+            TaskLoopState::Failed | TaskLoopState::Interrupted
+        ) {
+            return None;
+        }
+        let mut found = None;
+        for task in &self.tasks {
+            if matches!(
+                task.outcome,
+                TaskOutcome::Reserved | TaskOutcome::Dispatched | TaskOutcome::Failed
+            ) && task.child_id.is_some()
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(task);
+            }
+        }
+        found
     }
 
     pub(crate) fn command_token(&self) -> String {
@@ -244,6 +286,21 @@ impl TaskLoop {
                 format!("pause-requested:{}", child.as_hex())
             }
             TaskLoopState::Paused => format!("paused:{}", self.completed_count()),
+            TaskLoopState::Ready => format!("ready:{}", self.completed_count()),
+            TaskLoopState::Interrupted => format!(
+                "interrupted:{}",
+                self.retryable_task()
+                    .and_then(|task| task.child_id)
+                    .map(|id| id.as_hex())
+                    .unwrap_or_else(|| self.completed_count().to_string())
+            ),
+            TaskLoopState::Failed => format!(
+                "failed:{}",
+                self.retryable_task()
+                    .and_then(|task| task.child_id)
+                    .map(|id| id.as_hex())
+                    .unwrap_or_else(|| self.completed_count().to_string())
+            ),
             other => format!(
                 "{}:{}",
                 other.as_label().to_ascii_lowercase().replace(' ', "-"),
@@ -253,7 +310,7 @@ impl TaskLoop {
     }
 
     pub(crate) fn child_href(&self) -> String {
-        self.current_child()
+        self.occupied_child()
             .map(|child| format!("/runs/{}", child.as_hex()))
             .unwrap_or_default()
     }
@@ -371,6 +428,12 @@ impl TaskLoop {
                 }
                 children += 1;
             }
+            for previous in &task.previous_child_ids {
+                if !seen.insert(*previous) {
+                    return Err(TaskLoopError::Corrupt);
+                }
+                children += 1;
+            }
             if children > MAXIMUM_LOOP_CHILDREN {
                 return Err(TaskLoopError::Corrupt);
             }
@@ -386,6 +449,9 @@ impl TaskLoop {
                 | TaskOutcome::Cancelled
                     if task.child_id.is_none() =>
                 {
+                    return Err(TaskLoopError::Corrupt);
+                }
+                TaskOutcome::Pending if !task.previous_child_ids.is_empty() => {
                     return Err(TaskLoopError::Corrupt);
                 }
                 _ => {}
@@ -432,6 +498,21 @@ impl TaskLoop {
         self.tasks
             .iter()
             .position(|task| task.outcome == TaskOutcome::Pending && task.child_id.is_none())
+    }
+
+    fn retryable_index(&self) -> Option<usize> {
+        self.retryable_task().and_then(|task| {
+            self.tasks
+                .iter()
+                .position(|item| item.index == task.index && item.child_id == task.child_id)
+        })
+    }
+
+    fn child_count(&self) -> usize {
+        self.tasks
+            .iter()
+            .map(|task| usize::from(task.child_id.is_some()) + task.previous_child_ids.len())
+            .sum()
     }
 
     fn item_mut(&mut self, child: RunId) -> Result<&mut TaskLoopItem, TaskLoopError> {
@@ -502,6 +583,10 @@ impl TaskLoopStore {
         summaries
     }
 
+    pub(crate) fn list(&self) -> Vec<TaskLoop> {
+        self.lock().values().cloned().collect()
+    }
+
     pub(crate) fn mutate<F>(&self, id: &TaskLoopId, op: F) -> Result<TaskLoop, TaskLoopError>
     where
         F: FnOnce(&mut TaskLoop) -> Result<(), TaskLoopError>,
@@ -530,9 +615,7 @@ impl TaskLoopStore {
             ) {
                 return Err(TaskLoopError::DuplicateDispatch);
             }
-            if record.tasks.iter().filter(|task| task.child_id.is_some()).count()
-                >= MAXIMUM_LOOP_CHILDREN
-            {
+            if record.child_count() >= MAXIMUM_LOOP_CHILDREN {
                 return Err(TaskLoopError::ChildLimit);
             }
             if aggregate_attempts >= MAXIMUM_LOOP_ATTEMPTS {
@@ -563,6 +646,80 @@ impl TaskLoopStore {
             let child = task.child_id.ok_or(TaskLoopError::Conflict)?;
             Ok((record, child, task))
         });
+        if matches!(
+            result,
+            Err(TaskLoopError::ChildLimit | TaskLoopError::AttemptLimit)
+        ) {
+            self.mutate(id, |record| {
+                record.state = TaskLoopState::Blocked;
+                Ok(())
+            })?;
+        }
+        result
+    }
+
+    pub(crate) fn retry_current(
+        &self,
+        id: &TaskLoopId,
+        aggregate_attempts: usize,
+        reuse_reserved: bool,
+    ) -> Result<(TaskLoop, RunId, TaskLoopItem), TaskLoopError> {
+        let result = self
+            .mutate(id, |record| {
+                if !record.allows_retry() {
+                    return Err(TaskLoopError::Conflict);
+                }
+                let index = record.retryable_index().ok_or(TaskLoopError::Conflict)?;
+                if aggregate_attempts >= MAXIMUM_LOOP_ATTEMPTS {
+                    return Err(TaskLoopError::AttemptLimit);
+                }
+                if reuse_reserved {
+                    if record.tasks[index].outcome != TaskOutcome::Reserved
+                        || record.tasks[index].child_id.is_none()
+                    {
+                        return Err(TaskLoopError::Conflict);
+                    }
+                    let child = record.tasks[index]
+                        .child_id
+                        .ok_or(TaskLoopError::Conflict)?;
+                    record.state = TaskLoopState::Active {
+                        task_index: record.tasks[index].index,
+                        child,
+                    };
+                    return Ok(());
+                }
+                if record.child_count() >= MAXIMUM_LOOP_CHILDREN {
+                    return Err(TaskLoopError::ChildLimit);
+                }
+                let previous = record.tasks[index]
+                    .child_id
+                    .ok_or(TaskLoopError::Conflict)?;
+                record.tasks[index].previous_child_ids.push(previous);
+                let child = RunId::generate().map_err(|_| TaskLoopError::Persist)?;
+                record.tasks[index].child_id = Some(child);
+                record.tasks[index].outcome = TaskOutcome::Reserved;
+                record.state = TaskLoopState::Active {
+                    task_index: record.tasks[index].index,
+                    child,
+                };
+                Ok(())
+            })
+            .and_then(|record| {
+                let task = record
+                    .retryable_task()
+                    .cloned()
+                    .or_else(|| {
+                        record.tasks.iter().find(|task| {
+                            matches!(
+                                record.state,
+                                TaskLoopState::Active { child, .. } if task.child_id == Some(child)
+                            )
+                        }).cloned()
+                    })
+                    .ok_or(TaskLoopError::Conflict)?;
+                let child = task.child_id.ok_or(TaskLoopError::Conflict)?;
+                Ok((record, child, task))
+            });
         if matches!(
             result,
             Err(TaskLoopError::ChildLimit | TaskLoopError::AttemptLimit)
@@ -766,11 +923,22 @@ impl TaskLoopStore {
         Ok((record, advance))
     }
 
+    pub(crate) fn reconcile(&self, runs: &super::WorkflowRunStore) -> Result<(), TaskLoopError> {
+        let ids: Vec<_> = self.lock().keys().copied().collect();
+        for id in ids {
+            self.mutate(&id, |record| reconcile_record(record, runs))?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn fail(&self, id: &TaskLoopId) -> Result<TaskLoop, TaskLoopError> {
         self.mutate(id, |record| {
             if !record.state.is_terminal() {
                 if let Some(child) = record.current_child() {
-                    record.item_mut(child)?.outcome = TaskOutcome::Failed;
+                    let task = record.item_mut(child)?;
+                    if task.outcome != TaskOutcome::Reserved {
+                        task.outcome = TaskOutcome::Failed;
+                    }
                 }
                 record.state = TaskLoopState::Failed;
             }
@@ -848,7 +1016,7 @@ impl TaskLoopStore {
                 return Err(TaskLoopError::Conflict);
             }
             before_stop(record)?;
-            if let Some(child) = record.current_child() {
+            if let Some(child) = record.occupied_child() {
                 record.item_mut(child)?.outcome = TaskOutcome::Cancelled;
             }
             record.state = TaskLoopState::Stopped;
@@ -882,6 +1050,142 @@ fn summary_of(record: &TaskLoop) -> LoopSummary {
         created_at_ms: record.created_at_ms,
         current_step: record.progress_label(),
     }
+}
+
+fn reconcile_record(
+    record: &mut TaskLoop,
+    runs: &super::WorkflowRunStore,
+) -> Result<(), TaskLoopError> {
+    // A deliberate stop remains terminal across restarts.
+    if matches!(
+        record.state,
+        TaskLoopState::Stopped | TaskLoopState::Cancelled
+    ) {
+        return Ok(());
+    }
+    let mut uncertain = false;
+    let mut retryable = 0usize;
+    let mut reserved_only = false;
+    for task in &mut record.tasks {
+        for previous in &task.previous_child_ids {
+            let child = runs.get(previous).ok_or(TaskLoopError::Corrupt)?;
+            if child.parent_loop != Some(record.id)
+                || child.conversation_id != Some(record.conversation_id)
+            {
+                return Err(TaskLoopError::Corrupt);
+            }
+            uncertain |= child_commit_uncertain(&child);
+        }
+        let Some(child_id) = task.child_id else {
+            continue;
+        };
+        let created = runs.get(&child_id);
+        if created.as_ref().is_some_and(|child| {
+            child.parent_loop != Some(record.id)
+                || child.conversation_id != Some(record.conversation_id)
+                || child.project_id != record.project_id
+                || child.pinned != record.pinned
+                || child.phase_models != record.phase_models
+                || child.task_selection.as_ref().is_none_or(|selection| {
+                    selection.document_id != record.task_list.document_id
+                        || selection.revision != record.task_list.revision
+                        || selection.content_hash != record.task_list.content_hash
+                        || selection.task_list != record.task_list.markdown
+                        || selection.index != task.index
+                        || selection.task_markdown != task.markdown
+                })
+        }) {
+            return Err(TaskLoopError::Corrupt);
+        }
+        if created.as_ref().is_some_and(child_commit_uncertain) {
+            uncertain = true;
+            continue;
+        }
+        let evidence = created.as_ref().and_then(child_outcome);
+        if completed_outcome(task.outcome) {
+            if evidence != Some(task.outcome) {
+                uncertain = true;
+                // Retain the discrepancy so another restart cannot enable a retry.
+            }
+            continue;
+        }
+        match (created.is_some(), evidence) {
+            (true, Some(outcome)) if completed_outcome(outcome) => {
+                task.outcome = outcome;
+            }
+            (true, Some(TaskOutcome::Cancelled)) | (_, Some(TaskOutcome::Cancelled)) => {
+                task.outcome = TaskOutcome::Cancelled;
+            }
+            (false, None) if task.outcome == TaskOutcome::Reserved => {
+                retryable += 1;
+                reserved_only = true;
+            }
+            (false, None) => {
+                // Missing dispatched evidence cannot establish a safe retry boundary.
+                uncertain = true;
+            }
+            (true, Some(TaskOutcome::Failed) | None) => {
+                task.outcome = TaskOutcome::Failed;
+                retryable += 1;
+                reserved_only = false;
+            }
+            _ => {}
+        }
+    }
+    if uncertain || retryable > 1 {
+        record.state = TaskLoopState::Blocked;
+        return Ok(());
+    }
+    if record.completed_count() == record.tasks.len() {
+        record.state = TaskLoopState::Completed;
+        return Ok(());
+    }
+    if retryable == 1 {
+        record.state = if reserved_only {
+            TaskLoopState::Interrupted
+        } else {
+            TaskLoopState::Failed
+        };
+        return Ok(());
+    }
+    if record
+        .tasks
+        .iter()
+        .any(|task| task.outcome == TaskOutcome::Cancelled)
+    {
+        record.state = TaskLoopState::Stopped;
+        return Ok(());
+    }
+    if record.pending_index().is_some()
+        && record.tasks.iter().all(|task| {
+            matches!(
+                task.outcome,
+                TaskOutcome::Pending
+                    | TaskOutcome::CompletedCommit
+                    | TaskOutcome::CompletedUnchanged
+            )
+        })
+    {
+        record.state = if record.completed_count() == 0 {
+            TaskLoopState::Ready
+        } else {
+            TaskLoopState::Paused
+        };
+    }
+    Ok(())
+}
+
+fn completed_outcome(outcome: TaskOutcome) -> bool {
+    matches!(
+        outcome,
+        TaskOutcome::CompletedCommit | TaskOutcome::CompletedUnchanged
+    )
+}
+
+pub(crate) fn child_commit_uncertain(run: &WorkflowRun) -> bool {
+    run.attempts
+        .iter()
+        .any(|attempt| attempt.commit_transaction.is_some() && attempt.commit_result.is_none())
 }
 
 fn child_outcome(run: &WorkflowRun) -> Option<TaskOutcome> {
@@ -949,6 +1253,8 @@ struct TaskItemFile {
     index: u32,
     markdown: String,
     child_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    previous_child_ids: Vec<String>,
     outcome: String,
 }
 
@@ -1021,6 +1327,7 @@ impl TaskLoop {
                     index: task.index,
                     markdown: task.markdown.clone(),
                     child_id: task.child_id.map(|id| id.as_hex()),
+                    previous_child_ids: task.previous_child_ids.iter().map(RunId::as_hex).collect(),
                     outcome: outcome_as_str(task.outcome).to_owned(),
                 })
                 .collect(),
@@ -1116,6 +1423,11 @@ fn task_from_file(file: TaskItemFile) -> Result<TaskLoopItem, TaskLoopError> {
             Some(value) => Some(RunId::parse(&value).ok_or(TaskLoopError::Corrupt)?),
             None => None,
         },
+        previous_child_ids: file
+            .previous_child_ids
+            .into_iter()
+            .map(|id| RunId::parse(&id).ok_or(TaskLoopError::Corrupt))
+            .collect::<Result<Vec<_>, _>>()?,
         outcome: outcome_from_str(&file.outcome).ok_or(TaskLoopError::Corrupt)?,
     })
 }

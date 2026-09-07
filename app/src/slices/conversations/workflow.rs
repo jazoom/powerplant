@@ -619,6 +619,7 @@ pub(super) async fn launch(
                 index: task.index,
                 markdown: task.markdown.clone(),
                 child_id: None,
+                previous_child_ids: Vec::new(),
                 outcome: workflows::TaskOutcome::Pending,
             })
             .collect();

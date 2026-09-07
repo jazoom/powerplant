@@ -2042,3 +2042,72 @@ async fn execute_run_opens_a_gate_for_an_unchanged_configured_candidate() {
         Some(JobStatus::AwaitingDecision)
     );
 }
+
+#[test]
+fn recover_task_loops_does_not_start_model_work() {
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    let parent = crate::workflows::task_loop::tests::loop_record();
+    let parent = state.task_loops.create(parent).expect("loop");
+    let (parent, first_id, _) = state
+        .task_loops
+        .reserve_next_child(&parent.id, 0)
+        .expect("reserve");
+    state
+        .task_loops
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let child = crate::workflows::task_loop::tests::completed_child(
+        &parent,
+        first_id,
+        crate::workflows::task_loop::tests::source(1),
+    );
+    state.workflow_runs.create(child).expect("child");
+    super::recover_task_loops(&state).expect("recover");
+    let parent = state.task_loops.get(&parent.id).expect("parent");
+    assert_eq!(
+        parent.state,
+        crate::workflows::task_loop::TaskLoopState::Paused
+    );
+    assert_eq!(parent.tasks[1].child_id, None);
+    assert!(state.workflow_execution.acquire().is_ok());
+}
+
+#[test]
+fn a_recovered_commit_does_not_run_again_for_a_task_loop_child() {
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    let parent = crate::workflows::task_loop::tests::loop_record();
+    let parent = state.task_loops.create(parent).expect("loop");
+    let (parent, first_id, _) = state
+        .task_loops
+        .reserve_next_child(&parent.id, 0)
+        .expect("reserve");
+    state
+        .task_loops
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let child = crate::workflows::task_loop::tests::completed_child(
+        &parent,
+        first_id,
+        crate::workflows::task_loop::tests::source(1),
+    );
+    let commit = child.attempts[0]
+        .commit_result
+        .as_ref()
+        .map(|result| result.commit.clone());
+    state.workflow_runs.create(child).expect("child");
+    super::recover_commit_transactions(&state).expect("no active transaction");
+    super::recover_task_loops(&state).expect("recover loop");
+    super::recover_commit_transactions(&state).expect("second recovery");
+    let child = state.workflow_runs.get(&first_id).expect("child");
+    assert_eq!(
+        child.attempts[0]
+            .commit_result
+            .as_ref()
+            .map(|result| result.commit.clone()),
+        commit
+    );
+    assert_eq!(child.attempts.len(), 1);
+    let parent = state.task_loops.get(&parent.id).expect("parent");
+    assert_eq!(parent.tasks[0].child_id, Some(first_id));
+    assert_eq!(parent.tasks[1].child_id, None);
+}

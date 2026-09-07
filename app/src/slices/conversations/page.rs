@@ -333,6 +333,7 @@ pub(super) struct WorkflowProgressView {
     pub(super) command_token: String,
     pub(super) can_pause: bool,
     pub(super) can_continue: bool,
+    pub(super) can_retry: bool,
     pub(super) can_stop: bool,
     pub(super) pause_requested: bool,
     pub(super) awaiting_gate: bool,
@@ -757,6 +758,7 @@ pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
         command_token: String::new(),
         can_pause: false,
         can_continue: false,
+        can_retry: false,
         can_stop: false,
         pause_requested: false,
         awaiting_gate: false,
@@ -781,10 +783,8 @@ pub(super) fn loop_progress(
             crate::workflows::task_loop::TaskLoopState::Active { .. }
                 | crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. }
         ),
-        can_continue: matches!(
-            record.state,
-            crate::workflows::task_loop::TaskLoopState::Paused
-        ),
+        can_continue: record.allows_continue(),
+        can_retry: record.allows_retry(),
         can_stop: !record.state.is_terminal(),
         pause_requested: record.pause_requested(),
         awaiting_gate,
@@ -796,16 +796,16 @@ fn loop_result_label(state: &crate::workflows::task_loop::TaskLoopState) -> &'st
         crate::workflows::task_loop::TaskLoopState::Completed => {
             "Each completed task kept its commit. Open the parent run for task progress."
         }
-        crate::workflows::task_loop::TaskLoopState::Failed
-        | crate::workflows::task_loop::TaskLoopState::Blocked => {
-            "The task loop stopped. Earlier commits remain. Open the parent run for evidence."
+        crate::workflows::task_loop::TaskLoopState::Blocked => {
+            "The task loop is unavailable until reconciliation finishes. Earlier commits remain."
         }
         crate::workflows::task_loop::TaskLoopState::Cancelled
         | crate::workflows::task_loop::TaskLoopState::Stopped => {
             "The task loop stopped. Earlier commits remain. This did not roll back the project."
         }
-        crate::workflows::task_loop::TaskLoopState::Interrupted => {
-            "The task loop was interrupted. Earlier commits remain."
+        crate::workflows::task_loop::TaskLoopState::Interrupted
+        | crate::workflows::task_loop::TaskLoopState::Failed => {
+            "The current task stopped. Retry starts a fresh attempt from the recorded task base. It does not resume the earlier transcript."
         }
         crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. } => {
             "A task waits for a human decision. The conversation stays reserved."

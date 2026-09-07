@@ -939,6 +939,67 @@ impl ConversationStore {
         .map(|_| ())
     }
 
+    pub(crate) fn restore_reservation(
+        &self,
+        id: &ConversationId,
+    ) -> Result<JobId, ConversationError> {
+        if let Some(request) = self.get(id).and_then(|record| record.active_job) {
+            return Ok(request);
+        }
+        self.replace(id, 0, |current| {
+            let message = current
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|message| message.role == MessageRole::Assistant && message.request.is_some())
+                .ok_or(ConversationError::Conflict)?;
+            if message.status == MessageStatus::Interrupted {
+                message.status = MessageStatus::Pending;
+            } else if message.status != MessageStatus::Pending {
+                return Err(ConversationError::Conflict);
+            }
+            current.active_job = message.request;
+            Ok(())
+        })
+        .and_then(|record| record.active_job.ok_or(ConversationError::Conflict))
+    }
+
+    pub(crate) fn reopen_loop_request(
+        &self,
+        id: &ConversationId,
+        request: JobId,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, 0, |current| {
+            if current.active_job.is_some() && current.active_job != Some(request) {
+                return Err(ConversationError::Active);
+            }
+            if current.messages.len() >= MAXIMUM_MESSAGES {
+                return Err(ConversationError::Full);
+            }
+            if let Some(message) = current.messages.iter_mut().rev().find(|message| {
+                message.role == MessageRole::Assistant
+                    && message.request.is_some()
+                    && matches!(
+                        message.status,
+                        MessageStatus::Interrupted | MessageStatus::Pending
+                    )
+            }) {
+                message.status = MessageStatus::Pending;
+                message.request = Some(request);
+                current.active_job = Some(request);
+                return Ok(());
+            }
+            current.messages.push(ConversationMessage {
+                role: MessageRole::Assistant,
+                text: String::new(),
+                status: MessageStatus::Pending,
+                request: Some(request),
+            });
+            current.active_job = Some(request);
+            Ok(())
+        })
+    }
+
     pub(crate) fn delete(
         &self,
         id: &ConversationId,

@@ -48,6 +48,7 @@ pub(crate) fn loop_record() -> TaskLoop {
                 index: task.index,
                 markdown: task.markdown.clone(),
                 child_id: None,
+                previous_child_ids: Vec::new(),
                 outcome: TaskOutcome::Pending,
             })
             .collect(),
@@ -383,4 +384,180 @@ fn stop_preserves_completed_tasks() {
     assert_eq!(parent.state, TaskLoopState::Stopped);
     assert_eq!(parent.tasks[0].outcome, TaskOutcome::CompletedCommit);
     assert_eq!(parent.tasks[1].outcome, TaskOutcome::Cancelled);
+}
+
+fn interrupted_child(parent: &TaskLoop, child_id: RunId) -> WorkflowRun {
+    let task = parent
+        .tasks
+        .iter()
+        .find(|task| task.child_id == Some(child_id))
+        .expect("task");
+    let mut run = parent
+        .child_run(child_id, 2, task.index, task.markdown.clone())
+        .expect("child");
+    run.state = RunState::Interrupted;
+    run
+}
+
+#[test]
+fn recovery_uses_child_evidence_not_the_parent_counter() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let dispatched = store.get(&parent.id).expect("dispatched");
+    let child = interrupted_child(&dispatched, first_id);
+    store
+        .mutate(&parent.id, |record| {
+            record.tasks[0].outcome = TaskOutcome::CompletedCommit;
+            record.state = TaskLoopState::Paused;
+            Ok(())
+        })
+        .expect("counter only");
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    runs.create(child).expect("store child");
+    store.reconcile(&runs).expect("reconcile");
+    let parent = store.get(&parent.id).expect("parent");
+    assert_eq!(parent.state, TaskLoopState::Blocked);
+    store.reconcile(&runs).expect("second recovery");
+    let parent = store.get(&parent.id).expect("parent");
+    assert_eq!(parent.state, TaskLoopState::Blocked);
+    assert!(!parent.allows_retry());
+}
+
+#[test]
+fn a_reserved_child_without_a_created_run_is_not_complete() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    store.reconcile(&runs).expect("reconcile");
+    let parent = store.get(&parent.id).expect("parent");
+    assert_eq!(parent.state, TaskLoopState::Interrupted);
+    assert_eq!(parent.tasks[0].child_id, Some(first_id));
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::Reserved);
+    assert_eq!(parent.tasks[1].child_id, None);
+    assert!(parent.allows_retry());
+    assert!(!parent.allows_continue());
+}
+
+#[test]
+fn recovered_completion_pauses_before_the_next_task() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    let child = completed_child(&parent, first_id, source(1));
+    runs.create(child).expect("store child");
+    store.reconcile(&runs).expect("reconcile");
+    let parent = store.get(&parent.id).expect("parent");
+    assert_eq!(parent.state, TaskLoopState::Paused);
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::CompletedCommit);
+    assert_eq!(parent.tasks[1].child_id, None);
+    assert_eq!(parent.tasks[1].outcome, TaskOutcome::Pending);
+    assert!(parent.allows_continue());
+    let (next, next_id, task) = store.reserve_next_child(&parent.id, 1).expect("next");
+    assert_ne!(next_id, first_id);
+    assert_eq!(task.index, parent.tasks[1].index);
+    assert_eq!(next.tasks[0].child_id, Some(first_id));
+}
+
+#[test]
+fn retry_keeps_the_previous_child_for_inspection() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    runs.create(interrupted_child(&parent, first_id))
+        .expect("store child");
+    store.reconcile(&runs).expect("reconcile");
+    let parent = store.get(&parent.id).expect("failed");
+    assert_eq!(parent.state, TaskLoopState::Failed);
+    let (parent, retry_id, task) = store.retry_current(&parent.id, 1, false).expect("retry");
+    assert_ne!(retry_id, first_id);
+    assert_eq!(task.previous_child_ids, vec![first_id]);
+    assert_eq!(parent.tasks[0].child_id, Some(retry_id));
+    assert_eq!(parent.tasks[0].outcome, TaskOutcome::Reserved);
+    assert!(matches!(parent.state, TaskLoopState::Active { child, .. } if child == retry_id));
+    let retry = parent
+        .child_run(retry_id, 4, task.index, task.markdown)
+        .expect("fresh child");
+    assert!(retry.attempts.is_empty());
+    assert!(matches!(retry.source, RunSource::Pending));
+}
+
+#[test]
+fn an_uncertain_commit_blocks_a_replacement_child() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("create");
+    let (parent, first_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    store
+        .mark_dispatched(&parent.id, first_id)
+        .expect("dispatch");
+    let mut child = completed_child(&parent, first_id, source(1));
+    child.state = RunState::Active {
+        step: crate::workflows::definition::StepKey::parse("commit").expect("commit"),
+        attempt: child.attempts[0].id,
+    };
+    child.attempts[0].state = crate::workflows::run::AttemptState::Active;
+    child.attempts[0].finished_at_ms = None;
+    child.attempts[0].result = None;
+    child.attempts[0].commit_result = None;
+    child.attempts[0].commit_transaction = Some(crate::workflows::commit::CommitTransaction {
+        state: crate::workflows::commit::CommitTransactionState::WorktreeApplied,
+        candidate: source(2),
+        reviews: Vec::new(),
+        approval: None,
+        expected_reference: "refs/heads/main".to_owned(),
+        old_object: Some("a".repeat(40)),
+        target_tree: Some("b".repeat(40)),
+        expected_commit: Some("c".repeat(40)),
+        timestamp: "1 +0000".to_owned(),
+    });
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    runs.create(child).expect("store child");
+    store.reconcile(&runs).expect("reconcile");
+    let parent = store.get(&parent.id).expect("parent");
+    assert_eq!(parent.state, TaskLoopState::Blocked);
+    assert_eq!(parent.tasks[0].child_id, Some(first_id));
+    assert_eq!(parent.tasks[1].child_id, None);
+    assert_eq!(
+        store.retry_current(&parent.id, 1, false).err(),
+        Some(TaskLoopError::Conflict)
+    );
+    assert_eq!(
+        store.reserve_next_child(&parent.id, 1).err(),
+        Some(TaskLoopError::DuplicateDispatch)
+    );
+}
+
+#[test]
+fn recovery_rejects_a_child_from_another_parent() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("parent");
+    let (parent, child_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    let mut child = interrupted_child(&parent, child_id);
+    child.parent_loop = Some(TaskLoopId::generate().expect("other parent"));
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    runs.create(child).expect("child");
+    assert_eq!(store.reconcile(&runs), Err(TaskLoopError::Corrupt));
+    assert_eq!(store.get(&parent.id).expect("unchanged"), parent);
+}
+
+#[test]
+fn recovery_does_not_reopen_a_deliberate_between_task_stop() {
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(loop_record()).expect("parent");
+    let stopped = store.stop(&parent.id).expect("stop before dispatch");
+    let runs = crate::workflows::WorkflowRunStore::in_memory();
+    store.reconcile(&runs).expect("recovery");
+    assert_eq!(store.get(&parent.id).expect("parent"), stopped);
 }

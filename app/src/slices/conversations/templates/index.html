@@ -254,7 +254,7 @@
               <dt class="text-quiet">Result</dt>
               <dd>{{ run.result }}</dd>
             </dl>
-            {% if run.loop_id != "" && (run.can_pause || run.can_continue || run.can_stop || run.pause_requested) %}
+            {% if run.loop_id != "" && (run.can_pause || run.can_continue || run.can_retry || run.can_stop || run.pause_requested) %}
               <div id="loop-controls" class="flex flex-col gap-3">
                 {% if run.pause_requested %}
                   <p class="text-sm">
@@ -275,6 +275,12 @@
                   <p class="text-quiet text-sm">
                     Continue starts the next pending task. It does not repeat a
                     completed task.
+                  </p>
+                {% else if run.can_retry %}
+                  <p class="text-quiet text-sm">
+                    Retry current task starts a fresh child from the recorded
+                    task base. It does not resume the earlier worker transcript.
+                    The previous candidate stays available for inspection.
                   </p>
                 {% endif %}
                 {% if run.can_stop %}
@@ -325,6 +331,28 @@
                       />
                       <button class="btn btn-primary btn-sm" type="submit">
                         Continue
+                      </button>
+                    </form>
+                  {% endif %}
+                  {% if run.can_retry %}
+                    <form
+                      data-graft
+                      method="post"
+                      action="/runs/loops/{{ run.loop_id }}/retry"
+                      class="inline"
+                    >
+                      <input
+                        type="hidden"
+                        name="token"
+                        value="{{ run.command_token }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="surface"
+                        value="conversation"
+                      />
+                      <button class="btn btn-primary btn-sm" type="submit">
+                        Retry current task
                       </button>
                     </form>
                   {% endif %}

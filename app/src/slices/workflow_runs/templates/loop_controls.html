@@ -22,6 +22,12 @@
   <p class="text-quiet text-sm">
     Continue starts the next pending task. It does not repeat a completed task.
   </p>
+{% else if can_retry %}
+  <p class="text-quiet text-sm">
+    Retry current task starts a fresh child from the recorded task base. It does
+    not resume the earlier worker transcript. The previous candidate stays
+    available for inspection.
+  </p>
 {% endif %}
 {% if can_stop %}
   <p class="text-quiet text-sm">
@@ -58,6 +64,22 @@
         <input type="hidden" name="surface" value="conversation" />
       {% endif %}
       <button class="btn btn-primary btn-sm" type="submit">Continue</button>
+    </form>
+  {% endif %}
+  {% if can_retry %}
+    <form
+      data-graft
+      method="post"
+      action="/runs/loops/{{ loop_id }}/retry"
+      class="inline"
+    >
+      <input type="hidden" name="token" value="{{ command_token }}" />
+      {% if conversation_surface %}
+        <input type="hidden" name="surface" value="conversation" />
+      {% endif %}
+      <button class="btn btn-primary btn-sm" type="submit">
+        Retry current task
+      </button>
     </form>
   {% endif %}
   {% if can_stop %}

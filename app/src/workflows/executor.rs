@@ -238,7 +238,7 @@ fn set_active_connection(job: &WorkflowJob, connection: Option<ProviderConnectio
     }
 }
 
-fn validate_phase_selection(
+pub(crate) fn validate_phase_selection(
     state: &AppState,
     selection: &crate::providers::ModelSelection,
 ) -> Result<ProviderConnection, String> {
@@ -936,7 +936,21 @@ pub(crate) fn settle_terminal_job(
             };
             settle_job(state, job, JobStatus::Failed, Some(message));
         }
-        _ => settle_job(state, job, JobStatus::Completed, None),
+        crate::workflows::run::RunState::Failed | crate::workflows::run::RunState::Interrupted => {
+            settle_job(
+                state,
+                job,
+                JobStatus::Failed,
+                Some("The task did not complete."),
+            );
+        }
+        crate::workflows::run::RunState::Cancelled => {
+            settle_job(state, job, JobStatus::Cancelled, None);
+        }
+        crate::workflows::run::RunState::Completed => {
+            settle_job(state, job, JobStatus::Completed, None);
+        }
+        _ => {}
     }
 }
 
@@ -3398,22 +3412,22 @@ fn task_loop_attempts(
     state: &AppState,
     parent: &super::task_loop::TaskLoop,
 ) -> Result<usize, &'static str> {
-    parent
-        .tasks
-        .iter()
-        .filter_map(|task| task.child_id)
-        .try_fold(0usize, |total, id| {
-            let child = state
-                .workflow_runs
-                .get(&id)
-                .ok_or(OPERATIONAL_STORE_ERROR)?;
-            if child.parent_loop != Some(parent.id) {
-                return Err(OPERATIONAL_STORE_ERROR);
-            }
-            total
-                .checked_add(child.attempts.len())
-                .ok_or(OPERATIONAL_STORE_ERROR)
-        })
+    parent.tasks.iter().try_fold(0usize, |total, task| {
+        task.child_id
+            .into_iter()
+            .chain(task.previous_child_ids.iter().copied())
+            .try_fold(total, |total, id| {
+                let Some(child) = state.workflow_runs.get(&id) else {
+                    return Ok(total);
+                };
+                if child.parent_loop != Some(parent.id) {
+                    return Err(OPERATIONAL_STORE_ERROR);
+                }
+                total
+                    .checked_add(child.attempts.len())
+                    .ok_or(OPERATIONAL_STORE_ERROR)
+            })
+    })
 }
 
 enum TaskLoopDrive {
@@ -3551,6 +3565,18 @@ fn settle_with_reply(
             JobStatus::Cancelled => state.task_loops.cancel(&loop_id).ok(),
             _ => state.task_loops.fail(&loop_id).ok(),
         };
+        if terminal
+            .as_ref()
+            .is_some_and(|parent| matches!(parent.state, super::task_loop::TaskLoopState::Failed))
+        {
+            workflow.job.set_awaiting_decision();
+            let _ = state.sessions.release_job_reservation(
+                &workflow.session_id,
+                workflow.conversation_id,
+                workflow.job.id(),
+            );
+            return;
+        }
         if !terminal.is_some_and(|parent| parent.state.is_terminal()) {
             return;
         }
@@ -3707,6 +3733,127 @@ fn recovery_project_path(
         return Err(error);
     }
     Ok(project.host_path)
+}
+
+pub(crate) fn recover_task_loops(state: &AppState) -> Result<(), &'static str> {
+    let unfinished: std::collections::HashSet<_> = state
+        .task_loops
+        .list()
+        .into_iter()
+        .filter(|record| record.keeps_conversation_reservation())
+        .map(|record| record.id)
+        .collect();
+    state
+        .task_loops
+        .reconcile(&state.workflow_runs)
+        .map_err(|_| "Power Plant could not recover a task loop.")?;
+    for record in state.task_loops.list() {
+        // Old terminal loops do not own a later conversation request.
+        if !unfinished.contains(&record.id) {
+            continue;
+        }
+        if matches!(
+            record.state,
+            super::task_loop::TaskLoopState::Completed
+                | super::task_loop::TaskLoopState::Cancelled
+                | super::task_loop::TaskLoopState::Stopped
+        ) {
+            let status = match record.state {
+                super::task_loop::TaskLoopState::Completed => JobStatus::Completed,
+                _ => JobStatus::Cancelled,
+            };
+            if let Ok(request) = state
+                .conversations
+                .restore_reservation(&record.conversation_id)
+            {
+                let _ = state.conversations.settle_message(
+                    &record.conversation_id,
+                    request,
+                    conversation_loop_result(record.id, status, ""),
+                    match status {
+                        JobStatus::Completed => crate::conversations::MessageStatus::Complete,
+                        _ => crate::conversations::MessageStatus::Interrupted,
+                    },
+                );
+            }
+            continue;
+        }
+        if record.keeps_conversation_reservation()
+            && state.conversations.get(&record.conversation_id).is_some()
+            && state
+                .conversations
+                .restore_reservation(&record.conversation_id)
+                .is_err()
+        {
+            return Err("Power Plant could not restore a task loop reservation.");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn reconstruct_loop_job(
+    state: &AppState,
+    session_id: SessionId,
+    job: std::sync::Arc<Job>,
+    record: &super::task_loop::TaskLoop,
+    child_id: RunId,
+) -> Result<WorkflowJob, &'static str> {
+    let conversation = state
+        .conversations
+        .get(&record.conversation_id)
+        .ok_or("The conversation for this task loop is no longer available.")?;
+    let resolved = crate::conversations::resolve_workflow_authority(
+        &conversation,
+        &state.projects,
+        &state.agents,
+    )
+    .ok()
+    .flatten()
+    .ok_or("The conversation authority does not match this run.")?;
+    if resolved.effective.project_id != record.project_id {
+        return Err("The conversation authority does not match this run.");
+    }
+    for phase in &record.phase_models {
+        validate_phase_selection(state, &phase.selection)
+            .map_err(|_| "A selected phase provider is no longer available.")?;
+    }
+    let connection = if let Some(phase) = record.phase_models.first() {
+        validate_phase_selection(state, &phase.selection)
+            .map_err(|_| "A selected phase provider is no longer available.")?
+    } else {
+        let selection = conversation
+            .model
+            .as_ref()
+            .map(|model| &model.selection)
+            .ok_or("The conversation has no model selection.")?;
+        state
+            .vault
+            .connection_for(selection)
+            .ok_or("The provider for this phase is no longer stored.")?
+    };
+    Ok(WorkflowJob {
+        run_id: child_id,
+        session_id,
+        project_id: record.project_id,
+        agent_id: record.agent_id,
+        agent_revision: resolved.effective.revision,
+        conversation_id: Some(record.conversation_id),
+        authority: Some(resolved.effective.clone()),
+        grant_alias: resolved.effective.grant_alias.clone(),
+        grant_access: resolved.effective.grant_access,
+        connection,
+        phase_providers: record
+            .phase_models
+            .iter()
+            .map(|phase| phase.selection.provider)
+            .collect(),
+        active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        host_policy: resolved.effective.policy.clone(),
+        turns: Vec::new(),
+        job,
+        eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        task_loop: Some(record.id),
+    })
 }
 
 pub(crate) fn recover_commit_transactions(state: &AppState) -> Result<(), &'static str> {

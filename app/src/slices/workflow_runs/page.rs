@@ -263,6 +263,7 @@ pub(super) struct LoopDetailView {
     pub(super) command_token: String,
     pub(super) can_pause: bool,
     pub(super) can_continue: bool,
+    pub(super) can_retry: bool,
     pub(super) can_stop: bool,
     pub(super) pause_requested: bool,
     pub(super) awaiting_gate: bool,
@@ -275,6 +276,7 @@ pub(super) struct LoopTaskView {
     pub(super) markdown: String,
     pub(super) state: &'static str,
     pub(super) href: String,
+    pub(super) previous_href: String,
 }
 
 #[derive(Template)]
@@ -284,6 +286,7 @@ pub(super) struct LoopControlsView {
     pub(super) command_token: String,
     pub(super) can_pause: bool,
     pub(super) can_continue: bool,
+    pub(super) can_retry: bool,
     pub(super) can_stop: bool,
     pub(super) pause_requested: bool,
     pub(super) awaiting_gate: bool,
@@ -305,6 +308,7 @@ impl LoopDetailView {
             command_token: controls.command_token,
             can_pause: controls.can_pause,
             can_continue: controls.can_continue,
+            can_retry: controls.can_retry,
             can_stop: controls.can_stop,
             pause_requested: controls.pause_requested,
             awaiting_gate: controls.awaiting_gate,
@@ -329,6 +333,11 @@ impl LoopDetailView {
                         .child_id
                         .map(|id| format!("/runs/{}", id.as_hex()))
                         .unwrap_or_default(),
+                    previous_href: task
+                        .previous_child_ids
+                        .last()
+                        .map(|id| format!("/runs/{}", id.as_hex()))
+                        .unwrap_or_default(),
                 })
                 .collect(),
         }
@@ -349,10 +358,8 @@ pub(super) fn loop_controls(
             crate::workflows::task_loop::TaskLoopState::Active { .. }
                 | crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. }
         ),
-        can_continue: matches!(
-            record.state,
-            crate::workflows::task_loop::TaskLoopState::Paused
-        ),
+        can_continue: record.allows_continue(),
+        can_retry: record.allows_retry(),
         can_stop: !record.state.is_terminal(),
         pause_requested: record.pause_requested(),
         awaiting_gate,
@@ -965,7 +972,7 @@ fn state_note(state: &crate::workflows::run::RunState) -> &'static str {
             "The run was cancelled. No later steps will start."
         }
         crate::workflows::run::RunState::Interrupted => {
-            "The process restarted before this run finished. This run cannot continue."
+            "The process restarted before this run finished. This run cannot continue. Inspect the recorded attempts. Start new work from a conversation."
         }
     }
 }

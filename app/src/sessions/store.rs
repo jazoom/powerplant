@@ -174,6 +174,37 @@ impl SessionStore {
         Ok(job)
     }
 
+    pub(crate) fn attach_conversation_job(
+        &self,
+        id: &SessionId,
+        conversation_id: ConversationId,
+        job_id: JobId,
+        assistant_index: usize,
+    ) -> Result<Arc<Job>, BeginTurnError> {
+        if let Some(existing) = self.conversation_job(conversation_id, job_id) {
+            self.acquire_job_reservation(id, Some(conversation_id), job_id)?;
+            return Ok(existing);
+        }
+        let reservation = JobId::generate().map_err(|_| BeginTurnError::JobId)?;
+        let mut sessions = self.lock();
+        let session =
+            live_mut(&mut sessions, id, self.clock.now()).ok_or(BeginTurnError::MissingSession)?;
+        if session.active.is_some() || self.conversation_jobs().contains_key(&conversation_id) {
+            return Err(BeginTurnError::Conflict);
+        }
+        let job = Job::for_conversation(job_id, conversation_id, assistant_index);
+        self.conversation_jobs().insert(
+            conversation_id,
+            ConversationJob {
+                job: job.clone(),
+                session: *id,
+                reservation,
+            },
+        );
+        session.active = Some(reservation);
+        Ok(job)
+    }
+
     pub(crate) fn conversation_reserved(&self, conversation_id: ConversationId) -> bool {
         self.conversation_jobs().contains_key(&conversation_id)
     }

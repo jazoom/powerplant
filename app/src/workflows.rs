@@ -33,9 +33,10 @@ pub(crate) use commit::CommitJournals;
 pub(crate) use evidence::{AttemptEvidenceContext, WorkflowEvidenceStore};
 pub(crate) use execution::{ExecutionGuard, WorkflowExecution};
 pub(crate) use executor::{
-    WorkflowContinuationRegistry, WorkflowJob, execute_run, interrupt_provider_continuations,
-    interrupt_session_continuations, recover_commit_transactions, settle_cancelled_job,
-    settle_terminal_job,
+    PausedWorkflow, WorkflowContinuationRegistry, WorkflowJob, execute_run,
+    interrupt_provider_continuations, interrupt_session_continuations, reconstruct_loop_job,
+    recover_commit_transactions, recover_task_loops, settle_cancelled_job, settle_terminal_job,
+    validate_phase_selection,
 };
 pub(crate) use id::{ArtefactId, AttemptId, GateId, RunId, TaskLoopId, WorkflowId};
 #[cfg(test)]

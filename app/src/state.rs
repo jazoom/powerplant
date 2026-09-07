@@ -187,6 +187,7 @@ pub(crate) async fn build(
         .workflow_runs
         .interrupt_active()
         .map_err(|_| "Power Plant could not record workflow recovery.".to_owned())?;
+    crate::workflows::recover_task_loops(&state).map_err(str::to_owned)?;
     let workspace_recovery = state
         .workflow_workspaces
         .recover_leftovers(
