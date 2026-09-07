@@ -81,12 +81,9 @@ impl AttemptCapabilities {
             return Err(CapabilityError::Authority);
         };
         let reviewed = &authority.reviewed_aliases;
-        let expected_candidate = if !reviewed.is_empty() {
-            crate::workflows::definition::CandidateAuthority::Edit
-        } else {
-            crate::workflows::definition::CandidateAuthority::ReadOnly
-        };
-        if action.candidate_authority != expected_candidate
+        let writes =
+            action.candidate_authority == crate::workflows::definition::CandidateAuthority::Edit;
+        if (writes && reviewed.is_empty())
             || !action
                 .authority
                 .tools
@@ -118,12 +115,11 @@ impl AttemptCapabilities {
                 .iter()
                 .map(|grant| {
                     let reviewed_root = reviewed.contains(&grant.alias);
-                    let primary = reviewed.first() == Some(&grant.alias)
-                        || reviewed.is_empty() && grant.alias == authority.policy.primary_alias();
+                    let primary = grant.alias == authority.policy.primary_alias();
                     CapabilityDirectory {
                         alias: grant.alias.clone(),
                         guest_path: grant.guest_path.clone(),
-                        access: if reviewed_root {
+                        access: if reviewed_root && writes {
                             AccessMode::ReadWrite
                         } else {
                             AccessMode::ReadOnly
@@ -142,7 +138,9 @@ impl AttemptCapabilities {
             agent_revision: authority.revision,
             tools: action.authority.tools.clone(),
             directories,
-            source_location: if !reviewed.is_empty() {
+            source_location: if step.inputs.iter().any(|input| {
+                input.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+            }) {
                 PrimarySourceLocation::AttemptWorkspace
             } else {
                 PrimarySourceLocation::PrivateWorkspace

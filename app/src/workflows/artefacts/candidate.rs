@@ -494,10 +494,13 @@ impl CandidateCapture {
         store: &WorkflowArtefactRepository,
     ) -> Result<CandidateSetArtefact, CaptureError> {
         let mut roots = Vec::new();
-        for grant in grants
+        let reviewed = grants
             .iter()
-            .filter(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
-        {
+            .any(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply);
+        // Read-only inspection can pin a source set. Capture never authorises application.
+        for grant in grants.iter().filter(|grant| {
+            !reviewed || grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+        }) {
             grant
                 .revalidate()
                 .map_err(|_| CaptureError::SourceChanged)?;

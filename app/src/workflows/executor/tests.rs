@@ -58,8 +58,7 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
                 &authority,
             )
             .unwrap();
-        let spec =
-            super::project_free_attempt_spec(&capabilities, &workspace, &authority.policy).unwrap();
+        let spec = super::project_free_attempt_spec(&capabilities, &workspace, &authority).unwrap();
         assert_eq!(spec.mounts.len(), grants.len() + 1);
         assert_eq!(spec.mounts[0].host, workspace.project);
         assert_eq!(spec.mounts[0].guest, "/workspace");
@@ -80,6 +79,70 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
         } else {
             assert_eq!(spec.workdir, "/workspace");
         }
+    }
+}
+
+#[test]
+fn read_only_review_mounts_the_pinned_copy_instead_of_live_host_files() {
+    let root = tempfile::tempdir().unwrap();
+    let reference = root.path().join("reference");
+    let host = root.path().join("editable");
+    std::fs::create_dir(&reference).unwrap();
+    std::fs::create_dir(&host).unwrap();
+    let reference = crate::execution::DirectoryGrant::from_selected(&reference, &[]).unwrap();
+    let mut reviewed =
+        crate::execution::DirectoryGrant::from_selected(&host, std::slice::from_ref(&reference))
+            .unwrap();
+    reviewed.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "model".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        crate::agents::ToolId::ALL.to_vec(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![reference.clone(), reviewed.clone()])
+    .unwrap();
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let definition = crate::workflows::seeds::implement_and_review_definition(settings.environment)
+        .with_conversation_settings(&settings)
+        .unwrap();
+    let workspace = crate::workflows::workspace::AttemptWorkspace {
+        root: root.path().join("attempt"),
+        project: root.path().join("attempt/workspace"),
+    };
+    for (index, writable) in [(0, true), (1, false)] {
+        let capabilities =
+            crate::workflows::capabilities::AttemptCapabilities::derive_project_free(
+                &definition.steps()[index],
+                &authority,
+            )
+            .unwrap();
+        let spec = super::project_free_attempt_spec(&capabilities, &workspace, &authority).unwrap();
+        assert_eq!(spec.workdir, reference.guest_path());
+        let mount = spec
+            .mounts
+            .iter()
+            .find(|mount| mount.guest == reviewed.guest_path())
+            .unwrap();
+        assert_eq!(
+            mount.host,
+            workspace.reviewed_root(&reviewed.alias).unwrap()
+        );
+        assert_ne!(mount.host, host);
+        assert_eq!(mount.read_only, !writable);
+        assert!(
+            spec.mounts
+                .iter()
+                .find(|mount| mount.guest == reference.guest_path())
+                .unwrap()
+                .read_only
+        );
     }
 }
 
@@ -121,6 +184,31 @@ fn sensitive_dispatch_requires_live_consent_and_the_original_directory() {
         .unwrap();
     let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
     let run_id = crate::workflows::RunId::generate().unwrap();
+    let pinned = crate::workflows::pin_project_free_quick_task_with_directories(
+        &settings.tools,
+        "",
+        settings.environment,
+        vec![GuestDirectoryAccess {
+            alias: grant.alias.clone(),
+            access: AccessMode::ReadOnly,
+        }],
+        false,
+    )
+    .unwrap();
+    let environments = crate::workflows::resolve::tests::test_set(&pinned.definition);
+    state
+        .workflow_runs
+        .create(
+            crate::workflows::WorkflowRun::create_source_free_for_conversation(
+                run_id,
+                1,
+                record.id,
+                pinned,
+                environments,
+                Vec::new(),
+            ),
+        )
+        .unwrap();
     let session = crate::sessions::generate_session_token().unwrap().id();
     state.sessions.insert(session);
     let job = super::WorkflowJob {

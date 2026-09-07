@@ -5,6 +5,259 @@ use axum::{
 };
 use tower::ServiceExt;
 
+fn directory_settings() -> crate::execution::ExecutionSettings {
+    crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        "Use the pinned instructions.".to_owned(),
+        crate::agents::ToolId::ALL.to_vec(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn directory_launch_pins_non_git_roots_and_read_only_review_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let mut grants = Vec::new();
+    for name in ["first", "second"] {
+        let path = root.path().join(name);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("same.txt"), name).unwrap();
+        let mut grant = crate::execution::DirectoryGrant::from_selected(&path, &grants).unwrap();
+        grant.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+        grants.push(grant);
+    }
+    let mut settings = directory_settings().with_directories(grants).unwrap();
+    let definition = workflows::seeds::implement_and_review_definition(settings.environment)
+        .with_conversation_settings(&settings)
+        .unwrap();
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let reviewer = &definition.steps()[1];
+    let capabilities =
+        workflows::capabilities::AttemptCapabilities::derive_project_free(reviewer, &authority)
+            .unwrap();
+    assert!(
+        capabilities
+            .directories
+            .iter()
+            .all(|directory| directory.access == AccessMode::ReadOnly)
+    );
+    assert!(matches!(&definition.steps().last().unwrap().action,
+        workflows::definition::StepAction::SystemCommand(action)
+            if action.command == workflows::commands::SystemCommandId::ApplyChanges));
+    let state = connected_state();
+    let source = workflows::artefacts::CandidateCapture::capture_set(
+        &settings.directories,
+        &root.path().join("data"),
+        &state.workflow_artefacts,
+    )
+    .unwrap();
+    assert_eq!(source.roots.len(), 2);
+    let phases = phase_steps(&definition)
+        .into_iter()
+        .map(|step| PhaseModelSelection {
+            step: step.key.clone(),
+            selection: settings.model.clone(),
+            instructions: settings.instructions.clone(),
+            preset: None,
+            settings: Some(settings.clone()),
+        })
+        .collect();
+    let pinned = workflows::definition::PinnedWorkflowDefinition::pin(None, definition);
+    let environments = crate::tests::test_environment_set(&pinned.definition);
+    let mut run = WorkflowRun::create_source_free_for_conversation(
+        workflows::RunId::generate().unwrap(),
+        1,
+        crate::conversations::ConversationId::generate().unwrap(),
+        pinned,
+        environments,
+        phases,
+    );
+    run.kind = workflows::run::RunKind::Configured;
+    run.launch_brief = "Update both files".to_owned();
+    let bytes = source.manifest_bytes().unwrap();
+    let kind = workflows::definition::ArtefactKind::CandidateRevision;
+    let artefact = workflows::artefacts::ArtefactRecord {
+        id: workflows::ArtefactId::generate().unwrap(),
+        kind,
+        artefact_hash: workflows::artefacts::artefact_hash_for(
+            kind,
+            workflows::artefacts::CANDIDATE_SCHEMA,
+            &bytes,
+        ),
+        object_hash: state.workflow_artefacts.publish(&bytes).unwrap(),
+        payload_bytes: bytes.len() as u64,
+        created_at_ms: 1,
+        provenance: workflows::artefacts::ArtefactProvenance {
+            run_id: run.id,
+            producer: workflows::artefacts::ArtefactProducer::RunSourceCapture,
+            inputs: Vec::new(),
+        },
+        summary: workflows::artefacts::ArtefactSummary::Candidate {
+            candidate: source.candidate_hash,
+            entries: 2,
+            bytes: 11,
+            disposition: workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+    };
+    let reference = workflows::artefacts::ArtefactReference {
+        id: artefact.id,
+        kind,
+        artefact_hash: artefact.artefact_hash,
+    };
+    run.record_initial_candidate(artefact).unwrap();
+    let step = run.pinned.definition.steps()[0].clone();
+    let capabilities =
+        workflows::capabilities::AttemptCapabilities::derive_project_free(&step, &authority)
+            .unwrap();
+    run.start_attempt(
+        workflows::AttemptId::generate().unwrap(),
+        vec![workflows::run::AttemptArtefactInput {
+            key: workflows::definition::InputKey::parse("candidate").unwrap(),
+            artefact: reference,
+        }],
+        capabilities,
+        workflows::run::AttemptSandboxRecord {
+            kind: workflows::run::AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: run.environments.steps[0].snapshot_digest.clone(),
+        },
+        2,
+    )
+    .unwrap();
+    settings.directories.clear();
+    settings.instructions.clear();
+    state.workflow_runs.create(run.clone()).unwrap();
+    let loaded = state.workflow_runs.get(&run.id).unwrap();
+    assert_eq!(loaded.directory_settings().unwrap().directories.len(), 2);
+    assert_eq!(
+        loaded.directory_settings().unwrap().instructions,
+        "Use the pinned instructions."
+    );
+    assert!(loaded.project_id.is_none());
+    assert!(loaded.agent_id.is_none());
+    std::fs::rename(root.path().join("second"), root.path().join("old-second")).unwrap();
+    std::fs::create_dir(root.path().join("second")).unwrap();
+    assert!(
+        crate::execution::ProjectFreeAuthority::from_settings(
+            1,
+            loaded.directory_settings().unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_directory_launch_form_does_not_require_a_project_target() {
+    let (form, _) = parse_fields::<WorkflowLaunchForm>(vec![
+        ("revision".to_owned(), "1".to_owned()),
+        ("workflow".to_owned(), "selected".to_owned()),
+        ("brief".to_owned(), "Prepare a plan".to_owned()),
+    ])
+    .unwrap();
+    assert!(form.target.is_empty());
+    assert!(form.preview_target.is_empty());
+}
+
+#[test]
+fn source_free_plans_have_no_candidate_and_missing_review_sources_fail_before_execution() {
+    let settings = directory_settings();
+    let definition = workflows::seeds::plan_a_change_definition(settings.environment)
+        .with_conversation_settings(&settings)
+        .unwrap();
+    assert!(definition.steps().iter().all(|step| step.inputs.is_empty()));
+    assert!(
+        workflows::seeds::review_current_code_definition(settings.environment)
+            .with_conversation_settings(&settings)
+            .is_err()
+    );
+    assert!(
+        workflows::seeds::implement_with_approval_definition(settings.environment)
+            .with_conversation_settings(&settings)
+            .is_err()
+    );
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let capabilities = workflows::capabilities::AttemptCapabilities::derive_project_free(
+        &definition.steps()[0],
+        &authority,
+    )
+    .unwrap();
+    assert!(authority.policy.grants().is_empty());
+    assert_eq!(capabilities.primary().unwrap().guest_path, "/workspace");
+    let phases = vec![PhaseModelSelection {
+        step: definition.first_step().clone(),
+        selection: settings.model.clone(),
+        instructions: settings.instructions.clone(),
+        preset: None,
+        settings: Some(settings),
+    }];
+    let pinned = workflows::definition::PinnedWorkflowDefinition::pin(None, definition);
+    let environments = crate::tests::test_environment_set(&pinned.definition);
+    let mut run = WorkflowRun::create_source_free_for_conversation(
+        workflows::RunId::generate().unwrap(),
+        1,
+        crate::conversations::ConversationId::generate().unwrap(),
+        pinned,
+        environments,
+        phases,
+    );
+    run.kind = workflows::run::RunKind::Configured;
+    run.launch_brief = "Prepare a plan".to_owned();
+    let state = connected_state();
+    state.workflow_runs.create(run.clone()).unwrap();
+    let loaded = state.workflow_runs.get(&run.id).unwrap();
+    assert!(matches!(loaded.source, workflows::RunSource::None));
+    assert!(loaded.artefacts.is_empty());
+}
+
+#[test]
+fn sensitive_workflow_launch_needs_live_destination_consent() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let data = home.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut state = connected_state();
+    state.local_data = crate::local_data::LocalDataReset::for_test(data);
+    let grant = crate::execution::DirectoryGrant::from_selected(&home, &[]).unwrap();
+    let settings = directory_settings()
+        .with_directories(vec![grant.clone()])
+        .unwrap();
+    let record = state
+        .conversations
+        .create_saved(
+            crate::conversations::ConversationId::generate().unwrap(),
+            None,
+            None,
+            Some(crate::conversations::ConversationModelConfiguration {
+                settings: settings.clone(),
+                preset: None,
+            }),
+            None,
+        )
+        .unwrap();
+    let session = crate::sessions::generate_session_token().unwrap().id();
+    state.sessions.insert(session);
+    assert!(conversation_directory_authority(&state, session, &record, &settings).is_err());
+    let request = state
+        .access_consent
+        .request_conversation(session, record.id, &settings, &grant)
+        .unwrap();
+    state
+        .access_consent
+        .approve_conversation(&request, session, record.id, &settings, &grant)
+        .unwrap();
+    assert!(conversation_directory_authority(&state, session, &record, &settings).is_ok());
+    let mut copy = record.clone();
+    copy.id = crate::conversations::ConversationId::generate().unwrap();
+    assert!(conversation_directory_authority(&state, session, &copy, &settings).is_err());
+    state.access_consent.retain_sessions(|_| false);
+    assert!(conversation_directory_authority(&state, session, &record, &settings).is_err());
+}
+
 fn connected_state() -> AppState {
     let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     state
@@ -408,6 +661,33 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
         definition_version: once.definition_version,
     }
     .as_token();
+    for (selection, directory_launch) in [(&once_selection, true), (&selection, false)] {
+        let view = launch_view(
+            &state,
+            &conversation,
+            Some(selection),
+            Some("missing"),
+            "Keep this",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            &[],
+            "",
+        )
+        .await;
+        assert_eq!(view.directory_launch, directory_launch);
+        if directory_launch {
+            assert!(view.targets.is_empty());
+            assert!(view.error.is_empty());
+            assert!(!view.launch_blocked);
+        } else {
+            assert!(!view.error.is_empty());
+            assert!(view.launch_blocked);
+        }
+    }
     let document = state
         .documents
         .create_task_list_from_text(
@@ -479,7 +759,7 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
             "Choose a model for every model phase.",
         ),
         (
-            format!("stage=review&workflow={once_selection}&brief=Keep+this&target=missing"),
+            format!("stage=review&workflow={selection}&brief=Keep+this&target=missing"),
             "The selected project is unavailable.",
         ),
         (

@@ -487,7 +487,17 @@ impl RunDetailView {
         parent: Option<&TaskLoop>,
     ) -> Self {
         let (name_href, catalogue_note) = catalogue_presentation(run, workflows);
-        let (project_href, project_name) = project_presentation(run.project_id, projects);
+        let (project_href, mut project_name) = project_presentation(run.project_id, projects);
+        if let Some(settings) = run.directory_settings()
+            && !settings.directories.is_empty()
+        {
+            project_name = settings
+                .directories
+                .iter()
+                .map(|grant| format!("{} ({})", grant.host_path.display(), grant.guest_path()))
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
         let current_step = run.current_step_name().unwrap_or("").to_owned();
         let (parent_href, hierarchy, context_boundaries) =
             run_hierarchy(run, parent, &current_step);
@@ -1038,16 +1048,16 @@ fn step_status(
 fn state_note(state: &crate::workflows::run::RunState) -> &'static str {
     match state {
         crate::workflows::run::RunState::InitialisingSource => {
-            "Power Plant captures the project source before the first step starts."
+            "Power Plant captures the authorised reviewed directories before the first step starts."
         }
         crate::workflows::run::RunState::Ready { .. } => {
-            "The next step is queued. Only a commit step can change project files."
+            "The next step is queued. Apply changes updates host files. An explicit Git commit creates a commit."
         }
         crate::workflows::run::RunState::Active { .. } => {
-            "The current step runs in an isolated sandbox. Only a commit step can change project files."
+            "The current step uses an isolated attempt. File application and explicit Git commits update host files."
         }
         crate::workflows::run::RunState::AwaitingHuman { .. } => {
-            "Review the pinned candidate. Approval continues the run. Only a commit step can change project files."
+            "The decision covers the exact candidate set. Approval permits the configured file application or explicit Git commit."
         }
         crate::workflows::run::RunState::RevisionRequested { .. } => {
             "The revision request ended this run. Start a new task to continue the work."
@@ -1272,7 +1282,7 @@ fn catalogue_presentation(run: &WorkflowRun, catalogue: &WorkflowCatalogue) -> (
         None => (String::new(), "Workflow deleted from catalogue".to_owned()),
         Some(record) if record.definition_version != run.pinned.version => (
             format!("/workflows/{}/configuration", id.as_hex()),
-            "Earlier pinned version".to_owned(),
+            "Pinned configuration differs from the saved workflow".to_owned(),
         ),
         Some(_) => (
             format!("/workflows/{}/configuration", id.as_hex()),

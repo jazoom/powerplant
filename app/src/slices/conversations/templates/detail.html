@@ -1160,7 +1160,7 @@
                 </div>
                 {% if self.is_new() %}
                   <div class="flex flex-wrap gap-2 self-start">
-                    {% if directory.sensitive && directory.pending_approval && consent_request == "" %}
+                    {% if directory.pending_approval && consent_request == "" %}
                       <button
                         form="conversation-composer"
                         formaction="/conversations/new/directories/{{ directory.id }}/consent"
@@ -1234,7 +1234,7 @@
                             {% endif %}
                           </button>
                         {% endif %}
-                        {% if directory.sensitive && directory.pending_approval && consent_request == "" %}
+                        {% if directory.pending_approval && consent_request == "" %}
                           <button
                             class="btn btn-warning btn-sm min-h-11"
                             type="submit"

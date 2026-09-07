@@ -212,7 +212,7 @@ fn plan_and_review_starters_are_read_only() {
 }
 
 #[test]
-fn code_changing_starters_require_human_approval_before_commit() {
+fn code_changing_starters_require_human_approval_before_application() {
     let environment = test_environment_id();
     let approval = implement_with_approval_definition(environment);
     assert!(matches!(
@@ -222,7 +222,7 @@ fn code_changing_starters_require_human_approval_before_commit() {
     assert!(matches!(
         approval.steps()[2].action,
         StepAction::SystemCommand(ref command)
-            if command.command == SystemCommandId::CommitCandidate
+            if command.command == SystemCommandId::ApplyChanges
     ));
     assert!(
         approval.steps()[2]
@@ -293,19 +293,11 @@ fn plan_then_implement_accepts_a_plan_before_code_and_keeps_code_approval_separa
             .iter()
             .any(|input| input.kind == ArtefactKind::PlanDecision)
     );
-    let automatic = definition
-        .with_commit_policy(crate::workflows::definition::CommitPolicy::AutomaticAfterReview)
-        .expect("automatic commit after code review");
-    let gates: Vec<_> = automatic
-        .steps()
-        .iter()
-        .filter_map(|step| match &step.action {
-            StepAction::HumanGate(gate) => Some(gate),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(gates.len(), 1);
-    assert!(gates[0].is_plan_checkpoint());
+    assert!(
+        definition
+            .with_commit_policy(crate::workflows::definition::CommitPolicy::AutomaticAfterReview)
+            .is_err()
+    );
 }
 
 #[test]

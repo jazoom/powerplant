@@ -103,8 +103,40 @@ pub(crate) async fn read_project_instructions(
     sandbox: &GuestSandbox,
     secret: Option<&str>,
 ) -> Result<ProjectInstructions, InstructionError> {
+    read_instructions_at(sandbox, GUEST_PROJECT, secret).await
+}
+
+pub(crate) async fn read_directory_instructions(
+    sandbox: &GuestSandbox,
+    authority: &crate::execution::ProjectFreeAuthority,
+    secret: Option<&str>,
+) -> Result<ProjectInstructions, InstructionError> {
+    let mut combined = String::new();
+    for grant in authority.policy.grants() {
+        if let ProjectInstructions::Present(text) =
+            read_instructions_at(sandbox, &grant.guest_path, secret).await?
+        {
+            let section = format!("\n## {}/AGENTS.md\n{}\n", grant.guest_path, text);
+            if combined.len().saturating_add(section.len()) > MAXIMUM_PROJECT_INSTRUCTION_BYTES {
+                return Err(InstructionError::Bound);
+            }
+            combined.push_str(&section);
+        }
+    }
+    Ok(if combined.is_empty() {
+        ProjectInstructions::Absent
+    } else {
+        ProjectInstructions::Present(combined)
+    })
+}
+
+async fn read_instructions_at(
+    sandbox: &GuestSandbox,
+    guest_path: &str,
+    secret: Option<&str>,
+) -> Result<ProjectInstructions, InstructionError> {
     let mut command = sandbox
-        .exec_cmd(GuestExec::shell(INSTRUCTION_READ_COMMAND).in_dir(GUEST_PROJECT))
+        .exec_cmd(GuestExec::shell(INSTRUCTION_READ_COMMAND).in_dir(guest_path))
         .await
         .map_err(|_| InstructionError::Read)?;
     let deadline = Instant::now() + INSTRUCTION_READ_DEADLINE;
@@ -409,7 +441,7 @@ impl AttemptContextPacket {
             return false;
         };
         !self.messages.is_empty()
-            && self.source_available.len() <= 1024
+            && self.source_available.len() <= 8192
             && self.excluded_context.len() <= 1024
             && self.prompt.len() <= MAXIMUM_INITIAL_CONTEXT_BYTES
             && byte_len <= MAXIMUM_INITIAL_CONTEXT_BYTES
@@ -474,7 +506,33 @@ pub(crate) fn build_attempt_packet_for_request(
     let verified = verify_inputs(run, step, resolved, store)?;
     let project_instructions =
         ProjectInstructionSnapshot::from_verified(&verified, &project_instructions);
-    let source_available = if matches!(run.source, super::run::RunSource::None) {
+    let source_available = if let Some(settings) = run.directory_settings() {
+        let directories = settings
+            .directories
+            .iter()
+            .map(|grant| {
+                let access = if step.writes_primary_source() {
+                    match grant.access {
+                        crate::execution::DirectoryAccess::ReadOnly => "Read only",
+                        crate::execution::DirectoryAccess::ReviewBeforeApply => {
+                            "Review before apply"
+                        }
+                    }
+                } else {
+                    "Read only"
+                };
+                format!("- {}: {}", grant.guest_path(), access)
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "Private scratch: /workspace. Only the listed tools are available. Authorised directories:\n{}",
+            if directories.is_empty() {
+                "None".to_owned()
+            } else {
+                directories.join("\n")
+            }
+        )
+    } else if matches!(run.source, super::run::RunSource::None) {
         let directories = match &step.action {
             StepAction::Agent(action) => action
                 .authority

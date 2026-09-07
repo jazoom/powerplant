@@ -95,8 +95,8 @@ pub(crate) fn plan_a_change_definition(default_environment: EnvironmentId) -> Wo
     let roles = vec![role(
         "planner",
         "Planner",
-        "Inspects the project and explains a safe implementation sequence.",
-        "Inspect the project and produce a plan. Do not change the candidate.",
+        "Produces a plan from the brief and authorised directory context.",
+        "Produce a plan from the brief. Inspect authorised directories when available. Do not change files.",
     )];
     let planner = agent_step(
         "planner",
@@ -104,7 +104,7 @@ pub(crate) fn plan_a_change_definition(default_environment: EnvironmentId) -> Wo
         "planner",
         CandidateAuthority::ReadOnly,
         review_tools(),
-        vec![initial_candidate_input()],
+        Vec::new(),
         vec![assistant_output(), output("plan", OutputKind::Plan)],
         None,
     );
@@ -117,8 +117,8 @@ pub(crate) fn review_current_code_definition(
     let roles = vec![role(
         "reviewer",
         "Reviewer",
-        "Checks the current project for correctness, security and regressions.",
-        "Inspect the current project and produce a review. Do not change the candidate.",
+        "Checks the pinned directory contents for correctness, security and regressions.",
+        "Inspect the pinned directory contents and produce a review. Do not change the candidate set.",
     )];
     let reviewer = agent_step(
         "reviewer",
@@ -158,7 +158,7 @@ pub(crate) fn implement_with_approval_definition(
         None,
     );
     let approval = human_approval_step("implementer", None);
-    let commit = commit_with_approval("implementer", None, "approval");
+    let commit = apply_with_approval("implementer", None, "approval");
     definition(
         "Implement with approval",
         default_environment,
@@ -254,7 +254,7 @@ pub(crate) fn plan_then_implement_definition(
         None,
     );
     let approval = human_approval_step("implementer", Some("reviewer"));
-    let commit = commit_with_approval("implementer", Some("reviewer"), "approval");
+    let commit = apply_with_approval("implementer", Some("reviewer"), "approval");
     definition(
         "Plan then implement",
         default_environment,
@@ -364,7 +364,7 @@ pub(crate) fn implement_and_review_definition(
         None,
     );
     let approval = human_approval_step("implementer", Some("reviewer"));
-    let commit = commit_with_approval("implementer", Some("reviewer"), "approval");
+    let commit = apply_with_approval("implementer", Some("reviewer"), "approval");
     definition(
         "Implement and review",
         default_environment,
@@ -845,6 +845,21 @@ fn human_approval_step(candidate_step: &str, review_step: Option<&str>) -> StepD
         }),
         review: None,
     }
+}
+
+fn apply_with_approval(
+    candidate_step: &str,
+    review_step: Option<&str>,
+    approval_step: &str,
+) -> StepDefinition {
+    let mut step = commit_with_approval(candidate_step, review_step, approval_step);
+    step.key = StepKey::parse("apply").expect("step");
+    step.name = "Apply changes".to_owned();
+    if let StepAction::SystemCommand(action) = &mut step.action {
+        action.command = SystemCommandId::ApplyChanges;
+        action.required_outputs = vec![output("applied-candidate", OutputKind::CandidateRevision)];
+    }
+    step
 }
 
 fn commit_with_approval(

@@ -642,8 +642,26 @@ fn rebuild_review_definition(
 
 #[test]
 fn commit_policy_choices_match_the_candidate_assurance_shape() {
-    let approval =
-        crate::workflows::seeds::implement_with_approval_definition(test_environment_id());
+    let git_definition = |source: WorkflowDefinition| {
+        let mut steps = source.steps().to_vec();
+        for step in &mut steps {
+            if let StepAction::SystemCommand(action) = &mut step.action
+                && action.command == SystemCommandId::ApplyChanges
+            {
+                action.command = SystemCommandId::CommitCandidate;
+            }
+        }
+        WorkflowDefinition::from_parts(
+            source.name().to_owned(),
+            source.default_environment(),
+            source.roles().to_vec(),
+            steps,
+        )
+        .unwrap()
+    };
+    let approval = git_definition(crate::workflows::seeds::implement_with_approval_definition(
+        test_environment_id(),
+    ));
     assert_eq!(approval.commit_policy(), CommitPolicy::HumanApproval);
     assert!(
         approval
@@ -656,7 +674,9 @@ fn commit_policy_choices_match_the_candidate_assurance_shape() {
             .contains(&CommitPolicy::AutomaticAfterReview)
     );
 
-    let reviewed = crate::workflows::seeds::implement_and_review_definition(test_environment_id());
+    let reviewed = git_definition(crate::workflows::seeds::implement_and_review_definition(
+        test_environment_id(),
+    ));
     let automatic = reviewed
         .with_commit_policy(CommitPolicy::AutomaticAfterReview)
         .expect("automatic review policy");

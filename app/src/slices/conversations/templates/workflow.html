@@ -384,10 +384,9 @@
                       Choose models for each phase
                     </h2>
                     <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                      Each model phase keeps its selected provider, model and
-                      preset instructions for this run. A preset narrows access.
-                      It never grants access that this conversation does not
-                      already have.
+                      Each model phase copies its selected model and
+                      instructions. Conversation directory access stays fixed
+                      for this run. A preset cannot add execution access.
                     </p>
                   </div>
                   <div class="grid gap-4">
@@ -459,57 +458,74 @@
                 </label>
               </section>
             {% endif %}
-            <section
-              class="file-section space-y-4"
-              aria-labelledby="workflow-target-heading"
-            >
-              <div>
-                <h2 id="workflow-target-heading" class="text-lg font-semibold">
-                  Target project
-                </h2>
-                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                  Select one granted project as the execution target. Other
-                  grants remain read-only context. Project attachments alone
-                  grant no access.
-                </p>
-              </div>
-              {% if targets.is_empty() %}
-                <p class="text-quiet text-sm">
-                  Attach and grant a project before you start.
-                </p>
-              {% else %}
-                {% for target in targets %}
-                  {% if target.selected %}
-                    <input
-                      type="hidden"
-                      name="preview_target"
-                      value="{{ target.id }}"
-                    />
-                  {% endif %}
-                {% endfor %}
-                <label
-                  class="flex max-w-xl flex-col gap-1"
-                  for="workflow-target"
-                >
-                  <span class="text-sm font-semibold">Execution target</span>
-                  <select
-                    id="workflow-target"
-                    name="target"
-                    class="select select-bordered"
-                    required
+            {% if !directory_launch %}
+              <section
+                class="file-section space-y-4"
+                aria-labelledby="workflow-target-heading"
+              >
+                <div>
+                  <h2
+                    id="workflow-target-heading"
+                    class="text-lg font-semibold"
                   >
-                    {% for target in targets %}
-                      <option
+                    Git destination
+                  </h2>
+                  <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                    Select one granted project as the execution target. Other
+                    grants remain read-only context. Project attachments alone
+                    grant no access.
+                  </p>
+                </div>
+                {% if targets.is_empty() %}
+                  <p class="text-quiet text-sm">
+                    Attach and grant a project before you start.
+                  </p>
+                {% else %}
+                  {% for target in targets %}
+                    {% if target.selected %}
+                      <input
+                        type="hidden"
+                        name="preview_target"
                         value="{{ target.id }}"
-                        {% if target.selected %}selected{% endif %}
-                      >
-                        {{ target.name }} — {{ target.access }}
+                      />
+                    {% endif %}
+                  {% endfor %}
+                  <label
+                    class="flex max-w-xl flex-col gap-1"
+                    for="workflow-target"
+                  >
+                    <span class="text-sm font-semibold">Git destination</span>
+                    <select
+                      id="workflow-target"
+                      name="target"
+                      class="select select-bordered"
+                      required
+                    >
+                      <option value="">
+                        Choose an explicit Git destination
                       </option>
-                    {% endfor %}
-                  </select>
-                </label>
-              {% endif %}
-            </section>
+                      {% for target in targets %}
+                        <option
+                          value="{{ target.id }}"
+                          {% if target.selected %}selected{% endif %}
+                        >
+                          {{ target.name }} — {{ target.access }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                {% endif %}
+              </section>
+            {% else %}
+              <section class="file-section space-y-2">
+                <h2 class="text-lg font-semibold">Conversation settings</h2>
+                <p class="text-quiet text-sm">
+                  This process copies the conversation settings. No project
+                  registration or separate execution target is necessary.
+                </p>
+                <p class="text-sm">{{ access_summary }}</p>
+              </section>
+            {% endif %}
           </div>
           <section {% if stage != "review" %}hidden{% endif %}>
             <dl

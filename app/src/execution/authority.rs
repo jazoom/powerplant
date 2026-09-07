@@ -16,25 +16,29 @@ impl ProjectFreeAuthority {
         revision: u32,
         settings: &super::ExecutionSettings,
     ) -> Result<Self, super::DirectoryGrantError> {
-        super::settings::validate_directories(&settings.directories)?;
+        let authority = Self::from_snapshot(revision, settings)?;
         for grant in &settings.directories {
             grant.revalidate()?;
         }
+        Ok(authority)
+    }
+
+    // Historical evidence uses saved identities. Dispatch must use from_settings to inspect the host.
+    pub(crate) fn from_snapshot(
+        revision: u32,
+        settings: &super::ExecutionSettings,
+    ) -> Result<Self, super::DirectoryGrantError> {
+        super::settings::validate_directories(&settings.directories)?;
         let reviewed_aliases = settings
             .directories
             .iter()
             .filter(|grant| grant.access == super::DirectoryAccess::ReviewBeforeApply)
             .map(|grant| grant.alias.clone())
             .collect::<Vec<_>>();
-        let primary_alias = reviewed_aliases
+        let primary_alias = settings
+            .directories
             .first()
-            .cloned()
-            .or_else(|| {
-                settings
-                    .directories
-                    .first()
-                    .map(|grant| grant.alias.clone())
-            })
+            .map(|grant| grant.alias.clone())
             .unwrap_or_default();
         let grants = settings
             .directories

@@ -347,6 +347,7 @@ pub(crate) enum DefinitionError {
     UnknownStep,
     Command,
     Tools,
+    Authority,
     Alias,
     DuplicateAlias,
     HumanGate,
@@ -362,6 +363,9 @@ impl DefinitionError {
         match self {
             Self::Format => "That workflow definition uses an unsupported format.",
             Self::Environment => "Enter a valid environment identifier.",
+            Self::Authority => {
+                "The workflow needs tools, directories or an explicit Git destination outside these settings."
+            }
             Self::Name => "Enter a name of at most 80 bytes.",
             Self::Expertise => "Those expertise notes are too long.",
             Self::PromptDefaults => "Those prompt defaults are too long.",
@@ -650,6 +654,77 @@ impl WorkflowDefinition {
         .into_iter()
         .filter(|policy| self.with_commit_policy(*policy).is_ok())
         .collect()
+    }
+
+    pub(crate) fn with_conversation_settings(
+        &self,
+        settings: &crate::execution::ExecutionSettings,
+    ) -> Result<Self, DefinitionError> {
+        let reviewed = settings
+            .directories
+            .iter()
+            .any(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply);
+        let mut steps = self.steps.clone();
+        for step in &mut steps {
+            if matches!(&step.action, StepAction::SystemCommand(action)
+                if action.command == SystemCommandId::CommitCandidate)
+            {
+                // Git commands retain their explicit project binding. Directory order is not a binding.
+                return Err(DefinitionError::Authority);
+            }
+            if step.writes_primary_source() && !reviewed {
+                return Err(DefinitionError::Authority);
+            }
+            if settings.directories.is_empty()
+                && step.inputs.iter().any(|input| {
+                    matches!(
+                        input.source,
+                        ArtefactSource::RunInitialCandidate | ArtefactSource::RunCurrentCandidate
+                    )
+                })
+            {
+                return Err(DefinitionError::Authority);
+            }
+            if let StepAction::Agent(action) = &mut step.action {
+                if reviewed
+                    && !step
+                        .inputs
+                        .iter()
+                        .any(|input| input.kind == ArtefactKind::CandidateRevision)
+                {
+                    let mut input = initial_candidate_input();
+                    input.source = ArtefactSource::RunCurrentCandidate;
+                    step.inputs.push(input);
+                }
+                if !action
+                    .authority
+                    .tools
+                    .iter()
+                    .all(|tool| settings.tools.contains(tool))
+                {
+                    return Err(DefinitionError::Authority);
+                }
+                action.authority = AgentAuthority::new(
+                    action.authority.tools.clone(),
+                    settings
+                        .directories
+                        .iter()
+                        .map(|grant| GuestDirectoryAccess {
+                            alias: grant.alias.clone(),
+                            access: AccessMode::ReadOnly,
+                        })
+                        .collect(),
+                )?;
+                action.environment = StepEnvironment::WorkflowDefault;
+            }
+        }
+        Self::from_parts_with_mode(
+            self.name.clone(),
+            settings.environment,
+            self.roles.clone(),
+            steps,
+            self.execution_mode,
+        )
     }
 
     pub(crate) fn referenced_environments(&self) -> Vec<EnvironmentId> {
@@ -1852,7 +1927,8 @@ fn supports_task_execution(steps: &[StepDefinition], mode: ExecutionMode) -> boo
                     .iter()
                     .any(|output| output.kind == OutputKind::ReviewReport)
         })
-        && matches!(&commit.action, StepAction::SystemCommand(action) if action.command == SystemCommandId::CommitCandidate)
+        && matches!(&commit.action, StepAction::SystemCommand(action)
+            if matches!(action.command, SystemCommandId::CommitCandidate | SystemCommandId::ApplyChanges))
 }
 
 fn derive_commit_policy(steps: &[StepDefinition]) -> CommitPolicy {

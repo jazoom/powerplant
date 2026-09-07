@@ -724,6 +724,13 @@ impl WorkflowRun {
         }
     }
 
+    pub(crate) fn directory_settings(&self) -> Option<&crate::execution::ExecutionSettings> {
+        self.project_id
+            .is_none()
+            .then(|| self.phase_models.first()?.settings.as_ref())
+            .flatten()
+    }
+
     pub(crate) fn create_source_free_for_conversation(
         id: RunId,
         created_at_ms: u64,
@@ -733,11 +740,11 @@ impl WorkflowRun {
         phase_models: Vec<PhaseModelSelection>,
     ) -> Self {
         let step = pinned.definition.first_step().clone();
-        let captures_source = pinned
-            .definition
-            .steps()
-            .iter()
-            .any(StepDefinition::writes_primary_source);
+        let captures_source = pinned.definition.steps().iter().any(|step| {
+            step.inputs.iter().any(|input| {
+                input.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+            })
+        });
         Self {
             id,
             created_at_ms,
@@ -1414,7 +1421,7 @@ impl WorkflowRun {
         {
             return Err(TransitionError::Invalid);
         }
-        if !capabilities_match_step(&capabilities, definition_step) {
+        if !capabilities_match_step(self, &capabilities, definition_step) {
             return Err(TransitionError::Invalid);
         }
         let expected = self
@@ -2072,41 +2079,39 @@ impl WorkflowRun {
             .ok_or(RunRecordError::Corrupt)?;
         let source_free = matches!(self.source, RunSource::None);
         let reviewed_project_free = self.project_id.is_none()
-            && matches!(self.source, RunSource::Captured { .. })
-            && self.kind == RunKind::QuickTask
+            && matches!(self.source, RunSource::Pending | RunSource::Captured { .. })
             && self.conversation_id.is_some()
             && self.agent_id.is_none()
             && self.pinned.definition.steps().iter().any(|step| {
-                matches!(
-                    &step.action,
-                    StepAction::SystemCommand(action)
-                        if action.command
-                            == crate::workflows::commands::SystemCommandId::ApplyChanges
-                )
+                step.inputs.iter().any(|input| {
+                    input.kind == crate::workflows::definition::ArtefactKind::CandidateRevision
+                })
             });
         if (source_free && self.project_id.is_some())
             || (!source_free && self.project_id.is_none() && !reviewed_project_free)
             || (self.conversation_id.is_none() && self.agent_id.is_none())
             || (source_free
                 && (self.agent_id.is_some()
-                    || self.kind != RunKind::QuickTask
-                    || !self.gates.is_empty()
-                    || !self.artefacts.is_empty()
                     || self.pinned.definition.steps().iter().any(|step| {
-                        !matches!(&step.action, StepAction::Agent(action)
-                            if action.candidate_authority == crate::workflows::definition::CandidateAuthority::ReadOnly
-                                && action.authority.directories.is_empty())
-                            || !step.inputs.is_empty()
+                        step.writes_primary_source()
+                            || matches!(&step.action, StepAction::SystemCommand(_))
+                            || step.inputs.iter().any(|input| {
+                                input.kind
+                                    == crate::workflows::definition::ArtefactKind::CandidateRevision
+                            })
                             || step.required_outputs().iter().any(|output| {
-                                output.kind != crate::workflows::definition::OutputKind::AssistantReply
+                                output.kind
+                                    == crate::workflows::definition::OutputKind::CandidateRevision
                             })
                     })
                     || self.attempts.iter().any(|attempt| {
-                        attempt.capabilities.source_location != PrimarySourceLocation::PrivateWorkspace
+                        attempt.capabilities.source_location
+                            != PrimarySourceLocation::PrivateWorkspace
                     })))
-            || (!source_free && self.attempts.iter().any(|attempt| {
-                attempt.capabilities.source_location == PrimarySourceLocation::PrivateWorkspace
-            }))
+            || (!source_free
+                && self.attempts.iter().any(|attempt| {
+                    attempt.capabilities.source_location == PrimarySourceLocation::PrivateWorkspace
+                }))
             || fact_count > self.pinned.definition.attempt_bound()
             || self.artefacts.len() > crate::workflows::artefacts::MAXIMUM_ARTEFACTS
         {
@@ -2538,10 +2543,19 @@ fn validate_phase_models(run: &WorkflowRun) -> Result<(), RunRecordError> {
     let mut seen = Vec::new();
     for selection in &run.phase_models {
         if !seen.iter().all(|step: &StepKey| step != &selection.step)
-            || selection.preset.is_some() != selection.settings.is_some()
+            || (selection.preset.is_some() && selection.settings.is_none())
+            || (run.project_id.is_none()
+                && run.kind == RunKind::Configured
+                && selection.settings.is_none())
             || selection.settings.as_ref().is_some_and(|settings| {
                 settings.model != selection.selection
                     || settings.instructions != selection.instructions
+                    || run.directory_settings().is_some_and(|defaults| {
+                        settings.directories != defaults.directories
+                            || settings.tools != defaults.tools
+                            || settings.network != defaults.network
+                            || settings.environment != defaults.environment
+                    })
                     || run
                         .pinned
                         .definition
@@ -3942,7 +3956,7 @@ fn validate_attempt_isolation(
         ActionKind::Agent => {}
         ActionKind::HumanGate => return Err(RunRecordError::Corrupt),
     }
-    if !capabilities_match_step(&attempt.capabilities, step) {
+    if !capabilities_match_step(run, &attempt.capabilities, step) {
         return Err(RunRecordError::Corrupt);
     }
     match (&attempt.state, &attempt.cleanup) {
@@ -4122,11 +4136,24 @@ fn valid_git_object_id(value: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn capabilities_match_step(capabilities: &AttemptCapabilities, step: &StepDefinition) -> bool {
+fn capabilities_match_step(
+    run: &WorkflowRun,
+    capabilities: &AttemptCapabilities,
+    step: &StepDefinition,
+) -> bool {
     if capabilities.schema != crate::workflows::capabilities::CAPABILITY_SCHEMA
         || capabilities.agent_revision == 0
     {
         return false;
+    }
+    if let Some(settings) = run.directory_settings() {
+        return crate::execution::ProjectFreeAuthority::from_snapshot(
+            capabilities.agent_revision,
+            settings,
+        )
+        .ok()
+        .and_then(|authority| AttemptCapabilities::derive_project_free(step, &authority).ok())
+        .is_some_and(|expected| expected == *capabilities);
     }
     match &step.action {
         StepAction::Agent(action) => {

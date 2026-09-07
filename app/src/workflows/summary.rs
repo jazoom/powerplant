@@ -10,9 +10,9 @@ pub(crate) fn required_inputs(definition: &WorkflowDefinition) -> &'static str {
     if definition.execution_mode() == ExecutionMode::TaskList {
         "Task brief · Target project · Task list"
     } else if definition.launch_input_sources().is_empty() {
-        "Task brief · Target project"
+        "Task brief · Conversation settings"
     } else {
-        "Task brief · Target project · Saved plan"
+        "Task brief · Conversation settings · Saved plan"
     }
 }
 
@@ -286,6 +286,12 @@ pub(crate) fn process_summary(definition: &WorkflowDefinition) -> String {
 }
 
 pub(crate) fn code_effects(definition: &WorkflowDefinition) -> String {
+    if definition.steps().iter().any(|step| {
+        matches!(&step.action,
+        StepAction::SystemCommand(action) if action.command == SystemCommandId::ApplyChanges)
+    }) {
+        return "Prepares isolated changes across authorised directories. Approval applies the exact candidate set without a Git commit.".to_owned();
+    }
     let edits_candidate = definition
         .steps()
         .iter()

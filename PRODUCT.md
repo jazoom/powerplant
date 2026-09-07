@@ -159,7 +159,27 @@ An unchanged Quick task completes automatically after the assistant reply. The p
 
 A changed Quick task waits at a human gate. The user must approve the exact candidate. The host worktree does not change before that approval. Approval creates a local Git commit through the current transaction path.
 
-Configured workflows start from Run workflow beside the conversation title. The launch sheet shows its brief, target, access, environment readiness and fresh-context boundary.
+Configured workflows start from Workflows… beside the conversation title. Setup shows the selected process, brief, effective settings, environment readiness and approval stops.
+
+Ordinary one-shot workflows copy conversation settings and directory grants into their phase snapshots. They need no project registration or saved agent.
+
+Plan a change can run without directories. Its tools use private scratch storage at `/workspace`. Processes with required directory inputs reject missing roots before execution.
+
+The ordinary implementation starters prepare candidate sets across authorised reviewed directories. Apply changes updates those directories after approval and creates no Git commit.
+
+A read-only review inspects isolated candidate copies, not live host files. Other authorised reference directories remain read only. The first authorised directory supplies the command directory.
+
+Each model phase receives its pinned model and instructions. The run retains directory identities, aliases, tools, sandbox network policy and the selected environment snapshot.
+
+Preset changes and deletion do not change those values. A phase preset cannot add access or replace the run environment.
+
+Dispatch revalidates pinned directory identities and session-bound destination consent. Transcript and title changes do not constitute access approval.
+
+The preview lists exact engine paths that source capture excludes. Candidate manifests retain those exclusions. File application cannot change excluded paths.
+
+Model context identifies actual guest paths and effective access. Root instruction files come only from authorised directories, with the existing combined text bound.
+
+Explicit Git commands retain an explicit supported project binding. Directory order never selects a Git destination. Task-loop conversion remains separate from ordinary one-shot workflows.
 
 Saved documents sits in a stable inline section above the transcript. Its summary shows the document count when documents exist.
 
@@ -183,7 +203,9 @@ A workflow can declare a saved plan input. The authoring form offers Implementat
 
 The launch sheet selects an immutable plan revision from the conversation. The run retains its own copy and the source reference. Only phases that declare that input receive the plan. Later corrections or association removal cannot change the run copy. The run inspector exposes that copy.
 
-Project-backed runs record the actual project identity. Source-free Quick tasks record neither a project identity nor an agent identity. Run kinds are Configured and Quick task. A run can belong to an independent conversation.
+Project-backed runs record the actual project identity. Directory-backed and source-free conversation workflows record neither a project identity nor an agent identity.
+
+Run kinds are Configured and Quick task. A run can belong to an independent conversation.
 
 The browser session remains a command boundary, not a conversation identity. The session permits one active command while a conversation reservation protects its unfinished operation. A safe approval gate releases the session reservation so another conversation can run a command.
 
@@ -195,7 +217,9 @@ A human revision starts a fresh implementation attempt from the rejected candida
 
 Revision limits apply across reopened gates. An exhausted limit blocks the run and retains its evidence. Model verdict routes remain distinct from human revision routes.
 
-The launch sheet offers human approval before commit or automatic commit after an approved exact-candidate review when the definition supports that choice. Automatic commit requires review assurance. Read-only workflows need no commit policy or code approval.
+Explicit Git processes can offer human approval before commit or automatic commit after an approved exact-candidate review. Automatic commit requires review assurance.
+
+Ordinary reviewed starters require a human decision before file application. Read-only and source-free processes show no application policy controls.
 
 The run list shows the newest fifty runs.
 

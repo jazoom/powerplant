@@ -1489,10 +1489,11 @@ fn selected_tasks_require_implementation_and_human_code_approval() {
         crate::tests::test_environment_id(),
     );
     assert!(super::supports_task_execution(&definition));
-    let automatic = definition
-        .with_commit_policy(crate::workflows::definition::CommitPolicy::AutomaticAfterReview)
-        .expect("automatic");
-    assert!(!super::supports_task_execution(&automatic));
+    assert!(
+        definition
+            .with_commit_policy(crate::workflows::definition::CommitPolicy::AutomaticAfterReview)
+            .is_err()
+    );
     let read_only = crate::workflows::seeds::review_current_code_definition(
         crate::tests::test_environment_id(),
     );

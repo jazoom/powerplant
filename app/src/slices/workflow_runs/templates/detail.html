@@ -40,7 +40,9 @@
                 ></span
               >
             {% else if project_name != "" %}
-              <span>Project {{ project_name }}</span>
+              <span class="break-all"
+                >Directory context: {{ project_name }}</span
+              >
             {% endif %}
             <span>Started {{ created }}</span>
           </p>

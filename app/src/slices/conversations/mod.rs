@@ -2208,10 +2208,7 @@ async fn start_message_mode(
                         revision: preset.revision,
                         name: preset.name.clone(),
                     }),
-                settings: phase_model
-                    .preset
-                    .as_ref()
-                    .map(|_| phase_model.settings.clone()),
+                settings: Some(phase_model.settings.clone()),
             })
             .collect::<Vec<_>>();
         let mut run = match authority.as_ref() {

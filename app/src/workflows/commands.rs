@@ -28,7 +28,12 @@ impl SystemCommandContract {
             return false;
         }
         if self.id == SystemCommandId::ApplyChanges {
-            return kinds_match(inputs, self.required_inputs);
+            let required = inputs
+                .iter()
+                .copied()
+                .filter(|kind| *kind != ArtefactKind::ReviewReport)
+                .collect::<Vec<_>>();
+            return kinds_match(&required, self.required_inputs);
         }
         if self.id == SystemCommandId::CommitCandidate {
             let candidates = inputs

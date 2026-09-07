@@ -1517,10 +1517,18 @@ fn capture_isolated_candidate(
             .map(crate::workflows::artefacts::CandidatePayload::Revision)
         }
         crate::workflows::artefacts::CandidatePayload::Set(set) => {
+            let run = state.workflow_runs.get(&job.run_id)?;
             let conversation = job
                 .conversation_id
-                .and_then(|id| state.conversations.get(&id))?;
-            let grants = &conversation.model.as_ref()?.settings.directories;
+                .and_then(|id| state.conversations.get(&id));
+            let settings = run.directory_settings().or_else(|| {
+                conversation
+                    .as_ref()?
+                    .model
+                    .as_ref()
+                    .map(|model| &model.settings)
+            })?;
+            let grants = &settings.directories;
             crate::workflows::artefacts::CandidateCapture::capture_isolated_set(
                 workspace,
                 set,
@@ -1686,10 +1694,10 @@ fn execute_apply_transaction(
     else {
         return Err(ApplyExecutionError::Integrity);
     };
+    let settings = run.directory_settings().unwrap_or(&conversation.settings);
     let mut roots = Vec::new();
     for (before, after) in baseline.roots.iter().zip(&candidate.roots) {
-        let grant = conversation
-            .settings
+        let grant = settings
             .directories
             .iter()
             .find(|grant| {
@@ -2316,8 +2324,21 @@ async fn run_agent_step(
         .as_ref()
         .map(|authority| &authority.policy)
         .unwrap_or(&job.host_policy);
-    let policy = if job.project_free_authority.is_some() {
-        phase_policy.clone()
+    let policy = if let Some(authority) = job.project_free_authority.as_ref() {
+        let grants = phase_policy
+            .grants()
+            .iter()
+            .cloned()
+            .map(|mut grant| {
+                if action.candidate_authority == CandidateAuthority::Edit
+                    && authority.reviewed_aliases.contains(&grant.alias)
+                {
+                    grant.access = AccessMode::ReadWrite;
+                }
+                grant
+            })
+            .collect();
+        DirectoryPolicy::from_grants_with_workspace(grants, phase_policy.primary_alias().to_owned())
     } else {
         match intersect_authority(action.candidate_authority, &action.authority, phase_policy) {
             Ok(policy) => policy,
@@ -2390,17 +2411,19 @@ async fn run_agent_step(
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
-    let project_instructions = if job.project_free_authority.is_some() {
-        crate::workflows::input_context::ProjectInstructions::Absent
+    let directory_instructions = if let Some(authority) = job.project_free_authority.as_ref() {
+        crate::workflows::input_context::read_directory_instructions(sandbox, authority, secret)
+            .await
     } else {
-        match crate::workflows::input_context::read_project_instructions(sandbox, secret).await {
-            Ok(instructions) => instructions,
-            Err(error) => {
-                return StepOutcome::Failed {
-                    category: FailureCategory::Authority,
-                    error: Some(error.message().to_owned()),
-                };
-            }
+        crate::workflows::input_context::read_project_instructions(sandbox, secret).await
+    };
+    let project_instructions = match directory_instructions {
+        Ok(instructions) => instructions,
+        Err(error) => {
+            return StepOutcome::Failed {
+                category: FailureCategory::Authority,
+                error: Some(error.message().to_owned()),
+            };
         }
     };
     let Some(run) = state.workflow_runs.get(&job.run_id) else {
@@ -2825,15 +2848,13 @@ async fn start_attempt_sandbox(
         .environment_snapshots
         .restore_path(&environment.snapshot.artifact_key)
         .map_err(|_| "That environment snapshot is unavailable.")?;
-    let private_workspace = capabilities.source_location
-        == crate::workflows::capabilities::PrimarySourceLocation::PrivateWorkspace;
     let user_project = job
         .host_policy
         .grants()
         .iter()
         .find(|grant| grant.alias == job.host_policy.primary_alias());
-    let spec = if private_workspace {
-        project_free_attempt_spec(capabilities, workspace, &job.host_policy)?
+    let spec = if let Some(authority) = job.project_free_authority.as_ref() {
+        project_free_attempt_spec(capabilities, workspace, authority)?
     } else if capabilities.source_location
         == crate::workflows::capabilities::PrimarySourceLocation::UserProject
     {
@@ -2924,7 +2945,7 @@ fn active_step_label(run: &crate::workflows::WorkflowRun, step: &StepDefinition)
 fn project_free_attempt_spec(
     capabilities: &crate::workflows::capabilities::AttemptCapabilities,
     workspace: &crate::workflows::workspace::AttemptWorkspace,
-    host: &DirectoryPolicy,
+    authority: &crate::execution::ProjectFreeAuthority,
 ) -> Result<crate::sandbox::SandboxSpec, &'static str> {
     let mut mounts = vec![crate::sandbox::MountSpec {
         guest: crate::execution::GUEST_WORKSPACE.to_owned(),
@@ -2935,24 +2956,31 @@ fn project_free_attempt_spec(
         if directory.guest_path == crate::execution::GUEST_WORKSPACE {
             continue;
         }
-        let grant = host
+        let grant = authority
+            .policy
             .grants()
             .iter()
             .find(|grant| {
                 grant.alias == directory.alias && grant.guest_path == directory.guest_path
             })
             .ok_or("The pinned step authority exceeds the current directory policy.")?;
-        let reviewed = directory.access.is_writable();
+        let reviewed = authority.reviewed_aliases.contains(&directory.alias);
+        let captured = capabilities.source_location
+            == crate::workflows::capabilities::PrimarySourceLocation::AttemptWorkspace
+            && (reviewed || authority.reviewed_aliases.is_empty());
+        if directory.access.is_writable() && !reviewed {
+            return Err("Only an isolated reviewed directory can receive write access.");
+        }
         mounts.push(crate::sandbox::MountSpec {
             guest: grant.guest_path.clone(),
-            host: if reviewed {
+            host: if captured {
                 workspace
                     .reviewed_root(&directory.alias)
                     .map_err(|_| "Power Plant cannot create a reviewed root workspace.")?
             } else {
                 grant.host_path.clone()
             },
-            read_only: !reviewed,
+            read_only: !directory.access.is_writable(),
         });
     }
     Ok(crate::sandbox::SandboxSpec {
@@ -3055,21 +3083,33 @@ fn confirm_run_authority(
         let Some(record) = state.conversations.get(&conversation_id) else {
             return Err("That conversation is not in the catalogue.".to_owned());
         };
-        if record.model.as_ref().is_some_and(|model| {
-            model.settings.directories.iter().any(|grant| {
-                (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-                    || crate::execution::authority::sensitive_directory(
-                        &grant.host_path,
-                        state.local_data.root(),
+        let run = state
+            .workflow_runs
+            .get(&job.run_id)
+            .ok_or_else(|| "The workflow run is unavailable.".to_owned())?;
+        let settings = run
+            .directory_settings()
+            .or_else(|| record.model.as_ref().map(|model| &model.settings))
+            .ok_or_else(|| "The conversation settings are unavailable.".to_owned())?;
+        let pinned_authority =
+            crate::execution::ProjectFreeAuthority::from_settings(authority.revision, settings)
+                .map_err(|_| "A pinned directory changed identity before dispatch.".to_owned())?;
+        if pinned_authority != *authority {
+            return Err("The pinned directory authority changed before dispatch.".to_owned());
+        }
+        if settings.directories.iter().any(|grant| {
+            (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                || crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
+                ))
+                && (!state.sessions.contains_live(&job.session_id)
+                    || !state.access_consent.authorised_conversation(
+                        job.session_id,
+                        conversation_id,
+                        settings,
+                        grant,
                     ))
-                    && (!state.sessions.contains_live(&job.session_id)
-                        || !state.access_consent.authorised_conversation(
-                            job.session_id,
-                            conversation_id,
-                            &model.settings,
-                            grant,
-                        ))
-            })
         }) {
             return Err("Sensitive directory access needs explicit approval.".to_owned());
         }
@@ -3078,6 +3118,7 @@ fn confirm_run_authority(
         if current.tools != authority.tools
             || current.network != authority.network
             || current.policy != authority.policy
+            || current.reviewed_aliases != authority.reviewed_aliases
             || !authority.policy.is_private_workspace()
             || job.project_id.is_some()
             || job.agent_id.is_some()
@@ -3150,18 +3191,26 @@ fn confirm_run_authority(
 
 async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(), String> {
     let host_path = confirm_run_authority(state, job)?;
-    let captured = if job
-        .project_free_authority
-        .as_ref()
-        .is_some_and(|authority| !authority.reviewed_aliases.is_empty())
-    {
+    let captured = if job.project_free_authority.is_some() {
+        let run = state
+            .workflow_runs
+            .get(&job.run_id)
+            .ok_or_else(|| "The workflow run is unavailable.".to_owned())?;
         let conversation = job
             .conversation_id
-            .and_then(|id| state.conversations.get(&id))
-            .and_then(|record| record.model)
+            .and_then(|id| state.conversations.get(&id));
+        let settings = run
+            .directory_settings()
+            .or_else(|| {
+                conversation
+                    .as_ref()?
+                    .model
+                    .as_ref()
+                    .map(|model| &model.settings)
+            })
             .ok_or_else(|| "The reviewed directories are unavailable.".to_owned())?;
         crate::workflows::artefacts::CandidateCapture::capture_set(
-            &conversation.settings.directories,
+            &settings.directories,
             state.local_data.root(),
             &state.workflow_artefacts,
         )

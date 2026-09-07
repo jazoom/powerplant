@@ -386,18 +386,19 @@ async fn discard_and_switch(
 }
 
 fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun) -> String {
-    let Some(conversation) = run
+    let conversation = run
         .conversation_id
-        .and_then(|id| state.conversations.get(&id))
-    else {
-        return String::new();
-    };
-    conversation
-        .model
-        .as_ref()
-        .map(|model| {
-            model
-                .settings
+        .and_then(|id| state.conversations.get(&id));
+    run.directory_settings()
+        .or_else(|| {
+            conversation
+                .as_ref()?
+                .model
+                .as_ref()
+                .map(|model| &model.settings)
+        })
+        .map(|settings| {
+            settings
                 .directories
                 .iter()
                 .filter(|grant| {
@@ -1195,24 +1196,39 @@ fn continuation_authority(
         else {
             return ContinuationAuthority::Stale;
         };
-        if current != *pinned {
+        if current.tools != pinned.tools
+            || current.network != pinned.network
+            || current.policy != pinned.policy
+            || current.reviewed_aliases != pinned.reviewed_aliases
+        {
             return ContinuationAuthority::Stale;
         }
-        let Some(model) = record.model.as_ref() else {
+        let Some(settings) = run
+            .directory_settings()
+            .or_else(|| record.model.as_ref().map(|model| &model.settings))
+        else {
             return ContinuationAuthority::Stale;
         };
-        for grant in
-            model.settings.directories.iter().filter(|grant| {
-                grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-            })
+        if !crate::execution::ProjectFreeAuthority::from_settings(pinned.revision, settings)
+            .is_ok_and(|authority| authority == *pinned)
+            || !state.sessions.contains_live(&continuation.session_id)
         {
+            return ContinuationAuthority::Stale;
+        }
+        for grant in settings.directories.iter().filter(|grant| {
+            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                || crate::execution::authority::sensitive_directory(
+                    &grant.host_path,
+                    state.local_data.root(),
+                )
+        }) {
             if grant.revalidate().is_err() {
                 return ContinuationAuthority::Unavailable;
             }
             if !state.access_consent.authorised_conversation(
                 continuation.session_id,
                 conversation_id,
-                &model.settings,
+                settings,
                 grant,
             ) {
                 return ContinuationAuthority::Stale;
