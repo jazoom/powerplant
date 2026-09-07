@@ -25,12 +25,13 @@ pub(super) struct ModelPicker {
 impl ModelPicker {
     pub(super) fn new(
         vault: &ProviderVault,
+        preferences: &crate::preferences::Preferences,
         catalogue: &ModelsDevCatalogue,
         provider: &str,
         model: &str,
         thinking: &str,
     ) -> Self {
-        let connections = vault.desk_providers();
+        let connections = preferences.desk_providers(vault);
         let catalogue_models: std::collections::BTreeMap<_, Vec<_>> = connections
             .iter()
             .map(|connection| {

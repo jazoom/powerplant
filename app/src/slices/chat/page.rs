@@ -5,13 +5,13 @@ use crate::{
     environments::{EnvironmentRecord, PreparationRecord, PreparationState, SnapshotAvailability},
     markdown,
     models::models_dev::ModelsDevCatalogue,
+    preferences::DeskProvider,
     projects::ProjectRecord,
     providers::{
         AssistantActivity, AssistantReply, ChatTurn, ModelUsage, ProviderKind, Role,
         ThinkingEffort, ToolOutput,
     },
     sessions::{JobSnapshot, JobStatus, SessionSnapshot},
-    vault::{DeskProvider, ProviderVault},
 };
 
 pub(crate) const DOCUMENT_TITLE: &str = "Chat | Power Plant";
@@ -223,14 +223,14 @@ impl ChatViewModel {
     pub(crate) fn from_session(
         record: &AgentRecord,
         session: &SessionSnapshot,
-        vault: &ProviderVault,
+        providers: &[DeskProvider],
         models_dev: &ModelsDevCatalogue,
         error: &'static str,
         desk_error: &'static str,
     ) -> Self {
         Self::from_parts(
             record,
-            &vault.desk_providers(),
+            providers,
             models_dev,
             &session.turns,
             session.job.as_ref(),

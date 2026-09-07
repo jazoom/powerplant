@@ -195,8 +195,12 @@ async fn forget_of_the_last_provider_stops_an_active_stream() {
 }
 
 #[tokio::test]
-async fn forget_of_the_last_provider_returns_a_connect_navigation() {
-    let state = test_state();
+async fn forget_of_the_last_provider_clears_the_session_despite_preference_failure() {
+    let mut state = test_state();
+    let dir = tempfile::tempdir().unwrap();
+    state.preferences = Arc::new(crate::preferences::Preferences::open(
+        dir.path().to_path_buf(),
+    ));
     let token = connected(&state);
     let id = session_id(&token);
 
@@ -233,8 +237,12 @@ async fn forget_of_the_last_provider_returns_a_connect_navigation() {
 }
 
 #[tokio::test]
-async fn forget_of_one_provider_keeps_the_rest() {
-    let state = test_state();
+async fn forget_of_one_provider_keeps_the_rest_despite_preference_failure() {
+    let mut state = test_state();
+    let dir = tempfile::tempdir().unwrap();
+    state.preferences = Arc::new(crate::preferences::Preferences::open(
+        dir.path().to_path_buf(),
+    ));
     store_provider(&state, SECRET_KEY);
     state
         .vault

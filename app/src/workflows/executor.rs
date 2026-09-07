@@ -2559,6 +2559,9 @@ fn attempt_spec(
     if !git.is_dir() {
         return Err("The project is not a supported Git worktree.");
     }
+    // The guest cannot create a nested mount directory inside a read-only source mount.
+    std::fs::create_dir(workspace.project.join(".git"))
+        .map_err(|_| "Power Plant cannot create the Git mount directory.")?;
     mounts.push(crate::sandbox::MountSpec {
         guest: format!("{}/.git", primary.guest_path),
         host: git,
@@ -3584,6 +3587,13 @@ fn settle_with_reply(
             return;
         }
     }
+    let connection = workflow.active_connection();
+    let secret = match &connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
+        crate::providers::AuthMethod::Plan => None,
+    };
+    let error = error
+        .and_then(|text| crate::providers::sanitise_detail(&crate::tools::redact(text, secret)));
     let reply = crate::slices::bound_reply(reply);
     let conversation_reply = if let Some(loop_id) = workflow.task_loop {
         let stopped = state.task_loops.get(&loop_id).is_some_and(|parent| {
@@ -3628,7 +3638,11 @@ fn settle_with_reply(
             workflow.job.id(),
             conversation_reply.unwrap_or(reply.text),
             message_status,
-            None,
+            if message_status == crate::conversations::MessageStatus::Failed {
+                error.clone()
+            } else {
+                None
+            },
         );
         crate::conversations::titles::start(
             state,
@@ -3658,7 +3672,7 @@ fn settle_with_reply(
             }
         }
     }
-    let _ = workflow.job.finish(status, error);
+    let _ = workflow.job.finish(status, error.as_deref());
 }
 
 fn conversation_loop_result(loop_id: TaskLoopId, status: JobStatus, response: &str) -> String {

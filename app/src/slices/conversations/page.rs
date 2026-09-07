@@ -22,6 +22,12 @@ use crate::{
 
 pub(super) const CATALOGUE_TITLE: &str = "Conversations | Power Plant";
 
+#[derive(Template)]
+#[template(source = "{{ message }}", ext = "html")]
+pub(super) struct ModelSelectionStatus<'a> {
+    pub(super) message: &'a str,
+}
+
 pub(super) struct ConversationListItem {
     pub(super) id: String,
     pub(super) title: String,
@@ -303,6 +309,7 @@ pub(super) struct WorkflowProgressView {
 
 pub(super) struct ModelSources<'a> {
     pub(super) vault: &'a ProviderVault,
+    pub(super) preferences: &'a crate::preferences::Preferences,
     pub(super) models: &'a ModelsDevCatalogue,
     pub(super) projects: &'a [ProjectRecord],
     pub(super) documents: &'a [PlanDocument],
@@ -385,6 +392,7 @@ impl ConversationDetailView {
             title: form.title,
             model_picker: ModelPicker::new(
                 &state.vault,
+                &state.preferences,
                 &state.models_dev,
                 &form.provider,
                 &form.model,
@@ -530,8 +538,8 @@ impl ConversationDetailView {
         linked_candidate_reviews: Vec<CandidateReviewLinkView>,
     ) -> Self {
         let fallback = sources
-            .vault
-            .desk_providers()
+            .preferences
+            .desk_providers(sources.vault)
             .into_iter()
             .find(|provider| provider.selected)
             .map(|connection| {
@@ -574,6 +582,7 @@ impl ConversationDetailView {
         let network_summary = format_network_summary(&record.network, &effective_network);
         let model_picker = ModelPicker::new(
             sources.vault,
+            sources.preferences,
             sources.models,
             selection.map_or("", |selection| selection.provider.as_str()),
             selection.map_or("", |selection| selection.model.as_str()),

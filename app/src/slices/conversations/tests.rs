@@ -458,12 +458,69 @@ async fn saved_model_commands_accept_disabled_effort_and_reject_stale_revision()
     let updated = state.conversations.get(&record.id).unwrap();
     assert_eq!(updated.model.as_ref().unwrap().selection.model, model.id);
     assert!(updated.model.as_ref().unwrap().selection.thinking.is_none());
+    let remembered = state
+        .preferences
+        .desk_providers(&state.vault)
+        .into_iter()
+        .find(|provider| provider.selected)
+        .unwrap();
+    assert_eq!(remembered.model, model.id);
+    assert!(remembered.thinking.is_none());
+    state
+        .preferences
+        .select_settings(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+        .unwrap();
     let response = app(&state)
         .oneshot(command(&path, &token, &fields))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(state.conversations.get(&record.id).unwrap(), updated);
+    assert_eq!(
+        state
+            .preferences
+            .desk_providers(&state.vault)
+            .into_iter()
+            .find(|provider| provider.selected)
+            .unwrap()
+            .model,
+        "grok-4.6"
+    );
+}
+
+#[tokio::test]
+async fn model_preference_failure_returns_the_committed_conversation_patch() {
+    let mut state = test_state();
+    let dir = tempfile::tempdir().unwrap();
+    state.preferences = std::sync::Arc::new(crate::preferences::Preferences::open(
+        dir.path().to_path_buf(),
+    ));
+    let token = connected(&state);
+    let record = state.conversations.create("Saved".to_owned()).unwrap();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/model", record.id),
+            &token,
+            &format!(
+                "revision={}&provider=xai&model=grok-4.6&thinking={}",
+                record.revision,
+                effort.as_str()
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = state.conversations.get(&record.id).unwrap();
+    assert!(updated.revision > record.revision);
+    assert_eq!(updated.model.unwrap().selection.model, "grok-4.6");
+    let body = text(response).await;
+    assert!(body.contains("target=\"conversation-detail\""));
+    assert!(body.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
+    assert!(body.contains("Power Plant cannot store the model preference."));
 }
 
 #[tokio::test]

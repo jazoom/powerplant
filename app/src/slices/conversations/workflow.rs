@@ -1345,8 +1345,8 @@ fn selected_phase_model_options(
     let agents = state.agents.list();
     let selected = super::effective_model(state, record).map(|model| model.selection);
     let direct_models: Vec<ModelSelection> = state
-        .vault
-        .desk_providers()
+        .preferences
+        .desk_providers(&state.vault)
         .into_iter()
         .filter_map(|provider| {
             let thinking = state.models_dev.effective_effort(

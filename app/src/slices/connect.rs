@@ -280,6 +280,10 @@ async fn forget(
             .vault
             .forget(kind)
             .map_err(|error| crate::error::AppError::new("forget provider", error))?;
+        // Credential removal succeeds even if optional preference cleanup fails.
+        if let Err(error) = state.preferences.forget_provider(kind) {
+            crate::error::trace_operation_failure("forget provider preferences", &error);
+        }
     }
 
     if !state.vault.has_providers() {

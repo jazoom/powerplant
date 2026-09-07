@@ -178,12 +178,12 @@ fn options(vault: &ProviderVault, selected: Option<ProviderKind>) -> Vec<Provide
 
 fn stored_providers(vault: &ProviderVault) -> Vec<StoredProviderView> {
     vault
-        .desk_providers()
+        .providers()
         .into_iter()
-        .map(|provider| StoredProviderView {
-            value: provider.kind.as_str(),
-            label: provider.kind.label(),
-            method: provider.auth.label(),
+        .map(|(kind, auth)| StoredProviderView {
+            value: kind.as_str(),
+            label: kind.label(),
+            method: auth.label(),
         })
         .collect()
 }

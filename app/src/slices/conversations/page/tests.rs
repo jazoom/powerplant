@@ -32,6 +32,7 @@ fn escaped_history_keeps_the_latest_message_within_the_patch_bound() {
         &record,
         ModelSources {
             vault: &state.vault,
+            preferences: &state.preferences,
             models: &state.models_dev,
             projects: &[],
             documents: &[],
@@ -71,6 +72,7 @@ fn network_form_preserves_domains_and_shows_the_narrower_preset_ceiling() {
         &record,
         ModelSources {
             vault: &state.vault,
+            preferences: &state.preferences,
             models: &state.models_dev,
             projects: &[],
             documents: &[],

@@ -46,6 +46,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/conversations", get(catalogue).post(create))
         .route("/conversations/new", get(new::show).post(new::save))
+        .route("/conversations/new/model", post(new::remember_model))
         .route("/conversations/{conversation_id}", get(detail))
         .route(
             "/conversations/{conversation_id}/workflow",
@@ -993,8 +994,8 @@ fn candidate_review_view_model(
         })
         .or_else(|| {
             state
-                .vault
-                .desk_providers()
+                .preferences
+                .desk_providers(&state.vault)
                 .into_iter()
                 .find(|provider| provider.selected)
                 .map(|provider| ModelSelection {
@@ -1008,8 +1009,8 @@ fn candidate_review_view_model(
                 })
         });
     let providers = state
-        .vault
-        .desk_providers()
+        .preferences
+        .desk_providers(&state.vault)
         .into_iter()
         .map(|provider| ProviderOption {
             value: provider.kind.as_str(),
@@ -2167,13 +2168,16 @@ async fn select_model(
     }
     match state
         .conversations
-        .select_model(&record.id, revision, selection)
+        .select_model(&record.id, revision, selection.clone())
     {
-        Ok(updated) => render_detail_command(
-            graft,
-            PatchStatus::Ok,
-            detail_view(&state, session.0, &updated, &updated.title, ""),
-        ),
+        Ok(updated) => {
+            let warning = remember_selection(&state, selection).err().unwrap_or("");
+            render_detail_command(
+                graft,
+                PatchStatus::Ok,
+                detail_view(&state, session.0, &updated, &updated.title, warning),
+            )
+        }
         Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
             Err(AppError::new("store model selection", error))
         }
@@ -2855,8 +2859,8 @@ fn document_status(error: DocumentError) -> PatchStatus {
 
 fn plan_secret(state: &AppState, fields: &[&str]) -> Option<String> {
     state
-        .vault
-        .desk_providers()
+        .preferences
+        .desk_providers(&state.vault)
         .into_iter()
         .find_map(|provider| {
             let connection = state.vault.connection_for(&ModelSelection {
@@ -2894,8 +2898,8 @@ fn effective_model(
 ) -> Option<ConversationModelConfiguration> {
     record.model.clone().or_else(|| {
         state
-            .vault
-            .desk_providers()
+            .preferences
+            .desk_providers(&state.vault)
             .into_iter()
             .find(|provider| provider.selected)
             .map(|connection| {
@@ -2910,6 +2914,16 @@ fn effective_model(
                 })
             })
     })
+}
+
+fn remember_selection(state: &AppState, selection: ModelSelection) -> Result<(), &'static str> {
+    state
+        .preferences
+        .select_settings(selection.provider, selection.model, selection.thinking)
+        .map_err(|error| {
+            crate::error::trace_operation_failure("store model settings", &error);
+            "Power Plant cannot store the model preference."
+        })
 }
 
 fn valid_selection(state: &AppState, selection: &ModelSelection) -> Result<(), &'static str> {
@@ -3007,6 +3021,7 @@ fn detail_view(
         record,
         ModelSources {
             vault: &state.vault,
+            preferences: &state.preferences,
             models: &state.models_dev,
             projects: &state.projects.list(),
             documents: &state.documents.list_for_conversation(record.id),
@@ -3183,8 +3198,8 @@ fn review_view_model(
         .and_then(|form| submitted_selection(state, form).ok())
         .or_else(|| effective_model(state, source).map(|model| model.selection));
     let providers = state
-        .vault
-        .desk_providers()
+        .preferences
+        .desk_providers(&state.vault)
         .into_iter()
         .map(|provider| ProviderOption {
             value: provider.kind.as_str(),

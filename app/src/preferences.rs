@@ -2,8 +2,15 @@ use std::{fs, io, path::PathBuf, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::{
+    providers::{
+        MAXIMUM_FAVOURITES, ModelSelection, ProviderKind, ThinkingEffort, model_is_bounded,
+    },
+    vault::ProviderVault,
+};
+
 const FILE_VERSION: u32 = 1;
-const MAXIMUM_FILE_BYTES: usize = 1024;
+const MAXIMUM_FILE_BYTES: usize = 512 * 1024;
 
 #[cfg(test)]
 mod tests;
@@ -61,12 +68,85 @@ struct PreferencesFile {
     version: u32,
     theme: String,
     show_thinking: bool,
+    #[serde(deserialize_with = "crate::storage::required_option")]
+    selected_provider: Option<ProviderKind>,
+    models: Vec<ProviderPreference>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct PreferenceValues {
     theme: Theme,
     show_thinking: bool,
+    selected_provider: Option<ProviderKind>,
+    models: Vec<ProviderPreference>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderPreference {
+    selection: ModelSelection,
+    favourites: Vec<String>,
+}
+
+impl PreferenceValues {
+    fn provider(&mut self, kind: ProviderKind) -> &mut ProviderPreference {
+        let index = self
+            .models
+            .iter()
+            .position(|entry| entry.selection.provider == kind)
+            .unwrap_or_else(|| {
+                self.models.push(ProviderPreference {
+                    selection: ModelSelection {
+                        provider: kind,
+                        model: kind.default_model().to_owned(),
+                        thinking: None,
+                    },
+                    favourites: Vec::new(),
+                });
+                self.models.len() - 1
+            });
+        &mut self.models[index]
+    }
+
+    fn is_valid(&self) -> bool {
+        self.models.len() <= ProviderKind::ALL.len()
+            && self.selected_provider.is_none_or(|kind| {
+                self.models
+                    .iter()
+                    .any(|entry| entry.selection.provider == kind)
+            })
+            && self.models.iter().enumerate().all(|(index, entry)| {
+                let selection = &entry.selection;
+                ModelSelection::new(
+                    selection.provider,
+                    selection.model.clone(),
+                    selection.thinking.clone(),
+                )
+                .as_ref()
+                    == Some(selection)
+                    && !self.models[..index]
+                        .iter()
+                        .any(|previous| previous.selection.provider == selection.provider)
+                    && entry.favourites.len() <= MAXIMUM_FAVOURITES
+                    && entry.favourites.iter().enumerate().all(|(index, model)| {
+                        model_is_canonical(model) && !entry.favourites[..index].contains(model)
+                    })
+            })
+    }
+}
+
+pub(crate) struct DeskProvider {
+    pub(crate) kind: ProviderKind,
+    pub(crate) model: String,
+    pub(crate) thinking: Option<ThinkingEffort>,
+    pub(crate) selected: bool,
+    pub(crate) favourites: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(crate) enum FavouriteError {
+    Full,
+    Persist(PreferenceError),
 }
 
 #[derive(Debug)]
@@ -117,25 +197,106 @@ impl Preferences {
         self.update(|values| values.show_thinking = show)
     }
 
-    fn values(&self) -> PreferenceValues {
-        *self
-            .values
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    pub(crate) fn desk_providers(&self, vault: &ProviderVault) -> Vec<DeskProvider> {
+        let providers = vault.providers();
+        let values = self.values();
+        let selected = values
+            .selected_provider
+            .filter(|selected| providers.iter().any(|(kind, _)| kind == selected))
+            .or_else(|| providers.first().map(|(kind, _)| *kind));
+        providers
+            .into_iter()
+            .map(|(kind, _)| {
+                let stored = values
+                    .models
+                    .iter()
+                    .find(|entry| entry.selection.provider == kind);
+                DeskProvider {
+                    kind,
+                    model: stored.map_or_else(
+                        || kind.default_model().to_owned(),
+                        |entry| entry.selection.model.clone(),
+                    ),
+                    thinking: stored.and_then(|entry| entry.selection.thinking.clone()),
+                    selected: selected == Some(kind),
+                    favourites: stored.map_or_else(Vec::new, |entry| entry.favourites.clone()),
+                }
+            })
+            .collect()
     }
 
-    fn update(&self, change: impl FnOnce(&mut PreferenceValues)) -> Result<(), PreferenceError> {
+    pub(crate) fn select_settings(
+        &self,
+        kind: ProviderKind,
+        model: String,
+        thinking: Option<ThinkingEffort>,
+    ) -> Result<(), PreferenceError> {
+        let selection = ModelSelection::new(kind, model, thinking).ok_or(PreferenceError)?;
+        self.update(|values| {
+            values.provider(kind).selection = selection;
+            values.selected_provider = Some(kind);
+        })
+    }
+
+    pub(crate) fn forget_provider(&self, kind: ProviderKind) -> Result<(), PreferenceError> {
+        self.update(|values| {
+            values
+                .models
+                .retain(|entry| entry.selection.provider != kind);
+            if values.selected_provider == Some(kind) {
+                values.selected_provider = None;
+            }
+        })
+    }
+
+    pub(crate) fn toggle_favourite(
+        &self,
+        kind: ProviderKind,
+        model: &str,
+    ) -> Result<bool, FavouriteError> {
+        if !model_is_canonical(model) {
+            return Err(FavouriteError::Persist(PreferenceError));
+        }
+        self.update(|values| {
+            let favourites = &mut values.provider(kind).favourites;
+            if let Some(index) = favourites.iter().position(|item| item == model) {
+                favourites.remove(index);
+                Ok(false)
+            } else if favourites.len() == MAXIMUM_FAVOURITES {
+                Err(FavouriteError::Full)
+            } else {
+                favourites.push(model.to_owned());
+                Ok(true)
+            }
+        })
+        .map_err(FavouriteError::Persist)?
+    }
+
+    fn values(&self) -> PreferenceValues {
+        self.values
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn update<R>(
+        &self,
+        change: impl FnOnce(&mut PreferenceValues) -> R,
+    ) -> Result<R, PreferenceError> {
         let mut current = self
             .values
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut next = *current;
-        change(&mut next);
+        let mut next = current.clone();
+        let result = change(&mut next);
+        if !next.is_valid() {
+            return Err(PreferenceError);
+        }
         if let Some(path) = self.path.as_deref() {
-            persist(path, next)?;
+            persist(path, &next)?;
         }
         *current = next;
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -159,17 +320,30 @@ fn load(path: &std::path::Path) -> PreferenceValues {
     let Some(theme) = Theme::parse(&file.theme) else {
         return PreferenceValues::default();
     };
-    PreferenceValues {
+    let values = PreferenceValues {
         theme,
         show_thinking: file.show_thinking,
+        selected_provider: file.selected_provider,
+        models: file.models,
+    };
+    if values.is_valid() {
+        values
+    } else {
+        PreferenceValues::default()
     }
 }
 
-fn persist(path: &std::path::Path, values: PreferenceValues) -> Result<(), PreferenceError> {
+fn model_is_canonical(model: &str) -> bool {
+    !model.is_empty() && model.trim() == model && model_is_bounded(model)
+}
+
+fn persist(path: &std::path::Path, values: &PreferenceValues) -> Result<(), PreferenceError> {
     let file = PreferencesFile {
         version: FILE_VERSION,
         theme: values.theme.as_str().to_owned(),
         show_thinking: values.show_thinking,
+        selected_provider: values.selected_provider,
+        models: values.models.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&file).map_err(|_| PreferenceError)?;
     let dir = path.parent().ok_or(PreferenceError)?;

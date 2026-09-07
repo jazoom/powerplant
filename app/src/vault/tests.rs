@@ -27,7 +27,7 @@ impl super::ProviderVault {
 }
 
 use super::{ProviderVault, VaultError};
-use crate::providers::{AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind};
+use crate::providers::{AuthMethod, ProviderConnection, ProviderKind};
 use std::path::{Path, PathBuf};
 
 const SECRET: &str = "sk-vault-secret-do-not-echo";
@@ -51,7 +51,7 @@ fn marker_for(plan_path: &Path) -> PathBuf {
 fn write_plan_metadata(path: &Path) {
     std::fs::write(
         path,
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"plan","api_key":"","model":"grok-4.6","thinking":null,"favourites":[]}]}"#,
+        br#"{"version":1,"providers":[{"kind":"xai","auth":"plan","api_key":""}]}"#,
     )
     .unwrap();
 }
@@ -59,7 +59,7 @@ fn write_plan_metadata(path: &Path) {
 fn write_api_metadata(path: &Path) {
     std::fs::write(
         path,
-        br#"{"version":1,"selected":"synthetic","providers":[{"kind":"synthetic","auth":"api_key","api_key":"sk-one","model":"hf:custom","thinking":null,"favourites":[]}]}"#,
+        br#"{"version":1,"providers":[{"kind":"synthetic","auth":"api_key","api_key":"sk-one"}]}"#,
     )
     .unwrap();
 }
@@ -86,111 +86,27 @@ fn put_keeps_other_providers_and_survives_reload() {
 
     assert!(vault.contains(ProviderKind::Xai));
     assert!(vault.contains(ProviderKind::Synthetic));
-    assert_eq!(
-        vault.selected_connection().map(|item| item.kind),
-        Some(ProviderKind::Synthetic)
-    );
-
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(file.get("selected").is_none());
+    for provider in file["providers"].as_array().unwrap() {
+        for field in ["model", "thinking", "favourites"] {
+            assert!(provider.get(field).is_none());
+        }
+    }
     let reloaded = ProviderVault::open(path).expect("reload");
-    let desk = reloaded.desk_providers();
-    assert_eq!(desk.len(), 2);
-    assert_eq!(desk[0].kind, ProviderKind::Xai);
-    assert_eq!(desk[1].kind, ProviderKind::Synthetic);
-    assert_eq!(desk[1].model, "hf:custom");
+    assert_eq!(
+        reloaded.providers(),
+        vec![
+            (ProviderKind::Xai, AuthMethod::ApiKey),
+            (ProviderKind::Synthetic, AuthMethod::ApiKey)
+        ]
+    );
     assert_eq!(
         reloaded
-            .selected_connection()
+            .first_connection()
             .map(|item| item.api_key.expose().to_owned())
             .as_deref(),
         Some(SECRET)
-    );
-}
-
-#[test]
-fn replacing_a_key_keeps_the_saved_model() {
-    let vault = ProviderVault::in_memory();
-    vault
-        .put(connection(ProviderKind::Xai, "grok-4.6"))
-        .unwrap();
-    vault
-        .select_settings(ProviderKind::Xai, "grok-custom".to_owned(), None)
-        .unwrap();
-    vault
-        .put(connection(ProviderKind::Xai, "ignored-default"))
-        .unwrap();
-    assert_eq!(
-        vault.selected_connection().map(|item| item.model),
-        Some("grok-custom".to_owned())
-    );
-}
-
-#[test]
-fn thinking_level_round_trips_and_survives_a_new_key() {
-    let (vault, _dir, path) = file_vault();
-    vault
-        .put(connection(ProviderKind::Xai, "grok-4.6"))
-        .unwrap();
-    vault
-        .select_settings(
-            ProviderKind::Xai,
-            "grok-4.6".to_owned(),
-            Some(crate::providers::ThinkingEffort::new("high".to_owned()).unwrap()),
-        )
-        .unwrap();
-
-    let reloaded = ProviderVault::open(path).expect("reload");
-    reloaded
-        .put(connection(ProviderKind::Xai, "ignored-default"))
-        .unwrap();
-    assert_eq!(
-        reloaded.selected_connection().map(|item| item.thinking),
-        Some(Some(
-            crate::providers::ThinkingEffort::new("high".to_owned()).unwrap()
-        ))
-    );
-}
-
-#[test]
-fn favourites_round_trip_respect_the_cap_and_survive_a_new_key() {
-    let (vault, _dir, path) = file_vault();
-    vault
-        .put(connection(ProviderKind::Xai, "grok-4.6"))
-        .unwrap();
-    assert_eq!(
-        vault.toggle_favourite(ProviderKind::Xai, "grok-4.6").ok(),
-        Some(true)
-    );
-    assert_eq!(
-        vault.toggle_favourite(ProviderKind::Xai, "grok-4.6").ok(),
-        Some(false)
-    );
-    assert_eq!(
-        vault.toggle_favourite(ProviderKind::Xai, "grok-4.6").ok(),
-        Some(true)
-    );
-
-    let reloaded = ProviderVault::open(path).expect("reload");
-    let favourites = &reloaded.desk_providers()[0].favourites;
-    assert_eq!(favourites, &vec!["grok-4.6".to_owned()]);
-
-    reloaded
-        .put(connection(ProviderKind::Xai, "ignored-default"))
-        .unwrap();
-    let favourites = &reloaded.desk_providers()[0].favourites;
-    assert_eq!(favourites, &vec!["grok-4.6".to_owned()]);
-
-    for index in 1..crate::providers::MAXIMUM_FAVOURITES {
-        reloaded
-            .toggle_favourite(ProviderKind::Xai, &format!("model-{index}"))
-            .unwrap();
-    }
-    assert!(matches!(
-        reloaded.toggle_favourite(ProviderKind::Xai, "one-more"),
-        Err(super::FavouriteError::Full)
-    ));
-    assert_eq!(
-        reloaded.selected_connection().map(|item| item.model),
-        Some("grok-4.6".to_owned())
     );
 }
 
@@ -246,7 +162,7 @@ fn plan_auth_round_trips_without_a_key_and_forget_deletes_the_plan_file() {
     assert!(!staged.exists());
 
     let reloaded = ProviderVault::open(path.clone()).expect("reload");
-    let stored = reloaded.selected_connection().expect("plan");
+    let stored = reloaded.first_connection().expect("plan");
     assert_eq!(stored.auth, AuthMethod::Plan);
     assert!(stored.api_key.expose().is_empty());
     let text = std::fs::read_to_string(&path).unwrap();
@@ -270,7 +186,7 @@ fn api_key_insertion_removes_the_prior_plan_file() {
         .unwrap();
 
     assert!(!plan_path.exists());
-    let stored = vault.selected_connection().expect("api key");
+    let stored = vault.first_connection().expect("api key");
     assert_eq!(stored.auth, AuthMethod::ApiKey);
     assert_eq!(stored.api_key.expose(), SECRET);
 }
@@ -302,7 +218,7 @@ fn plan_installation_restores_metadata_and_files_after_persist_failure() {
         br#"{"access_token":"xai-plan-access-do-not-echo"}"#
     );
     assert!(!plan_path.exists());
-    let stored = vault.selected_connection().expect("api key");
+    let stored = vault.first_connection().expect("api key");
     assert_eq!(stored.auth, AuthMethod::ApiKey);
     assert_eq!(stored.api_key.expose(), SECRET);
 }
@@ -332,7 +248,7 @@ fn failed_plan_replacement_restores_the_prior_plan_file() {
         br#"{"access_token":"second-token"}"#
     );
     assert_eq!(
-        vault.selected_connection().map(|stored| stored.auth),
+        vault.first_connection().map(|stored| stored.auth),
         Some(AuthMethod::Plan)
     );
 }
@@ -343,7 +259,7 @@ fn absent_file_opens_as_empty() {
     let path = dir.path().join("providers.json");
     let vault = ProviderVault::open(path).expect("absent");
     assert!(!vault.has_providers());
-    assert!(vault.selected_connection().is_none());
+    assert!(vault.first_connection().is_none());
 }
 
 #[test]
@@ -358,13 +274,13 @@ fn malformed_json_is_corrupt_and_leaves_the_file_unchanged() {
 #[test]
 fn missing_current_provider_fields_are_corrupt() {
     for provider in [
-        r#"{"kind":"xai","auth":"api_key","model":"grok-4.6","thinking":null,"favourites":[]}"#,
-        r#"{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":[]}"#,
-        r#"{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","thinking":null}"#,
+        r#"{"kind":"xai","auth":"api_key"}"#,
+        r#"{"kind":"xai","api_key":"sk-one"}"#,
+        r#"{"auth":"api_key","api_key":"sk-one"}"#,
     ] {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("providers.json");
-        let bytes = format!(r#"{{"version":1,"selected":"xai","providers":[{provider}]}}"#);
+        let bytes = format!(r#"{{"version":1,"providers":[{provider}]}}"#);
         std::fs::write(&path, &bytes).unwrap();
         assert_open_leaves_bytes(&path, bytes.as_bytes());
     }
@@ -374,7 +290,7 @@ fn missing_current_provider_fields_are_corrupt() {
 fn unknown_vault_fields_are_corrupt() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("providers.json");
-    let bytes = br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","thinking":null,"favourites":[],"removed-field":true}]}"#;
+    let bytes = br#"{"version":1,"providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","removed-field":true}]}"#;
     std::fs::write(&path, bytes).unwrap();
 
     assert_open_leaves_bytes(&path, bytes);
@@ -394,10 +310,9 @@ fn duplicate_providers_are_corrupt_and_leave_the_file_unchanged() {
     let path = dir.path().join("providers.json");
     let bytes = br#"{
         "version": 1,
-        "selected": "xai",
         "providers": [
-            {"kind": "xai", "auth": "api_key", "api_key": "sk-one", "model": "grok-4.6"},
-            {"kind": "xai", "auth": "api_key", "api_key": "sk-two", "model": "grok-4.6"}
+            {"kind": "xai", "auth": "api_key", "api_key": "sk-one"},
+            {"kind": "xai", "auth": "api_key", "api_key": "sk-two"}
         ]
     }"#;
     std::fs::write(&path, bytes).unwrap();
@@ -405,64 +320,23 @@ fn duplicate_providers_are_corrupt_and_leave_the_file_unchanged() {
 }
 
 #[test]
-fn invalid_selections_are_corrupt_and_leave_the_file_unchanged() {
-    let cases: &[&[u8]] = &[
-        br#"{"version":1,"selected":null,"providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6"}]}"#,
-        br#"{"version":1,"providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6"}]}"#,
-        br#"{"version":1,"selected":"synthetic","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6"}]}"#,
-        br#"{"version":1,"selected":"unknown","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6"}]}"#,
-        br#"{"version":1,"selected":"xai","providers":[]}"#,
-    ];
-    for bytes in cases {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("providers.json");
-        std::fs::write(&path, bytes).unwrap();
-        assert_open_leaves_bytes(&path, bytes);
-    }
-}
-
-#[test]
 fn invalid_provider_records_are_corrupt_and_leave_the_file_unchanged() {
-    let too_many_favourites = format!(
-        r#"{{"version":1,"selected":"xai","providers":[{{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":[{}]}}]}}"#,
-        (0..=MAXIMUM_FAVOURITES)
-            .map(|index| format!("\"model-{index}\""))
-            .collect::<Vec<_>>()
-            .join(",")
-    );
-    let excessive_model = "a".repeat(crate::providers::MAXIMUM_MODEL_BYTES + 1);
     let excessive_key = "a".repeat(crate::providers::MAXIMUM_API_KEY_BYTES + 1);
-    let mut cases = vec![
-        br#"{"version":2,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"unknown","auth":"api_key","api_key":"sk-one","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","api_key":"sk-one","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"token","api_key":"sk-one","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":" sk-one ","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"bad\nkey","model":"grok-4.6"}]}"#.to_vec(),
+    let cases = vec![
+        br#"{"version":2,"providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one"}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"unknown","auth":"api_key","api_key":"sk-one"}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"xai","api_key":"sk-one"}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"xai","auth":"token","api_key":"sk-one"}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"xai","auth":"api_key","api_key":""}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"xai","auth":"api_key","api_key":" sk-one "}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"xai","auth":"api_key","api_key":"bad\nkey"}]}"#.to_vec(),
         format!(
-            r#"{{"version":1,"selected":"xai","providers":[{{"kind":"xai","auth":"api_key","api_key":"{excessive_key}","model":"grok-4.6"}}]}}"#
+            r#"{{"version":1,"providers":[{{"kind":"xai","auth":"api_key","api_key":"{excessive_key}"}}]}}"#
         )
         .into_bytes(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":""}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":" grok-4.6 "}]}"#.to_vec(),
-        format!(
-            r#"{{"version":1,"selected":"xai","providers":[{{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"{excessive_model}"}}]}}"#
-        )
-        .into_bytes(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"bad\nmodel"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"synthetic","providers":[{"kind":"synthetic","auth":"plan","model":"hf:custom"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"plan","api_key":"sk-one","model":"grok-4.6"}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":["grok-4.6","grok-4.6"]}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":[""]}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":[" grok-4.6 "]}]}"#.to_vec(),
-        br#"{"version":1,"selected":"xai","providers":[{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":["bad\nmodel"]}]}"#.to_vec(),
-        format!(
-            r#"{{"version":1,"selected":"xai","providers":[{{"kind":"xai","auth":"api_key","api_key":"sk-one","model":"grok-4.6","favourites":["{excessive_model}"]}}]}}"#
-        )
-        .into_bytes(),
+        br#"{"version":1,"providers":[{"kind":"synthetic","auth":"plan"}]}"#.to_vec(),
+        br#"{"version":1,"providers":[{"kind":"xai","auth":"plan","api_key":"sk-one"}]}"#.to_vec(),
     ];
-    cases.push(too_many_favourites.into_bytes());
     for bytes in cases {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("providers.json");
@@ -573,7 +447,7 @@ fn open_reconciles_every_final_file_and_marker_combination() {
                 assert_eq!(vault.contains(ProviderKind::Xai), case.named);
                 if case.named {
                     assert_eq!(
-                        vault.selected_connection().map(|item| item.auth),
+                        vault.first_connection().map(|item| item.auth),
                         Some(AuthMethod::Plan)
                     );
                     assert_eq!(std::fs::read(&plan_path).unwrap(), PLAN_BYTES);
@@ -672,7 +546,7 @@ fn forget_restores_plan_files_after_persist_failure() {
     assert!(!marker_for(&plan_path).exists());
     assert!(vault.contains(ProviderKind::Xai));
     assert_eq!(
-        vault.selected_connection().map(|item| item.auth),
+        vault.first_connection().map(|item| item.auth),
         Some(AuthMethod::Plan)
     );
 }
@@ -742,8 +616,9 @@ fn open_restricts_retained_plan_files_to_owner_read_write() {
 }
 
 impl super::ProviderVault {
-    pub(crate) fn selected_connection(&self) -> Option<ProviderConnection> {
+    fn first_connection(&self) -> Option<ProviderConnection> {
+        let kind = self.providers().first()?.0;
         let state = self.lock();
-        connection_from(self.path.as_deref(), &state, state.selected?)
+        connection_from(self.path.as_deref(), &state, kind)
     }
 }

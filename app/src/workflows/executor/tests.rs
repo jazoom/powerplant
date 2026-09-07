@@ -653,53 +653,125 @@ fn final_gate_completion_settles_the_session_job_successfully() {
 
 #[test]
 fn attempt_spec_mounts_isolated_source_and_read_only_git() {
-    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
-    let run = crate::workflows::RunId::generate().expect("run");
-    let attempt = crate::workflows::AttemptId::generate().expect("attempt");
-    let workspace = state
-        .workflow_workspaces
-        .create_attempt(run, attempt)
-        .expect("workspace");
-    let project = tempfile::tempdir().expect("project");
-    std::fs::create_dir(project.path().join(".git")).expect("git");
-    let secondary = tempfile::tempdir().expect("secondary");
-    let host = DirectoryPolicy::from_grants(
-        vec![
-            PolicyGrant {
-                alias: "project".to_owned(),
-                guest_path: GUEST_PROJECT.to_owned(),
-                host_path: project.path().to_path_buf(),
-                access: AccessMode::ReadWrite,
-            },
-            PolicyGrant {
-                alias: "docs".to_owned(),
-                guest_path: "/access/docs".to_owned(),
-                host_path: secondary.path().to_path_buf(),
-                access: AccessMode::ReadOnly,
-            },
-        ],
-        "project".to_owned(),
+    for access in [AccessMode::ReadOnly, AccessMode::ReadWrite] {
+        let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+        let run = crate::workflows::RunId::generate().expect("run");
+        let attempt = crate::workflows::AttemptId::generate().expect("attempt");
+        let workspace = state
+            .workflow_workspaces
+            .create_attempt(run, attempt)
+            .expect("workspace");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir(project.path().join(".git")).expect("git");
+        let secondary = tempfile::tempdir().expect("secondary");
+        let host = DirectoryPolicy::from_grants(
+            vec![
+                PolicyGrant {
+                    alias: "project".to_owned(),
+                    guest_path: GUEST_PROJECT.to_owned(),
+                    host_path: project.path().to_path_buf(),
+                    access: AccessMode::ReadWrite,
+                },
+                PolicyGrant {
+                    alias: "docs".to_owned(),
+                    guest_path: "/access/docs".to_owned(),
+                    host_path: secondary.path().to_path_buf(),
+                    access: AccessMode::ReadOnly,
+                },
+            ],
+            "project".to_owned(),
+        );
+        let mut capabilities = crate::tests::test_agent_capabilities();
+        capabilities.directories[0].access = access;
+        capabilities.directories.push(CapabilityDirectory {
+            alias: "docs".to_owned(),
+            guest_path: "/access/docs".to_owned(),
+            access: AccessMode::ReadOnly,
+            role: DirectoryRole::SecondaryContext,
+        });
+
+        assert!(!workspace.project.join(".git").exists());
+        let spec = attempt_spec(&capabilities, &workspace, project.path(), &host).expect("spec");
+
+        assert!(workspace.project.join(".git").is_dir());
+        assert_eq!(
+            std::fs::read_dir(workspace.project.join(".git"))
+                .expect("mount directory")
+                .count(),
+            0
+        );
+        assert_eq!(spec.workdir, GUEST_PROJECT);
+        assert_eq!(spec.mounts[0].host, workspace.project);
+        assert_eq!(spec.mounts[0].read_only, !access.is_writable());
+        assert_eq!(spec.mounts[1].guest, "/project/.git");
+        assert_eq!(spec.mounts[1].host, project.path().join(".git"));
+        assert!(spec.mounts[1].read_only);
+        assert_eq!(spec.mounts[2].guest, "/access/docs");
+        assert_eq!(spec.mounts[2].host, secondary.path());
+        assert!(spec.mounts[2].read_only);
+        std::fs::remove_dir(workspace.project.join(".git")).expect("remove placeholder");
+        std::os::unix::fs::symlink(project.path().join(".git"), workspace.project.join(".git"))
+            .expect("symlink");
+        assert!(attempt_spec(&capabilities, &workspace, project.path(), &host).is_err());
+        workspace.destroy().expect("destroy");
+    }
+}
+
+#[test]
+fn failed_conversation_workflow_retains_a_secret_safe_error() {
+    let (state, mut workflow, _, _) = gate_ready_fixture(
+        crate::workflows::RunKind::QuickTask,
+        GateCandidate::Unchanged,
     );
-    let mut capabilities = crate::tests::test_agent_capabilities();
-    capabilities.directories.push(CapabilityDirectory {
-        alias: "docs".to_owned(),
-        guest_path: "/access/docs".to_owned(),
-        access: AccessMode::ReadOnly,
-        role: DirectoryRole::SecondaryContext,
-    });
+    let conversation = state
+        .conversations
+        .create("Failure".to_owned())
+        .expect("conversation");
+    let session = crate::sessions::generate_session_token()
+        .expect("session")
+        .id();
+    state.sessions.insert(session);
+    workflow.session_id = session;
+    workflow.job = state
+        .sessions
+        .begin_conversation_job(&session, conversation.id, 1)
+        .expect("job");
+    let job_id = workflow.job.id();
+    state
+        .conversations
+        .begin_message_with_model(
+            &conversation.id,
+            conversation.revision,
+            None,
+            job_id,
+            "Read the project".to_owned(),
+        )
+        .expect("message");
+    workflow.conversation_id = Some(conversation.id);
+    super::set_active_connection(
+        &workflow,
+        Some(crate::providers::ProviderConnection::with_key(
+            crate::providers::ProviderKind::Xai,
+            "phase-secret",
+            "model",
+        )),
+    );
+    super::settle_job(
+        &state,
+        &workflow,
+        JobStatus::Failed,
+        Some("Sandbox failed: phase-secret\0"),
+    );
 
-    let spec = attempt_spec(&capabilities, &workspace, project.path(), &host).expect("spec");
-
-    assert_eq!(spec.workdir, GUEST_PROJECT);
-    assert_eq!(spec.mounts[0].host, workspace.project);
-    assert!(!spec.mounts[0].read_only);
-    assert_eq!(spec.mounts[1].guest, "/project/.git");
-    assert_eq!(spec.mounts[1].host, project.path().join(".git"));
-    assert!(spec.mounts[1].read_only);
-    assert_eq!(spec.mounts[2].guest, "/access/docs");
-    assert_eq!(spec.mounts[2].host, secondary.path());
-    assert!(spec.mounts[2].read_only);
-    workspace.destroy().expect("destroy");
+    let saved = state
+        .conversations
+        .get(&conversation.id)
+        .expect("saved conversation");
+    let reply = saved.messages.last().expect("reply");
+    assert_eq!(reply.status, crate::conversations::MessageStatus::Failed);
+    assert_eq!(reply.error.as_deref(), Some("Sandbox failed: [redacted]"));
+    assert_eq!(saved.active_job, None);
+    assert!(!state.sessions.busy(&session));
 }
 
 #[tokio::test]

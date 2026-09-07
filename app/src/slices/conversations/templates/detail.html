@@ -1000,6 +1000,13 @@
                 Another command is active in this browser session.
               </p>
             {% endif %}
+            {% if self.is_new() %}
+              <p
+                id="conversation-send-status"
+                role="status"
+                class="text-quiet px-4 text-sm"
+              ></p>
+            {% endif %}
             <div class="composer-toolbar">
               <span
                 data-island="shortcut-hint"
@@ -1357,6 +1364,24 @@
               />
             </form>
           {% endif %}
+        {% endif %}
+        {% if self.is_new() %}
+          <form
+            id="conversation-model-preference"
+            data-graft
+            method="post"
+            action="/conversations/new/model"
+            hidden
+          >
+            <input type="hidden" name="provider" />
+            <input type="hidden" name="model" />
+            <input type="hidden" name="thinking" />
+          </form>
+          <p
+            id="conversation-model-status"
+            role="status"
+            class="text-error text-sm"
+          ></p>
         {% endif %}
         <div class="flex min-w-0 flex-col gap-3">
           {% include "conversations/templates/model_picker.html" %}

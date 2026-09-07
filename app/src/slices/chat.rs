@@ -222,7 +222,7 @@ async fn update_model(
     match form.validate(|kind| state.vault.contains(kind)) {
         Ok((kind, model, submitted_effort)) => {
             let model = submitted_model(&state, &form, kind, model);
-            let providers = state.vault.desk_providers();
+            let providers = state.preferences.desk_providers(&state.vault);
             let previous = providers.iter().find(|provider| provider.selected);
             let Some(target) = providers.iter().find(|provider| provider.kind == kind) else {
                 let view = desk_view(&state, &desk).await;
@@ -253,7 +253,7 @@ async fn update_model(
                 }
             };
             state
-                .vault
+                .preferences
                 .select_settings(kind, model, thinking)
                 .map_err(|error| crate::error::AppError::new("store model settings", error))?;
         }
@@ -288,19 +288,14 @@ async fn toggle_favourite(
     match form.validate_favourite(|kind| state.vault.contains(kind)) {
         Ok((kind, model)) => {
             let model = submitted_model(state, form, kind, model);
-            match state.vault.toggle_favourite(kind, &model) {
+            match state.preferences.toggle_favourite(kind, &model) {
                 Ok(_) => {}
-                Err(crate::vault::FavouriteError::Provider) => {
-                    let view = desk_view(state, desk).await;
-                    return reject_model_view(state, graft, view, "Choose a stored provider.")
-                        .await;
-                }
-                Err(crate::vault::FavouriteError::Full) => {
+                Err(crate::preferences::FavouriteError::Full) => {
                     let view = desk_view(state, desk).await;
                     return reject_model_view(state, graft, view, "The favourites list is full.")
                         .await;
                 }
-                Err(crate::vault::FavouriteError::Persist(error)) => {
+                Err(crate::preferences::FavouriteError::Persist(error)) => {
                     return Err(crate::error::AppError::new("store favourite", error));
                 }
             }
@@ -331,7 +326,7 @@ fn submitted_model(
     if form.provider_model_synced {
         return model;
     }
-    let providers = state.vault.desk_providers();
+    let providers = state.preferences.desk_providers(&state.vault);
     let Some(selected) = providers.iter().find(|provider| provider.selected) else {
         return model;
     };
@@ -370,7 +365,7 @@ pub(crate) async fn view(
     let mut rendered = ChatViewModel::from_session(
         page.agent,
         page.snapshot,
-        &state.vault,
+        &state.preferences.desk_providers(&state.vault),
         &state.models_dev,
         error,
         desk_error,

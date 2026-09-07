@@ -404,7 +404,10 @@ async fn the_desk_updates_the_thinking_level() {
 
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     assert_eq!(
-        state.vault.selected_connection().map(|item| item.thinking),
+        state
+            .preferences
+            .selected_provider(&state.vault)
+            .map(|item| item.thinking),
         Some(Some(
             crate::providers::ThinkingEffort::new("high".to_owned()).unwrap()
         ))
@@ -435,7 +438,10 @@ async fn an_oversized_model_name_is_rejected() {
     assert!(text.contains("target=\"desk-settings\""));
     assert!(!text.contains(&long_model));
     assert_eq!(
-        state.vault.selected_connection().map(|item| item.model),
+        state
+            .preferences
+            .selected_provider(&state.vault)
+            .map(|item| item.model),
         Some("grok-4.6".to_owned())
     );
 }
@@ -468,7 +474,10 @@ async fn model_updates_require_an_eligible_project_and_agent_pair() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("navigate=\"/projects\""));
     assert_eq!(
-        state.vault.selected_connection().map(|item| item.model),
+        state
+            .preferences
+            .selected_provider(&state.vault)
+            .map(|item| item.model),
         Some("grok-4.6".to_owned())
     );
 }
@@ -539,7 +548,11 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
         ))
         .unwrap();
     state
-        .vault
+        .preferences
+        .select_settings(ProviderKind::OpenaiCodex, "gpt-5.1-codex".to_owned(), None)
+        .unwrap();
+    state
+        .preferences
         .select_settings(ProviderKind::Xai, "grok-4.6".to_owned(), None)
         .unwrap();
 
@@ -553,7 +566,7 @@ async fn a_native_provider_change_keeps_that_providers_saved_model() {
         .expect("provider change");
 
     assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let selected = state.vault.selected_connection().unwrap();
+    let selected = state.preferences.selected_provider(&state.vault).unwrap();
     assert_eq!(selected.kind, ProviderKind::OpenaiCodex);
     assert_eq!(selected.model, "gpt-5.1-codex");
 }
@@ -571,7 +584,7 @@ async fn provider_changes_preserve_each_providers_saved_thinking_effort() {
         ))
         .unwrap();
     state
-        .vault
+        .preferences
         .select_settings(
             ProviderKind::OpenaiCodex,
             "gpt-5.2".to_owned(),
@@ -579,7 +592,7 @@ async fn provider_changes_preserve_each_providers_saved_thinking_effort() {
         )
         .unwrap();
     state
-        .vault
+        .preferences
         .select_settings(
             ProviderKind::Xai,
             "grok-4.6".to_owned(),
@@ -596,7 +609,10 @@ async fn provider_changes_preserve_each_providers_saved_thinking_effort() {
         .await
         .expect("openai provider change");
     assert_eq!(openai.status(), axum::http::StatusCode::OK);
-    let selected = state.vault.selected_connection().expect("openai selected");
+    let selected = state
+        .preferences
+        .selected_provider(&state.vault)
+        .expect("openai selected");
     assert_eq!(selected.kind, ProviderKind::OpenaiCodex);
     assert_eq!(selected.model, "gpt-5.2");
     assert_eq!(
@@ -613,7 +629,10 @@ async fn provider_changes_preserve_each_providers_saved_thinking_effort() {
         .await
         .expect("xai provider change");
     assert_eq!(xai.status(), axum::http::StatusCode::OK);
-    let selected = state.vault.selected_connection().expect("xai selected");
+    let selected = state
+        .preferences
+        .selected_provider(&state.vault)
+        .expect("xai selected");
     assert_eq!(selected.kind, ProviderKind::Xai);
     assert_eq!(selected.model, "grok-4.6");
     assert_eq!(
@@ -647,7 +666,7 @@ async fn the_desk_can_toggle_a_model_favourite() {
             "aria-pressed=\"false\""
         }));
 
-        let desk = state.vault.desk_providers();
+        let desk = state.preferences.desk_providers(&state.vault);
         let favourites = &desk
             .iter()
             .find(|provider| provider.kind == ProviderKind::Xai)
@@ -655,7 +674,10 @@ async fn the_desk_can_toggle_a_model_favourite() {
             .favourites;
         assert_eq!(favourites.contains(&"grok-4-mini".to_owned()), expected);
         assert_eq!(
-            state.vault.selected_connection().map(|item| item.model),
+            state
+                .preferences
+                .selected_provider(&state.vault)
+                .map(|item| item.model),
             Some("grok-4.6".to_owned())
         );
     }
@@ -681,7 +703,10 @@ async fn a_favourite_toggle_without_a_model_is_rejected() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("Choose a model."));
     assert_eq!(
-        state.vault.selected_connection().map(|item| item.model),
+        state
+            .preferences
+            .selected_provider(&state.vault)
+            .map(|item| item.model),
         Some("grok-4.6".to_owned())
     );
 }

@@ -24,8 +24,8 @@ pub(super) async fn show(
         ..NewForm::default()
     };
     if let Some(provider) = state
-        .vault
-        .desk_providers()
+        .preferences
+        .desk_providers(&state.vault)
         .into_iter()
         .find(|provider| provider.selected)
     {
@@ -95,6 +95,31 @@ fn model(
         Some(preset) => ConversationModelConfiguration::from_preset(&preset, selection),
         None => ConversationModelConfiguration::direct(selection),
     }))
+}
+
+pub(super) async fn remember_model(
+    State(state): State<AppState>,
+    _session: RequiredSession,
+    _graft: PatchGraft,
+    Form(mut form): Form<NewForm>,
+) -> AppResult<Response> {
+    form.preset.clear();
+    let (status, message) = match model(&state, &form) {
+        Ok(Some(model)) => match remember_selection(&state, model.selection) {
+            Ok(()) => (PatchStatus::Ok, ""),
+            Err(error) => (PatchStatus::UnprocessableEntity, error),
+        },
+        Ok(None) => (
+            PatchStatus::UnprocessableEntity,
+            "Choose a stored provider.",
+        ),
+        Err(error) => (PatchStatus::UnprocessableEntity, error),
+    };
+    Ok(hypergraft::outcome::children_patch(
+        status,
+        "conversation-model-status",
+        &page::ModelSelectionStatus { message },
+    )?)
 }
 
 pub(super) async fn save(
@@ -181,7 +206,12 @@ pub(super) async fn save(
             return reject(status_for(error), error.message(), form);
         }
     };
-    let view = detail_view(&state, session.0, &record, &record.title, "");
+    let warning = record
+        .model
+        .as_ref()
+        .and_then(|model| remember_selection(&state, model.selection.clone()).err())
+        .unwrap_or("");
+    let view = detail_view(&state, session.0, &record, &record.title, warning);
     let mut patches = hypergraft::PatchSet::new();
     patches
         .children("conversation-detail", &view.contents())

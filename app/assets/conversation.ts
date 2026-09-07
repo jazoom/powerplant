@@ -1,4 +1,9 @@
-import type { IslandInstance, IslandMountContext } from "hypergraft/browser";
+import {
+    commandBlockReason,
+    listenForRequestSettled,
+    type IslandInstance,
+    type IslandMountContext,
+} from "hypergraft/browser";
 
 export function initConversation(
     root: HTMLElement,
@@ -8,6 +13,94 @@ export function initConversation(
         return root.querySelector<HTMLInputElement>("#conversation-model")
             ?.form;
     }
+
+    const choices = new Map<string, { model: string; thinking: string }>();
+    let pendingPreference = false;
+    let deferredSend:
+        { form: HTMLFormElement; submitter: HTMLElement | null } | undefined;
+    function sendStatus(message: string) {
+        const status = root.querySelector("#conversation-send-status");
+        if (status) status.textContent = message;
+    }
+    function rememberModel() {
+        const preference = root.querySelector<HTMLFormElement>(
+            "#conversation-model-preference",
+        );
+        const source = modelForm();
+        if (!preference || !source) return;
+        const provider = source.elements.namedItem(
+            "provider",
+        ) as HTMLSelectElement;
+        choices.set(provider.value, {
+            model: (source.elements.namedItem("model") as HTMLInputElement)
+                .value,
+            thinking: (
+                source.elements.namedItem("thinking") as HTMLSelectElement
+            ).value,
+        });
+        pendingPreference = true;
+        if (commandBlockReason()) return;
+        for (const name of ["provider", "model", "thinking"]) {
+            const field = source.elements.namedItem(name) as
+                HTMLInputElement | HTMLSelectElement;
+            (preference.elements.namedItem(name) as HTMLInputElement).value =
+                field.disabled ? "" : field.value;
+        }
+        pendingPreference = false;
+        preference.requestSubmit();
+    }
+    root.addEventListener(
+        "submit",
+        (event) => {
+            if (
+                event.defaultPrevented ||
+                !(event.target instanceof HTMLFormElement) ||
+                event.target.id !== "conversation-composer" ||
+                root
+                    .querySelector("#conversation-model-preference")
+                    ?.getAttribute("aria-busy") !== "true"
+            )
+                return;
+            // Only defer an unsent message behind this page's preference request.
+            event.preventDefault();
+            deferredSend ??= { form: event.target, submitter: event.submitter };
+            sendStatus(
+                "Your message will send after the model preference request finishes.",
+            );
+        },
+        { signal },
+    );
+    const stopSettlement = listenForRequestSettled((detail) => {
+        if (
+            deferredSend &&
+            detail.form === root.querySelector("#conversation-model-preference")
+        ) {
+            const { form, submitter } = deferredSend;
+            deferredSend = undefined;
+            pendingPreference = false;
+            if (detail.outcome !== "applied-patch") {
+                sendStatus(
+                    "The message was not sent. The page needs a reload before another command.",
+                );
+                return;
+            }
+            sendStatus("");
+            if (
+                !commandBlockReason() &&
+                root.contains(form) &&
+                form.isConnected &&
+                (!submitter ||
+                    ((submitter instanceof HTMLButtonElement ||
+                        submitter instanceof HTMLInputElement) &&
+                        submitter.form === form &&
+                        !submitter.disabled))
+            )
+                form.requestSubmit(submitter ?? undefined);
+            return;
+        }
+        if (detail.outcome === "applied-patch" && pendingPreference)
+            rememberModel();
+    });
 
     function syncConversation() {
         // Saved summaries describe the authoritative configuration, not unsubmitted choices.
@@ -68,7 +161,9 @@ export function initConversation(
         if (changed.name === "provider") {
             if (search) search.value = "";
             setModelExpanded(false);
-            const preferred = provider.selectedOptions[0]?.dataset.defaultModel;
+            const preferred =
+                choices.get(provider.value)?.model ??
+                provider.selectedOptions[0]?.dataset.defaultModel;
             model.value =
                 models.find((item) => item.id === preferred)?.id ??
                 models[0]?.id ??
@@ -113,7 +208,12 @@ export function initConversation(
                 : [new Option("Not available", "")]),
         );
         thinking.disabled = efforts.length === 0;
-        thinking.value = selected?.default_effort ?? "";
+        const remembered = choices.get(provider.value);
+        thinking.value =
+            remembered?.model === model.value &&
+            efforts.some((effort) => effort.value === remembered.thinking)
+                ? remembered.thinking
+                : (selected?.default_effort ?? "");
     }
 
     function setModelExpanded(expanded: boolean, restoreFocus = false) {
@@ -167,6 +267,7 @@ export function initConversation(
                     model.value = option.dataset.conversationModelValue ?? "";
                     updateModelOptions(model);
                     syncConversation();
+                    rememberModel();
                 }
                 setModelExpanded(false, true);
             } else if (!event.target.closest("#conversation-model-picker")) {
@@ -286,6 +387,11 @@ export function initConversation(
                 )
                     updateModelOptions(event.target);
                 syncConversation();
+                if (
+                    event.target.form === modelForm() &&
+                    ["provider", "thinking"].includes(event.target.name)
+                )
+                    rememberModel();
             }
         },
         { signal },
@@ -302,6 +408,9 @@ export function initConversation(
                     ))
             )
                 return;
+            pendingPreference = false;
+            deferredSend = undefined;
+            choices.clear();
             setModelExpanded(false);
             const search = root.querySelector<HTMLInputElement>(
                 "#conversation-model-search",
@@ -312,6 +421,8 @@ export function initConversation(
             )?.replaceChildren();
             syncConversation();
         },
-        destroy() {},
+        destroy() {
+            stopSettlement();
+        },
     };
 }

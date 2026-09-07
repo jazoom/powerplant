@@ -7,8 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::providers::{
-    AuthMethod, MAXIMUM_FAVOURITES, ProviderConnection, ProviderKind, SecretString, ThinkingEffort,
-    api_key_is_bounded, model_is_bounded,
+    AuthMethod, ProviderConnection, ProviderKind, SecretString, api_key_is_bounded,
 };
 
 #[cfg(test)]
@@ -18,7 +17,6 @@ const VAULT_VERSION: u32 = 1;
 
 #[derive(Clone, Default)]
 struct VaultState {
-    selected: Option<ProviderKind>,
     providers: HashMap<ProviderKind, StoredProvider>,
 }
 
@@ -26,16 +24,12 @@ struct VaultState {
 struct StoredProvider {
     auth: AuthMethod,
     api_key: SecretString,
-    model: String,
-    thinking: Option<ThinkingEffort>,
-    favourites: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct VaultFile {
     version: u32,
-    selected: Option<String>,
     providers: Vec<VaultFileProvider>,
 }
 
@@ -45,10 +39,6 @@ struct VaultFileProvider {
     kind: String,
     auth: String,
     api_key: String,
-    model: String,
-    #[serde(deserialize_with = "crate::storage::required_option")]
-    thinking: Option<String>,
-    favourites: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,34 +63,6 @@ impl std::fmt::Display for VaultError {
 }
 
 impl std::error::Error for VaultError {}
-
-#[derive(Debug)]
-pub(crate) enum FavouriteError {
-    Provider,
-    Full,
-    Persist(VaultError),
-}
-
-impl std::fmt::Display for FavouriteError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Provider => "provider is not stored",
-            Self::Full => "favourite list is full",
-            Self::Persist(_) => "provider vault persist failed",
-        })
-    }
-}
-
-impl std::error::Error for FavouriteError {}
-
-pub(crate) struct DeskProvider {
-    pub(crate) kind: ProviderKind,
-    pub(crate) auth: AuthMethod,
-    pub(crate) model: String,
-    pub(crate) thinking: Option<ThinkingEffort>,
-    pub(crate) selected: bool,
-    pub(crate) favourites: Vec<String>,
-}
 
 pub(crate) struct ProviderVault {
     path: Option<PathBuf>,
@@ -144,20 +106,11 @@ impl ProviderVault {
         Some(connection)
     }
 
-    pub(crate) fn desk_providers(&self) -> Vec<DeskProvider> {
+    pub(crate) fn providers(&self) -> Vec<(ProviderKind, AuthMethod)> {
         let state = self.lock();
         ProviderKind::ALL
             .into_iter()
-            .filter_map(|kind| {
-                state.providers.get(&kind).map(|stored| DeskProvider {
-                    kind,
-                    auth: stored.auth,
-                    model: stored.model.clone(),
-                    thinking: stored.thinking.clone(),
-                    selected: state.selected == Some(kind),
-                    favourites: stored.favourites.clone(),
-                })
-            })
+            .filter_map(|kind| state.providers.get(&kind).map(|stored| (kind, stored.auth)))
             .collect()
     }
 
@@ -173,28 +126,13 @@ impl ProviderVault {
             .transpose()?
             .flatten();
         let previous = state.clone();
-        let (model, thinking, favourites) = state
-            .providers
-            .get(&connection.kind)
-            .map(|stored| {
-                (
-                    stored.model.clone(),
-                    stored.thinking.clone(),
-                    stored.favourites.clone(),
-                )
-            })
-            .unwrap_or((connection.model, connection.thinking, Vec::new()));
         state.providers.insert(
             connection.kind,
             StoredProvider {
                 auth: AuthMethod::ApiKey,
                 api_key: connection.api_key,
-                model,
-                thinking,
-                favourites,
             },
         );
-        state.selected = Some(connection.kind);
         if self.commit(&state).is_err() {
             *state = previous;
             self.commit(&state)?;
@@ -224,28 +162,13 @@ impl ProviderVault {
             restore_plan_backup(&final_path, previous_plan.as_deref())?;
             return Err(VaultError::Persist);
         }
-        let (model, thinking, favourites) = state
-            .providers
-            .get(&kind)
-            .map(|stored| {
-                (
-                    stored.model.clone(),
-                    stored.thinking.clone(),
-                    stored.favourites.clone(),
-                )
-            })
-            .unwrap_or_else(|| (kind.default_model().to_owned(), None, Vec::new()));
         state.providers.insert(
             kind,
             StoredProvider {
                 auth: AuthMethod::Plan,
                 api_key: SecretString::new(String::new()),
-                model,
-                thinking,
-                favourites,
             },
         );
-        state.selected = Some(kind);
         if self.commit(&state).is_err() {
             self.rollback_plan_install(
                 &mut state,
@@ -294,11 +217,6 @@ impl ProviderVault {
             None
         };
         state.providers.remove(&kind);
-        if state.selected == Some(kind) {
-            state.selected = ProviderKind::ALL
-                .into_iter()
-                .find(|candidate| state.providers.contains_key(candidate));
-        }
         if self.commit(&state).is_err() {
             self.rollback_forget(&mut state, previous, plan_deletion.as_ref())?;
             return Err(VaultError::Persist);
@@ -310,60 +228,6 @@ impl ProviderVault {
             return Err(VaultError::Persist);
         }
         Ok(())
-    }
-
-    pub(crate) fn select_settings(
-        &self,
-        kind: ProviderKind,
-        model: String,
-        thinking: Option<ThinkingEffort>,
-    ) -> Result<(), VaultError> {
-        self.mutate(|state| {
-            if let Some(stored) = state.providers.get_mut(&kind) {
-                stored.model = model;
-                stored.thinking = thinking;
-                state.selected = Some(kind);
-            }
-        })
-    }
-
-    pub(crate) fn toggle_favourite(
-        &self,
-        kind: ProviderKind,
-        model: &str,
-    ) -> Result<bool, FavouriteError> {
-        match self.mutate(|state| {
-            let Some(stored) = state.providers.get_mut(&kind) else {
-                return Err(FavouriteError::Provider);
-            };
-            let position = stored.favourites.iter().position(|item| item == model);
-            if position.is_none() && stored.favourites.len() >= MAXIMUM_FAVOURITES {
-                return Err(FavouriteError::Full);
-            }
-            let favourite = if let Some(position) = position {
-                stored.favourites.remove(position);
-                false
-            } else {
-                stored.favourites.push(model.to_owned());
-                true
-            };
-            Ok(favourite)
-        }) {
-            Ok(Ok(favourite)) => Ok(favourite),
-            Ok(Err(error)) => Err(error),
-            Err(error) => Err(FavouriteError::Persist(error)),
-        }
-    }
-
-    fn mutate<R>(&self, edit: impl FnOnce(&mut VaultState) -> R) -> Result<R, VaultError> {
-        let mut state = self.lock();
-        let previous = state.clone();
-        let value = edit(&mut state);
-        if let Err(error) = self.commit(&state) {
-            *state = previous;
-            return Err(error);
-        }
-        Ok(value)
     }
 
     fn rollback_forget(
@@ -452,8 +316,8 @@ fn connection_from(
         kind,
         auth: stored.auth,
         api_key: stored.api_key.clone(),
-        model: stored.model.clone(),
-        thinking: stored.thinking.clone(),
+        model: kind.default_model().to_owned(),
+        thinking: None,
         plan_file: (stored.auth == AuthMethod::Plan)
             .then(|| plan_file_path(path, kind))
             .flatten(),
@@ -481,13 +345,6 @@ fn load(path: &Path) -> Result<VaultState, VaultError> {
         let Some(auth) = AuthMethod::parse(&entry.auth) else {
             return Err(VaultError::Corrupt);
         };
-        if !model_is_canonical(&entry.model) {
-            return Err(VaultError::Corrupt);
-        }
-        let thinking = match entry.thinking.as_deref() {
-            None | Some("default") => None,
-            Some(value) => Some(ThinkingEffort::new(value.to_owned()).ok_or(VaultError::Corrupt)?),
-        };
         let api_key = match auth {
             AuthMethod::ApiKey => {
                 if entry.api_key.trim() != entry.api_key || !api_key_is_bounded(&entry.api_key) {
@@ -502,45 +359,11 @@ fn load(path: &Path) -> Result<VaultState, VaultError> {
                 SecretString::new(String::new())
             }
         };
-        if entry.favourites.len() > MAXIMUM_FAVOURITES {
-            return Err(VaultError::Corrupt);
-        }
-        let mut favourites = Vec::with_capacity(entry.favourites.len());
-        for item in entry.favourites {
-            if !model_is_canonical(&item) || favourites.iter().any(|seen| seen == &item) {
-                return Err(VaultError::Corrupt);
-            }
-            favourites.push(item);
-        }
-        state.providers.insert(
-            kind,
-            StoredProvider {
-                auth,
-                api_key,
-                model: entry.model,
-                thinking,
-                favourites,
-            },
-        );
+        state
+            .providers
+            .insert(kind, StoredProvider { auth, api_key });
     }
-    state.selected = match file.selected.as_deref() {
-        None if state.providers.is_empty() => None,
-        None => return Err(VaultError::Corrupt),
-        Some(value) => {
-            let Some(kind) = ProviderKind::parse(value) else {
-                return Err(VaultError::Corrupt);
-            };
-            if !state.providers.contains_key(&kind) {
-                return Err(VaultError::Corrupt);
-            }
-            Some(kind)
-        }
-    };
     Ok(state)
-}
-
-fn model_is_canonical(model: &str) -> bool {
-    !model.is_empty() && model.trim() == model && model_is_bounded(model)
 }
 
 fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
@@ -552,7 +375,6 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
     }
     let file = VaultFile {
         version: VAULT_VERSION,
-        selected: state.selected.map(ProviderKind::as_str).map(str::to_owned),
         providers: ProviderKind::ALL
             .into_iter()
             .filter_map(|kind| {
@@ -563,12 +385,6 @@ fn persist(path: Option<&Path>, state: &VaultState) -> Result<(), VaultError> {
                         AuthMethod::ApiKey => stored.api_key.expose().to_owned(),
                         AuthMethod::Plan => String::new(),
                     },
-                    model: stored.model.clone(),
-                    thinking: stored
-                        .thinking
-                        .as_ref()
-                        .map(|value| value.as_str().to_owned()),
-                    favourites: stored.favourites.clone(),
                 })
             })
             .collect(),
