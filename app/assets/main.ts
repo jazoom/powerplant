@@ -49,6 +49,24 @@ document.addEventListener("change", (event) => {
     }
 });
 
+document.addEventListener(
+    "invalid",
+    (event) => {
+        if (
+            !(event.target instanceof HTMLElement) ||
+            !event.target.closest("#workflow-launch")
+        )
+            return;
+        let parent = event.target.parentElement;
+        while (parent && parent.id !== "workflow-launch") {
+            parent.hidden = false;
+            if (parent instanceof HTMLDetailsElement) parent.open = true;
+            parent = parent.parentElement;
+        }
+    },
+    true,
+);
+
 startApp();
 
 const LIVE_RELOAD_EVENT_STREAM = "/_tower-livereload/event-stream";

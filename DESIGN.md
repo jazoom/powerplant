@@ -157,7 +157,12 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Workflow phase settings use a keyboard-accessible selector. Unselected panels stay in the form so unsaved values remain.
 - Invalid controls reveal their phase before browser validation moves focus. Server errors reveal the first affected phase and its advanced settings.
 - Workflow overviews show each phase purpose, candidate effect, fresh model context and approval route. Independent review is labelled only when that phase exists. Environment overrides and technical mappings stay under Advanced settings.
-- Conversation workflow launch uses the same ordered process presentation as workflow configuration.
+- Conversation workflow setup has Choose a workflow, Workflow inputs and Review workflow states on one canonical GET route.
+- The chooser shows names and short outcomes. Only the selected process shows its ordered phases through the shared process template.
+- Input controls show the selected process requirements. Model and preset overrides stay collapsed until requested or invalid.
+- Review shows selected context, effects, effective access, environment readiness and approval stops before Start workflow.
+- Workers receive selected inputs, not the entire conversation history. Setup navigation creates no run or reservation.
+- Back controls retain entered values. A stale process selection returns to the chooser without a substitute.
 - Conversation pages keep the transcript and composer within the viewport. The empty transcript offers a short invitation, not setup forms or task suggestions.
 - A model shortcut and Project access stay visible above the transcript.
 - The model shortcut opens one Settings panel with inline model, instructions, tool and preset controls.
@@ -173,7 +178,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Document import names the authorised directory and selected environment. It reads one file without model calls or task execution.
 - Project access remains explicit. The composer shows each attached project and its access level.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
-- The composer expands with the message. Run workflow stays beside the conversation title.
+- The composer expands with the message. Workflows… stays beside the conversation title.
 - Jump to latest appears when the reader leaves the transcript end. New output does not move a reader away from earlier messages.
 - Thinking visibility remains a local preference for shared chat controls.
 - The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.
@@ -195,7 +200,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - On project detail, the project name is the title. The host path is quiet monospace metadata.
 - Readiness states appear before task input.
 - Send is the primary composer action.
-- Run workflow sits beside the conversation title.
+- Workflows… sits beside the conversation title.
 - Yellow identifies actions and the composer.
 - Green identifies ready or connected states.
 - Red identifies destructive actions and errors.
@@ -229,7 +234,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Reuse the workflow process presentation in the conversation launch sheet.
 - Do not duplicate the Providers route beside conversation model controls.
 - Keep Send as the primary conversation action.
-- Keep Run workflow beside the conversation title.
+- Keep Workflows… beside the conversation title.
 - Keep native links as navigation fallbacks for Hypergraft routes.
 - Keep focus indicators visible on every interactive control.
 - Keep No network as the default for new agents.

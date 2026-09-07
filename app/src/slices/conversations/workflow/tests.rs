@@ -382,31 +382,128 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
         ))
         .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
         .with_state(state.clone());
-    for (representation, target) in [
-        (None, "<!doctype html>"),
-        (Some("navigation"), "chat-main"),
-        (Some("patch"), "workflow-launch"),
-    ] {
-        let mut request = Request::builder()
+    let workflow = state
+        .workflows
+        .create(workflows::seeds::ralph_task_loop_definition(
+            crate::tests::test_environment_id(),
+        ))
+        .expect("workflow");
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let once = state
+        .workflows
+        .create(
+            workflows::seeds::production_seeds(crate::tests::test_environment_id())
+                .into_iter()
+                .next()
+                .expect("seed")
+                .definition,
+        )
+        .expect("workflow");
+    let once_selection = WorkflowSelection {
+        workflow_id: once.id,
+        definition_version: once.definition_version,
+    }
+    .as_token();
+    let document = state
+        .documents
+        .create_task_list_from_text(
+            conversation.id,
+            "Review input".to_owned(),
+            "# Tasks\n\n- [ ] Keep the selected task\n".to_owned(),
+            None,
+        )
+        .expect("task list");
+    let task_token = format!(
+        "{}/1/{}",
+        document.id.as_hex(),
+        document.current().content_hash.as_str()
+    );
+    for selection in [&selection, &once_selection] {
+        for stage in ["choose", "inputs", "review"] {
+            for (representation, target) in [
+                (None, "<!doctype html>"),
+                (Some("navigation"), "chat-main"),
+                (Some("patch"), "workflow-launch"),
+            ] {
+                let mut request = Request::builder()
             .uri(format!(
-                "/conversations/{}/workflow?brief=Preserve+this+brief&phase=first&phase=second",
+                "/conversations/{}/workflow?stage={stage}&workflow={selection}&brief=Preserve+this+brief&task_document={task_token}",
                 conversation.id.as_hex()
             ))
             .header(
                 header::COOKIE,
                 format!("powerplant_session={}", token.raw().as_str()),
             );
-        if let Some(representation) = representation {
-            request = request
-                .header(hypergraft::GRAFT_REQUEST, representation)
-                .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+                if let Some(representation) = representation {
+                    request = request
+                        .header(hypergraft::GRAFT_REQUEST, representation)
+                        .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).expect("request"))
+                    .await
+                    .expect("response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = String::from_utf8(
+                    to_bytes(response.into_body(), 1024 * 1024)
+                        .await
+                        .expect("body")
+                        .to_vec(),
+                )
+                .expect("text");
+                assert!(body.contains(target), "missing {target}");
+                assert!(body.contains("Preserve this brief"));
+                if stage == "review" {
+                    assert!(body.contains("Workers receive selected inputs,"));
+                    assert!(body.contains("workflow-start"));
+                    if selection != &once_selection {
+                        assert!(body.contains("Review input"));
+                        assert!(body.contains(&task_token));
+                    }
+                }
+            }
         }
+    }
+    for (query, error) in [
+        (
+            format!("stage=review&workflow={selection}&brief=Keep+this"),
+            "Choose the required saved input before review.",
+        ),
+        (
+            format!("stage=review&workflow={once_selection}&brief=Keep+this&phase=invalid"),
+            "Choose a model for every model phase.",
+        ),
+        (
+            format!("stage=review&workflow={once_selection}&brief=Keep+this&target=missing"),
+            "The selected project is unavailable.",
+        ),
+        (
+            "stage=inputs".to_owned(),
+            "Choose a workflow before you continue.",
+        ),
+    ] {
         let response = app
             .clone()
-            .oneshot(request.body(Body::empty()).expect("request"))
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/conversations/{}/workflow?{query}",
+                        conversation.id.as_hex()
+                    ))
+                    .header(
+                        header::COOKIE,
+                        format!("powerplant_session={}", token.raw().as_str()),
+                    )
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
         let body = String::from_utf8(
             to_bytes(response.into_body(), 1024 * 1024)
                 .await
@@ -414,9 +511,50 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
                 .to_vec(),
         )
         .expect("text");
-        assert!(body.contains(target), "missing {target}");
-        assert!(body.contains("Preserve this brief"));
+        assert!(body.contains(error));
+        assert!(!body.contains("id=\"workflow-start\""));
+        if query.contains("brief=") {
+            assert!(body.contains("Keep this"));
+        }
     }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/conversations/{}/workflow?stage=review&workflow=stale",
+                    conversation.id.as_hex()
+                ))
+                .header(
+                    header::COOKIE,
+                    format!("powerplant_session={}", token.raw().as_str()),
+                )
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body")
+            .to_vec(),
+    )
+    .expect("text");
+    assert!(body.contains("This workflow selection is no longer available."));
+    assert!(!state.sessions.busy(&token.id()));
+    assert!(
+        state
+            .workflow_runs
+            .for_conversation(&conversation.id)
+            .is_empty()
+    );
+    assert!(
+        state
+            .task_loops
+            .for_conversation(&conversation.id)
+            .is_empty()
+    );
     assert_eq!(
         state
             .conversations

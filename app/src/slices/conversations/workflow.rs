@@ -28,6 +28,7 @@ const TITLE_SUFFIX: &str = " | Power Plant";
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(super) struct WorkflowQuery {
+    stage: String,
     workflow: String,
     target: String,
     brief: String,
@@ -163,6 +164,7 @@ struct PhaseChoiceToken {
 #[derive(Template)]
 #[template(path = "conversations/templates/workflow.html", block = "launch_page")]
 struct WorkflowLaunchView {
+    stage: &'static str,
     document_title: String,
     conversation_id: String,
     revision: String,
@@ -191,6 +193,7 @@ struct WorkflowLaunchView {
 #[derive(Template)]
 #[template(path = "conversations/templates/workflow.html", block = "launch_form")]
 struct WorkflowLaunchContents<'a> {
+    stage: &'static str,
     conversation_id: &'a str,
     revision: &'a str,
     brief: &'a str,
@@ -218,6 +221,7 @@ struct WorkflowLaunchContents<'a> {
 impl WorkflowLaunchView {
     fn contents(&self) -> WorkflowLaunchContents<'_> {
         WorkflowLaunchContents {
+            stage: self.stage,
             conversation_id: &self.conversation_id,
             revision: &self.revision,
             brief: &self.brief,
@@ -271,10 +275,13 @@ pub(super) async fn show(
         return Ok(axum::http::StatusCode::BAD_REQUEST.into_response());
     };
     query.phase = phases;
+    if !matches!(query.stage.as_str(), "" | "choose" | "inputs" | "review") {
+        return Ok(axum::http::StatusCode::BAD_REQUEST.into_response());
+    }
     let Some(record) = super::load_conversation(&state, &conversation_id) else {
         return Ok(responses::request_navigation(graft, "/conversations"));
     };
-    let view = launch_view(
+    let mut view = launch_view(
         &state,
         &record,
         if query.workflow.is_empty() {
@@ -298,6 +305,45 @@ pub(super) async fn show(
         "",
     )
     .await;
+    if matches!(query.stage.as_str(), "inputs" | "review") && query.workflow.is_empty() {
+        view.error = "Choose a workflow before you continue.";
+    }
+    if query.stage == "choose" {
+        view.stage = "choose";
+    } else if query.stage == "review" && view.stage == "inputs" && view.error.is_empty() {
+        if let Err(error) = workflows::input_context::validate_launch_brief(&view.brief) {
+            view.error = error.message();
+        } else if (view.requires_plan
+            && !view
+                .plans
+                .iter()
+                .any(|p| p.selected && !p.content_hash.is_empty()))
+            || (view.requires_task_list
+                && !view
+                    .task_lists
+                    .iter()
+                    .any(|p| p.selected && !p.content_hash.is_empty()))
+        {
+            view.error = "Choose the required saved input before review.";
+        } else if let Some(definition) = WorkflowSelection::parse(&query.workflow)
+            .and_then(|selection| state.workflows.resolve(&selection).ok())
+        {
+            let phases = if query.phase.is_empty() {
+                view.phase_models
+                    .iter()
+                    .flat_map(|phase| &phase.choices)
+                    .filter(|choice| choice.selected)
+                    .map(|choice| choice.value.clone())
+                    .collect()
+            } else {
+                query.phase.clone()
+            };
+            match resolve_phase_models(&state, &definition.pinned.definition, &phases) {
+                Ok(_) => view.stage = "review",
+                Err(error) => view.error = error,
+            }
+        }
+    }
     render(graft, PatchStatus::Ok, &view, &state)
 }
 
@@ -390,7 +436,7 @@ pub(super) async fn launch(
     {
         return error_view(
             PatchStatus::Conflict,
-            "The selection changed. Review its access and environment readiness before launch.",
+            "The selection changed. Review its access and environment readiness before you start.",
         )
         .await;
     }
@@ -420,7 +466,7 @@ pub(super) async fn launch(
     {
         return error_view(
             PatchStatus::Conflict,
-            "The selected task changed. Review it before launch.",
+            "The selected task changed. Review it before you start.",
         )
         .await;
     }
@@ -446,7 +492,7 @@ pub(super) async fn launch(
     if form.plan != form.preview_plan {
         return error_view(
             PatchStatus::Conflict,
-            "The plan selection changed. Review the selected immutable plan before launch.",
+            "The plan selection changed. Review the selected plan before you start.",
         )
         .await;
     }
@@ -521,7 +567,7 @@ pub(super) async fn launch(
     else {
         return error_view(
             PatchStatus::UnprocessableEntity,
-            "Choose a model before you launch a workflow.",
+            "Choose a model before you start a workflow.",
         )
         .await;
     };
@@ -960,7 +1006,20 @@ async fn launch_view(
                     && workflows::run::supports_task_execution(&record.definition))
         })
         .collect();
-    let selected_workflow = selected_workflow(&records, workflow_raw);
+    let selected_workflow = workflow_raw.unwrap_or_default().trim().to_owned();
+    let selection_available = records.iter().any(|record| {
+        WorkflowSelection {
+            workflow_id: record.id,
+            definition_version: record.definition_version,
+        }
+        .as_token()
+            == selected_workflow
+    });
+    let error = if !selected_workflow.is_empty() && !selection_available && error.is_empty() {
+        "This workflow selection is no longer available. Choose a current process."
+    } else {
+        error
+    };
     let mode = WorkflowSelection::parse(&selected_workflow)
         .and_then(|selection| state.workflows.resolve(&selection).ok())
         .map(|resolved| resolved.pinned.definition.execution_mode())
@@ -1051,14 +1110,17 @@ async fn launch_view(
                 .collect()
         })
         .unwrap_or_default();
-    let selected_target = target_raw
-        .and_then(|raw| ProjectId::parse(raw.trim()))
-        .or(record.execution_target)
-        .or_else(|| record.grants.first().map(|grant| grant.project_id));
+    let requested_target = target_raw.filter(|raw| !raw.trim().is_empty());
+    let selected_target = match requested_target {
+        Some(raw) => ProjectId::parse(raw.trim()),
+        None => record
+            .execution_target
+            .or_else(|| record.grants.first().map(|grant| grant.project_id)),
+    };
     let (plans, requires_plan) = selected_plan_options(state, record, &selected_workflow, plan_raw);
     let (task_lists, requires_task_list) =
         selected_task_list_options(state, record, &selected_workflow, task_document);
-    let targets: Vec<TargetOption> = record
+    let mut targets: Vec<TargetOption> = record
         .grants
         .iter()
         .filter_map(|grant| {
@@ -1071,6 +1133,21 @@ async fn launch_view(
             })
         })
         .collect();
+    let target_unavailable =
+        requested_target.is_some() && !targets.iter().any(|target| target.selected);
+    if target_unavailable {
+        targets.push(TargetOption {
+            id: requested_target.unwrap_or_default().to_owned(),
+            name: "Selected project is unavailable".to_owned(),
+            access: "Choose an available granted project".to_owned(),
+            selected: true,
+        });
+    }
+    let error = if target_unavailable && error.is_empty() {
+        "The selected project is unavailable. Choose an available granted project."
+    } else {
+        error
+    };
     let (model_summary, access_summary, environment_summary) =
         launch_readiness(state, record, selected_target, &selected_workflow).await;
     let phase_models = selected_phase_model_options(state, record, &selected_workflow, phase_raw);
@@ -1087,7 +1164,7 @@ async fn launch_view(
             "This process needs a task list. Save one in this conversation first.".to_owned()
         }
         ExecutionMode::TaskList if !selected_task_list => {
-            "Select a task list before launch.".to_owned()
+            "Select a task list before you start.".to_owned()
         }
         ExecutionMode::TaskList => {
             "Task list selected. Each remaining task runs the pinned process once.".to_owned()
@@ -1096,7 +1173,7 @@ async fn launch_view(
             "This process needs a saved plan. Save one in this conversation first.".to_owned()
         }
         ExecutionMode::Once if requires_plan && !selected_plan => {
-            "Select a saved plan before launch.".to_owned()
+            "Select a saved plan before you start.".to_owned()
         }
         ExecutionMode::Once if requires_plan => {
             "Saved plan selected. This process runs once.".to_owned()
@@ -1104,14 +1181,20 @@ async fn launch_view(
         ExecutionMode::Once => "This process runs once. It does not need a task list.".to_owned(),
     };
     let launch_blocked = workflows.is_empty()
+        || target_unavailable
         || targets.is_empty()
         || (requires_task_list && !available_task_lists)
         || (requires_plan && !available_plans);
     WorkflowLaunchView {
-        document_title: format!("Run workflow · {}{}", record.title, TITLE_SUFFIX),
+        stage: if selection_available {
+            "inputs"
+        } else {
+            "choose"
+        },
+        document_title: format!("Workflows · {}{}", record.title, TITLE_SUFFIX),
         conversation_id: record.id.as_hex(),
         revision: record.revision.to_string(),
-        brief: if brief.is_empty() && !task_document.is_empty() {
+        brief: if brief.is_empty() && (requires_task_list || !task_document.is_empty()) {
             "Implement only the assigned task from the selected task list.".to_owned()
         } else {
             brief.to_owned()
@@ -1420,7 +1503,7 @@ fn selected_phase_model_options(
                     choices.push(PhaseChoice {
                         value: raw.clone(),
                         label: "Selected model or preset is unavailable".to_owned(),
-                        detail: "Choose an available model or reload the launch sheet".to_owned(),
+                        detail: "Choose an available model or reload workflow setup".to_owned(),
                         selected: true,
                     });
                 }
@@ -1841,22 +1924,6 @@ fn resolve_task_list_snapshot(
         content_hash: expected_hash.as_str(),
         markdown,
     })
-}
-
-fn selected_workflow(records: &[workflows::WorkflowRecord], raw: Option<&str>) -> String {
-    if let Some(raw) = raw {
-        return raw.trim().to_owned();
-    }
-    records
-        .first()
-        .map(|record| {
-            WorkflowSelection {
-                workflow_id: record.id,
-                definition_version: record.definition_version,
-            }
-            .as_token()
-        })
-        .unwrap_or_default()
 }
 
 fn target_access_summary(

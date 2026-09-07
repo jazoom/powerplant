@@ -36,9 +36,23 @@ Configuration uses a phase selector. The selector does not submit the form. Hidd
 
 Environment overrides and technical mappings appear under Advanced settings.
 
-The conversation launch sheet uses the same process model and template as the catalogue and authoring page.
+Conversation setup starts with workflow names and short outcomes, not an expanded catalogue of phases.
 
-Ordinary phase controls remain visible. Advanced settings group environment overrides and technical mappings.
+The canonical conversation workflow GET uses explicit choose, inputs and review states. Navigation creates no run or execution reservation.
+
+Only the selected process shows detailed phases through the shared process template. Its input state shows the required brief, plan or task list.
+
+Model and preset overrides stay collapsed until requested. Review validates phase selections and reveals invalid controls. Error responses retain usable navigation controls.
+
+The final review identifies selected context, effects, effective access, environment readiness and approval stops. Workers receive selected inputs, not the entire conversation history.
+
+Workflows… opens setup from the conversation. Start workflow starts execution only after review. Back controls retain entered values.
+
+Stale workflow selections return to the chooser without a substitute. Unavailable target selections retain their value and require an explicit replacement.
+
+Storage integrity explanations stay outside the chooser.
+
+Authoring retains ordinary phase controls. Advanced settings group environment overrides and technical mappings.
 
 ## Interaction
 

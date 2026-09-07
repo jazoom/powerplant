@@ -8,7 +8,15 @@
       {% block launch_form %}
         <div class="page-intro">
           <div>
-            <h1>Run workflow</h1>
+            <h1>
+              {% if stage == "choose" %}
+                Choose a workflow
+              {% else if stage == "inputs" %}
+                Workflow inputs
+              {% else %}
+                Review workflow
+              {% endif %}
+            </h1>
             <p>
               Start a configured process from an explicit brief. Each model
               phase receives a fresh context, not this conversation history.
@@ -33,112 +41,120 @@
           class="flex flex-col gap-6"
         >
           <input type="hidden" name="revision" value="{{ revision }}" />
-          {% if !task_document.is_empty() && !requires_task_list %}
-            <input
-              type="hidden"
-              name="task_document"
-              value="{{ task_document }}"
-            />
-            <input
-              type="hidden"
-              name="task_revision"
-              value="{{ task_revision }}"
-            />
-            <input type="hidden" name="task_hash" value="{{ task_hash }}" />
-            <input type="hidden" name="task_index" value="{{ task_index }}" />
-            <input
-              type="hidden"
-              name="preview_task_document"
-              value="{{ task_document }}"
-            />
-            <input
-              type="hidden"
-              name="preview_task_revision"
-              value="{{ task_revision }}"
-            />
-            <input
-              type="hidden"
-              name="preview_task_hash"
-              value="{{ task_hash }}"
-            />
-            <input
-              type="hidden"
-              name="preview_task_index"
-              value="{{ task_index }}"
-            />
-            <p class="alert alert-info text-sm">
-              This run receives the complete pinned task list and works only on
-              the assigned task. Code changes require human approval before
-              commit.
-            </p>
-            <pre
-              class="overflow-x-auto text-sm break-words whitespace-pre-wrap"
-            >
+          <div
+            class="flex flex-col gap-6"
+            {% if stage != "inputs" %}hidden{% endif %}
+          >
+            {% if !task_document.is_empty() && !requires_task_list %}
+              <input
+                type="hidden"
+                name="task_document"
+                value="{{ task_document }}"
+              />
+              <input
+                type="hidden"
+                name="task_revision"
+                value="{{ task_revision }}"
+              />
+              <input type="hidden" name="task_hash" value="{{ task_hash }}" />
+              <input type="hidden" name="task_index" value="{{ task_index }}" />
+              <input
+                type="hidden"
+                name="preview_task_document"
+                value="{{ task_document }}"
+              />
+              <input
+                type="hidden"
+                name="preview_task_revision"
+                value="{{ task_revision }}"
+              />
+              <input
+                type="hidden"
+                name="preview_task_hash"
+                value="{{ task_hash }}"
+              />
+              <input
+                type="hidden"
+                name="preview_task_index"
+                value="{{ task_index }}"
+              />
+              <p class="alert alert-info text-sm">
+                This run receives the complete pinned task list and works only
+                on the assigned task. Code changes require human approval before
+                commit.
+              </p>
+              <pre
+                class="overflow-x-auto text-sm break-words whitespace-pre-wrap"
+              >
 {{ task_preview }}</pre>
-          {% endif %}
-          {% if requires_task_list %}
-            <input
-              type="hidden"
-              name="preview_task_document"
-              value="{{ task_document }}"
-            />
-            <section
-              class="file-section space-y-4"
-              aria-labelledby="workflow-task-list-heading"
-            >
-              <div>
-                <h2
-                  id="workflow-task-list-heading"
-                  class="text-lg font-semibold"
-                >
-                  Task list
-                </h2>
-                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                  This process runs each remaining task as a child run. Each
-                  task starts from the code left by the previous task. Worker
-                  transcripts stay out of later task context.
-                </p>
-              </div>
-              {% if !task_preview.is_empty() %}
-                <details class="collapse-arrow bg-base-200 collapse">
-                  <summary class="collapse-title">Pinned task list</summary>
-                  <pre
-                    class="collapse-content overflow-x-auto text-sm whitespace-pre-wrap"
+            {% endif %}
+            {% if requires_task_list %}
+              <input
+                type="hidden"
+                name="preview_task_document"
+                value="{{ task_document }}"
+              />
+              <section
+                class="file-section space-y-4"
+                aria-labelledby="workflow-task-list-heading"
+              >
+                <div>
+                  <h2
+                    id="workflow-task-list-heading"
+                    class="text-lg font-semibold"
                   >
+                    Task list
+                  </h2>
+                  <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                    This process runs each remaining task as a child run. Each
+                    task starts from the code left by the previous task. Worker
+                    transcripts stay out of later task context.
+                  </p>
+                </div>
+                {% if !task_preview.is_empty() %}
+                  <details class="collapse-arrow bg-base-200 collapse">
+                    <summary class="collapse-title">Pinned task list</summary>
+                    <pre
+                      class="collapse-content overflow-x-auto text-sm whitespace-pre-wrap"
+                    >
 {{ task_preview }}</pre>
-                </details>
-              {% endif %}
-              {% if task_lists.is_empty() %}
-                <p class="text-error text-sm">
-                  Save a task list in this conversation before you launch.
-                </p>
-              {% else %}
-                <fieldset class="flex flex-col gap-2">
-                  <legend class="text-sm font-semibold">Task list</legend>
-                  {% for list in task_lists %}
-                    <label class="flex gap-3">
-                      <input
-                        class="radio radio-sm mt-1"
-                        type="radio"
-                        name="task_document"
-                        value="{{ list.value }}"
-                        {% if list.selected %}checked{% endif %}
-                        required
-                      />
-                      <span>
-                        <span class="block font-medium">{{ list.title }}</span>
-                        <span class="text-quiet text-sm"
-                          >Revision {{ list.revision }} ·
-                          {{ list.content_bytes }} bytes</span
-                        >
-                      </span>
-                    </label>
-                  {% endfor %}
-                </fieldset>
-              {% endif %}
-            </section>
-          {% endif %}
+                  </details>
+                {% endif %}
+                {% if task_lists.is_empty() %}
+                  <p class="text-error text-sm">
+                    Save a task list in this conversation before you start.
+                  </p>
+                {% else %}
+                  <fieldset class="flex flex-col gap-2">
+                    <legend class="text-sm font-semibold">Task list</legend>
+                    {% for list in task_lists %}
+                      <label class="flex gap-3">
+                        <input
+                          class="radio radio-sm mt-1"
+                          type="radio"
+                          name="task_document"
+                          value="{{ list.value }}"
+                          {% if list.selected %}checked{% endif %}
+                          required
+                        />
+                        <span>
+                          <span class="block font-medium"
+                            >{{ list.title }}</span
+                          >
+                          <span class="text-quiet text-sm"
+                            >Revision {{ list.revision }} ·
+                            {{ list.content_bytes }} bytes</span
+                          >
+                        </span>
+                      </label>
+                    {% endfor %}
+                  </fieldset>
+                {% endif %}
+              </section>
+            {% endif %}
+          </div>
           <section
+            {% if stage != "choose" %}hidden{% endif %}
             class="file-section space-y-4"
             aria-labelledby="workflow-process-heading"
           >
@@ -147,8 +163,7 @@
                 Choose a process
               </h2>
               <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                The server checks the selected definition again at launch. A
-                changed or removed definition cannot start from an old form.
+                Choose the outcome that fits your task.
               </p>
             </div>
             {% if workflows.is_empty() %}
@@ -182,270 +197,321 @@
                         <span class="text-quiet mt-1 block text-sm"
                           >{{ workflow.summary }}</span
                         >
-                        <span class="text-quiet mt-1 block text-xs"
-                          >{{ workflow.effects }}</span
-                        >
-                        <span class="text-quiet mt-1 block text-xs"
-                          >Required inputs: {{ workflow.inputs }}</span
-                        >
-                        <span class="text-quiet mt-1 block text-xs"
-                          >Approval stops: {{ workflow.approvals }}</span
-                        >
                       </span>
                     </label>
-                    {% let process_phases = workflow.process_phases %}
-                    {% include "workflows/templates/process.html" %}
                   </div>
                 {% endfor %}
               </fieldset>
             {% endif %}
           </section>
-          {% if requires_plan %}
-            <section
-              class="file-section space-y-4"
-              aria-labelledby="workflow-plan-heading"
-            >
-              <div>
-                <h2 id="workflow-plan-heading" class="text-lg font-semibold">
-                  Saved plan input
-                </h2>
-                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                  This workflow declares a saved plan input. Power Plant copies
-                  the selected immutable revision into the run before execution.
-                  Later plan corrections cannot change this run.
-                </p>
-              </div>
-              {% for plan in plans %}
-                {% if plan.selected %}
-                  <input
-                    type="hidden"
-                    name="preview_plan"
-                    value="{{ plan.value }}"
-                  />
-                {% endif %}
-              {% endfor %}
-              {% if plans.is_empty() %}
-                <p class="text-error text-sm">
-                  Save a plan in this conversation before you launch.
-                </p>
-              {% else %}
-                <label
-                  class="flex max-w-3xl flex-col gap-1"
-                  for="workflow-plan"
-                >
-                  <span class="text-sm font-semibold">Plan revision</span>
-                  <select
-                    id="workflow-plan"
-                    name="plan"
-                    class="select select-bordered"
-                    required
-                  >
-                    <option value="">Choose a saved plan</option>
-                    {% for plan in plans %}
-                      <option
-                        value="{{ plan.value }}"
-                        {% if plan.selected %}selected{% endif %}
-                      >
-                        {{ plan.title }} · Revision {{ plan.revision }} ·
-                        {{ plan.content_bytes }} bytes
-                      </option>
-                    {% endfor %}
-                  </select>
-                  {% for plan in plans %}
-                    {% if plan.selected && plan.content_hash != "" %}
-                      <span class="text-quiet font-mono text-xs break-all">
-                        Content {{ plan.content_hash }}
-                      </span>
-                    {% endif %}
-                  {% endfor %}
-                </label>
+          {% if stage != "choose" %}
+            {% for workflow in workflows %}
+              {% if workflow.selected %}
+                <section class="file-section space-y-4">
+                  <h2 class="text-lg font-semibold">{{ workflow.name }}</h2>
+                  {% let process_phases = workflow.process_phases %}
+                  {% include "workflows/templates/process.html" %}
+                  {% if stage == "review" %}
+                    <dl class="grid gap-2 text-sm sm:grid-cols-[10rem_1fr]">
+                      <dt>Context</dt>
+                      <dd>
+                        {{ workflow.inputs }}. Workers receive selected inputs,
+                        not the entire conversation history.
+                      </dd>
+                      <dt>Effects</dt>
+                      <dd>{{ workflow.effects }}</dd>
+                      <dt>Approval stops</dt>
+                      <dd>{{ workflow.approvals }}</dd>
+                      <dt>Brief</dt>
+                      <dd class="break-words whitespace-pre-wrap">
+                        {{ brief }}
+                      </dd>
+                      {% if !task_document.is_empty() && !requires_task_list %}
+                        <dt>Assigned task</dt>
+                        <dd class="break-words whitespace-pre-wrap">
+                          {{ task_preview }}
+                        </dd>
+                      {% endif %}
+                      {% for plan in plans %}{% if plan.selected %}
+                        <dt>Plan</dt>
+                        <dd>{{ plan.title }} · Revision {{ plan.revision }}</dd>
+                      {% endif %}{% endfor %}
+                      {% for list in task_lists %}{% if list.selected %}
+                        <dt>Task list</dt>
+                        <dd>{{ list.title }} · Revision {{ list.revision }}</dd>
+                      {% endif %}{% endfor %}
+                      {% for phase in phase_models %}{% for choice in phase.choices %}{% if choice.selected %}
+                        <dt>{{ phase.name }}</dt>
+                        <dd>{{ choice.label }} — {{ choice.detail }}</dd>
+                      {% endif %}{% endfor %}{% endfor %}
+                    </dl>
+                  {% endif %}
+                </section>
               {% endif %}
-            </section>
+            {% endfor %}
           {% endif %}
-          {% if !commit_policies.is_empty() %}
-            <section
-              class="file-section space-y-4"
-              aria-labelledby="workflow-commit-policy-heading"
-            >
-              <div>
-                <h2
-                  id="workflow-commit-policy-heading"
-                  class="text-lg font-semibold"
-                >
-                  Commit policy
-                </h2>
-                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                  Choose how this run handles its exact candidate. Read-only
-                  processes do not offer a commit policy.
-                </p>
-              </div>
-              {% for policy in commit_policies %}
-                {% if policy.selected %}
-                  <input
-                    type="hidden"
-                    name="preview_commit_policy"
-                    value="{{ policy.value }}"
-                  />
-                {% endif %}
-              {% endfor %}
-              <fieldset class="flex flex-col gap-3">
-                <legend class="sr-only">Available commit policies</legend>
-                {% for policy in commit_policies %}
-                  <label class="border-base-300 flex gap-3 border p-3">
+          <div
+            class="flex flex-col gap-6"
+            {% if stage != "inputs" %}hidden{% endif %}
+          >
+            {% if requires_plan %}
+              <section
+                class="file-section space-y-4"
+                aria-labelledby="workflow-plan-heading"
+              >
+                <div>
+                  <h2 id="workflow-plan-heading" class="text-lg font-semibold">
+                    Saved plan input
+                  </h2>
+                  <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                    This workflow declares a saved plan input. Power Plant
+                    copies the selected immutable revision into the run before
+                    execution. Later plan corrections cannot change this run.
+                  </p>
+                </div>
+                {% for plan in plans %}
+                  {% if plan.selected %}
                     <input
-                      class="radio radio-sm mt-1"
-                      type="radio"
-                      name="commit_policy"
-                      value="{{ policy.value }}"
-                      {% if policy.selected %}checked{% endif %}
-                      required
+                      type="hidden"
+                      name="preview_plan"
+                      value="{{ plan.value }}"
                     />
-                    <span class="min-w-0">
-                      <span class="block font-semibold"
-                        >{{ policy.label }}</span
-                      >
-                      <span class="text-quiet mt-1 block text-sm"
-                        >{{ policy.detail }}</span
-                      >
-                    </span>
-                  </label>
+                  {% endif %}
                 {% endfor %}
-              </fieldset>
-            </section>
-          {% endif %}
-          {% if !phase_models.is_empty() %}
-            <section
-              class="file-section space-y-4"
-              aria-labelledby="workflow-models-heading"
-            >
-              <div>
-                <h2 id="workflow-models-heading" class="text-lg font-semibold">
-                  Choose models for each phase
-                </h2>
-                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                  Each model phase keeps its selected provider, model and preset
-                  instructions for this run. A preset narrows access. It never
-                  grants access that this conversation does not already have.
-                </p>
-              </div>
-              <div class="grid gap-4">
-                {% for phase in phase_models %}
+                {% if plans.is_empty() %}
+                  <p class="text-error text-sm">
+                    Save a plan in this conversation before you start.
+                  </p>
+                {% else %}
                   <label
                     class="flex max-w-3xl flex-col gap-1"
-                    for="phase-model-{{ phase.step }}"
+                    for="workflow-plan"
                   >
-                    <span class="text-sm font-semibold">{{ phase.name }}</span>
+                    <span class="text-sm font-semibold">Plan revision</span>
                     <select
-                      id="phase-model-{{ phase.step }}"
-                      name="phase"
+                      id="workflow-plan"
+                      name="plan"
                       class="select select-bordered"
                       required
                     >
-                      {% for choice in phase.choices %}
+                      <option value="">Choose a saved plan</option>
+                      {% for plan in plans %}
                         <option
-                          value="{{ choice.value }}"
-                          {% if choice.selected %}selected{% endif %}
+                          value="{{ plan.value }}"
+                          {% if plan.selected %}selected{% endif %}
                         >
-                          {{ choice.label }} — {{ choice.detail }}
+                          {{ plan.title }} · Revision {{ plan.revision }} ·
+                          {{ plan.content_bytes }} bytes
                         </option>
                       {% endfor %}
                     </select>
+                    {% for plan in plans %}
+                      {% if plan.selected && plan.content_hash != "" %}
+                        <span class="text-quiet font-mono text-xs break-all">
+                          Content {{ plan.content_hash }}
+                        </span>
+                      {% endif %}
+                    {% endfor %}
                   </label>
-                {% endfor %}
-              </div>
-            </section>
-          {% endif %}
-          <section
-            class="file-section space-y-4"
-            aria-labelledby="workflow-brief-heading"
-          >
-            <div>
-              <h2 id="workflow-brief-heading" class="text-lg font-semibold">
-                Task brief
-              </h2>
-              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                This brief is pinned to the run. Worker phases receive it with
-                their declared artefacts and the selected candidate
-                instructions.
-              </p>
-            </div>
-            <label class="flex max-w-3xl flex-col gap-1" for="workflow-brief">
-              <span class="text-sm font-semibold"
-                >What must this workflow do?</span
-              >
-              <textarea
-                id="workflow-brief"
-                name="brief"
-                class="textarea textarea-bordered min-h-36"
-                maxlength="32768"
-                placeholder="Describe the change, review or project inspection."
-                required
-              >
-{{ brief }}</textarea>
-              <span class="text-quiet text-xs"
-                >The brief cannot exceed 32 KiB.</span
-              >
-            </label>
-          </section>
-          <section
-            class="file-section space-y-4"
-            aria-labelledby="workflow-target-heading"
-          >
-            <div>
-              <h2 id="workflow-target-heading" class="text-lg font-semibold">
-                Target project
-              </h2>
-              <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-                Select one granted project as the execution target. Other grants
-                remain read-only context. Project attachments alone grant no
-                access.
-              </p>
-            </div>
-            {% if targets.is_empty() %}
-              <p class="text-quiet text-sm">
-                Attach and grant a project before you launch.
-              </p>
-            {% else %}
-              {% for target in targets %}
-                {% if target.selected %}
-                  <input
-                    type="hidden"
-                    name="preview_target"
-                    value="{{ target.id }}"
-                  />
                 {% endif %}
-              {% endfor %}
-              <label class="flex max-w-xl flex-col gap-1" for="workflow-target">
-                <span class="text-sm font-semibold">Execution target</span>
-                <select
-                  id="workflow-target"
-                  name="target"
-                  class="select select-bordered"
-                  required
-                >
-                  {% for target in targets %}
-                    <option
-                      value="{{ target.id }}"
-                      {% if target.selected %}selected{% endif %}
-                    >
-                      {{ target.name }} — {{ target.access }}
-                    </option>
-                  {% endfor %}
-                </select>
-              </label>
+              </section>
             {% endif %}
-            <button
-              class="btn btn-outline"
-              type="submit"
-              formmethod="get"
-              formnovalidate
+            {% if !commit_policies.is_empty() %}
+              <section
+                class="file-section space-y-4"
+                aria-labelledby="workflow-commit-policy-heading"
+              >
+                <div>
+                  <h2
+                    id="workflow-commit-policy-heading"
+                    class="text-lg font-semibold"
+                  >
+                    Commit policy
+                  </h2>
+                  <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                    Choose how this run handles its exact candidate. Read-only
+                    processes do not offer a commit policy.
+                  </p>
+                </div>
+                {% for policy in commit_policies %}
+                  {% if policy.selected %}
+                    <input
+                      type="hidden"
+                      name="preview_commit_policy"
+                      value="{{ policy.value }}"
+                    />
+                  {% endif %}
+                {% endfor %}
+                <fieldset class="flex flex-col gap-3">
+                  <legend class="sr-only">Available commit policies</legend>
+                  {% for policy in commit_policies %}
+                    <label class="border-base-300 flex gap-3 border p-3">
+                      <input
+                        class="radio radio-sm mt-1"
+                        type="radio"
+                        name="commit_policy"
+                        value="{{ policy.value }}"
+                        {% if policy.selected %}checked{% endif %}
+                        required
+                      />
+                      <span class="min-w-0">
+                        <span class="block font-semibold"
+                          >{{ policy.label }}</span
+                        >
+                        <span class="text-quiet mt-1 block text-sm"
+                          >{{ policy.detail }}</span
+                        >
+                      </span>
+                    </label>
+                  {% endfor %}
+                </fieldset>
+              </section>
+            {% endif %}
+            {% if !phase_models.is_empty() %}
+              <details {% if error != "" %}open{% endif %}>
+                <summary class="cursor-pointer font-semibold">
+                  Model and preset overrides
+                </summary>
+                <section
+                  class="file-section space-y-4"
+                  aria-labelledby="workflow-models-heading"
+                >
+                  <div>
+                    <h2
+                      id="workflow-models-heading"
+                      class="text-lg font-semibold"
+                    >
+                      Choose models for each phase
+                    </h2>
+                    <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                      Each model phase keeps its selected provider, model and
+                      preset instructions for this run. A preset narrows access.
+                      It never grants access that this conversation does not
+                      already have.
+                    </p>
+                  </div>
+                  <div class="grid gap-4">
+                    {% for phase in phase_models %}
+                      <label
+                        class="flex max-w-3xl flex-col gap-1"
+                        for="phase-model-{{ phase.step }}"
+                      >
+                        <span class="text-sm font-semibold"
+                          >{{ phase.name }}</span
+                        >
+                        <select
+                          id="phase-model-{{ phase.step }}"
+                          name="phase"
+                          class="select select-bordered"
+                          required
+                        >
+                          {% for choice in phase.choices %}
+                            <option
+                              value="{{ choice.value }}"
+                              {% if choice.selected %}selected{% endif %}
+                            >
+                              {{ choice.label }} — {{ choice.detail }}
+                            </option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                    {% endfor %}
+                  </div>
+                </section>
+              </details>
+            {% endif %}
+            {% if requires_task_list %}
+              <input type="hidden" name="brief" value="{{ brief }}" />
+            {% else %}
+              <section
+                class="file-section space-y-4"
+                aria-labelledby="workflow-brief-heading"
+              >
+                <div>
+                  <h2 id="workflow-brief-heading" class="text-lg font-semibold">
+                    Task brief
+                  </h2>
+                  <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                    This brief is pinned to the run. Worker phases receive it
+                    with their declared artefacts and the selected candidate
+                    instructions.
+                  </p>
+                </div>
+                <label
+                  class="flex max-w-3xl flex-col gap-1"
+                  for="workflow-brief"
+                >
+                  <span class="text-sm font-semibold"
+                    >What must this workflow do?</span
+                  >
+                  <textarea
+                    id="workflow-brief"
+                    name="brief"
+                    class="textarea textarea-bordered min-h-36"
+                    maxlength="32768"
+                    placeholder="Describe the change, review or project inspection."
+                    required
+                  >
+{{ brief }}</textarea>
+                  <span class="text-quiet text-xs"
+                    >The brief cannot exceed 32 KiB.</span
+                  >
+                </label>
+              </section>
+            {% endif %}
+            <section
+              class="file-section space-y-4"
+              aria-labelledby="workflow-target-heading"
             >
-              Preview selected access and environments
-            </button>
-            <p class="text-quiet text-sm">
-              If you change the process or target, preview the selection before
-              launch.
-            </p>
+              <div>
+                <h2 id="workflow-target-heading" class="text-lg font-semibold">
+                  Target project
+                </h2>
+                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                  Select one granted project as the execution target. Other
+                  grants remain read-only context. Project attachments alone
+                  grant no access.
+                </p>
+              </div>
+              {% if targets.is_empty() %}
+                <p class="text-quiet text-sm">
+                  Attach and grant a project before you start.
+                </p>
+              {% else %}
+                {% for target in targets %}
+                  {% if target.selected %}
+                    <input
+                      type="hidden"
+                      name="preview_target"
+                      value="{{ target.id }}"
+                    />
+                  {% endif %}
+                {% endfor %}
+                <label
+                  class="flex max-w-xl flex-col gap-1"
+                  for="workflow-target"
+                >
+                  <span class="text-sm font-semibold">Execution target</span>
+                  <select
+                    id="workflow-target"
+                    name="target"
+                    class="select select-bordered"
+                    required
+                  >
+                    {% for target in targets %}
+                      <option
+                        value="{{ target.id }}"
+                        {% if target.selected %}selected{% endif %}
+                      >
+                        {{ target.name }} — {{ target.access }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                </label>
+              {% endif %}
+            </section>
+          </div>
+          <section {% if stage != "review" %}hidden{% endif %}>
             <dl
               class="grid gap-2 border-t pt-4 text-sm sm:grid-cols-[10rem_1fr]"
             >
@@ -462,13 +528,67 @@
           <div
             class="border-base-300 flex flex-wrap items-center gap-3 border-t pt-5"
           >
-            <button
-              class="btn btn-primary"
-              type="submit"
-              {% if launch_blocked %}disabled{% endif %}
-            >
-              Run workflow
-            </button>
+            {% if stage == "choose" %}
+              <button
+                id="workflow-continue"
+                aria-disabled="{% if workflows.is_empty() %}true{% else %}false{% endif %}"
+                class="btn btn-primary"
+                type="submit"
+                formmethod="get"
+                name="stage"
+                value="inputs"
+                formnovalidate
+                {% if workflows.is_empty() %}disabled{% endif %}
+              >
+                Continue
+              </button>
+            {% else if stage == "inputs" %}
+              <button
+                id="workflow-back-choose"
+                aria-disabled="false"
+                class="btn btn-outline"
+                type="submit"
+                formmethod="get"
+                name="stage"
+                value="choose"
+                formnovalidate
+              >
+                Back to workflows
+              </button>
+              <button
+                id="workflow-review"
+                aria-disabled="false"
+                class="btn btn-primary"
+                type="submit"
+                formmethod="get"
+                name="stage"
+                value="review"
+              >
+                Review workflow
+              </button>
+            {% else %}
+              <button
+                id="workflow-back-inputs"
+                aria-disabled="false"
+                class="btn btn-outline"
+                type="submit"
+                formmethod="get"
+                name="stage"
+                value="inputs"
+                formnovalidate
+              >
+                Back to inputs
+              </button>
+              <button
+                id="workflow-start"
+                aria-disabled="{% if launch_blocked %}true{% else %}false{% endif %}"
+                class="btn btn-primary"
+                type="submit"
+                {% if launch_blocked %}disabled{% endif %}
+              >
+                Start workflow
+              </button>
+            {% endif %}
             <a
               href="/conversations/{{ conversation_id }}"
               data-graft
