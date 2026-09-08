@@ -313,9 +313,7 @@ pub(super) struct MessageView {
     pub(super) error: String,
     pub(super) streaming: bool,
     pub(super) saveable_plan: bool,
-    pub(super) task_title: String,
     pub(super) task_action: String,
-    pub(super) plan_title: String,
     pub(super) plan_action: String,
     pub(super) conversation_revision: String,
 }
@@ -451,7 +449,7 @@ pub(super) struct EnvironmentSwitchGateView {
 }
 
 use crate::slices::execution_settings::page::{
-    EnvironmentOption, ToolOption, environment_options, environment_status, tool_options,
+    EnvironmentOption, ToolOption, environment_options, tool_options,
 };
 
 pub(super) struct SubmittedSettingsFields<'a> {
@@ -501,7 +499,6 @@ pub(super) struct ConversationDetailView {
     pub(super) draft_nonce: String,
     pub(super) draft_preset_reference: String,
     pub(super) consent_reference: String,
-    pub(super) model_summary: String,
     pub(super) instructions: String,
     pub(super) tool_options: Vec<ToolOption>,
     pub(super) environment_options: Vec<EnvironmentOption>,
@@ -685,7 +682,6 @@ impl ConversationDetailView {
             draft_nonce: form.draft_nonce,
             draft_preset_reference: form.preset_preview,
             consent_reference: form.consent_reference,
-            model_summary: String::new(),
             instructions: form.instructions.clone(),
             tool_options: tool_options(&selected_tools),
             environment_options: environment_options(
@@ -695,7 +691,6 @@ impl ConversationDetailView {
             ),
             environment_summary: environment_summary(
                 &state.environments,
-                &state.environment_snapshots,
                 EnvironmentId::parse(&form.environment),
             ),
             execution_switch: None,
@@ -961,26 +956,6 @@ impl ConversationDetailView {
             })
             .collect();
         attachable_projects.sort_by(|left, right| left.name.cmp(&right.name));
-        let model_summary = configuration.map_or_else(
-            || "No model selected".to_owned(),
-            |configuration| {
-                let selection = &configuration.settings.model;
-                let effort = selection
-                    .thinking
-                    .as_ref()
-                    .map(|effort| format!(" · Thinking: {}", effort.label()))
-                    .unwrap_or_else(|| " · Thinking: Not available".to_owned());
-                let source = configuration.preset.as_ref().map_or_else(
-                    || "Direct model".to_owned(),
-                    |preset| format!("Preset: {}", preset.name),
-                );
-                format!(
-                    "{source} · {} · {}{effort}",
-                    selection.provider.label(),
-                    selection.model
-                )
-            },
-        );
         let (job_id, cursor, job_active, observe_active) = match job {
             Some(job) if job.status == JobStatus::Running => {
                 (job.id.as_hex(), job.latest_seq, true, true)
@@ -1053,7 +1028,6 @@ impl ConversationDetailView {
             draft_nonce: String::new(),
             draft_preset_reference: String::new(),
             consent_reference: String::new(),
-            model_summary,
             instructions: configuration
                 .map(|configuration| configuration.settings.instructions.clone())
                 .unwrap_or_default(),
@@ -1074,11 +1048,7 @@ impl ConversationDetailView {
                 sources.environment_snapshots,
                 selected_environment,
             ),
-            environment_summary: environment_summary(
-                sources.environments,
-                sources.environment_snapshots,
-                selected_environment,
-            ),
+            environment_summary: environment_summary(sources.environments, selected_environment),
             execution_switch: None,
             network_options: network_options.clone(),
             network_domains: network_domains.clone(),
@@ -1151,6 +1121,11 @@ impl ConversationDetailView {
                     && !state.access_consent.authorised_conversation(
                         session,
                         record.id,
+                        &configuration.settings,
+                        grant,
+                    )
+                    && !state.conversations.directory_approved(
+                        &record.id,
                         &configuration.settings,
                         grant,
                     );
@@ -1282,11 +1257,8 @@ impl ConversationDetailView {
             selected_environment,
         );
         if self.saved().is_none() {
-            self.environment_summary = environment_summary(
-                &state.environments,
-                &state.environment_snapshots,
-                selected_environment,
-            );
+            self.environment_summary =
+                environment_summary(&state.environments, selected_environment);
         }
         self.network_options = network_options(fields.network);
         self.network_domains = fields.network_domains.to_owned();
@@ -1525,7 +1497,6 @@ fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
 
 fn environment_summary(
     catalogue: &EnvironmentCatalogue,
-    snapshots: &EnvironmentSnapshotRepository,
     selected: Option<EnvironmentId>,
 ) -> String {
     let Some(selected) = selected else {
@@ -1534,8 +1505,7 @@ fn environment_summary(
     let Some(record) = catalogue.get(&selected) else {
         return "Environment unavailable".to_owned();
     };
-    let (readiness, availability) = environment_status(&record, catalogue, snapshots);
-    format!("{} · {readiness} · {availability}", record.name)
+    record.name
 }
 
 fn network_options(selected: &str) -> Vec<NetworkOption> {
@@ -1562,7 +1532,7 @@ fn network_summary_from_form(network: &str) -> String {
     match network {
         "restricted" => "Restricted domains".to_owned(),
         "public" => "Public internet".to_owned(),
-        _ => "Network off".to_owned(),
+        _ => "Off".to_owned(),
     }
 }
 
@@ -1748,9 +1718,7 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
         saveable_plan: !user
             && message.status == MessageStatus::Complete
             && !message.text.trim().is_empty(),
-        task_title: format!("Tasks from response {}", index + 1),
         task_action: String::new(),
-        plan_title: format!("Plan from response {}", index + 1),
         plan_action: String::new(),
         conversation_revision: String::new(),
     }

@@ -391,7 +391,7 @@ fn private_workspace_uses_the_copied_settings_without_a_live_preset_ceiling() {
             None,
             None,
             Some(model),
-            None,
+            Vec::new(),
         )
         .unwrap();
     let authority = resolve_project_free_authority(&record, &state.agents).unwrap();
@@ -475,6 +475,7 @@ fn resolving_a_conversation_materialises_each_secondary_project_by_id() {
         execution_target: Some(primary.id),
         network: NetworkAccess::None,
         model: None,
+        directory_approvals: Vec::new(),
         source_review: None,
         plan_reviews: Vec::new(),
         review_context: None,

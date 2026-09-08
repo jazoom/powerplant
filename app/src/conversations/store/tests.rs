@@ -26,7 +26,7 @@ impl ConversationStore {
             projects.first().copied(),
             (!title_pending).then_some(title),
             None,
-            None,
+            Vec::new(),
         )
     }
 
@@ -93,32 +93,6 @@ impl ConversationStore {
 }
 
 #[test]
-fn invalid_first_messages_do_not_allocate_or_persist() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = ConversationStore::open(dir.path().to_path_buf()).unwrap();
-    let id = super::ConversationId::generate().unwrap();
-    for message in [
-        "   ".to_owned(),
-        "x".repeat(super::MAXIMUM_MESSAGE_BYTES + 1),
-        "bad\0input".to_owned(),
-    ] {
-        assert_eq!(
-            store.create_saved(
-                id,
-                None,
-                None,
-                None,
-                Some((JobId::generate().unwrap(), message))
-            ),
-            Err(ConversationError::Message)
-        );
-        assert!(store.get(&id).is_none());
-        assert!(store.lock().is_empty());
-        assert!(!dir.path().join(super::CATALOGUE_FILE).exists());
-    }
-}
-
-#[test]
 fn restart_preserves_explicit_saves_with_or_without_a_manual_title() {
     let dir = tempfile::tempdir().unwrap();
     let store = ConversationStore::in_memory();
@@ -160,7 +134,7 @@ fn restart_preserves_directory_identity_and_guest_alias() {
                 settings,
                 preset: None,
             }),
-            None,
+            Vec::new(),
         )
         .unwrap();
     drop(store);
@@ -188,7 +162,7 @@ fn capacity_never_evicts_saved_conversations() {
                 None,
                 None,
                 None,
-                None,
+                Vec::new(),
             )
             .unwrap();
     }
@@ -199,7 +173,7 @@ fn capacity_never_evicts_saved_conversations() {
             None,
             None,
             None,
-            None
+            Vec::new()
         ),
         Err(ConversationError::Full)
     );
@@ -938,4 +912,89 @@ fn invalid_record_fields_do_not_replace_the_catalogue() {
         );
         assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
     }
+}
+
+#[test]
+fn restart_preserves_directory_approvals_until_settings_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let granted = tempfile::tempdir().unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(granted.path(), &[]).unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
+        String::new(),
+        Vec::new(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![grant.clone()])
+    .unwrap();
+    let store = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    let record = store
+        .create_saved(
+            super::ConversationId::generate().unwrap(),
+            None,
+            Some("Directory".to_owned()),
+            Some(super::ConversationModelConfiguration {
+                settings: settings.clone(),
+                preset: None,
+            }),
+            vec![super::DirectoryApproval::for_grant(&settings, &grant)],
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    assert!(reopened.directory_approved(&record.id, &settings, &grant));
+
+    let mut changed_grant = grant.clone();
+    changed_grant.access = crate::execution::DirectoryAccess::DirectWrite;
+    let changed_settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(ProviderKind::Xai, "model".to_owned(), None).unwrap(),
+        String::new(),
+        Vec::new(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![changed_grant.clone()])
+    .unwrap();
+    assert!(!reopened.directory_approved(&record.id, &changed_settings, &changed_grant));
+    assert!(!reopened.directory_approved(&record.id, &settings, &changed_grant));
+
+    let other = tempfile::tempdir().unwrap();
+    let other_grant = crate::execution::DirectoryGrant::from_selected(other.path(), &[]).unwrap();
+    assert!(!reopened.directory_approved(&record.id, &settings, &other_grant));
+
+    let changed = reopened
+        .update_execution_settings(&record.id, record.revision, changed_settings)
+        .unwrap();
+    let restored = reopened
+        .update_execution_settings(&record.id, changed.revision, settings.clone())
+        .unwrap();
+    assert!(restored.directory_approvals.is_empty());
+    drop(reopened);
+    let reopened = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    assert!(!reopened.directory_approved(&record.id, &settings, &grant));
+
+    let approved = reopened
+        .record_directory_approval(
+            &record.id,
+            restored.revision,
+            super::DirectoryApproval::for_grant(&settings, &grant),
+        )
+        .unwrap();
+    let preset = crate::presets::PresetRecord {
+        id: crate::presets::PresetId::generate().unwrap(),
+        revision: 1,
+        name: "Same access".to_owned(),
+        settings: settings.clone(),
+        provenance: crate::presets::PresetProvenance::Draft,
+        created_at_ms: 1,
+    };
+    let replaced = reopened
+        .apply_preset(&record.id, approved.revision, &preset)
+        .unwrap();
+    assert!(replaced.directory_approvals.is_empty());
+    drop(reopened);
+    let reopened = ConversationStore::open(dir.path().to_path_buf()).unwrap();
+    assert!(!reopened.directory_approved(&record.id, &settings, &grant));
 }

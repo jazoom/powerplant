@@ -1965,12 +1965,16 @@ pub(super) async fn preflight_execution(
                     state.local_data.root(),
                 ))
                 && (!state.sessions.contains_live(&session)
-                    || !state.access_consent.authorised_conversation(
+                    || (!state.access_consent.authorised_conversation(
                         session,
                         conversation,
                         &model.settings,
                         grant,
-                    ))
+                    ) && !state.conversations.directory_approved(
+                        &conversation,
+                        &model.settings,
+                        grant,
+                    )))
         })
     {
         return Err(StartMessageError::User(

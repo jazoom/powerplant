@@ -1297,20 +1297,22 @@ fn continuation_authority(
                 conversation_id,
                 &settings,
                 grant,
-            ) && !run.model_phases().any(|phase| {
-                phase.settings.as_ref().is_some_and(|phase_settings| {
-                    phase_settings
-                        .directories
-                        .iter()
-                        .any(|root| root.identity == grant.identity && root.access == grant.access)
-                        && state.access_consent.authorised_launch(
+            ) && !state
+                .conversations
+                .directory_approved(&conversation_id, &settings, grant)
+                && !run.model_phases().any(|phase| {
+                    phase.settings.as_ref().is_some_and(|phase_settings| {
+                        phase_settings.directories.iter().any(|root| {
+                            root.identity == grant.identity && root.access == grant.access
+                        }) && state.access_consent.authorised_launch(
                             run.id,
                             continuation.session_id,
                             conversation_id,
                             phase_settings,
                         )
+                    })
                 })
-            }) {
+            {
                 return ContinuationAuthority::Stale;
             }
         }

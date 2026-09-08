@@ -134,7 +134,12 @@ async fn bounded_partial_reply_settles_and_observation_restores_commands() {
     let frame = super::final_frame(&state, &record.id, token.id(), &job, job.latest_seq());
     let body = String::from_utf8(frame.into_bytes()).expect("frame");
     assert!(body.contains("target=\"conversation-detail\""));
-    assert!(body.contains(&format!("name=\"revision\" value=\"{}\"", saved.revision)));
+    assert!(
+        body.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(&format!("name=\"revision\" value=\"{}\"", saved.revision))
+    );
     assert!(!body.contains("data-observe-active"));
 }
 
@@ -303,6 +308,7 @@ fn pending_assistant_output_stays_out_of_the_next_request_history() {
         execution_target: None,
         network: crate::agents::NetworkAccess::None,
         model: None,
+        directory_approvals: Vec::new(),
         source_review: None,
         plan_reviews: Vec::new(),
         review_context: None,

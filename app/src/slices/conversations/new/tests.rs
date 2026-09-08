@@ -533,7 +533,21 @@ async fn sensitive_first_message_case(access: crate::execution::DirectoryAccess)
         .await
         .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
-    assert_eq!(state.conversations.list().len(), 1);
+    let records = state.conversations.list();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    let settings = &record.model.as_ref().unwrap().settings;
+    assert!(
+        state
+            .conversations
+            .directory_approved(&record.id, settings, &grant)
+    );
+    state.access_consent.invalidate_conversation(record.id);
+    assert!(
+        state
+            .conversations
+            .directory_approved(&record.id, settings, &grant)
+    );
 
     let replay = app(&state)
         .oneshot(command("/conversations/new", &token, &body))

@@ -112,11 +112,9 @@ pub(crate) fn tool_options(selected: &[String]) -> Vec<ToolOption> {
             value: tool.as_str(),
             label: tool.label(),
             detail: match tool {
-                ToolId::List => "List files in private scratch storage or authorised directories.",
-                ToolId::Read => "Read files in private scratch storage or authorised directories.",
-                ToolId::Write => {
-                    "Write files in private scratch storage or authorised writable directories."
-                }
+                ToolId::List => "List files and directories.",
+                ToolId::Read => "Read file contents.",
+                ToolId::Write => "Create or edit files with write access.",
                 ToolId::Run => "Run commands in the sandbox.",
             },
             selected: selected.iter().any(|value| value == tool.as_str()),

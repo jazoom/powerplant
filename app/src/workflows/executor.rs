@@ -3295,6 +3295,11 @@ fn confirm_run_authority(
                             settings,
                             grant,
                         )
+                        && !state.conversations.directory_approved(
+                            &conversation_id,
+                            settings,
+                            grant,
+                        )
                 })
             })
         {

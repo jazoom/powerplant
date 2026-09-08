@@ -553,7 +553,7 @@ fn catalogue_conflict_includes_conversation_directory_grants() {
                 settings,
                 preset: None,
             }),
-            None,
+            Vec::new(),
         )
         .unwrap();
 
@@ -581,7 +581,7 @@ fn catalogue_conflict_includes_conversation_directory_grants() {
                 settings: broad_settings,
                 preset: None,
             }),
-            None,
+            Vec::new(),
         )
         .unwrap();
     assert_eq!(

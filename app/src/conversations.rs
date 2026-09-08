@@ -14,7 +14,7 @@ pub(crate) use id::ConversationId;
 pub(crate) use store::{
     CandidateReviewContext, CandidateReviewCreation, CandidateReviewLink, ConversationError,
     ConversationMessage, ConversationModelConfiguration, ConversationRecord, ConversationStore,
-    MAXIMUM_MESSAGE_BYTES, MAXIMUM_PROJECT_ASSOCIATIONS, MAXIMUM_REPLY_BYTES, MAXIMUM_TITLE_BYTES,
-    MessageRole, MessageStatus, PlanReviewContext, PlanReviewCreation, PlanReviewLink,
-    normalise_message, normalise_title,
+    DirectoryApproval, MAXIMUM_MESSAGE_BYTES, MAXIMUM_PROJECT_ASSOCIATIONS, MAXIMUM_REPLY_BYTES,
+    MAXIMUM_TITLE_BYTES, MessageRole, MessageStatus, PlanReviewContext, PlanReviewCreation,
+    PlanReviewLink, normalise_message, normalise_title,
 };

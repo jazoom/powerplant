@@ -569,9 +569,7 @@ fn progress_frame(
         error: String::new(),
         streaming: true,
         saveable_plan: false,
-        task_title: String::new(),
         task_action: String::new(),
-        plan_title: String::new(),
         plan_action: String::new(),
         conversation_revision: String::new(),
     };
@@ -637,9 +635,7 @@ fn final_frame(
             error: super::page::message_error(message),
             streaming: message.status == MessageStatus::Pending,
             saveable_plan: false,
-            task_title: String::new(),
             task_action: String::new(),
-            plan_title: String::new(),
             plan_action: String::new(),
             conversation_revision: String::new(),
         };

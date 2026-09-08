@@ -43,6 +43,17 @@
               class="btn btn-ghost btn-sm"
               >New with same settings</a
             >
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              popovertarget="conversation-documents"
+            >
+              Documents{% if !saved.plans.is_empty() %}
+                <span class="badge badge-ghost badge-sm"
+                  >{{ saved.plans.len() }}</span
+                >
+              {% endif %}
+            </button>
             <a
               href="/conversations/{{ saved.id }}/workflow"
               data-graft
@@ -50,71 +61,146 @@
               >Workflows…</a
             >
           {% endif %}
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            popovertarget="conversation-options"
-          >
-            Conversation options
-          </button>
         </div>
       </header>
       <div class="flex shrink-0 flex-wrap items-center gap-2 px-5 py-2 sm:px-8">
         <button
           type="button"
-          class="btn btn-ghost btn-sm h-auto min-h-10 max-w-full gap-2 py-2 text-left [anchor-name:--conversation-settings]"
+          class="btn btn-ghost btn-sm h-auto min-h-11 max-w-full gap-2 py-2 text-left"
           popovertarget="conversation-settings"
+          popovertargetaction="show"
+          data-settings-section="conversation-model-heading"
         >
-          <span class="shrink-0 font-medium">Settings</span>
-          <span aria-hidden="true" class="text-quiet">·</span>
+          <span class="text-quiet shrink-0">Model</span>
           <span class="min-w-0 break-all" data-conversation-model-summary
             >{% if model_picker.model.is_empty() %}Choose a model{% else %}{{ model_picker.model }}{% endif %}</span
           >
-          <svg
-            aria-hidden="true"
-            class="size-4 shrink-0"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-          >
-            <path d="m6 9 6 6 6-6" />
-          </svg>
         </button>
         {% if !host_summary.is_empty() %}
           <button
             type="button"
-            class="btn btn-ghost btn-sm min-h-10 max-w-full"
+            class="btn btn-ghost btn-sm h-auto min-h-11 max-w-full gap-2 py-2 text-left"
             popovertarget="conversation-settings"
+            popovertargetaction="show"
+            data-settings-section="conversation-location-heading"
           >
-            <span class="truncate">{{ host_summary }}</span>
+            <span class="text-quiet shrink-0">Location</span>
+            <span class="min-w-0 break-all">{{ host_summary }}</span>
           </button>
         {% else %}
           <button
             type="button"
-            class="btn btn-ghost btn-sm min-h-10"
+            class="btn btn-ghost btn-sm h-auto min-h-11 max-w-full gap-2 py-2 text-left"
             popovertarget="conversation-settings"
-            data-conversation-network-summary
+            popovertargetaction="show"
+            data-settings-section="conversation-network-heading"
           >
-            {{ network_summary }}
+            <span class="text-quiet shrink-0">Network</span>
+            <span class="min-w-0 break-all" data-conversation-network-summary>
+              {{ network_summary }}
+            </span>
           </button>
           <button
             type="button"
-            class="btn btn-ghost btn-sm min-h-10 max-w-full"
+            class="btn btn-ghost btn-sm h-auto min-h-11 max-w-full gap-2 py-2 text-left"
             popovertarget="conversation-settings"
+            popovertargetaction="show"
+            data-settings-section="conversation-environment-heading"
           >
-            <span class="truncate" data-conversation-environment-summary
-              >{{ environment_summary }}</span
+            <span class="text-quiet shrink-0">Environment</span>
+            <span
+              class="min-w-0 break-all"
+              data-conversation-environment-summary
             >
+              {{ environment_summary }}
+            </span>
+            {% for option in environment_options %}
+              {% if option.selected %}
+                <span
+                  class="badge badge-ghost badge-sm text-quiet shrink-0 font-normal"
+                  data-conversation-environment-status
+                  aria-label="Status: {{ option.readiness }}{% if option.availability != "Available" %}
+                    , {{ option.availability }}
+                  {% endif %}"
+                >
+                  {{ option.readiness }}{% if option.availability != "Available" %}
+                    , {{ option.availability }}
+                  {% endif %}
+                </span>
+              {% endif %}
+            {% endfor %}
           </button>
         {% endif %}
         <button
           type="button"
-          class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-directories]"
-          popovertarget="conversation-directory-settings"
+          class="btn btn-ghost btn-sm h-auto min-h-11 max-w-full gap-2 py-2 text-left"
+          popovertarget="conversation-settings"
+          popovertargetaction="show"
+          data-settings-section="conversation-directory-heading"
         >
-          {% if location_host %}Work locations{% else %}Directories{% endif %}
-          {% if !directories.is_empty() %}· {{ directories.len() }}{% endif %}
+          <span class="text-quiet shrink-0"
+            >{% if location_host %}Work locations{% else %}Directories{% endif %}</span
+          >
+          {% if directories.is_empty() %}
+            <span class="min-w-0 break-all">None</span>
+          {% else %}
+            <span class="inline-flex min-w-0 flex-wrap gap-x-2 gap-y-1"
+              >{% for directory in directories %}
+                <span class="inline-flex min-w-0 items-center gap-1"
+                  ><span
+                    class="break-all"
+                    title="{{ directory.name }} — {{ directory.host_path }} · {% if !directory.available %}
+                      Unavailable ·
+                    {% else if directory.pending_approval %}
+                      Pending approval ·
+                    {% else %}
+                      {% if directory.sensitive %}
+                        Sensitive access ·
+                      {% endif %}
+                    {% endif %}{% if location_host %}
+                      Work location
+                    {% else %}
+                      {{ directory.access_label }}
+                    {% endif %}"
+                    >{{ directory.name }}</span
+                  >{% if !location_host %}{% if directory.direct_write %}
+                    <span
+                      class="badge badge-ghost badge-sm shrink-0 font-normal"
+                      title="Direct write"
+                      >Write</span
+                    >
+                  {% else if directory.review_before_apply %}
+                    <span
+                      class="badge badge-ghost badge-sm shrink-0 font-normal"
+                      title="Review before apply"
+                      >Review</span
+                    >
+                  {% else %}
+                    <span
+                      class="badge badge-ghost badge-sm shrink-0 font-normal"
+                      title="Read only"
+                      >Read</span
+                    >
+                  {% endif %}{% endif %}{% if !loop.last %}
+                    <span aria-hidden="true" class="text-quiet px-1">·</span>
+                  {% endif %}</span
+                >
+              {% endfor %}</span
+            >
+            {% for directory in directories %}
+              {% if !directory.available %}
+                <span
+                  class="badge badge-error badge-sm ml-2 shrink-0 font-normal"
+                  >{{ directory.name }} unavailable</span
+                >
+              {% else if directory.pending_approval %}
+                <span
+                  class="badge badge-warning badge-sm ml-2 shrink-0 font-normal"
+                  >{{ directory.name }} pending approval</span
+                >
+              {% endif %}
+            {% endfor %}
+          {% endif %}
         </button>
         {% if !attached_projects.is_empty() || !self.draft_project().is_empty() %}
           <button
@@ -125,6 +211,15 @@
             Project access
           </button>
         {% endif %}
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm min-h-11 sm:ml-auto"
+          popovertarget="conversation-settings"
+          popovertargetaction="show"
+          data-settings-section="conversation-settings-heading"
+        >
+          Conversation settings
+        </button>
       </div>
       {% if error != "" && !settings_open && !directories_open %}
         <div
@@ -137,25 +232,44 @@
         </div>
       {% endif %}
       {% if let Some(saved) = self.saved() %}
-        <details
+        <section
           id="conversation-documents"
-          class="file-disclosure mx-auto min-h-0 w-full max-w-3xl shrink-0 overflow-y-auto px-5 open:flex-1 [&[open]~#transcript]:hidden"
-          {% if !saved.task_text.is_empty() || saved.plan_text_error %}open{% endif %}
+          popover
+          aria-labelledby="conversation-documents-heading"
+          data-documents-open="{% if !saved.task_text.is_empty() || saved.plan_text_error %}true{% else %}false{% endif %}"
+          class="conversation-panel m-auto max-h-[calc(100dvh-2rem)] w-[min(42rem,calc(100%-2rem))] overflow-y-auto p-5 sm:p-6"
         >
-          <summary class="bg-base-100 sticky top-0 z-10 min-h-11 py-3">
-            Saved
-            documents{% if !saved.plans.is_empty() %}· {{ saved.plans.len() }}{% endif %}
-          </summary>
-          <div class="space-y-4 pb-4">
-            <div>
-              <p class="text-quiet mt-1 max-w-[60ch] text-sm">
-                Save plans for reuse or prepare task lists for a workflow. These
-                actions save documents and execute no tasks.
-              </p>
-            </div>
+          <header class="flex items-center justify-between gap-4">
+            <h2
+              id="conversation-documents-heading"
+              class="text-lg font-semibold"
+            >
+              Documents
+            </h2>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm min-h-11"
+              popovertarget="conversation-documents"
+              popovertargetaction="hide"
+            >
+              Close
+            </button>
+          </header>
+          <div class="mt-3 space-y-4">
+            {% if error != "" && (!saved.task_text.is_empty() || saved.plan_text_error) %}
+              <div class="alert alert-error" role="alert" tabindex="-1">
+                <p>{{ error }}</p>
+              </div>
+            {% endif %}
+            <p class="text-quiet max-w-[60ch] text-sm">
+              Plans and task lists you save from this conversation appear here.
+              You can reuse them in workflows. They do not run automatically.
+            </p>
             {% if saved.plans.is_empty() %}
+              <p class="text-sm">No saved plans or task lists yet.</p>
               <p class="text-quiet text-sm">
-                No documents are associated with this conversation.
+                Each completed response has a Save as… action. You can also add
+                text below.
               </p>
             {% else %}
               <ul class="record-list" aria-label="Saved documents">
@@ -359,7 +473,7 @@
               </form>
             </details>
           </div>
-        </details>
+        </section>
       {% endif %}
       <section
         id="transcript"
@@ -978,42 +1092,6 @@
               {% endif %}{% endfor %}
             </p>
           {% endif %}
-          {% if !directories.is_empty() %}
-            <div
-              class="text-composer-quiet mb-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs"
-              aria-label="{% if location_host %}
-                Work locations
-              {% else %}
-                Directory access
-              {% endif %}"
-            >
-              {% for directory in directories %}
-                <span class="inline-flex min-w-0 items-center gap-1">
-                  <span class="max-w-36 truncate font-medium sm:max-w-56"
-                    >{{ directory.name }}</span
-                  >
-                  <span aria-hidden="true">·</span>
-                  <span>
-                    {% if location_host %}
-                      {% if !directory.available %}Unavailable ·{% endif %}
-                      Work location
-                    {% else if !directory.available %}
-                      Unavailable · {{ directory.access_label }}
-                    {% else if directory.pending_approval %}
-                      Pending approval · {{ directory.access_label }}
-                    {% else %}
-                      {% if directory.sensitive %}Sensitive access ·{% endif %}
-                      {{ directory.access_label }}
-                    {% endif %}
-                    {% if directory.direct_write && !location_host %}
-                      · Immediate host changes remain after discard,
-                      cancellation and environment changes.
-                    {% endif %}
-                  </span>
-                </span>
-              {% endfor %}
-            </div>
-          {% endif %}
           {% if !attached_projects.is_empty() %}
             <p class="text-composer-quiet mb-2 text-xs">
               {% for project in attached_projects %}
@@ -1036,7 +1114,7 @@
             data-graft
             method="post"
             action="{{ self.composer_action() }}"
-            class="composer-form"
+            class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 gap-y-2"
           >
             {% if let Some(saved) = self.saved() %}
               <input
@@ -1094,7 +1172,7 @@
             <textarea
               id="composer-message"
               name="message"
-              class="composer-message textarea"
+              class="textarea textarea-bordered field-sizing-content max-h-[min(12rem,24dvh)] min-h-24 w-full min-w-0 resize-y text-base leading-relaxed"
               placeholder="Ask a question or describe a task…"
               rows="3"
               {% if !self.is_new() %}required{% endif %}
@@ -1102,34 +1180,10 @@
               {% if self.composer_disabled() %}disabled{% endif %}
             >
 {{ self.draft_message() }}</textarea>
-            {% if !model_available %}
-              <p class="text-quiet px-4 py-2 text-sm">
-                <a href="/connect" data-graft class="link"
-                  >Connect a provider</a
-                >
-                to send a message.
-              </p>
-            {% endif %}
-            {% if session_busy && !job_active %}
-              <p class="text-quiet text-sm">
-                Another command is active in this browser session.
-              </p>
-            {% endif %}
-            {% if self.is_new() %}
-              <p
-                id="conversation-send-status"
-                role="status"
-                class="text-quiet px-4 text-sm"
-              ></p>
-            {% endif %}
-            <div class="composer-toolbar">
-              <span
-                data-island="shortcut-hint"
-                class="shortcut-hint text-quiet text-xs"
-              ></span>
+            <div class="flex flex-col gap-2">
               {# Explicit ARIA values replace the transport overlay on a retained submitter. #}
               <button
-                class="btn btn-primary min-w-20"
+                class="btn btn-primary min-h-11 min-w-20"
                 type="submit"
                 name="action"
                 value="send"
@@ -1138,7 +1192,31 @@
               >
                 Send
               </button>
+              <span
+                data-island="shortcut-hint"
+                class="shortcut-hint text-quiet text-center text-xs"
+              ></span>
             </div>
+            {% if !model_available %}
+              <p class="text-quiet col-span-2 text-sm">
+                <a href="/connect" data-graft class="link"
+                  >Connect a provider</a
+                >
+                to send a message.
+              </p>
+            {% endif %}
+            {% if session_busy && !job_active %}
+              <p class="text-quiet col-span-2 text-sm">
+                Another command is active in this browser session.
+              </p>
+            {% endif %}
+            {% if self.is_new() %}
+              <p
+                id="conversation-send-status"
+                role="status"
+                class="text-quiet col-span-2 text-sm"
+              ></p>
+            {% endif %}
           </form>
           {% if let Some(saved) = self.saved() %}{% if job_active %}
             <form
@@ -1157,398 +1235,6 @@
           {% endif %}{% endif %}
         </div>
       </div>
-      <section
-        id="conversation-directory-settings"
-        popover
-        data-directories-open="{% if directories_open %}true{% else %}false{% endif %}"
-        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[70dvh] w-auto min-w-0 space-y-4 overflow-y-auto p-5 [position-anchor:--conversation-directories] supports-[position-area:bottom]:top-2 supports-[position-area:bottom]:max-h-[min(70dvh,calc(100%-1.5rem))] supports-[position-area:bottom]:[position-area:bottom_span-all] md:left-72 md:max-w-[44rem] md:supports-[left:anchor(left)]:left-[anchor(left)]"
-        aria-labelledby="conversation-directory-heading"
-        tabindex="-1"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h2
-              id="conversation-directory-heading"
-              class="text-lg font-semibold"
-            >
-              {% if location_host %}Work locations{% else %}Directories{% endif %}
-            </h2>
-            <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-              {% if location_host %}
-                Host commands start in the first work location. These paths are
-                conveniences, not sandbox access limits.
-              {% else %}
-                Review before apply uses an isolated copy and requires approval.
-                Direct write changes host files immediately. Read only does not
-                permit writes through that mount.
-              {% endif %}
-            </p>
-          </div>
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm min-h-11"
-            popovertarget="conversation-directory-settings"
-            popovertargetaction="hide"
-          >
-            Close
-          </button>
-        </div>
-        {% if error != "" && directories_open %}
-          <div
-            id="conversation-error"
-            class="alert alert-error"
-            role="alert"
-            tabindex="-1"
-          >
-            <p>{{ error }}</p>
-          </div>
-        {% endif %}
-        {% if directories.is_empty() %}
-          <p class="text-quiet text-sm">
-            {% if location_host %}
-              Commands start in Power Plant's current directory. Work locations
-              do not limit host access.
-            {% else %}
-              No host directory access. Tools use private scratch storage at
-              <code>/workspace</code>.
-            {% endif %}
-          </p>
-        {% else %}
-          <ul class="record-list" aria-label="Authorised directories">
-            {% for directory in directories %}
-              <li
-                class="record-row grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-              >
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <p class="font-medium break-words">{{ directory.name }}</p>
-                    {% if !directory.available %}
-                      <span class="badge badge-error badge-sm"
-                        >Unavailable</span
-                      >
-                    {% else if directory.pending_approval && !location_host %}
-                      <span class="badge badge-warning badge-sm"
-                        >Pending approval</span
-                      >
-                    {% else if directory.sensitive %}
-                      <span class="badge badge-warning badge-sm"
-                        >Sensitive access</span
-                      >
-                    {% endif %}
-                    <span
-                      class="badge badge-outline badge-sm shrink-0 whitespace-nowrap"
-                      >{% if location_host %}Work location{% else %}{{ directory.access_label }}{% endif %}</span
-                    >
-                  </div>
-                  <dl
-                    class="mt-2 grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]"
-                  >
-                    <dt class="text-quiet">Host path</dt>
-                    <dd class="min-w-0 font-mono break-all">
-                      {{ directory.host_path }}
-                    </dd>
-                    {% if !location_host %}
-                      <dt class="text-quiet">Guest path</dt>
-                      <dd class="min-w-0 font-mono break-all">
-                        {{ directory.guest_path }}
-                      </dd>
-                      <dt class="text-quiet">Alias</dt>
-                      <dd class="min-w-0 font-mono break-all">
-                        {{ directory.alias }}
-                      </dd>
-                    {% endif %}
-                  </dl>
-                  {% if !location_host && directory.review_before_apply && !directory.exclusions.is_empty() %}
-                    <div class="mt-3 text-xs">
-                      <p class="font-medium">Excluded engine paths</p>
-                      <ul class="text-quiet mt-1 space-y-1">
-                        {% for exclusion in directory.exclusions %}
-                          <li class="font-mono break-all">{{ exclusion }}</li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                  {% endif %}
-                </div>
-                {% if self.is_new() %}
-                  <div class="flex flex-wrap gap-2 self-start">
-                    {% if !location_host %}
-                      {% if directory.pending_approval && consent_request == "" %}
-                        <button
-                          form="conversation-composer"
-                          formaction="/conversations/new/directories/{{ directory.id }}/consent"
-                          formmethod="post"
-                          class="btn btn-warning btn-sm min-h-11"
-                          type="submit"
-                        >
-                          Review access
-                        </button>
-                      {% endif %}
-                      {% if !directory.direct_write %}
-                        <button
-                          form="conversation-composer"
-                          formaction="/conversations/new/directories/{{ directory.id }}/access"
-                          formmethod="post"
-                          name="action"
-                          value="direct-write"
-                          class="btn btn-warning btn-sm min-h-11"
-                          type="submit"
-                        >
-                          Direct write
-                        </button>
-                      {% endif %}
-                      <button
-                        form="conversation-composer"
-                        formaction="/conversations/new/directories/{{ directory.id }}/access"
-                        formmethod="post"
-                        name="action"
-                        value="{% if directory.review_before_apply || directory.direct_write %}read-only{% else %}review-before-apply{% endif %}"
-                        class="btn btn-secondary btn-sm min-h-11"
-                        type="submit"
-                      >
-                        {% if directory.review_before_apply || directory.direct_write %}
-                          Use read only
-                        {% else %}
-                          Review before apply
-                        {% endif %}
-                      </button>
-                    {% endif %}
-                    <button
-                      form="conversation-composer"
-                      formaction="/conversations/new/directories/{{ directory.id }}/remove"
-                      formmethod="post"
-                      class="btn btn-ghost btn-sm min-h-11"
-                      type="submit"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                {% else if let Some(saved) = self.saved() %}
-                  {% if directory.transient %}
-                    <a
-                      data-graft
-                      href="/conversations/{{ saved.id }}"
-                      class="btn btn-ghost btn-sm min-h-11"
-                      >Cancel</a
-                    >
-                  {% else %}
-                    <form
-                      data-graft
-                      method="post"
-                      action="/conversations/{{ saved.id }}/directories/{{ directory.id }}/remove"
-                    >
-                      <input
-                        type="hidden"
-                        name="revision"
-                        value="{{ saved.revision }}"
-                      />
-                      <div class="flex flex-wrap gap-2">
-                        {% if !location_host %}
-                          {% if !directory.direct_write %}
-                            <button
-                              class="btn btn-warning btn-sm min-h-11"
-                              type="submit"
-                              name="access"
-                              value="direct-write"
-                              formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/access"
-                              {% if job_active || session_busy %}disabled{% endif %}
-                            >
-                              Direct write
-                            </button>
-                          {% endif %}
-                          <button
-                            class="btn btn-secondary btn-sm min-h-11"
-                            type="submit"
-                            name="access"
-                            value="{% if directory.review_before_apply || directory.direct_write %}read-only{% else %}review-before-apply{% endif %}"
-                            formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/access"
-                            {% if job_active || session_busy %}disabled{% endif %}
-                          >
-                            {% if directory.review_before_apply || directory.direct_write %}
-                              Use read only
-                            {% else %}
-                              Review before apply
-                            {% endif %}
-                          </button>
-                          {% if directory.pending_approval && consent_request == "" %}
-                            <button
-                              class="btn btn-warning btn-sm min-h-11"
-                              type="submit"
-                              formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/consent"
-                              {% if job_active || session_busy %}disabled{% endif %}
-                            >
-                              Review access
-                            </button>
-                          {% endif %}
-                        {% endif %}
-                        <button
-                          class="btn btn-ghost btn-sm min-h-11"
-                          type="submit"
-                          {% if job_active || session_busy %}disabled{% endif %}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </form>
-                  {% endif %}
-                {% endif %}
-              </li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-        {% if consent_request != "" %}
-          <div class="alert alert-warning items-start" role="alert">
-            <div class="min-w-0 space-y-3">
-              <div class="space-y-1">
-                <h3 class="font-semibold">
-                  {% if consent_direct %}
-                    Approve direct host writes
-                  {% else if consent_reviewed %}
-                    Approve directory review access
-                  {% else %}
-                    Approve sensitive directory access
-                  {% endif %}
-                </h3>
-                <p class="text-sm break-words">
-                  The requested
-                  {% if consent_direct %}
-                    Direct write
-                  {% else if consent_reviewed %}
-                    Review before apply
-                  {% else %}
-                    read-only
-                  {% endif %}
-                  directory is
-                  <code class="break-all">{{ consent_path }}</code>.
-                </p>
-                {% if consent_sensitive %}
-                  <p class="text-sm">
-                    Power Plant stores provider credentials and private
-                    conversations at
-                    <code class="break-all">{{ data_root }}</code>. Tool output
-                    can expose provider credentials, private conversations and
-                    other sensitive records to the model. Network off does not
-                    prevent this disclosure. Provider requests leave the host
-                    separately.
-                  </p>
-                {% endif %}
-                {% if consent_direct %}
-                  <p class="text-sm">
-                    Tools can immediately change or delete host files in this
-                    directory.
-                  </p>
-                  {% if consent_sensitive %}
-                    <p class="text-sm">
-                      Direct write can alter or corrupt live configuration,
-                      permissions and execution evidence.
-                    </p>
-                  {% endif %}
-                  <p class="text-sm">
-                    Discard, cancellation and environment changes do not undo
-                    these host changes.
-                  </p>
-                {% else if consent_reviewed %}
-                  <p class="text-sm">
-                    Tools use an isolated copy. Apply changes writes the exact
-                    reviewed changes to the host directory.
-                    {% if consent_sensitive %}
-                      The copy can propose changes to Power Plant configuration.
-                    {% endif %}
-                  </p>
-                {% endif %}
-              </div>
-              {% if self.is_new() %}
-                <button
-                  form="conversation-composer"
-                  formaction="/conversations/new/directories/consent"
-                  formmethod="post"
-                  class="btn btn-warning min-h-11"
-                  type="submit"
-                >
-                  Approve
-                  {% if consent_direct %}
-                    direct write
-                  {% else if consent_reviewed %}
-                    review access
-                  {% else %}
-                    read-only access
-                  {% endif %}
-                </button>
-              {% else if let Some(saved) = self.saved() %}
-                <form
-                  data-graft
-                  method="post"
-                  action="/conversations/{{ saved.id }}/directories/consent"
-                >
-                  <input
-                    type="hidden"
-                    name="revision"
-                    value="{{ saved.revision }}"
-                  />
-                  <input
-                    type="hidden"
-                    name="consent_request"
-                    value="{{ consent_request }}"
-                  />
-                  <input
-                    type="hidden"
-                    name="pending_directory"
-                    value="{{ pending_directory }}"
-                  />
-                  <input
-                    type="hidden"
-                    name="existing"
-                    value="{% if consent_existing %}true{% else %}false{% endif %}"
-                  />
-                  <button class="btn btn-warning min-h-11" type="submit">
-                    Approve
-                    {% if consent_direct %}
-                      direct write
-                    {% else if consent_reviewed %}
-                      review access
-                    {% else %}
-                      read-only access
-                    {% endif %}
-                  </button>
-                </form>
-              {% endif %}
-            </div>
-          </div>
-        {% endif %}
-        {% if directories.len() >= 8 %}
-          <p class="text-quiet text-sm">
-            This conversation has the maximum of eight directories.
-          </p>
-        {% else if self.is_new() %}
-          <button
-            form="conversation-composer"
-            formaction="/conversations/new/directories/pick"
-            formmethod="post"
-            class="btn btn-secondary min-h-11"
-            type="submit"
-          >
-            Choose directory
-          </button>
-        {% else if let Some(saved) = self.saved() %}
-          <form
-            data-graft
-            method="post"
-            action="/conversations/{{ saved.id }}/directories/pick"
-          >
-            <input type="hidden" name="revision" value="{{ saved.revision }}" />
-            <button
-              class="btn btn-secondary min-h-11"
-              type="submit"
-              {% if job_active || session_busy %}disabled{% endif %}
-            >
-              Choose directory
-            </button>
-          </form>
-        {% endif %}
-        <p class="text-quiet text-xs">
-          The first directory is the command directory. This choice grants no
-          write access. Sandbox network access remains separate.
-        </p>
-      </section>
       <section
         id="conversation-project-settings"
         popover
@@ -1823,22 +1509,23 @@
       <section
         id="conversation-settings"
         popover
-        data-settings-open="{% if settings_open %}true{% else %}false{% endif %}"
-        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[70dvh] w-auto min-w-0 overflow-y-auto p-5 [position-anchor:--conversation-settings] supports-[position-area:bottom]:top-2 supports-[position-area:bottom]:max-h-[min(70dvh,calc(100%-1.5rem))] supports-[position-area:bottom]:[position-area:bottom_span-all] md:left-72 md:max-w-[42rem] md:supports-[left:anchor(left)]:left-[anchor(left)]"
+        data-settings-open="{% if settings_open || directories_open %}true{% else %}false{% endif %}"
+        data-directories-open="{% if directories_open %}true{% else %}false{% endif %}"
+        class="conversation-panel fixed inset-0 m-auto h-[min(44rem,calc(100dvh-2rem))] w-[calc(100%-2rem)] max-w-4xl min-w-0 flex-col overflow-hidden p-0 [&:popover-open]:flex"
         aria-labelledby="conversation-settings-heading"
         tabindex="-1"
       >
-        <div class="flex items-start justify-between gap-3">
+        <div
+          class="border-base-300 flex shrink-0 items-center justify-between gap-3 border-b px-5 py-3 sm:px-6"
+        >
           <div>
             <h2
               id="conversation-settings-heading"
               class="text-lg font-semibold"
+              tabindex="-1"
             >
-              Settings
+              Conversation settings
             </h2>
-            <p class="text-quiet mt-1 text-sm">
-              These settings apply to this conversation.
-            </p>
           </div>
           <button
             type="button"
@@ -1850,960 +1537,1549 @@
           </button>
         </div>
 
-        {% for directory in directories %}
-          {% if directory.sensitive %}
-            <div class="alert alert-warning mt-4 items-start">
-              <p class="text-sm break-words">
-                Sensitive read-only access can expose private records. Power
-                Plant stores its data at
-                <code class="break-all">{{ data_root }}</code>. Tool output can
-                disclose credentials and private conversations to the model even
-                with Network off.
-                {% if directory.pending_approval %}Approval is pending.{% endif %}
-              </p>
-            </div>
-          {% endif %}
-        {% endfor %}
-
-        {% if error != "" && settings_open %}
+        <label class="mx-5 mt-4 flex flex-col gap-1 sm:hidden">
+          <span class="sr-only">Settings section</span>
+          <select class="select select-bordered w-full" data-settings-menu>
+            <option value="settings-model">Model</option>
+            <option value="settings-instructions">
+              Instructions and tools
+            </option>
+            <option value="settings-execution">Execution</option>
+            <option value="settings-directories">
+              {% if location_host %}Work locations{% else %}Directories{% endif %}
+            </option>
+            <option value="settings-presets">Presets</option>
+            <option value="settings-details">Conversation details</option>
+          </select>
+        </label>
+        <div class="flex min-h-0 flex-1">
           <div
-            id="conversation-error"
-            class="alert alert-error mt-4"
-            role="alert"
-            tabindex="-1"
+            role="tablist"
+            aria-label="Conversation settings sections"
+            aria-orientation="vertical"
+            class="menu border-base-300 hidden w-52 shrink-0 flex-col gap-1 overflow-y-auto border-r p-3 sm:flex"
           >
-            <p>{{ error }}</p>
-          </div>
-        {% endif %}
-
-        {% if let Some(saved) = self.saved() %}
-          <form
-            id="conversation-settings-form"
-            data-graft
-            method="post"
-            action="/conversations/{{ saved.id }}/settings"
-            class="mt-5 space-y-6"
-          >
-            <input type="hidden" name="revision" value="{{ saved.revision }}" />
-          </form>
-          <p class="text-quiet mt-3 text-sm break-words">{{ model_summary }}</p>
-          <form
-            id="conversation-preset-form"
-            data-graft
-            method="post"
-            action="/conversations/{{ saved.id }}/settings/presets/preview"
-          >
-            <input type="hidden" name="revision" value="{{ saved.revision }}" />
-          </form>
-          <form
-            id="conversation-preset-save-form"
-            data-graft
-            method="post"
-            action="/conversations/{{ saved.id }}/settings/presets/save"
-          >
-            <input type="hidden" name="revision" value="{{ saved.revision }}" />
-          </form>
-          {% if let Some(preview) = preset_preview %}
-            <form
-              id="conversation-preset-apply-form"
-              data-graft
-              method="post"
-              action="/conversations/{{ saved.id }}/settings/presets/apply"
-            >
-              <input
-                type="hidden"
-                name="revision"
-                value="{{ saved.revision }}"
-              />
-              <input
-                type="hidden"
-                name="preset_preview"
-                value="{{ preview.token }}"
-              />
-            </form>
-          {% endif %}
-        {% endif %}
-        {% if self.is_new() %}
-          <form
-            id="conversation-model-preference"
-            data-graft
-            method="post"
-            action="/conversations/new/model"
-            hidden
-          >
-            <input type="hidden" name="provider" />
-            <input type="hidden" name="model" />
-            <input type="hidden" name="thinking" />
-          </form>
-          <p
-            id="conversation-model-status"
-            role="status"
-            class="text-error mt-3 text-sm"
-          ></p>
-        {% endif %}
-
-        <section
-          class="mt-5 space-y-4"
-          aria-labelledby="conversation-preset-heading"
-        >
-          <div>
-            <h3 id="conversation-preset-heading" class="text-sm font-semibold">
-              Preset
-            </h3>
-            <p class="text-quiet mt-1 text-xs">
-              A preset copies these settings. It copies no access approval or
-              provider credential.
-            </p>
-          </div>
-          {% if !preset_source.is_empty() %}
-            <p class="text-quiet text-sm">
-              {{ preset_source }}. Local edits never update the source preset.
-            </p>
-          {% endif %}
-          <a href="/presets" data-graft class="link text-sm">Manage presets</a>
-          {% if !presets.is_empty() %}
-            <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
-              <label
-                class="flex min-w-0 flex-1 flex-col gap-1"
-                for="conversation-preset"
-              >
-                <span class="text-sm">Saved preset</span>
-                <select
-                  id="conversation-preset"
-                  name="preset"
-                  form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
-                  class="select select-bordered w-full"
-                  {% if job_active %}disabled{% endif %}
-                >
-                  <option value="">Choose a preset</option>
-                  {% for preset in presets %}
-                    <option
-                      value="{{ preset.id }}"
-                      {% if preset.selected %}selected{% endif %}
-                    >
-                      {{ preset.name }} — {{ preset.description }}
-                    </option>
-                  {% endfor %}
-                </select>
-              </label>
-              <button
-                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
-                formaction="{% if self.is_new() %}/conversations/new/settings/presets/preview{% endif %}"
-                formmethod="post"
-                class="btn btn-secondary"
-                type="submit"
-                {% if job_active || session_busy %}disabled{% endif %}
-              >
-                Preview preset
-              </button>
-            </div>
-          {% else %}
-            <p class="text-quiet text-sm">No presets are saved yet.</p>
-          {% endif %}
-
-          {% if let Some(preview) = preset_preview %}
-            <div
-              class="border-base-300 space-y-3 border p-4"
-              data-preset-preview
-            >
-              <div>
-                <h4 class="font-semibold">
-                  Replace settings with {{ preview.name }}
-                </h4>
-                <p class="text-quiet mt-1 text-xs">
-                  Review the complete replacement, including removal of existing
-                  directory and project permissions. Sensitive access needs
-                  fresh approval.
-                </p>
-              </div>
-              <dl class="grid gap-2 text-sm sm:grid-cols-[7rem_1fr]">
-                <dt class="text-quiet">Model</dt>
-                <dd>{{ preview.model }}</dd>
-                <dt class="text-quiet">Reasoning effort</dt>
-                <dd>{{ preview.thinking }}</dd>
-                <dt class="text-quiet">Instructions</dt>
-                <dd
-                  class="max-h-48 overflow-auto break-words whitespace-pre-wrap"
-                >
-                  {% if preview.instructions.is_empty() %}None{% else %}{{ preview.instructions }}{% endif %}
-                </dd>
-                <dt class="text-quiet">Environment</dt>
-                <dd>{{ preview.environment }}</dd>
-                <dt class="text-quiet">Tools</dt>
-                <dd>{{ preview.tools }}</dd>
-                <dt class="text-quiet">Network</dt>
-                <dd>{{ preview.network }}</dd>
-                <dt class="text-quiet">Where tools run</dt>
-                <dd>{{ preview.location }}</dd>
-                <dt class="text-quiet">Directories</dt>
-                <dd>
-                  {% if preview.directories.is_empty() %}
-                    None
-                  {% else %}
-                    <ul class="space-y-1">
-                      {% for directory in preview.directories %}
-                        <li class="break-all">{{ directory }}</li>
-                      {% endfor %}
-                    </ul>
-                  {% endif %}
-                </dd>
-              </dl>
-              <button
-                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-apply-form{% endif %}"
-                formaction="{% if self.is_new() %}/conversations/new/settings/presets/apply{% endif %}"
-                formmethod="post"
-                class="btn btn-warning"
-                type="submit"
-              >
-                Apply replacement
-              </button>
-            </div>
-          {% endif %}
-
-          <div
-            class="border-base-300 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end"
-          >
-            <label
-              class="flex min-w-0 flex-1 flex-col gap-1"
-              for="conversation-preset-name"
-            >
-              <span class="text-sm">Preset name</span>
-              <input
-                id="conversation-preset-name"
-                name="{% if self.is_new() %}preset_name{% else %}name{% endif %}"
-                form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-save-form{% endif %}"
-                class="input input-bordered"
-                value="{{ preset_name }}"
-                maxlength="80"
-              />
-            </label>
             <button
-              form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-save-form{% endif %}"
-              formaction="{% if self.is_new() %}/conversations/new/settings/presets/save{% endif %}"
-              formmethod="post"
-              class="btn btn-secondary"
-              type="submit"
-              {% if job_active || session_busy %}disabled{% endif %}
+              id="settings-model-tab"
+              type="button"
+              role="tab"
+              class="btn btn-ghost aria-selected:bg-base-200 min-h-11 justify-start text-left font-normal aria-selected:font-semibold"
+              aria-selected="true"
+              aria-controls="settings-model"
+              data-settings-section="conversation-model-heading"
             >
-              Save as preset
+              Model
+            </button>
+            <button
+              id="settings-instructions-tab"
+              type="button"
+              role="tab"
+              class="btn btn-ghost aria-selected:bg-base-200 min-h-11 justify-start text-left font-normal aria-selected:font-semibold"
+              aria-selected="false"
+              aria-controls="settings-instructions"
+              tabindex="-1"
+              data-settings-section="conversation-instructions-heading"
+            >
+              Instructions and tools
+            </button>
+            <button
+              id="settings-execution-tab"
+              type="button"
+              role="tab"
+              class="btn btn-ghost aria-selected:bg-base-200 min-h-11 justify-start text-left font-normal aria-selected:font-semibold"
+              aria-selected="false"
+              aria-controls="settings-execution"
+              tabindex="-1"
+              data-settings-section="conversation-execution-heading"
+            >
+              Execution
+            </button>
+            <button
+              id="settings-directories-tab"
+              type="button"
+              role="tab"
+              class="btn btn-ghost aria-selected:bg-base-200 min-h-11 justify-start text-left font-normal aria-selected:font-semibold"
+              aria-selected="false"
+              aria-controls="settings-directories"
+              tabindex="-1"
+              data-settings-section="conversation-directory-heading"
+            >
+              {% if location_host %}Work locations{% else %}Directories{% endif %}
+            </button>
+            <button
+              id="settings-presets-tab"
+              type="button"
+              role="tab"
+              class="btn btn-ghost aria-selected:bg-base-200 min-h-11 justify-start text-left font-normal aria-selected:font-semibold"
+              aria-selected="false"
+              aria-controls="settings-presets"
+              tabindex="-1"
+              data-settings-section="conversation-preset-heading"
+            >
+              Presets
+            </button>
+            <button
+              id="settings-details-tab"
+              type="button"
+              role="tab"
+              class="btn btn-ghost aria-selected:bg-base-200 min-h-11 justify-start text-left font-normal aria-selected:font-semibold"
+              aria-selected="false"
+              aria-controls="settings-details"
+              tabindex="-1"
+              data-settings-section="conversation-details-heading"
+            >
+              Conversation details
             </button>
           </div>
-        </section>
-
-        <section
-          class="border-base-300 mt-6 space-y-3 border-t pt-5"
-          aria-labelledby="conversation-model-heading"
-        >
-          <h3 id="conversation-model-heading" class="text-sm font-semibold">
-            Model
-          </h3>
-          <div class="flex min-w-0 flex-col gap-3">
-            {% include "conversations/templates/model_picker.html" %}
-          </div>
-        </section>
-
-        {% let settings_form = self.model_form() %}
-        {% let field_prefix = "" %}
-        {% let tools_host = location_host %}
-        {% include "execution_settings/templates/fields.html" %}
-
-        {% if self.is_new() %}
-          <button
-            form="conversation-composer"
-            data-location-preview
-            type="submit"
-            name="action"
-            value="settings"
-            formnovalidate
-            hidden
-          >
-            Update settings
-          </button>
-        {% endif %}
-        <section
-          class="border-base-300 mt-6 space-y-3 border-t pt-5"
-          aria-labelledby="conversation-location-heading"
-        >
-          <h3 id="conversation-location-heading" class="text-sm font-semibold">
-            Where tools run
-          </h3>
-          <p class="text-quiet max-w-[65ch] text-xs">
-            Sandbox tools use the selected environment and directory mounts.
-            This computer runs approved shell commands as the Power Plant
-            process user. Sandbox network restrictions and environment recipes
-            do not apply to host commands.
-          </p>
-          <fieldset class="grid gap-2 sm:grid-cols-2">
-            <legend class="sr-only">Where tools run</legend>
-            <label
-              class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
-            >
-              <input
-                form="{{ self.model_form() }}"
-                class="radio radio-sm"
-                type="radio"
-                name="location"
-                value="sandbox"
-                {% if !location_host %}checked{% endif %}
-              />
-              <span>Sandbox</span>
-            </label>
-            <label
-              class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
-            >
-              <input
-                form="{{ self.model_form() }}"
-                class="radio radio-sm"
-                type="radio"
-                name="location"
-                value="host"
-                {% if location_host %}checked{% endif %}
-              />
-              <span>This computer</span>
-            </label>
-          </fieldset>
           <div
-            data-execution-host-policy
-            {% if !location_host %}hidden{% endif %}
+            data-settings-scroll
+            class="min-h-0 min-w-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto overscroll-contain px-5 pb-6 sm:px-6"
           >
-            {% include "execution_settings/templates/host_approval.html" %}
-          </div>
-          {% if location_host %}
-            <div class="alert alert-warning items-start">
-              <div class="min-w-0 space-y-2 text-sm">
-                <p class="font-medium">
-                  {% if host_approval_automatic %}
-                    Run without approval
-                  {% else %}
-                    Unrestricted host access
-                  {% endif %}
-                </p>
-                <p class="break-words">{{ host_identity }}</p>
-                {% if host_elevated %}
-                  <p>
-                    This process already has elevated privileges. Host commands
-                    inherit that authority.
-                  </p>
-                {% endif %}
-                <p>
-                  Command output is sent to the hosted model. Directory rows
-                  become work locations, not access limits.
-                  {% if host_approval_automatic %}
-                    Run without approval starts each submitted shell command
-                    without a further decision. It does not inspect script
-                    internals.
-                  {% else %}
-                    Approval does not inspect script internals.
-                  {% endif %}
-                </p>
-                {% if host_pending_approval %}
-                  <p>Pending approval</p>
-                {% endif %}
-              </div>
-            </div>
-            {% if host_pending_approval && host_consent_request.is_empty() %}
-              {% if self.is_new() %}
-                <button
-                  form="conversation-composer"
-                  id="conversation-host-consent-preview"
-                  formaction="/conversations/new/settings/host-consent"
-                  formmethod="post"
-                  class="btn btn-warning"
-                  type="submit"
-                >
-                  Review host access
-                </button>
-              {% else %}
-                {% if let Some(saved) = self.saved() %}
-                  <form
-                    data-graft
-                    method="post"
-                    action="/conversations/{{ saved.id }}/settings/host-consent"
-                  >
-                    <input
-                      type="hidden"
-                      name="revision"
-                      value="{{ saved.revision }}"
-                    />
-                    <button class="btn btn-warning" type="submit">
-                      Review host access
-                    </button>
-                  </form>
-                {% endif %}
-              {% endif %}
-            {% endif %}
-            {% if host_consent_request != "" %}
-              {% if self.is_new() %}
-                <button
-                  form="conversation-composer"
-                  id="conversation-host-consent-approve"
-                  formaction="/conversations/new/settings/host-consent/approve"
-                  formmethod="post"
-                  class="btn btn-warning"
-                  type="submit"
-                >
-                  {% if host_approval_automatic %}
-                    Approve Run without approval
-                  {% else %}
-                    Approve unrestricted host access
-                  {% endif %}
-                </button>
-              {% else %}
-                {% if let Some(saved) = self.saved() %}
-                  <form
-                    data-graft
-                    method="post"
-                    action="/conversations/{{ saved.id }}/settings/host-consent/approve"
-                  >
-                    <input
-                      type="hidden"
-                      name="revision"
-                      value="{{ saved.revision }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="consent_request"
-                      value="{{ host_consent_request }}"
-                    />
-                    <button class="btn btn-warning" type="submit">
-                      {% if host_approval_automatic %}
-                        Approve Run without approval
-                      {% else %}
-                        Approve unrestricted host access
-                      {% endif %}
-                    </button>
-                  </form>
-                {% endif %}
-              {% endif %}
-            {% endif %}
-          {% endif %}
-        </section>
-
-        <section
-          class="border-base-300 mt-6 space-y-3 border-t pt-5"
-          aria-labelledby="conversation-environment-heading"
-          data-execution-sandbox-settings
-          {% if location_host %}hidden{% endif %}
-        >
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3
-                id="conversation-environment-heading"
-                class="text-sm font-semibold"
+            {% if error != "" && (settings_open || directories_open) %}
+              <div
+                id="conversation-error"
+                class="alert alert-error mt-4"
+                role="alert"
+                tabindex="-1"
               >
-                Environment
-              </h3>
-              <p class="text-quiet mt-1 max-w-[65ch] text-xs">
-                Tools use this environment for the next attempt. Each attempt
-                starts from its ready snapshot. Tool-free chat does not use it.
-              </p>
-            </div>
-            <a href="/environments" data-graft class="link text-sm"
-              >Manage environments</a
-            >
-          </div>
-          <label class="flex flex-col gap-1" for="conversation-environment">
-            <span class="sr-only">Environment for sandbox tools</span>
-            <select
-              form="{{ self.model_form() }}"
-              id="conversation-environment"
-              name="environment"
-              class="select select-bordered w-full"
-              required
-            >
-              {% if environment_options.is_empty() %}
-                <option value="">No environments available</option>
-              {% endif %}
-              {% for option in environment_options %}
-                <option
-                  value="{{ option.id }}"
-                  {% if option.selected %}selected{% endif %}
-                >
-                  {{ option.name }} — {{ option.readiness }} ·
-                  {{ option.availability }}
-                </option>
-              {% endfor %}
-            </select>
-          </label>
-          <p class="text-quiet text-xs">
-            Power Plant never substitutes another environment when this
-            selection or its snapshot becomes unavailable.
-          </p>
-        </section>
-
-        <section
-          class="border-base-300 mt-6 space-y-3 border-t pt-5"
-          aria-labelledby="conversation-network-heading"
-          data-execution-sandbox-settings
-          {% if location_host %}hidden{% endif %}
-        >
-          <div>
-            <h3 id="conversation-network-heading" class="text-sm font-semibold">
-              Sandbox network
-            </h3>
-            <p class="text-quiet mt-1 text-xs">
-              This controls sandbox tools only. Provider requests still leave
-              the host. Private and host networks remain blocked.
-            </p>
-            {% if !network_detail.is_empty() %}
-              <p class="mt-2 text-sm break-words">{{ network_detail }}</p>
+                <p>{{ error }}</p>
+              </div>
             {% endif %}
-          </div>
-          <fieldset
-            class="grid gap-2 sm:grid-cols-3"
-            {% if job_active %}disabled{% endif %}
-          >
-            <legend class="sr-only">Sandbox network access</legend>
-            {% for option in network_options %}
-              <label
-                class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+
+            {% if let Some(saved) = self.saved() %}
+              <form
+                id="conversation-settings-form"
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/settings"
               >
                 <input
-                  form="{{ self.model_form() }}"
-                  class="radio radio-sm"
-                  type="radio"
-                  name="network"
-                  value="{{ option.value }}"
-                  {% if option.selected %}checked{% endif %}
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
                 />
-                <span>{{ option.label }}</span>
-              </label>
-            {% endfor %}
-          </fieldset>
-          <label
-            class="flex flex-col gap-1"
-            for="conversation-settings-network-domains"
-          >
-            <span class="text-sm">Allowed domains</span>
-            <textarea
-              form="{{ self.model_form() }}"
-              id="conversation-settings-network-domains"
-              class="textarea textarea-bordered min-h-24 w-full"
-              name="network_domains"
-              maxlength="8127"
-              {% if job_active %}disabled{% endif %}
-            >
-{{ network_domains }}</textarea>
-            <span class="text-quiet text-xs">
-              Use one domain per line. Restricted access includes subdomains and
-              all ports.
-            </span>
-          </label>
-        </section>
+              </form>
+              <form
+                id="conversation-preset-form"
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/settings/presets/preview"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+              </form>
+              <form
+                id="conversation-preset-save-form"
+                data-graft
+                method="post"
+                action="/conversations/{{ saved.id }}/settings/presets/save"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ saved.revision }}"
+                />
+              </form>
+              {% if let Some(preview) = preset_preview %}
+                <form
+                  id="conversation-preset-apply-form"
+                  data-graft
+                  method="post"
+                  action="/conversations/{{ saved.id }}/settings/presets/apply"
+                >
+                  <input
+                    type="hidden"
+                    name="revision"
+                    value="{{ saved.revision }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="preset_preview"
+                    value="{{ preview.token }}"
+                  />
+                </form>
+              {% endif %}
+            {% endif %}
+            {% if self.is_new() %}
+              <form
+                id="conversation-model-preference"
+                data-graft
+                method="post"
+                action="/conversations/new/model"
+                hidden
+              >
+                <input type="hidden" name="provider" />
+                <input type="hidden" name="model" />
+                <input type="hidden" name="thinking" />
+              </form>
+              <p
+                id="conversation-model-status"
+                role="status"
+                class="text-error mt-3 text-sm"
+              ></p>
+            {% endif %}
 
-        {% if let Some(saved) = self.saved() %}
-          {% if !directories.is_empty() %}
-            <fieldset class="border-base-300 mt-6 space-y-3 border-t pt-5">
-              <legend class="font-semibold">
-                Sandbox directory strategies
-              </legend>
-              <p class="text-quiet text-sm">
-                These strategies apply in Sandbox only. Host work locations do
-                not limit access.
-              </p>
-              <input
-                type="hidden"
-                name="directory_access"
-                value=""
-                form="conversation-settings-form"
-                id="execution-directory-access"
-              />
-              {% for directory in directories %}
-                <label class="flex min-w-0 flex-col gap-1">
-                  <span class="text-sm break-all"
-                    >{{ directory.host_path }}</span
-                  >
-                  <select
-                    class="select select-bordered w-full"
-                    data-execution-directory="{{ directory.id }}"
-                  >
-                    <option
-                      value="read-only"
-                      {% if !directory.review_before_apply && !directory.direct_write %}selected{% endif %}
-                    >
-                      Read only
-                    </option>
-                    <option
-                      value="review-before-apply"
-                      {% if directory.review_before_apply %}selected{% endif %}
-                    >
-                      Review before apply
-                    </option>
-                    <option
-                      value="direct-write"
-                      {% if directory.direct_write %}selected{% endif %}
-                    >
-                      Direct write
-                    </option>
-                  </select>
-                </label>
-              {% endfor %}
-            </fieldset>
-          {% endif %}
-          <button
-            id="conversation-execution-preview"
-            form="conversation-settings-form"
-            formaction="/conversations/{{ saved.id }}/settings/environment"
-            class="btn btn-secondary mt-6"
-            type="submit"
-          >
-            Review execution change
-          </button>
-          {% if let Some(change) = execution_switch %}
-            <div
-              class="alert alert-warning mt-4 items-start"
-              role="alert"
-              data-execution-switch
+            <section
+              id="settings-presets"
+              role="tabpanel"
+              aria-labelledby="settings-presets-tab"
+              hidden
+              class="mt-5"
             >
-              <div class="min-w-0 space-y-3">
-                <div>
-                  <h4 class="font-semibold">Change execution settings</h4>
-                  <p class="mt-1 text-sm">
-                    This decision changes execution settings only. Model,
-                    instruction, tool and network edits need a separate save
-                    after the switch.
+              <h3
+                id="conversation-preset-heading"
+                class="text-base font-semibold"
+                tabindex="-1"
+              >
+                Presets
+              </h3>
+              <div class="mt-2 space-y-5 pb-4">
+                <p class="text-quiet text-sm">
+                  A preset is a reusable setup for other conversations and
+                  workflow phases. It stores these settings:
+                </p>
+                <ul class="text-quiet list-disc space-y-1 pl-5 text-sm">
+                  <li>Model and instructions</li>
+                  <li>Tools and execution environment</li>
+                  <li>Directory and network access</li>
+                </ul>
+                <p class="text-quiet text-sm">
+                  Presets do not store messages. They do not store provider
+                  credentials or access approvals.
+                </p>
+                {% if !preset_source.is_empty() %}
+                  <p class="text-quiet text-sm">
+                    {{ preset_source }}. Changes here do not update that preset.
                   </p>
-                  {% if change.backend_changes %}
-                    <p class="mt-1 text-sm break-words">
-                      Change from {{ change.current_backend }} to
-                      {{ change.requested_backend }}.
-                    </p>
+                {% endif %}
+                <a href="/presets" data-graft class="link text-sm"
+                  >Manage presets</a
+                >
+                <div class="border-base-300 space-y-3 border-t pt-5">
+                  <h4 class="text-sm font-semibold">Use a saved setup</h4>
+                  <p class="text-quiet text-sm">
+                    A preview shows the replacement settings before you apply
+                    them. This replaces the whole setup, not individual fields.
+                  </p>
+                  {% if !presets.is_empty() %}
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <label
+                        class="flex min-w-0 flex-1 flex-col gap-1"
+                        for="conversation-preset"
+                      >
+                        <span class="text-sm">Saved preset</span>
+                        <select
+                          id="conversation-preset"
+                          name="preset"
+                          form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
+                          class="select select-bordered w-full"
+                          {% if job_active %}disabled{% endif %}
+                        >
+                          <option value="">Choose a preset</option>
+                          {% for preset in presets %}
+                            <option
+                              value="{{ preset.id }}"
+                              {% if preset.selected %}selected{% endif %}
+                            >
+                              {{ preset.name }} — {{ preset.description }}
+                            </option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                      <button
+                        form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-form{% endif %}"
+                        {% if self.is_new() %}formaction="/conversations/new/settings/presets/preview"{% endif %}
+                        formmethod="post"
+                        class="btn btn-secondary"
+                        type="submit"
+                        {% if job_active || session_busy %}disabled{% endif %}
+                      >
+                        Preview preset
+                      </button>
+                    </div>
+                  {% else %}
+                    <p class="text-quiet text-sm">No presets are saved yet.</p>
                   {% endif %}
-                  {% if change.approval_changes %}
-                    <p class="mt-1 text-sm break-words">
-                      Host command approval changes from
-                      {{ change.current_approval }} to
-                      {{ change.requested_approval }}.
-                    </p>
-                  {% endif %}
-                  {% if change.environment_changes %}
-                    <p class="mt-1 text-sm break-words">
-                      Change the next environment from
-                      {{ change.current_environment }} to
-                      {{ change.requested_environment_name }}.
-                    </p>
+
+                  {% if let Some(preview) = preset_preview %}
+                    <div
+                      class="border-base-300 space-y-3 border p-4"
+                      data-preset-preview
+                      tabindex="-1"
+                    >
+                      <div>
+                        <h4 class="font-semibold">
+                          Replace settings with {{ preview.name }}
+                        </h4>
+                        <p class="text-quiet mt-1 text-xs">
+                          This preset replaces all settings, including directory
+                          and project permissions. Sensitive access needs new
+                          approval.
+                        </p>
+                      </div>
+                      <dl class="grid gap-2 text-sm sm:grid-cols-[7rem_1fr]">
+                        <dt class="text-quiet">Model</dt>
+                        <dd>{{ preview.model }}</dd>
+                        <dt class="text-quiet">Thinking effort</dt>
+                        <dd>{{ preview.thinking }}</dd>
+                        <dt class="text-quiet">Instructions</dt>
+                        <dd
+                          class="max-h-48 overflow-auto break-words whitespace-pre-wrap"
+                        >
+                          {% if preview.instructions.is_empty() %}None{% else %}{{ preview.instructions }}{% endif %}
+                        </dd>
+                        <dt class="text-quiet">Environment</dt>
+                        <dd>{{ preview.environment }}</dd>
+                        <dt class="text-quiet">Tools</dt>
+                        <dd>{{ preview.tools }}</dd>
+                        <dt class="text-quiet">Network</dt>
+                        <dd>{{ preview.network }}</dd>
+                        <dt class="text-quiet">Where tools run</dt>
+                        <dd>{{ preview.location }}</dd>
+                        <dt class="text-quiet">Directories</dt>
+                        <dd>
+                          {% if preview.directories.is_empty() %}
+                            None
+                          {% else %}
+                            <ul class="space-y-1">
+                              {% for directory in preview.directories %}
+                                <li class="break-all">{{ directory }}</li>
+                              {% endfor %}
+                            </ul>
+                          {% endif %}
+                        </dd>
+                      </dl>
+                      <button
+                        form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-apply-form{% endif %}"
+                        {% if self.is_new() %}formaction="/conversations/new/settings/presets/apply"{% endif %}
+                        formmethod="post"
+                        class="btn btn-warning"
+                        type="submit"
+                      >
+                        Apply replacement
+                      </button>
+                    </div>
                   {% endif %}
                 </div>
-                <ul class="list-disc space-y-1 pl-5 text-sm">
-                  {% for line in change.access_lines %}
-                    <li class="break-words">{{ line }}</li>
-                  {% endfor %}
-                </ul>
-                {% if change.host_effects_remain %}
-                  <p class="text-sm">
-                    Direct writes and host side effects remain unchanged by this
-                    switch.
+                <div class="border-base-300 space-y-3 border-t pt-5">
+                  <h4 class="text-sm font-semibold">
+                    Save this setup for reuse
+                  </h4>
+                  <p class="text-quiet text-sm">
+                    {% if self.is_new() %}
+                      This saves the settings from this draft as a new preset.
+                    {% else %}
+                      This copies the last saved conversation settings. Unsaved
+                      edits are not included.
+                    {% endif %}
+                    Later changes to this conversation do not change the preset.
                   </p>
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <label
+                      class="flex min-w-0 flex-1 flex-col gap-1"
+                      for="conversation-preset-name"
+                    >
+                      <span class="text-sm">Preset name</span>
+                      <input
+                        id="conversation-preset-name"
+                        name="{% if self.is_new() %}preset_name{% else %}name{% endif %}"
+                        form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-save-form{% endif %}"
+                        class="input input-bordered w-full"
+                        value="{{ preset_name }}"
+                        maxlength="80"
+                      />
+                    </label>
+                    <button
+                      form="{% if self.is_new() %}conversation-composer{% else %}conversation-preset-save-form{% endif %}"
+                      {% if self.is_new() %}formaction="/conversations/new/settings/presets/save"{% endif %}
+                      formmethod="post"
+                      class="btn btn-secondary"
+                      type="submit"
+                      {% if job_active || session_busy %}disabled{% endif %}
+                    >
+                      Save as preset
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section
+              id="settings-model"
+              role="tabpanel"
+              aria-labelledby="settings-model-tab"
+              class="mt-5 space-y-3"
+            >
+              <h3
+                id="conversation-model-heading"
+                class="text-base font-semibold"
+                tabindex="-1"
+              >
+                Model
+              </h3>
+              <div class="flex min-w-0 flex-col gap-3">
+                {% include "conversations/templates/model_picker.html" %}
+              </div>
+            </section>
+
+            <section
+              id="settings-instructions"
+              role="tabpanel"
+              aria-labelledby="settings-instructions-tab"
+              hidden
+              class="[&>section]:mt-5 [&>section]:border-t-0 [&>section]:pt-0"
+            >
+              <h3
+                id="conversation-instructions-heading"
+                class="sr-only"
+                tabindex="-1"
+              >
+                Instructions and tools
+              </h3>
+              {% let settings_form = self.model_form() %}
+              {% let field_prefix = "" %}
+              {% let tools_host = location_host %}
+              {% include "execution_settings/templates/fields.html" %}
+            </section>
+
+            <section
+              id="settings-execution"
+              role="tabpanel"
+              aria-labelledby="settings-execution-tab"
+              hidden
+              class="mt-5 [&>section:first-of-type]:mt-4 [&>section:first-of-type]:border-t-0 [&>section:first-of-type]:pt-0"
+            >
+              <h3
+                id="conversation-execution-heading"
+                class="text-base font-semibold"
+                tabindex="-1"
+              >
+                Execution
+              </h3>
+              {% for directory in directories %}
+                {% if directory.sensitive %}
+                  <div class="alert alert-warning mt-4 items-start">
+                    <p class="text-sm break-words">
+                      Access to sensitive directories can expose private
+                      records. Power Plant stores its data at
+                      <code class="break-all">{{ data_root }}</code>. Tool
+                      output can disclose credentials and private conversations
+                      to the model even with Network off.
+                      {% if directory.pending_approval %}Approval is pending.{% endif %}
+                    </p>
+                  </div>
                 {% endif %}
-                {% if change.needs_new_consent %}
-                  <p class="text-sm">
-                    The replacement configuration needs new approval for
-                    sensitive directories, Direct write or automatic host
-                    commands.
-                  </p>
-                {% endif %}
-                {% if change.active_job %}
-                  <p class="text-sm">
-                    Stop task and switch cancels the active task and any waiting
-                    host command. Power Plant waits for the task to stop and
-                    removes any temporary sandbox. Unsaved work in that sandbox
-                    is lost.
-                  </p>
-                  <p class="text-sm">
-                    Conversation history and existing host files remain. The new
-                    settings apply only to subsequent attempts.
-                  </p>
-                  <form
-                    data-graft
-                    method="post"
-                    id="conversation-execution-switch-form"
-                    action="/conversations/{{ saved.id }}/settings/environment/stop-and-switch"
-                    class="flex flex-wrap gap-2"
+              {% endfor %}
+
+              {% if self.is_new() %}
+                <button
+                  form="conversation-composer"
+                  data-location-preview
+                  type="submit"
+                  name="action"
+                  value="settings"
+                  formnovalidate
+                  hidden
+                >
+                  Update settings
+                </button>
+              {% endif %}
+              <section
+                class="border-base-300 mt-6 space-y-3 border-t pt-5"
+                aria-labelledby="conversation-location-heading"
+              >
+                <h4
+                  id="conversation-location-heading"
+                  class="text-sm font-semibold"
+                  tabindex="-1"
+                >
+                  Where tools run
+                </h4>
+                <fieldset class="grid gap-2 sm:grid-cols-2">
+                  <legend class="sr-only">Where tools run</legend>
+                  <label
+                    class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
                   >
                     <input
-                      type="hidden"
-                      name="revision"
-                      value="{{ saved.revision }}"
-                    />
-                    <input
-                      type="hidden"
+                      form="{{ self.model_form() }}"
+                      class="radio radio-sm"
+                      type="radio"
                       name="location"
-                      value="{{ change.requested_location }}"
+                      value="sandbox"
+                      {% if !location_host %}checked{% endif %}
                     />
-                    <input
-                      type="hidden"
-                      name="host_approval"
-                      value="{{ change.requested_host_approval }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="environment"
-                      value="{{ change.requested_environment }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="job"
-                      value="{{ change.job_id }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="directory_access"
-                      value="{{ change.directory_access }}"
-                    />
-                    <button class="btn btn-warning" type="submit">
-                      Stop task and switch
-                    </button>
-                    <a
-                      href="/conversations/{{ saved.id }}"
-                      data-graft
-                      class="btn btn-ghost"
-                      >Cancel</a
+                    <span
+                      ><span class="block font-semibold">Sandbox</span
+                      ><span class="text-quiet mt-1 block text-xs"
+                        >Tools use an isolated environment. Only the directories
+                        and network access that you allow are available.</span
+                      ></span
                     >
-                  </form>
-                {% else if let Some(gate) = change.gate %}
-                  <p class="text-sm">
-                    This task has reviewed changes. Review them or discard the
-                    exact candidate before execution settings change.
-                  </p>
-                  <p class="text-sm">
-                    Discard keeps conversation history, existing host files and
-                    immutable run evidence. Direct writes and host side effects
-                    remain unchanged by this switch.
-                  </p>
-                  <div class="flex flex-wrap gap-2">
-                    <a
-                      href="{{ gate.review_href }}"
-                      data-graft
-                      class="btn btn-secondary"
-                      >Review changes</a
+                  </label>
+                  <label
+                    class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+                  >
+                    <input
+                      form="{{ self.model_form() }}"
+                      class="radio radio-sm"
+                      type="radio"
+                      name="location"
+                      value="host"
+                      {% if location_host %}checked{% endif %}
+                    />
+                    <span
+                      ><span class="block font-semibold">This computer</span
+                      ><span class="text-quiet mt-1 block text-xs"
+                        >Commands run directly on your computer. They can access
+                        any file or network that Power Plant can access.</span
+                      ></span
                     >
+                  </label>
+                </fieldset>
+                <div
+                  data-execution-host-policy
+                  {% if !location_host %}hidden{% endif %}
+                >
+                  {% include "execution_settings/templates/host_approval.html" %}
+                </div>
+                {% if location_host %}
+                  <div class="alert alert-warning items-start">
+                    <div class="min-w-0 space-y-2 text-sm">
+                      <p class="font-medium">
+                        {% if host_approval_automatic %}
+                          Run without approval
+                        {% else %}
+                          Unrestricted host access
+                        {% endif %}
+                      </p>
+                      <p class="break-words">{{ host_identity }}</p>
+                      {% if host_elevated %}
+                        <p>
+                          This process already has elevated privileges. Host
+                          commands inherit that authority.
+                        </p>
+                      {% endif %}
+                      <p>
+                        The model receives command output. Work locations do not
+                        limit which files commands can access.
+                        {% if host_approval_automatic %}
+                          Run without approval lets the model run commands
+                          without a decision from you for each command. Power
+                          Plant does not inspect what scripts do.
+                        {% else %}
+                          Approval covers the command, not what scripts do.
+                        {% endif %}
+                      </p>
+                      {% if host_pending_approval %}
+                        <p>Pending approval</p>
+                      {% endif %}
+                    </div>
+                  </div>
+                  {% if host_pending_approval && host_consent_request.is_empty() %}
+                    {% if self.is_new() %}
+                      <button
+                        form="conversation-composer"
+                        id="conversation-host-consent-preview"
+                        formaction="/conversations/new/settings/host-consent"
+                        formmethod="post"
+                        class="btn btn-warning"
+                        type="submit"
+                      >
+                        Review host access
+                      </button>
+                    {% else %}
+                      {% if let Some(saved) = self.saved() %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/settings/host-consent"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <button class="btn btn-warning" type="submit">
+                            Review host access
+                          </button>
+                        </form>
+                      {% endif %}
+                    {% endif %}
+                  {% endif %}
+                  {% if host_consent_request != "" %}
+                    {% if self.is_new() %}
+                      <button
+                        form="conversation-composer"
+                        id="conversation-host-consent-approve"
+                        formaction="/conversations/new/settings/host-consent/approve"
+                        formmethod="post"
+                        class="btn btn-warning"
+                        type="submit"
+                      >
+                        {% if host_approval_automatic %}
+                          Approve Run without approval
+                        {% else %}
+                          Approve unrestricted host access
+                        {% endif %}
+                      </button>
+                    {% else %}
+                      {% if let Some(saved) = self.saved() %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/settings/host-consent/approve"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="consent_request"
+                            value="{{ host_consent_request }}"
+                          />
+                          <button class="btn btn-warning" type="submit">
+                            {% if host_approval_automatic %}
+                              Approve Run without approval
+                            {% else %}
+                              Approve unrestricted host access
+                            {% endif %}
+                          </button>
+                        </form>
+                      {% endif %}
+                    {% endif %}
+                  {% endif %}
+                {% endif %}
+              </section>
+
+              <section
+                class="border-base-300 mt-6 space-y-3 border-t pt-5"
+                aria-labelledby="conversation-environment-heading"
+                data-execution-sandbox-settings
+                {% if location_host %}hidden{% endif %}
+              >
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h4
+                      id="conversation-environment-heading"
+                      class="text-sm font-semibold"
+                      tabindex="-1"
+                    >
+                      Environment
+                    </h4>
+                    <p class="text-quiet mt-1 max-w-[65ch] text-xs">
+                      This environment supplies the software for sandbox tools.
+                      Each task starts with a fresh copy of the prepared
+                      environment.
+                    </p>
+                  </div>
+                  <a href="/environments" data-graft class="link text-sm"
+                    >Manage environments</a
+                  >
+                </div>
+                <label
+                  class="flex flex-col gap-1"
+                  for="conversation-environment"
+                >
+                  <span class="sr-only">Environment for sandbox tools</span>
+                  <select
+                    form="{{ self.model_form() }}"
+                    id="conversation-environment"
+                    name="environment"
+                    class="select select-bordered w-full"
+                    required
+                  >
+                    {% if environment_options.is_empty() %}
+                      <option value="">No environments available</option>
+                    {% endif %}
+                    {% for option in environment_options %}
+                      <option
+                        value="{{ option.id }}"
+                        data-environment-name="{{ option.name }}"
+                        data-environment-status="{{ option.readiness }}{% if option.availability != "Available" %}
+                          , {{ option.availability }}
+                        {% endif %}"
+                        {% if option.selected %}selected{% endif %}
+                      >
+                        {{ option.name }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                </label>
+                {% for option in environment_options %}
+                  {% if option.readiness != "Ready" || option.availability != "Available" %}
+                    <p
+                      class="text-quiet text-xs"
+                      data-environment-problem="{{ option.id }}"
+                      {% if !option.selected %}hidden{% endif %}
+                      role="status"
+                    >
+                      {% if option.readiness != "Ready" %}
+                        {{ option.readiness }}{% if option.availability != "Available" %}·{% endif %}
+                      {% endif %}
+                      {% if option.availability != "Available" %}{{ option.availability }}{% endif %}
+                    </p>
+                  {% endif %}
+                {% endfor %}
+              </section>
+
+              <section
+                class="border-base-300 mt-6 space-y-3 border-t pt-5"
+                aria-labelledby="conversation-network-heading"
+                data-execution-sandbox-settings
+                {% if location_host %}hidden{% endif %}
+              >
+                <div>
+                  <h4
+                    id="conversation-network-heading"
+                    class="text-sm font-semibold"
+                    tabindex="-1"
+                  >
+                    Sandbox network
+                  </h4>
+                  <p class="text-quiet mt-1 text-xs">
+                    This limits network access for sandbox tools, not requests
+                    to your model provider. Tools cannot access private or host
+                    networks.
+                  </p>
+                  {% if !network_detail.is_empty() %}
+                    <p class="mt-2 text-sm break-words">{{ network_detail }}</p>
+                  {% endif %}
+                </div>
+                <fieldset
+                  class="grid gap-2 sm:grid-cols-3"
+                  {% if job_active %}disabled{% endif %}
+                >
+                  <legend class="sr-only">Sandbox network access</legend>
+                  {% for option in network_options %}
+                    <label
+                      class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+                    >
+                      <input
+                        form="{{ self.model_form() }}"
+                        class="radio radio-sm"
+                        type="radio"
+                        name="network"
+                        value="{{ option.value }}"
+                        {% if option.selected %}checked{% endif %}
+                      />
+                      <span>{{ option.label }}</span>
+                    </label>
+                  {% endfor %}
+                </fieldset>
+                <label
+                  class="flex flex-col gap-1"
+                  for="conversation-settings-network-domains"
+                >
+                  <span class="text-sm">Allowed domains</span>
+                  <textarea
+                    form="{{ self.model_form() }}"
+                    id="conversation-settings-network-domains"
+                    class="textarea textarea-bordered min-h-24 w-full"
+                    name="network_domains"
+                    maxlength="8127"
+                    {% if job_active %}disabled{% endif %}
+                  >
+{{ network_domains }}</textarea>
+                  <span class="text-quiet text-xs">
+                    Enter one domain per line. Access is allowed to each listed
+                    domain and all its subdomains, on all ports.
+                  </span>
+                </label>
+              </section>
+            </section>
+            <section
+              id="settings-directories"
+              role="tabpanel"
+              aria-labelledby="settings-directories-tab"
+              hidden
+            >
+              <section
+                class="mt-5 space-y-5"
+                aria-labelledby="conversation-directory-heading"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <h3
+                      id="conversation-directory-heading"
+                      class="text-base font-semibold"
+                      tabindex="-1"
+                    >
+                      {% if location_host %}Work locations{% else %}Directories{% endif %}
+                    </h3>
+                    <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                      {% if location_host %}
+                        Commands start in the first work location. They can
+                        still access other files that Power Plant can access.
+                      {% else %}
+                        These are the folders on your computer that tools can
+                        access. Each folder has its own access setting.
+                      {% endif %}
+                    </p>
+                  </div>
+                </div>
+                {% if directories.len() >= 8 %}
+                  <p class="text-quiet text-sm">
+                    This conversation has the maximum of eight directories.
+                  </p>
+                {% else %}
+                  {% if let Some(saved) = self.saved() %}
+                    <form
+                      id="conversation-directory-picker"
+                      data-graft
+                      method="post"
+                      action="/conversations/{{ saved.id }}/directories/pick"
+                    >
+                      <input
+                        type="hidden"
+                        name="revision"
+                        value="{{ saved.revision }}"
+                      />
+                    </form>
+                  {% endif %}
+                  <button
+                    form="{% if self.is_new() %}conversation-composer{% else %}conversation-directory-picker{% endif %}"
+                    {% if self.is_new() %}formaction="/conversations/new/directories/pick"{% endif %}
+                    formmethod="post"
+                    class="btn btn-secondary min-h-11"
+                    type="submit"
+                    {% if job_active || session_busy %}disabled{% endif %}
+                  >
+                    Add directory
+                  </button>
+                {% endif %}
+                {% if !location_host %}
+                  <ul class="text-quiet list-disc space-y-1 pl-5 text-sm">
+                    <li>
+                      Read only lets tools read files but not change them
+                      through this directory.
+                    </li>
+                    <li>
+                      Review before apply keeps changes in a copy until you
+                      approve them.
+                    </li>
+                    <li>Direct write changes your files immediately.</li>
+                  </ul>
+                {% endif %}
+                {% if directories.is_empty() %}
+                  <p class="text-quiet text-sm">
+                    {% if location_host %}
+                      No work locations are selected. Commands start in Power
+                      Plant's current directory.
+                    {% else %}
+                      Tools have no access to your directories. They use
+                      temporary storage at
+                      <code>/workspace</code>.
+                    {% endif %}
+                  </p>
+                {% else %}
+                  <ul class="record-list" aria-label="Authorised directories">
+                    {% for directory in directories %}
+                      <li
+                        class="border-base-300 space-y-4 border-b py-5 first:pt-0"
+                      >
+                        <div class="min-w-0 flex-1">
+                          <div
+                            class="flex flex-wrap items-center gap-x-2 gap-y-1"
+                          >
+                            <p class="font-medium break-words">
+                              {{ directory.name }}
+                            </p>
+                            {% if !directory.available %}
+                              <span class="badge badge-error badge-sm"
+                                >Unavailable</span
+                              >
+                            {% else if directory.pending_approval && !location_host %}
+                              <span class="badge badge-warning badge-sm"
+                                >Pending approval</span
+                              >
+                            {% else if directory.sensitive %}
+                              <span class="badge badge-warning badge-sm"
+                                >Sensitive access</span
+                              >
+                            {% endif %}
+                            {% if !self.is_new() && !location_host %}
+                              <span class="text-quiet text-xs"
+                                >Current access:
+                                {{ directory.access_label }}</span
+                              >
+                            {% endif %}
+                          </div>
+                          <p
+                            class="text-quiet mt-1 font-mono text-xs break-all"
+                          >
+                            {{ directory.host_path }}
+                          </p>
+                          {% if !location_host %}
+                            <p class="text-quiet mt-1 text-xs">
+                              Sandbox path:
+                              <code class="break-all"
+                                >{{ directory.guest_path }}</code
+                              >
+                            </p>
+                          {% endif %}
+                          {% if !location_host && directory.review_before_apply && !directory.exclusions.is_empty() %}
+                            <div class="mt-3 text-xs">
+                              <p class="font-medium">Excluded engine paths</p>
+                              <ul class="text-quiet mt-1 space-y-1">
+                                {% for exclusion in directory.exclusions %}
+                                  <li class="font-mono break-all">
+                                    {{ exclusion }}
+                                  </li>
+                                {% endfor %}
+                              </ul>
+                            </div>
+                          {% endif %}
+                        </div>
+                        {% if self.is_new() %}
+                          <div class="flex flex-wrap items-end gap-3">
+                            {% if !location_host %}
+                              <label class="flex min-w-0 flex-1 flex-col gap-1">
+                                <span class="text-sm">Access</span>
+                                <select
+                                  class="select select-bordered w-full"
+                                  aria-label="Access for {{ directory.name }}"
+                                  data-draft-directory-access="directory-access-{{ directory.id }}"
+                                >
+                                  <option
+                                    value="read-only"
+                                    {% if !directory.review_before_apply && !directory.direct_write %}selected{% endif %}
+                                  >
+                                    Read only
+                                  </option>
+                                  <option
+                                    value="review-before-apply"
+                                    {% if directory.review_before_apply %}selected{% endif %}
+                                  >
+                                    Review before apply
+                                  </option>
+                                  <option
+                                    value="direct-write"
+                                    {% if directory.direct_write %}selected{% endif %}
+                                  >
+                                    Direct write
+                                  </option>
+                                </select>
+                              </label>
+                              <button
+                                id="directory-access-{{ directory.id }}"
+                                form="conversation-composer"
+                                formaction="/conversations/new/directories/{{ directory.id }}/access"
+                                formmethod="post"
+                                name="action"
+                                value="read-only"
+                                type="submit"
+                                hidden
+                              >
+                                Change access
+                              </button>
+                              {% if directory.pending_approval && consent_request == "" %}
+                                <button
+                                  form="conversation-composer"
+                                  formaction="/conversations/new/directories/{{ directory.id }}/consent"
+                                  formmethod="post"
+                                  class="btn btn-warning btn-sm min-h-11"
+                                  type="submit"
+                                >
+                                  Review access
+                                </button>
+                              {% endif %}
+                            {% endif %}
+                            <button
+                              form="conversation-composer"
+                              formaction="/conversations/new/directories/{{ directory.id }}/remove"
+                              formmethod="post"
+                              class="btn btn-ghost btn-sm min-h-11"
+                              type="submit"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        {% else if let Some(saved) = self.saved() %}
+                          {% if directory.transient %}
+                            <a
+                              data-graft
+                              href="/conversations/{{ saved.id }}"
+                              class="btn btn-ghost btn-sm min-h-11"
+                              >Cancel</a
+                            >
+                          {% else %}
+                            <form
+                              data-graft
+                              method="post"
+                              action="/conversations/{{ saved.id }}/directories/{{ directory.id }}/remove"
+                              class="flex flex-wrap items-end gap-3"
+                            >
+                              <input
+                                type="hidden"
+                                name="revision"
+                                value="{{ saved.revision }}"
+                              />
+                              <label
+                                class="flex min-w-0 flex-1 flex-col gap-1"
+                                data-execution-sandbox-settings
+                                {% if location_host %}hidden{% endif %}
+                              >
+                                <span class="text-sm">Requested access</span>
+                                <select
+                                  class="select select-bordered w-full"
+                                  data-execution-directory="{{ directory.id }}"
+                                  aria-label="Sandbox access for {{ directory.name }}"
+                                >
+                                  <option
+                                    value="read-only"
+                                    {% if !directory.review_before_apply && !directory.direct_write %}selected{% endif %}
+                                  >
+                                    Read only
+                                  </option>
+                                  <option
+                                    value="review-before-apply"
+                                    {% if directory.review_before_apply %}selected{% endif %}
+                                  >
+                                    Review before apply
+                                  </option>
+                                  <option
+                                    value="direct-write"
+                                    {% if directory.direct_write %}selected{% endif %}
+                                  >
+                                    Direct write
+                                  </option>
+                                </select>
+                              </label>
+                              <div class="flex flex-wrap gap-2">
+                                {% if !location_host %}
+                                  {% if directory.pending_approval && consent_request == "" %}
+                                    <button
+                                      class="btn btn-warning btn-sm min-h-11"
+                                      type="submit"
+                                      formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/consent"
+                                      {% if job_active || session_busy %}disabled{% endif %}
+                                    >
+                                      Review access
+                                    </button>
+                                  {% endif %}
+                                {% endif %}
+                                <button
+                                  class="btn btn-ghost btn-sm min-h-11"
+                                  type="submit"
+                                  {% if job_active || session_busy %}disabled{% endif %}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </form>
+                          {% endif %}
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+                {% if consent_request != "" %}
+                  <div
+                    id="conversation-directory-consent"
+                    class="alert alert-warning items-start"
+                    role="alert"
+                    tabindex="-1"
+                  >
+                    <div class="min-w-0 space-y-3">
+                      <div class="space-y-1">
+                        <h3 class="font-semibold">
+                          {% if consent_direct %}
+                            Approve direct host writes
+                          {% else if consent_reviewed %}
+                            Approve directory review access
+                          {% else %}
+                            Approve sensitive directory access
+                          {% endif %}
+                        </h3>
+                        <p class="text-sm break-words">
+                          The requested
+                          {% if consent_direct %}
+                            Direct write
+                          {% else if consent_reviewed %}
+                            Review before apply
+                          {% else %}
+                            read-only
+                          {% endif %}
+                          directory is
+                          <code class="break-all">{{ consent_path }}</code>.
+                        </p>
+                        {% if consent_sensitive %}
+                          <p class="text-sm">
+                            Power Plant stores provider credentials and private
+                            conversations at
+                            <code class="break-all">{{ data_root }}</code>. Tool
+                            output can expose provider credentials, private
+                            conversations and other sensitive records to the
+                            model. Network off does not prevent this disclosure.
+                          </p>
+                        {% endif %}
+                        {% if consent_direct %}
+                          <p class="text-sm">
+                            Tools can immediately change or delete host files in
+                            this directory.
+                          </p>
+                          {% if consent_sensitive %}
+                            <p class="text-sm">
+                              Direct write can alter or corrupt live
+                              configuration, permissions and execution evidence.
+                            </p>
+                          {% endif %}
+                          <p class="text-sm">
+                            Discard, cancellation and environment changes do not
+                            undo these host changes.
+                          </p>
+                        {% else if consent_reviewed %}
+                          <p class="text-sm">
+                            Tools use an isolated copy. Apply changes writes the
+                            exact reviewed changes to the host directory.
+                            {% if consent_sensitive %}
+                              The copy can propose changes to Power Plant
+                              configuration.
+                            {% endif %}
+                          </p>
+                        {% endif %}
+                      </div>
+                      {% if self.is_new() %}
+                        <button
+                          form="conversation-composer"
+                          formaction="/conversations/new/directories/consent"
+                          formmethod="post"
+                          class="btn btn-warning min-h-11"
+                          type="submit"
+                        >
+                          Approve
+                          {% if consent_direct %}
+                            direct write
+                          {% else if consent_reviewed %}
+                            review access
+                          {% else %}
+                            read-only access
+                          {% endif %}
+                        </button>
+                      {% else if let Some(saved) = self.saved() %}
+                        <form
+                          data-graft
+                          method="post"
+                          action="/conversations/{{ saved.id }}/directories/consent"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="consent_request"
+                            value="{{ consent_request }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="pending_directory"
+                            value="{{ pending_directory }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="existing"
+                            value="{% if consent_existing %}true{% else %}false{% endif %}"
+                          />
+                          <button
+                            class="btn btn-warning min-h-11"
+                            type="submit"
+                          >
+                            Approve
+                            {% if consent_direct %}
+                              direct write
+                            {% else if consent_reviewed %}
+                              review access
+                            {% else %}
+                              read-only access
+                            {% endif %}
+                          </button>
+                        </form>
+                      {% endif %}
+                    </div>
+                  </div>
+                {% endif %}
+                {% if !location_host %}
+                  <p class="text-quiet text-xs">
+                    Commands start in the first directory. New directories have
+                    read-only access until you approve write access.
+                  </p>
+                {% endif %}
+              </section>
+            </section>
+            <div data-execution-actions hidden>
+              {% if let Some(saved) = self.saved() %}
+                {% if !directories.is_empty() %}
+                  <input
+                    type="hidden"
+                    name="directory_access"
+                    value=""
+                    form="conversation-settings-form"
+                    id="execution-directory-access"
+                  />
+                {% endif %}
+                <button
+                  id="conversation-execution-preview"
+                  form="conversation-settings-form"
+                  formaction="/conversations/{{ saved.id }}/settings/environment"
+                  class="btn btn-secondary mt-6"
+                  type="submit"
+                >
+                  Review execution change
+                </button>
+                {% if let Some(change) = execution_switch %}
+                  <div
+                    class="alert alert-warning mt-4 items-start"
+                    role="alert"
+                    data-execution-switch
+                    tabindex="-1"
+                  >
+                    <div class="min-w-0 space-y-3">
+                      <div>
+                        <h4 class="font-semibold">Change execution settings</h4>
+                        <p class="mt-1 text-sm">
+                          This change does not save edits to the model,
+                          instructions, tools or network access. Those edits
+                          need Save settings afterward.
+                        </p>
+                        {% if change.backend_changes %}
+                          <p class="mt-1 text-sm break-words">
+                            Change from {{ change.current_backend }} to
+                            {{ change.requested_backend }}.
+                          </p>
+                        {% endif %}
+                        {% if change.approval_changes %}
+                          <p class="mt-1 text-sm break-words">
+                            Host command approval changes from
+                            {{ change.current_approval }} to
+                            {{ change.requested_approval }}.
+                          </p>
+                        {% endif %}
+                        {% if change.environment_changes %}
+                          <p class="mt-1 text-sm break-words">
+                            Change the next environment from
+                            {{ change.current_environment }} to
+                            {{ change.requested_environment_name }}.
+                          </p>
+                        {% endif %}
+                      </div>
+                      <ul class="list-disc space-y-1 pl-5 text-sm">
+                        {% for line in change.access_lines %}
+                          <li class="break-words">{{ line }}</li>
+                        {% endfor %}
+                      </ul>
+                      {% if change.host_effects_remain %}
+                        <p class="text-sm">
+                          This switch does not undo file changes or other
+                          effects of commands on this computer.
+                        </p>
+                      {% endif %}
+                      {% if change.needs_new_consent %}
+                        <p class="text-sm">
+                          The replacement configuration needs new approval for
+                          sensitive directories, Direct write or automatic host
+                          commands.
+                        </p>
+                      {% endif %}
+                      {% if change.active_job %}
+                        <p class="text-sm">
+                          Stop task and switch cancels the active task and any
+                          waiting host command. Power Plant waits for the task
+                          to stop and removes any temporary sandbox. Unsaved
+                          work in that sandbox is lost.
+                        </p>
+                        <p class="text-sm">
+                          Conversation history and existing host files remain.
+                          The new settings apply to the next task.
+                        </p>
+                        <form
+                          data-graft
+                          method="post"
+                          id="conversation-execution-switch-form"
+                          action="/conversations/{{ saved.id }}/settings/environment/stop-and-switch"
+                          class="flex flex-wrap gap-2"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="location"
+                            value="{{ change.requested_location }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="host_approval"
+                            value="{{ change.requested_host_approval }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="environment"
+                            value="{{ change.requested_environment }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="job"
+                            value="{{ change.job_id }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="directory_access"
+                            value="{{ change.directory_access }}"
+                          />
+                          <button class="btn btn-warning" type="submit">
+                            Stop task and switch
+                          </button>
+                          <a
+                            href="/conversations/{{ saved.id }}"
+                            data-graft
+                            class="btn btn-ghost"
+                            >Cancel</a
+                          >
+                        </form>
+                      {% else if let Some(gate) = change.gate %}
+                        <p class="text-sm">
+                          This task has changes that need a decision before
+                          execution settings can change.
+                        </p>
+                        <p class="text-sm">
+                          Discard removes the proposed changes, not conversation
+                          history, existing host files or run records. It does
+                          not undo direct writes or host commands.
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                          <a
+                            href="{{ gate.review_href }}"
+                            data-graft
+                            class="btn btn-secondary"
+                            >Review changes</a
+                          >
+                          <form
+                            data-graft
+                            method="post"
+                            id="conversation-execution-switch-form"
+                            action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/discard-and-switch"
+                          >
+                            <input
+                              type="hidden"
+                              name="gate-revision"
+                              value="{{ gate.revision }}"
+                            />
+                            <input
+                              type="hidden"
+                              name="candidate"
+                              value="{{ gate.candidate }}"
+                            />
+                            <input
+                              type="hidden"
+                              name="conversation-revision"
+                              value="{{ saved.revision }}"
+                            />
+                            <input
+                              type="hidden"
+                              name="location"
+                              value="{{ change.requested_location }}"
+                            />
+                            <input
+                              type="hidden"
+                              name="host_approval"
+                              value="{{ change.requested_host_approval }}"
+                            />
+                            <input
+                              type="hidden"
+                              name="environment"
+                              value="{{ change.requested_environment }}"
+                            />
+                            <input
+                              type="hidden"
+                              name="surface"
+                              value="conversation"
+                            />
+                            <input
+                              type="hidden"
+                              name="directory_access"
+                              value="{{ change.directory_access }}"
+                            />
+                            <button class="btn btn-warning" type="submit">
+                              Discard changes and switch
+                            </button>
+                          </form>
+                          <a
+                            href="/conversations/{{ saved.id }}"
+                            data-graft
+                            class="btn btn-ghost"
+                            >Cancel</a
+                          >
+                        </div>
+                      {% else %}
+                        <form
+                          data-graft
+                          method="post"
+                          id="conversation-execution-switch-form"
+                          action="/conversations/{{ saved.id }}/settings/environment"
+                          class="flex flex-wrap gap-2"
+                        >
+                          <input
+                            type="hidden"
+                            name="revision"
+                            value="{{ saved.revision }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="location"
+                            value="{{ change.requested_location }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="host_approval"
+                            value="{{ change.requested_host_approval }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="environment"
+                            value="{{ change.requested_environment }}"
+                          />
+                          <input
+                            type="hidden"
+                            name="directory_access"
+                            value="{{ change.directory_access }}"
+                          />
+                          <input type="hidden" name="confirm" value="true" />
+                          <button class="btn btn-warning" type="submit">
+                            Change execution settings
+                          </button>
+                          <a
+                            href="/conversations/{{ saved.id }}"
+                            data-graft
+                            class="btn btn-ghost"
+                            >Cancel</a
+                          >
+                        </form>
+                      {% endif %}
+                    </div>
+                  </div>
+                {% endif %}
+              {% endif %}
+            </div>
+            <section
+              id="settings-details"
+              role="tabpanel"
+              aria-labelledby="settings-details-tab"
+              class="mt-5"
+              hidden
+            >
+              <h3
+                id="conversation-details-heading"
+                class="text-base font-semibold"
+                tabindex="-1"
+              >
+                Conversation details
+              </h3>
+              <div id="conversation-options" class="mt-4 space-y-5">
+                {% if self.is_new() %}
+                  <label class="flex flex-col gap-1"
+                    ><span class="text-sm">Title</span
+                    ><input
+                      form="conversation-composer"
+                      name="title"
+                      class="input input-bordered"
+                      maxlength="120"
+                      value="{{ title }}"
+                      placeholder="Automatic title after the first message"
+                  /></label>
+                {% else if let Some(saved) = self.saved() %}
+                  <section
+                    class="space-y-3"
+                    aria-labelledby="conversation-name-heading"
+                  >
+                    <h3
+                      id="conversation-name-heading"
+                      class="text-sm font-semibold"
+                    >
+                      Rename conversation
+                    </h3>
                     <form
                       data-graft
                       method="post"
-                      id="conversation-execution-switch-form"
-                      action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/discard-and-switch"
+                      action="/conversations/{{ saved.id }}/rename"
+                      class="flex max-w-xl flex-col gap-3"
                     >
                       <input
                         type="hidden"
-                        name="gate-revision"
-                        value="{{ gate.revision }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="candidate"
-                        value="{{ gate.candidate }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="conversation-revision"
+                        name="revision"
                         value="{{ saved.revision }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="location"
-                        value="{{ change.requested_location }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="host_approval"
-                        value="{{ change.requested_host_approval }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="environment"
-                        value="{{ change.requested_environment }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="surface"
-                        value="conversation"
-                      />
-                      <input
-                        type="hidden"
-                        name="directory_access"
-                        value="{{ change.directory_access }}"
-                      />
-                      <button class="btn btn-warning" type="submit">
-                        Discard changes and switch
+                      /><label
+                        class="flex flex-col gap-1"
+                        for="conversation-rename-title"
+                        ><span class="sr-only">Title</span
+                        ><input
+                          id="conversation-rename-title"
+                          class="input input-bordered"
+                          name="title"
+                          required
+                          maxlength="120"
+                          value="{{ title }}" /></label
+                      ><button class="btn btn-primary self-start" type="submit">
+                        Save title
                       </button>
                     </form>
-                    <a
-                      href="/conversations/{{ saved.id }}"
-                      data-graft
-                      class="btn btn-ghost"
-                      >Cancel</a
-                    >
-                  </div>
-                {% else %}
-                  <form
-                    data-graft
-                    method="post"
-                    id="conversation-execution-switch-form"
-                    action="/conversations/{{ saved.id }}/settings/environment"
-                    class="flex flex-wrap gap-2"
-                  >
-                    <input
-                      type="hidden"
-                      name="revision"
-                      value="{{ saved.revision }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="location"
-                      value="{{ change.requested_location }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="host_approval"
-                      value="{{ change.requested_host_approval }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="environment"
-                      value="{{ change.requested_environment }}"
-                    />
-                    <input
-                      type="hidden"
-                      name="directory_access"
-                      value="{{ change.directory_access }}"
-                    />
-                    <input type="hidden" name="confirm" value="true" />
-                    <button class="btn btn-warning" type="submit">
-                      Change execution settings
-                    </button>
-                    <a
-                      href="/conversations/{{ saved.id }}"
-                      data-graft
-                      class="btn btn-ghost"
-                      >Cancel</a
-                    >
-                  </form>
+                  </section>
+                  <details class="danger-zone file-disclosure">
+                    <summary>Delete conversation</summary>
+                    <div class="max-w-xl space-y-3 pt-4">
+                      <p class="text-quiet text-sm">
+                        This deletes the conversation from local history. You
+                        cannot delete a conversation while a task is active.
+                      </p>
+                      <form
+                        data-graft
+                        method="post"
+                        action="/conversations/{{ saved.id }}/delete"
+                      >
+                        <input
+                          type="hidden"
+                          name="revision"
+                          value="{{ saved.revision }}"
+                        /><button
+                          class="btn btn-error btn-outline btn-sm"
+                          type="submit"
+                        >
+                          Delete conversation
+                        </button>
+                      </form>
+                    </div>
+                  </details>
+                  <p class="text-quiet text-sm">
+                    Conversation history stays on this machine. Every local
+                    browser session can open it.
+                  </p>
                 {% endif %}
               </div>
-            </div>
-          {% endif %}
-        {% endif %}
-
-        <div
-          class="border-base-300 mt-6 flex items-center justify-between gap-3 border-t pt-5"
-        >
-          {% if self.is_new() %}
-            <p class="text-quiet text-sm">
-              Nothing is saved until you send the first message.
-            </p>
-          {% else %}
+            </section>
+          </div>
+        </div>
+        {% if !self.is_new() %}
+          <div
+            class="border-base-300 flex min-h-18 shrink-0 items-center justify-end gap-3 border-t px-5 py-3 sm:px-6"
+          >
             <button
               form="conversation-settings-form"
+              data-settings-save
               class="btn btn-primary"
               type="submit"
               {% if job_active || session_busy %}disabled{% endif %}
             >
               Save settings
             </button>
-          {% endif %}
-        </div>
-      </section>
-
-      <section
-        id="conversation-options"
-        popover
-        class="conversation-panel fixed inset-x-4 top-40 m-0 max-h-[65dvh] space-y-4 overflow-y-auto p-5 md:inset-x-auto md:top-28 md:right-8 md:w-[min(40rem,calc(100vw-18rem))]"
-        aria-labelledby="conversation-options-heading"
-      >
-        <div class="flex items-center justify-between gap-3">
-          <h2 id="conversation-options-heading" class="text-lg font-semibold">
-            Conversation options
-          </h2>
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm min-h-11"
-            popovertarget="conversation-options"
-            popovertargetaction="hide"
-          >
-            Close
-          </button>
-        </div>
-        {% if self.is_new() %}
-          <label class="flex flex-col gap-1"
-            ><span class="text-sm">Title</span
-            ><input
-              form="conversation-composer"
-              name="title"
-              class="input input-bordered"
-              maxlength="120"
-              value="{{ title }}"
-              placeholder="Automatic title after the first message"
-          /></label>
-          <p class="text-quiet text-sm">
-            Nothing is saved until you send your first message.
-          </p>
-          <p class="text-quiet text-sm">
-            Saved conversations offer plans, tasks, workflows and guest network
-            controls.
-          </p>
-        {% else if let Some(saved) = self.saved() %}
-          <section
-            class="file-section space-y-3"
-            aria-labelledby="conversation-name-heading"
-          >
-            <h3 id="conversation-name-heading" class="text-sm font-semibold">
-              Rename conversation
-            </h3>
-            <form
-              data-graft
-              method="post"
-              action="/conversations/{{ saved.id }}/rename"
-              class="flex max-w-xl flex-col gap-3"
-            >
-              <input
-                type="hidden"
-                name="revision"
-                value="{{ saved.revision }}"
-              /><label
-                class="flex flex-col gap-1"
-                for="conversation-rename-title"
-                ><span class="sr-only">Title</span
-                ><input
-                  id="conversation-rename-title"
-                  class="input input-bordered"
-                  name="title"
-                  required
-                  maxlength="120"
-                  value="{{ title }}" /></label
-              ><button class="btn btn-primary self-start" type="submit">
-                Save title
-              </button>
-            </form>
-          </section>
-          <details class="danger-zone file-disclosure">
-            <summary>Delete conversation</summary>
-            <div class="max-w-xl space-y-3 pt-4">
-              <p class="text-quiet text-sm">
-                This removes this discussion from local history. You cannot
-                delete an active conversation.
-              </p>
-              <form
-                data-graft
-                method="post"
-                action="/conversations/{{ saved.id }}/delete"
-              >
-                <input
-                  type="hidden"
-                  name="revision"
-                  value="{{ saved.revision }}"
-                /><button
-                  class="btn btn-error btn-outline btn-sm"
-                  type="submit"
-                >
-                  Delete conversation
-                </button>
-              </form>
-            </div>
-          </details>
-          <p class="text-quiet text-sm">
-            Conversation history stays on this machine. Every local browser
-            session can open it.
-          </p>
+          </div>
         {% endif %}
       </section>
     {% endblock conversation_detail %}

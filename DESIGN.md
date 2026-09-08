@@ -164,25 +164,36 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Workers receive selected inputs, not the entire conversation history. Setup navigation creates no run or reservation.
 - Back controls retain entered values. A stale process selection returns to the chooser without a substitute.
 - Conversation pages keep the transcript and composer within the viewport. The empty transcript offers a short invitation, not setup forms or task suggestions.
-- A model shortcut and Project access stay visible above the transcript.
-- The model shortcut opens one Settings panel with inline model, instructions, tool and preset controls.
+- Compact model, network, environment and directory summaries stay visible above the transcript. Project access remains separate when applicable.
+- A separate Conversation settings button ends the summary row.
+- Each summary opens its section in one centred Conversation settings panel.
+- A left menu selects one section. Narrow viewports use a section dropdown.
+- Directories and conversation details have separate sections. Presets apply across all settings.
+- The active section has a tinted background and bold text. Arrow keys select adjacent sections.
+- The model list overlays controls without a layout shift.
+- Tab changes retain unsaved fields. Validation reveals hidden fields before focus moves.
+- The panel keeps its heading, menu and footer visible. Its dimensions stay fixed within the viewport. The content area scrolls independently.
 - Host command approval sits beside host-mode consent. Ask each time is the default. Run without approval needs a distinct destination consent.
 - A host approval preference change does not approve a waiting command. Active work must finish or stop before the new execution configuration takes effect.
 - Settings updates keep the panel open. Invalid updates reveal the panel and retain submitted fields.
-- Execution setting switches stay inline in one Settings panel. Directory strategy selectors share the backend, approval policy and environment preview.
+- Execution setting switches stay inline in one Conversation settings panel. Directory rows contain their requested strategy selectors.
+- Directory strategy selectors share the backend, approval policy and environment preview.
 - An idle switch requires Change execution settings after the preview. A preview or failed settlement leaves effective summaries unchanged.
 - Active work offers Stop task and switch. Reviewed work offers review or exact-candidate discard. Summaries keep the current effective settings until settlement succeeds.
 - Switch warnings name temporary attempt loss. They state that conversation history, existing host files, direct writes and host side effects remain.
 - New conversation settings remain draft values until a valid first message creates the conversation.
-- Conversation options contains rename and delete controls.
-- Saved documents uses a stable inline disclosure above the transcript, with a count when documents exist.
-- The open document section occupies the transcript area. Its summary and the composer remain visible.
-- Completed responses expose Save as plan and Save as tasks beside their content. Both actions execute nothing.
+- The Conversation details section contains title and delete controls without a disclosure. Delete retains its separate confirmation.
+- Documents opens a separate panel from the conversation header, with a count when documents exist. It never occupies transcript space.
+- The document panel explains that saved plans and task lists support reuse in workflows. It opens automatically for document text errors.
+- Completed responses keep one Save as… disclosure below their content. One title field serves both document actions.
+- The expanded form explains plans and task lists. Both actions execute nothing.
+- Conversation turn headings align the author and status vertically. Animated dots accompany Replying and respect reduced-motion preferences.
 - Document views put Create task list or Run tasks before provenance. Export, revision history and independent review stay within the document view.
 - Document import names the authorised directory and selected environment. It reads one file without model calls or task execution.
 - Project access remains explicit. The composer shows each attached project and its access level.
 - A centred transcript column aligns with the composer. Requests use a tinted surface. Replies use the paper surface.
-- The composer expands with the message. Workflows… stays beside the conversation title.
+- The composer expands with the message. Send sits beside the text area, with its keyboard shortcut below the button on desktop.
+- Workflows… stays beside the conversation title.
 - Jump to latest appears when the reader leaves the transcript end. New output does not move a reader away from earlier messages.
 - Thinking visibility remains a local preference for shared chat controls.
 - The thinking control lists only efforts that the selected model advertises. It labels the upstream `none` effort as Off.

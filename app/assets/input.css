@@ -1280,6 +1280,19 @@
 
 /* DaisyUI places its controls in utilities. Chat overrides must share that layer. */
 @layer utilities {
+    .select {
+        border-width: 2px;
+        border-color: var(--powerplant-quiet-ink);
+    }
+
+    .select::picker(select) {
+        border: 2px solid var(--powerplant-quiet-ink);
+    }
+
+    .select[aria-invalid="true"] {
+        border-color: var(--color-error);
+    }
+
     .chat-sheet {
         display: flex;
         min-height: 0;
@@ -1542,6 +1555,11 @@
         gap: 1rem;
         margin-inline: auto;
         padding: 1.25rem 1rem;
+    }
+
+    .chat-turn.conversation-turn {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.5rem;
     }
 
     .chat-turn-user {

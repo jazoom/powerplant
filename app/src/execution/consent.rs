@@ -605,7 +605,7 @@ fn host_conversation_binding(
     }
 }
 
-fn settings_digest(settings: &super::ExecutionSettings) -> [u8; 32] {
+pub(crate) fn settings_digest(settings: &super::ExecutionSettings) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(access_digest(&settings.directories));
     digest.update(settings.environment.as_hex());

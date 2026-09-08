@@ -5,7 +5,7 @@
     id="conversation-provider"
     name="provider"
     {% if job_active %}disabled{% endif %}
-    class="select select-bordered"
+    class="select select-bordered w-full"
   >
     {% if let Some(provider) = model_picker.unavailable_provider %}
       <option value="{{ provider.as_str() }}" selected>
@@ -25,7 +25,10 @@
     {% endfor %}
   </select></label
 >
-<div id="conversation-model-picker" class="flex min-w-0 flex-col gap-1">
+<div
+  id="conversation-model-picker"
+  class="relative flex min-w-0 flex-col gap-1"
+>
   <span id="conversation-model-label" class="text-sm">Model</span>
   <input
     form="{{ self.model_form() }}"
@@ -49,14 +52,14 @@
   </button>
   <div
     id="conversation-model-options"
-    class="border-base-300 min-w-0 border p-2 [contain:inline-size]"
+    class="border-base-300 bg-base-100 absolute inset-x-0 top-full z-20 mt-1 flex max-h-[min(20rem,40dvh)] min-w-0 flex-col border p-2 shadow-lg [contain:inline-size]"
     hidden
   >
     <label class="sr-only" for="conversation-model-search">Search models</label>
     <input
       id="conversation-model-search"
       type="search"
-      class="input input-bordered w-full min-w-0"
+      class="input input-bordered w-full min-w-0 shrink-0"
       placeholder="Search models"
       maxlength="256"
       autocomplete="off"
@@ -72,7 +75,7 @@
       id="conversation-model-results"
       role="group"
       aria-label="Models"
-      class="max-h-48 overflow-y-auto overscroll-contain"
+      class="min-h-0 overflow-y-auto overscroll-contain"
     ></div>
   </div>
 </div>
@@ -82,7 +85,7 @@
     form="{{ self.model_form() }}"
     id="conversation-thinking"
     name="thinking"
-    class="select select-bordered"
+    class="select select-bordered w-full"
     {% if job_active || model_picker.efforts.is_empty() %}disabled{% endif %}
   >
     {% if model_picker.efforts.is_empty() %}

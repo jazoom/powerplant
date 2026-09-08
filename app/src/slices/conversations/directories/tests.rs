@@ -17,7 +17,7 @@ fn conversation(state: &crate::state::AppState) -> crate::conversations::Convers
                 ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
                 crate::tests::test_environment_id(),
             )),
-            None,
+            Vec::new(),
         )
         .unwrap()
 }
@@ -259,6 +259,86 @@ async fn a_draft_can_approve_and_renew_non_sensitive_review_access() {
         .await
         .unwrap();
     assert_eq!(renewed.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn draft_read_only_replaces_stale_write_consent_without_bypassing_sensitive_consent() {
+    use crate::execution::{DirectoryAccess, DirectoryGrant};
+
+    for sensitive in [false, true] {
+        for access in [
+            DirectoryAccess::ReviewBeforeApply,
+            DirectoryAccess::DirectWrite,
+        ] {
+            let mut state = test_state();
+            let token = connected(&state);
+            let directory = tempfile::tempdir().unwrap();
+            if sensitive {
+                let data = directory.path().join("powerplant-data");
+                std::fs::create_dir(&data).unwrap();
+                state.local_data = crate::local_data::LocalDataReset::for_test(data);
+            }
+            let grant = DirectoryGrant::from_selected(directory.path(), &[]).unwrap();
+            let path = format!(
+                "/conversations/new/directories/{}/access",
+                grant.id.as_hex()
+            );
+            let preview = app(&state)
+                .oneshot(command(
+                    &path,
+                    &token,
+                    &format!(
+                        "action={}&directory_0={}",
+                        access.as_str(),
+                        form_value(&grant.form_value())
+                    ),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(preview.status(), StatusCode::OK);
+            let preview = text(preview).await;
+            let previous_request = hidden_value(&preview, "consent_request");
+            assert!(!previous_request.is_empty());
+            let fields = [
+                "draft_nonce",
+                "directory_0",
+                "pending_directory",
+                "consent_request",
+                "consent_existing",
+            ]
+            .map(|name| format!("{name}={}", form_value(&hidden_value(&preview, name))))
+            .join("&");
+            let response = app(&state)
+                .oneshot(command(
+                    &path,
+                    &token,
+                    &format!("{fields}&action=read-only"),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = text(response).await;
+            let current = DirectoryGrant::parse_form(&hidden_value(&body, "directory_0")).unwrap();
+            assert_eq!(current, grant);
+            assert_eq!(
+                body.contains("id=\"conversation-directory-consent\""),
+                sensitive
+            );
+            let request = hidden_value(&body, "consent_request");
+            let pending = hidden_value(&body, "pending_directory");
+            if sensitive {
+                assert!(!request.is_empty());
+                assert_ne!(request, previous_request);
+                assert_eq!(DirectoryGrant::parse_form(&pending), Some(grant));
+                assert_eq!(hidden_value(&body, "consent_existing"), "true");
+            } else {
+                assert!(request.is_empty());
+                assert!(pending.is_empty());
+                assert_eq!(hidden_value(&body, "consent_existing"), "false");
+            }
+            assert!(state.conversations.list().is_empty());
+        }
+    }
 }
 
 #[tokio::test]

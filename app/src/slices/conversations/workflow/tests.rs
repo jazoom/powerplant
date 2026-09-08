@@ -319,7 +319,7 @@ fn sensitive_workflow_launch_needs_live_destination_consent() {
                 settings: settings.clone(),
                 preset: None,
             }),
-            None,
+            Vec::new(),
         )
         .unwrap();
     let session = crate::sessions::generate_session_token().unwrap().id();
@@ -806,7 +806,7 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
                 settings,
                 preset: None,
             }),
-            None,
+            Vec::new(),
         )
         .expect("conversation");
     let token = crate::sessions::generate_session_token().expect("session");

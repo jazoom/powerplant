@@ -472,16 +472,6 @@ pub(super) async fn save(
             form,
         );
     };
-    let record = match state.conversations.create_saved(
-        id,
-        project,
-        (!form.title.is_empty()).then(|| form.title.clone()),
-        Some(model.clone()),
-        None,
-    ) {
-        Ok(record) => record,
-        Err(error) => return reject(status_for(error), error.message(), form),
-    };
     if (!consent_grants.is_empty() || model.settings.host_tools())
         && state
             .access_consent
@@ -490,18 +480,43 @@ pub(super) async fn save(
                 session.0,
                 &form.consent_nonce(),
                 &model.settings,
-                record.id,
+                id,
                 &consent_grants,
             )
             .is_err()
     {
-        let _ = state.conversations.delete(&id, 1);
         return reject(
             PatchStatus::UnprocessableEntity,
             "Directory access needs explicit approval.",
             form,
         );
     }
+    let approvals = consent_grants
+        .iter()
+        .map(|grant| crate::conversations::DirectoryApproval::for_grant(&model.settings, grant))
+        .collect();
+    let record = match state.conversations.create_saved(
+        id,
+        project,
+        (!form.title.is_empty()).then(|| form.title.clone()),
+        Some(model.clone()),
+        approvals,
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            state.access_consent.invalidate_conversation(id);
+            if matches!(
+                error,
+                ConversationError::Persist | ConversationError::Corrupt
+            ) {
+                return Err(AppError::new(
+                    "store first conversation and directory approvals",
+                    error,
+                ));
+            }
+            return reject(status_for(error), error.message(), form);
+        }
+    };
     drop(permit);
     let record =
         match super::start_message(&state, session.0, record, 1, model, form.message.clone()).await

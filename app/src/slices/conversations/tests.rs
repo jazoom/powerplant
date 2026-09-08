@@ -448,6 +448,7 @@ async fn conversation_states_share_document_navigation_and_detail_patch_controls
                 assert_eq!(body.matches(&format!("id=\"{id}\"")).count(), 1);
             }
             assert!(body.contains(&format!("form=\"{model_form}\"")));
+            assert!(!body.contains("formaction=\"\""));
             assert!(body.contains("data-conversation-model-catalogue=\"{&#34;xai&#34;:"));
             assert!(!body.contains("&#34;deepseek&#34;:"));
         }
@@ -560,7 +561,12 @@ async fn model_preference_failure_returns_the_committed_conversation_patch() {
     assert_eq!(updated.model.unwrap().settings.model.model, "grok-4.6");
     let body = text(response).await;
     assert!(body.contains("target=\"conversation-detail\""));
-    assert!(body.contains(&format!("name=\"revision\" value=\"{}\"", updated.revision)));
+    assert!(
+        body.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(&format!("name=\"revision\" value=\"{}\"", updated.revision))
+    );
     assert!(body.contains("Power Plant cannot store the model preference."));
 }
 
@@ -680,7 +686,7 @@ async fn directory_history_matches_identity_without_granting_access() {
                 None,
                 Some(title.to_owned()),
                 Some(model),
-                None,
+                Vec::new(),
             )
             .unwrap();
     }
@@ -1518,7 +1524,6 @@ async fn read_only_access_is_explicit_revisioned_and_selects_one_target() {
         .expect("detail");
     let detail_body = text(detail).await;
     assert!(detail_body.contains("Grant effect: List, Read and Run"));
-    assert!(detail_body.contains("Network off"));
     let path = format!("/conversations/{}/access", conversation.id);
 
     let response = app(&state)

@@ -304,6 +304,9 @@ pub(super) async fn update_new(
         form.consent_existing = "true".to_owned();
     } else {
         form.set_directories(&directories);
+        form.pending_directory.clear();
+        form.consent_request.clear();
+        form.consent_existing.clear();
     }
     render_new(&state, session.0, form, PatchStatus::Ok, "")
 }
@@ -704,6 +707,7 @@ pub(super) async fn approve_saved(
             "The sensitive access request expired or changed. Choose the directory again.",
         );
     }
+    let approval_grant = grant.clone();
     let changed = if reapproval {
         state
             .conversations
@@ -714,7 +718,42 @@ pub(super) async fn approve_saved(
             .add_directory(&record.id, revision, grant)
     };
     match changed {
-        Ok(updated) => render_saved(&state, session.0, graft, &updated, PatchStatus::Ok, ""),
+        Ok(updated) => {
+            let approval = updated.model.as_ref().map(|model| {
+                crate::conversations::DirectoryApproval::for_grant(&model.settings, &approval_grant)
+            });
+            let updated = match approval {
+                None => updated,
+                Some(approval) => match state.conversations.record_directory_approval(
+                    &updated.id,
+                    updated.revision,
+                    approval,
+                ) {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        state.access_consent.invalidate_conversation(record.id);
+                        if matches!(
+                            error,
+                            ConversationError::Persist | ConversationError::Corrupt
+                        ) {
+                            return Err(AppError::new(
+                                "store sensitive conversation directory",
+                                error,
+                            ));
+                        }
+                        return render_saved(
+                            &state,
+                            session.0,
+                            graft,
+                            &updated,
+                            status_for(error),
+                            error.message(),
+                        );
+                    }
+                },
+            };
+            render_saved(&state, session.0, graft, &updated, PatchStatus::Ok, "")
+        }
         Err(error) => {
             state.access_consent.invalidate_conversation(record.id);
             if matches!(

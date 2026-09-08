@@ -10,9 +10,11 @@
           <div>
             <h1>{{ title }}</h1>
             <p>
-              {% if task_count > 0 %}A saved task list for a repeatable
-              workflow.{% else %}A saved plan for reuse, task preparation or
-              independent review.{% endif %}
+              {% if task_count > 0 %}
+                A saved task list for a repeatable workflow.
+              {% else %}
+                A saved plan for reuse, task preparation or independent review.
+              {% endif %}
             </p>
           </div>
           <a
@@ -30,12 +32,11 @@
         {% if associated %}
           <div class="flex flex-wrap items-center gap-3">
             {% if task_count > 0 %}
-              {% if eligible_task_count > 0 %}<a
-                href="{{ action_href }}"
-                data-graft
-                class="btn btn-primary"
-                >Run tasks</a
-              >{% endif %}
+              {% if eligible_task_count > 0 %}
+                <a href="{{ action_href }}" data-graft class="btn btn-primary"
+                  >Run tasks</a
+                >
+              {% endif %}
               <p class="text-quiet text-sm">
                 Run tasks opens workflow setup. No task starts before explicit
                 confirmation.

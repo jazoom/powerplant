@@ -222,6 +222,9 @@ fn import_grant<'a>(
         && !state
             .access_consent
             .authorised_conversation(session, record.id, settings, grant)
+        && !state
+            .conversations
+            .directory_approved(&record.id, settings, grant)
     {
         return Err("Directory access needs approval. Open Directories before import.");
     }

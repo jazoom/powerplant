@@ -256,7 +256,7 @@ fn sensitive_dispatch_requires_live_consent_and_the_original_directory() {
                 settings: settings.clone(),
                 preset: None,
             }),
-            None,
+            Vec::new(),
         )
         .unwrap();
     let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();

@@ -5,13 +5,26 @@
   <h3 id="{{ field_prefix }}instructions-heading" class="text-sm font-semibold">
     Instructions
   </h3>
-  <p class="text-quiet text-xs">Persistent guidance for model replies.</p>
+  <p class="text-quiet text-sm">
+    Enter guidance for the model, such as project conventions or your preferred
+    reply style.
+  </p>
+  <p id="{{ field_prefix }}instructions-help" class="text-quiet text-sm">
+    Power Plant sends this text as system instructions with each model request,
+    separate from your chat messages.
+    {% if settings_form == "conversation-settings-form" %}
+      Saved changes take effect from your next message. Earlier replies stay
+      unchanged.
+    {% endif %}
+  </p>
   <textarea
     {% if !settings_form.is_empty() %}form="{{ settings_form }}"{% endif %}
     id="{{ field_prefix }}instructions"
     aria-labelledby="{{ field_prefix }}instructions-heading"
+    aria-describedby="{{ field_prefix }}instructions-help"
+    placeholder="For example: Use Australian English. Keep replies concise."
     name="{{ field_prefix }}{% if field_prefix.is_empty() %}instructions{% else %}settings-instructions{% endif %}"
-    class="textarea textarea-bordered min-h-28 w-full"
+    class="textarea textarea-bordered min-h-40 w-full"
     maxlength="32768"
     {% if job_active %}disabled{% endif %}
   >
@@ -24,11 +37,11 @@
   <legend class="text-sm font-semibold">Available tools</legend>
   <p class="text-quiet text-xs">
     {% if tools_host %}
-      Only Run is available on this computer. Work locations do not limit host
-      access.
+      Only Run is available on this computer. Commands can access any file that
+      Power Plant can access.
     {% else %}
-      Tools use private scratch storage at /workspace without directory access.
-      Plain chat needs no sandbox.
+      The model can use the tools that you select. Without tools, it can only
+      reply.
     {% endif %}
   </p>
   <div class="grid gap-2 sm:grid-cols-2">

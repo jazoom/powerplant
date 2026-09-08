@@ -175,7 +175,7 @@ export function initConversation(
                     ? "Restricted domains"
                     : value === "public"
                       ? "Public internet"
-                      : "Network off";
+                      : "Off";
         }
         const environment = field("environment") as HTMLSelectElement | null;
         const environmentSummary = root.querySelector(
@@ -183,9 +183,8 @@ export function initConversation(
         );
         if (environmentSummary && environment) {
             environmentSummary.textContent =
-                environment.selectedOptions[0]?.text
-                    .replace(/\s+/g, " ")
-                    .trim() || "Choose environment";
+                environment.selectedOptions[0]?.dataset.environmentName ||
+                "Choose environment";
         }
         const project = field("project") as HTMLSelectElement | null;
         const context = root.querySelector<HTMLElement>(
@@ -301,8 +300,7 @@ export function initConversation(
         if (expanded) {
             search.value = "";
             updateModelOptions(search);
-            search.focus();
-            options.scrollIntoView({ block: "nearest" });
+            search.focus({ preventScroll: true });
         } else if (restoreFocus) {
             toggle.focus();
         }

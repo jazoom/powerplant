@@ -1,5 +1,16 @@
-<header class="chat-turn-meta">
+<header class="chat-turn-meta flex items-center gap-2">
   <strong>{% if message.user %}You{% else %}Agent{% endif %}</strong>
+  {% if message.status != "" && message.error == "" %}
+    <span class="inline-flex items-center gap-1.5 text-xs" role="status">
+      {% if message.streaming %}
+        <span
+          class="loading loading-dots loading-xs motion-reduce:hidden"
+          aria-hidden="true"
+        ></span>
+      {% endif %}
+      {{ message.status }}
+    </span>
+  {% endif %}
 </header>
 <div class="chat-turn-body">
   <div
@@ -12,20 +23,15 @@
     <div class="alert alert-error mt-3" role="alert">
       <p>{{ message.error }}</p>
     </div>
-  {% else if message.status != "" %}
-    <p class="text-quiet mt-2 text-xs" role="status">{{ message.status }}</p>
   {% endif %}
   {% if message.saveable_plan %}
-    <div class="mt-3 border-t pt-3">
-      <p class="text-quiet text-sm">
-        Save this response as a reusable document. Neither action executes
-        tasks.
-      </p>
+    <details class="mt-2">
+      <summary class="btn btn-ghost btn-sm min-h-11">Save as…</summary>
       <form
         data-graft
         method="post"
         action="{{ message.plan_action }}"
-        class="mt-3 flex flex-wrap items-end gap-2"
+        class="border-base-300 mt-2 flex flex-col gap-3 border-t pt-3"
       >
         <input
           type="hidden"
@@ -33,54 +39,37 @@
           value="{{ message.conversation_revision }}"
         />
         <input type="hidden" name="message_index" value="{{ message.index }}" />
+        <p class="text-quiet text-sm">
+          A plan keeps this response for reuse. A task list needs Markdown
+          checkboxes. Neither action runs tasks.
+        </p>
         <label
-          class="flex min-w-0 flex-1 basis-56 flex-col gap-1"
-          for="plan-title-{{ message.index }}"
+          class="flex flex-col gap-1"
+          for="document-title-{{ message.index }}"
         >
-          <span class="text-sm">Plan title</span>
+          <span class="text-sm">Document title</span>
           <input
-            id="plan-title-{{ message.index }}"
-            class="input input-bordered input-sm"
+            id="document-title-{{ message.index }}"
+            class="input input-bordered w-full"
             name="title"
             required
             maxlength="120"
-            value="{{ message.plan_title }}"
+            value="Response {{ message.index + 1 }}"
           />
         </label>
-        <button class="btn btn-secondary btn-sm" type="submit">
-          Save as plan
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <button class="btn btn-secondary btn-sm min-h-11" type="submit">
+            Save as plan
+          </button>
+          <button
+            class="btn btn-secondary btn-sm min-h-11"
+            type="submit"
+            formaction="{{ message.task_action }}"
+          >
+            Save as task list
+          </button>
+        </div>
       </form>
-      <form
-        data-graft
-        method="post"
-        action="{{ message.task_action }}"
-        class="mt-2 flex flex-wrap items-end gap-2"
-      >
-        <input
-          type="hidden"
-          name="revision"
-          value="{{ message.conversation_revision }}"
-        />
-        <input type="hidden" name="message_index" value="{{ message.index }}" />
-        <label
-          class="flex min-w-0 flex-1 basis-56 flex-col gap-1"
-          for="task-title-{{ message.index }}"
-        >
-          <span class="text-sm">Task list title</span>
-          <input
-            id="task-title-{{ message.index }}"
-            class="input input-bordered input-sm"
-            name="title"
-            required
-            maxlength="120"
-            value="{{ message.task_title }}"
-          />
-        </label>
-        <button class="btn btn-secondary btn-sm" type="submit">
-          Save as tasks
-        </button>
-      </form>
-    </div>
+    </details>
   {% endif %}
 </div>

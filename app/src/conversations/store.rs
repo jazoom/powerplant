@@ -89,6 +89,9 @@ pub(crate) struct ConversationRecord {
     pub(crate) execution_target: Option<ProjectId>,
     pub(crate) network: crate::agents::NetworkAccess,
     pub(crate) model: Option<ConversationModelConfiguration>,
+    // Approvals survive restarts, but access settings changes revoke them.
+    // The digest covers execution access, not model selection or instructions.
+    pub(crate) directory_approvals: Vec<DirectoryApproval>,
     pub(crate) source_review: Option<PlanReviewLink>,
     pub(crate) plan_reviews: Vec<PlanReviewLink>,
     pub(crate) review_context: Option<PlanReviewContext>,
@@ -112,6 +115,42 @@ pub(crate) struct AppliedPreset {
     pub(crate) id: crate::presets::PresetId,
     pub(crate) revision: u32,
     pub(crate) name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DirectoryApproval {
+    pub(crate) settings_digest: [u8; 32],
+    pub(crate) root: PathBuf,
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+    pub(crate) access: crate::execution::DirectoryAccess,
+}
+
+impl DirectoryApproval {
+    pub(crate) fn for_grant(
+        settings: &crate::execution::ExecutionSettings,
+        grant: &crate::execution::DirectoryGrant,
+    ) -> Self {
+        Self {
+            settings_digest: crate::execution::settings_digest(settings),
+            root: grant.host_path.clone(),
+            device: grant.identity.device,
+            inode: grant.identity.inode,
+            access: grant.access,
+        }
+    }
+
+    pub(crate) fn matches(
+        &self,
+        settings: &crate::execution::ExecutionSettings,
+        grant: &crate::execution::DirectoryGrant,
+    ) -> bool {
+        self.settings_digest == crate::execution::settings_digest(settings)
+            && self.root == grant.host_path
+            && self.device == grant.identity.device
+            && self.inode == grant.identity.inode
+            && self.access == grant.access
+    }
 }
 
 impl ConversationModelConfiguration {
@@ -278,6 +317,7 @@ struct ConversationFile {
     network_domains: Vec<String>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     model: Option<ConversationModelFile>,
+    directory_approvals: Vec<DirectoryApprovalFile>,
     #[serde(deserialize_with = "crate::storage::required_option")]
     source_review: Option<ReviewLinkFile>,
     plan_reviews: Vec<ReviewLinkFile>,
@@ -326,6 +366,16 @@ struct DirectoryGrantFile {
     device: u64,
     inode: u64,
     alias: String,
+    access: crate::execution::DirectoryAccess,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct DirectoryApprovalFile {
+    settings_digest: String,
+    host_path: PathBuf,
+    device: u64,
+    inode: u64,
     access: crate::execution::DirectoryAccess,
 }
 
@@ -421,12 +471,26 @@ impl ConversationStore {
         project: Option<ProjectId>,
         title: Option<String>,
         model: Option<ConversationModelConfiguration>,
-        message: Option<(JobId, String)>,
+        directory_approvals: Vec<DirectoryApproval>,
     ) -> Result<ConversationRecord, ConversationError> {
+        if directory_approvals.len() > crate::execution::MAXIMUM_DIRECTORY_GRANTS
+            || directory_approvals
+                .iter()
+                .enumerate()
+                .any(|(index, approval)| {
+                    directory_approvals[..index].contains(approval)
+                        || !model.as_ref().is_some_and(|model| {
+                            model
+                                .settings
+                                .directories
+                                .iter()
+                                .any(|grant| approval.matches(&model.settings, grant))
+                        })
+                })
+        {
+            return Err(ConversationError::Directories);
+        }
         let title_pending = title.is_none();
-        let message = message
-            .map(|(job, text)| normalise_message(&text).map(|text| (job, text)))
-            .transpose()?;
         let title = match title {
             Some(title) => normalise_title(&title)?,
             None => "New conversation".to_owned(),
@@ -452,6 +516,7 @@ impl ConversationStore {
             execution_target: None,
             network,
             model,
+            directory_approvals,
             source_review: None,
             plan_reviews: Vec::new(),
             review_context: None,
@@ -463,26 +528,6 @@ impl ConversationStore {
             created_at_ms: now,
             updated_at_ms: now,
         };
-        let mut record = record;
-        if let Some((job, text)) = message {
-            record.messages = vec![
-                ConversationMessage {
-                    role: MessageRole::User,
-                    text,
-                    status: MessageStatus::Complete,
-                    error: None,
-                    request: None,
-                },
-                ConversationMessage {
-                    role: MessageRole::Assistant,
-                    text: String::new(),
-                    status: MessageStatus::Pending,
-                    error: None,
-                    request: Some(job),
-                },
-            ];
-            record.active_job = Some(job);
-        }
         conversations.insert(id, record.clone());
         if let Err(error) = persist(self.path.as_deref(), &conversations) {
             conversations.remove(&id);
@@ -577,6 +622,7 @@ impl ConversationStore {
             execution_target: target,
             network: crate::agents::NetworkAccess::None,
             model: Some(model),
+            directory_approvals: Vec::new(),
             source_review: Some(source_link.clone()),
             plan_reviews: Vec::new(),
             review_context: Some(PlanReviewContext {
@@ -674,6 +720,7 @@ impl ConversationStore {
             execution_target: None,
             network: crate::agents::NetworkAccess::None,
             model: Some(model),
+            directory_approvals: Vec::new(),
             source_review: None,
             plan_reviews: Vec::new(),
             review_context: None,
@@ -961,6 +1008,7 @@ impl ConversationStore {
                 return Err(ConversationError::Active);
             }
             current.grants.clear();
+            current.directory_approvals.clear();
             current.execution_target = None;
             current.network = preset.settings.network.clone();
             current.model = Some(ConversationModelConfiguration::from_preset(preset));
@@ -1056,6 +1104,38 @@ impl ConversationStore {
                 .with_directories(directories)
                 .ok_or(ConversationError::Directories)?;
             Ok(())
+        })
+    }
+
+    pub(crate) fn record_directory_approval(
+        &self,
+        id: &ConversationId,
+        expected_revision: u32,
+        approval: DirectoryApproval,
+    ) -> Result<ConversationRecord, ConversationError> {
+        self.replace(id, expected_revision, |current| {
+            current.directory_approvals.retain(|stored| {
+                stored.settings_digest == approval.settings_digest && stored != &approval
+            });
+            if current.directory_approvals.len() >= crate::execution::MAXIMUM_DIRECTORY_GRANTS {
+                return Err(ConversationError::Directories);
+            }
+            current.directory_approvals.push(approval);
+            Ok(())
+        })
+    }
+
+    pub(crate) fn directory_approved(
+        &self,
+        id: &ConversationId,
+        settings: &crate::execution::ExecutionSettings,
+        grant: &crate::execution::DirectoryGrant,
+    ) -> bool {
+        self.lock().get(id).is_some_and(|record| {
+            record
+                .directory_approvals
+                .iter()
+                .any(|approval| approval.matches(settings, grant))
         })
     }
 
@@ -1265,6 +1345,16 @@ impl ConversationStore {
         }
         let mut updated = current.clone();
         edit(&mut updated)?;
+        // Reverting settings must not resurrect consent from an earlier configuration.
+        let access_digest = |record: &ConversationRecord| {
+            record
+                .model
+                .as_ref()
+                .map(|model| crate::execution::settings_digest(&model.settings))
+        };
+        if access_digest(&current) != access_digest(&updated) {
+            updated.directory_approvals.clear();
+        }
         updated.revision = current
             .revision
             .checked_add(1)
@@ -1490,6 +1580,24 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
     {
         return Err(ConversationError::Corrupt);
     }
+    let mut directory_approvals = Vec::with_capacity(file.directory_approvals.len());
+    for approval in file.directory_approvals {
+        let settings_digest: [u8; 32] =
+            crate::hex::decode(&approval.settings_digest).ok_or(ConversationError::Corrupt)?;
+        let candidate = DirectoryApproval {
+            settings_digest,
+            root: approval.host_path,
+            device: approval.device,
+            inode: approval.inode,
+            access: approval.access,
+        };
+        if directory_approvals.len() >= crate::execution::MAXIMUM_DIRECTORY_GRANTS
+            || directory_approvals.contains(&candidate)
+        {
+            return Err(ConversationError::Corrupt);
+        }
+        directory_approvals.push(candidate);
+    }
     let messages: Result<Vec<_>, _> = file.messages.into_iter().map(message_from_file).collect();
     let messages = messages?;
     let active_job = file.active_job.as_deref().and_then(JobId::parse);
@@ -1528,6 +1636,7 @@ fn record_from_file(file: ConversationFile) -> Result<ConversationRecord, Conver
         execution_target,
         network,
         model,
+        directory_approvals,
         source_review,
         plan_reviews,
         review_context,
@@ -1859,6 +1968,17 @@ fn record_to_file(record: &ConversationRecord) -> ConversationFile {
         network: record.network.as_str().to_owned(),
         network_domains: record.network.domains().to_vec(),
         model: record.model.as_ref().map(model_to_file),
+        directory_approvals: record
+            .directory_approvals
+            .iter()
+            .map(|approval| DirectoryApprovalFile {
+                settings_digest: crate::hex::encode(&approval.settings_digest),
+                host_path: approval.root.clone(),
+                device: approval.device,
+                inode: approval.inode,
+                access: approval.access,
+            })
+            .collect(),
         source_review: record.source_review.as_ref().map(review_link_to_file),
         plan_reviews: record
             .plan_reviews
