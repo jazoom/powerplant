@@ -222,3 +222,20 @@ fn workflow_request_identity_includes_run_step_and_attempt() {
     }
     store.decide(&bound, HostCommandDecision::Approved).unwrap();
 }
+
+#[test]
+fn conversation_invalidation_drops_pending_host_commands() {
+    let store = HostApprovalStore::new();
+    let owner = session();
+    let conversation = crate::conversations::ConversationId::generate().unwrap();
+    let other = crate::conversations::ConversationId::generate().unwrap();
+    let (job_id, _) = job();
+    let (other_job, _) = job();
+    let mut kept = request(owner, other_job, other, 1, "true", "");
+    kept.token = store.submit(kept.clone()).unwrap();
+    let mut dropped = request(owner, job_id, conversation, 1, "true", "");
+    dropped.token = store.submit(dropped.clone()).unwrap();
+    store.invalidate_conversation(conversation);
+    assert!(store.pending_for(conversation, job_id).is_none());
+    assert!(store.pending_for(other, other_job).is_some());
+}

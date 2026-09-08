@@ -294,9 +294,33 @@ async fn discard_and_switch(
             "conversation-settings",
         );
     }
-    if let Err(error) = crate::slices::conversations::settings::replacement_environment_ready(
+    let Some(current_settings) = conversation.model.as_ref() else {
+        return command_error_target(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            "Choose a model first.",
+            "conversation-settings",
+        );
+    };
+    if let Err(error) = crate::slices::conversations::settings::replacement_directory_access(
+        &current_settings.settings,
+        &form.directory_access,
+    ) {
+        return command_error_target(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            error,
+            "conversation-settings",
+        );
+    }
+    let location = form.location.unwrap_or(current_settings.settings.location);
+    let host_approval = form
+        .host_approval
+        .unwrap_or(current_settings.settings.host_approval);
+    if let Err(error) = crate::slices::conversations::settings::replacement_execution_ready(
         &state,
         &conversation,
+        location,
         form.environment,
     )
     .await
@@ -308,6 +332,14 @@ async fn discard_and_switch(
             "conversation-settings",
         );
     }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            crate::local_data::HOST_PATH_RESET_PENDING,
+            "conversation-settings",
+        );
+    };
     let Some(continuation) = state.gate_continuations.take(&run_id) else {
         return command_error_target(
             graft,
@@ -364,20 +396,67 @@ async fn discard_and_switch(
     let Some(settled) = state.conversations.get(&conversation_id) else {
         return Ok(responses::command_navigation("/conversations"));
     };
+    if settled.model != conversation.model || settled.active_job.is_some() {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "The conversation changed. Execution settings did not change.",
+            "conversation-settings",
+        );
+    }
+    if let Err(error) = crate::slices::conversations::settings::replacement_execution_ready(
+        &state,
+        &settled,
+        location,
+        form.environment,
+    )
+    .await
+    {
+        return command_error_target(graft, PatchStatus::Conflict, error, "conversation-settings");
+    }
+    let Some(model) = settled.model.as_ref() else {
+        return command_error_target(
+            graft,
+            PatchStatus::Conflict,
+            "The changes were discarded, but Power Plant could not save the new execution settings.",
+            "conversation-settings",
+        );
+    };
+    let replacement = match crate::slices::conversations::settings::replacement_directory_access(
+        &model.settings,
+        &form.directory_access,
+    ) {
+        Ok(settings) => settings,
+        Err(error) => {
+            return command_error_target(
+                graft,
+                PatchStatus::Conflict,
+                error,
+                "conversation-settings",
+            );
+        }
+    };
+    let mut settings = replacement
+        .with_location(location)
+        .with_host_approval(host_approval);
+    settings.environment = form.environment;
     if state
         .conversations
-        .select_environment(&conversation_id, settled.revision, form.environment)
+        .update_execution_settings(&conversation_id, settled.revision, settings)
         .is_err()
     {
         return command_error_target(
             graft,
             PatchStatus::Conflict,
-            "The changes were discarded, but Power Plant could not save the new environment.",
+            "The changes were discarded, but Power Plant could not save the new execution settings.",
             "conversation-settings",
         );
     }
     state
         .access_consent
+        .invalidate_conversation(conversation_id);
+    state
+        .host_approvals
         .invalidate_conversation(conversation_id);
     Ok(responses::command_navigation(&format!(
         "/conversations/{}",

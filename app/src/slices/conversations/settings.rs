@@ -45,6 +45,15 @@ pub(super) struct SettingsForm {
     pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
+    pub(super) directory_access: String,
+}
+
+#[derive(Clone)]
+struct RequestedExecutionMode {
+    location: crate::execution::ToolLocation,
+    host_approval: crate::execution::HostApprovalPolicy,
+    environment: crate::environments::EnvironmentId,
+    directory_access: String,
 }
 
 #[derive(Deserialize)]
@@ -52,7 +61,15 @@ pub(super) struct EnvironmentSwitchForm {
     pub(super) revision: String,
     pub(super) environment: String,
     #[serde(default)]
+    pub(super) location: String,
+    #[serde(default)]
+    pub(super) host_approval: String,
+    #[serde(default)]
     pub(super) job: String,
+    #[serde(default)]
+    pub(super) directory_access: String,
+    #[serde(default)]
+    pub(super) confirm: bool,
 }
 
 pub(super) fn parse_tools(values: &[String]) -> Result<Vec<ToolId>, &'static str> {
@@ -109,7 +126,12 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
     let selection = ModelSelection::new(provider, form.model.clone(), thinking)
         .ok_or("Enter a valid model name.")?;
     valid_selection(state, &selection)?;
-    let environment = super::selected_environment(state, &form.environment)?;
+    let environment = if form.location.trim() == "host" && !form.environment.trim().is_empty() {
+        crate::environments::EnvironmentId::parse(form.environment.trim())
+            .ok_or("Choose a valid environment.")?
+    } else {
+        super::selected_environment(state, &form.environment)?
+    };
     let network_mode = if form.network.trim().is_empty() {
         "none"
     } else {
@@ -195,9 +217,10 @@ pub(super) async fn update(
             .as_ref()
             .map(|model| model.settings.directories.clone())
             .unwrap_or_default();
-        settings
+        let settings = settings
             .with_directories(directories)
-            .ok_or("The saved directory grants are not valid.")
+            .ok_or("The saved directory grants are not valid.")?;
+        replacement_directory_access(&settings, &form.directory_access)
     }) {
         Ok(settings) => settings,
         Err(error) => {
@@ -209,14 +232,51 @@ pub(super) async fn update(
             );
         }
     };
-    let environment_changed = record
-        .model
-        .as_ref()
-        .is_some_and(|model| model.settings.environment != settings.environment);
-    if record.active_job.is_some() || super::has_pending_review(&state, record.id) {
-        if environment_changed {
-            if let Err(error) =
-                replacement_environment_ready(&state, &record, settings.environment).await
+    if record.active_job.is_some()
+        || super::has_pending_review(&state, record.id)
+        || record.model.as_ref().is_some_and(|model| {
+            model.settings.location != settings.location
+                || model.settings.host_approval != settings.host_approval
+                || model.settings.environment != settings.environment
+                || model.settings.directories != settings.directories
+        })
+    {
+        let Some(current) = record.model.as_ref() else {
+            return render_detail_command(
+                graft,
+                PatchStatus::UnprocessableEntity,
+                detail_view(
+                    &state,
+                    session.0,
+                    &record,
+                    &record.title,
+                    "Choose a model first.",
+                )
+                .with_settings_fields(&state, form.submitted_fields()),
+            );
+        };
+        let requested = RequestedExecutionMode {
+            location: if form.location.trim().is_empty() {
+                current.settings.location
+            } else {
+                settings.location
+            },
+            host_approval: if form.host_approval.trim().is_empty() {
+                current.settings.host_approval
+            } else {
+                settings.host_approval
+            },
+            environment: settings.environment,
+            directory_access: form.directory_access.clone(),
+        };
+        if execution_mode_changed(&current.settings, &requested) {
+            if let Err(error) = replacement_execution_ready(
+                &state,
+                &record,
+                requested.location,
+                requested.environment,
+            )
+            .await
             {
                 return render_detail_command(
                     graft,
@@ -230,8 +290,8 @@ pub(super) async fn update(
                 session.0,
                 graft,
                 &record,
-                settings.environment,
-                Some(form.submitted_fields()),
+                &current.settings,
+                requested,
             );
         }
         return render_detail_command(
@@ -248,7 +308,8 @@ pub(super) async fn update(
         );
     }
     let access_changed = record.model.as_ref().is_some_and(|model| {
-        model.settings.tools != settings.tools
+        model.settings.directories != settings.directories
+            || model.settings.tools != settings.tools
             || model.settings.network != settings.network
             || model.settings.environment != settings.environment
             || model.settings.location != settings.location
@@ -262,6 +323,7 @@ pub(super) async fn update(
         Ok(updated) => {
             if access_changed {
                 state.access_consent.invalidate_conversation(record.id);
+                state.host_approvals.invalidate_conversation(record.id);
             }
             let warning = remember_selection(&state, selection).err().unwrap_or("");
             render_detail_command(
@@ -298,30 +360,47 @@ pub(super) async fn preview_environment_switch(
     if revision != record.revision {
         return switch_error(&state, session.0, graft, &record, REVISION_MESSAGE);
     }
-    let environment = match super::selected_environment(&state, &form.environment) {
-        Ok(environment) => environment,
+    let Some(current) = record.model.as_ref() else {
+        return switch_error(&state, session.0, graft, &record, "Choose a model first.");
+    };
+    let requested = match execution_mode_from_form(
+        &state,
+        &form.location,
+        &form.host_approval,
+        &form.environment,
+        &form.directory_access,
+        &current.settings,
+    ) {
+        Ok(mode) => mode,
         Err(error) => return switch_error(&state, session.0, graft, &record, error),
     };
-    if record
-        .model
-        .as_ref()
-        .is_some_and(|model| model.settings.environment == environment)
-    {
+    if !execution_mode_changed(&current.settings, &requested) {
         return switch_error(
             &state,
             session.0,
             graft,
             &record,
-            "Choose a different environment.",
+            "Choose a different backend, approval policy, directory strategy or environment.",
         );
     }
-    if record.active_job.is_some() || super::has_pending_review(&state, record.id) {
-        if let Err(error) = replacement_environment_ready(&state, &record, environment).await {
-            return switch_error(&state, session.0, graft, &record, error);
-        }
-        return render_switch_preview(&state, session.0, graft, &record, environment, None);
+    if let Err(error) =
+        replacement_execution_ready(&state, &record, requested.location, requested.environment)
+            .await
+    {
+        return switch_error(&state, session.0, graft, &record, error);
     }
-    save_environment(&state, session.0, graft, &record, revision, environment)
+    if !form.confirm || record.active_job.is_some() || super::has_pending_review(&state, record.id)
+    {
+        return render_switch_preview(
+            &state,
+            session.0,
+            graft,
+            &record,
+            &current.settings,
+            requested,
+        );
+    }
+    save_execution_mode(&state, session.0, graft, &record, revision, requested).await
 }
 
 pub(super) async fn stop_and_switch_environment(
@@ -337,14 +416,19 @@ pub(super) async fn stop_and_switch_environment(
     let Some(revision) = parse_revision(&form.revision) else {
         return switch_error(&state, session.0, graft, &record, REVISION_MESSAGE);
     };
-    let Some(environment) = crate::environments::EnvironmentId::parse(&form.environment) else {
-        return switch_error(
-            &state,
-            session.0,
-            graft,
-            &record,
-            "Choose an available environment.",
-        );
+    let Some(current_settings) = record.model.as_ref() else {
+        return switch_error(&state, session.0, graft, &record, "Choose a model first.");
+    };
+    let requested = match execution_mode_from_form(
+        &state,
+        &form.location,
+        &form.host_approval,
+        &form.environment,
+        &form.directory_access,
+        &current_settings.settings,
+    ) {
+        Ok(requested) => requested,
+        Err(error) => return switch_error(&state, session.0, graft, &record, error),
     };
     let Some(job_id) = crate::sessions::JobId::parse(&form.job) else {
         return switch_error(
@@ -358,7 +442,10 @@ pub(super) async fn stop_and_switch_environment(
     if revision != record.revision || record.active_job != Some(job_id) {
         return switch_error(&state, session.0, graft, &record, REVISION_MESSAGE);
     }
-    if let Err(error) = replacement_environment_ready(&state, &record, environment).await {
+    if let Err(error) =
+        replacement_execution_ready(&state, &record, requested.location, requested.environment)
+            .await
+    {
         return switch_error(&state, session.0, graft, &record, error);
     }
     let Some(job) = state.sessions.conversation_job(record.id, job_id) else {
@@ -377,6 +464,7 @@ pub(super) async fn stop_and_switch_environment(
     {
         return switch_error(&state, session.0, graft, &record, REVISION_MESSAGE);
     }
+    state.host_approvals.invalidate_job(job_id);
     job.request_cancel();
     if !job.wait_for_terminal(CANCELLATION_WAIT).await {
         return switch_error(
@@ -384,7 +472,7 @@ pub(super) async fn stop_and_switch_environment(
             session.0,
             graft,
             &record,
-            "Power Plant is still stopping the task. The environment did not change.",
+            "Power Plant is still stopping the task. Execution settings did not change.",
         );
     }
     let current = state
@@ -394,31 +482,42 @@ pub(super) async fn stop_and_switch_environment(
     if current.model != record.model {
         return switch_error(&state, session.0, graft, &current, REVISION_MESSAGE);
     }
-    if current.active_job.is_some() {
+    if current.active_job.is_some() || super::has_pending_review(&state, current.id) {
         return switch_error(
             &state,
             session.0,
             graft,
             &current,
-            "Power Plant could not clean up the task. The environment did not change.",
+            "Power Plant could not clean up the task. Execution settings did not change.",
         );
     }
-    save_environment(
+    if let Err(error) =
+        replacement_execution_ready(&state, &current, requested.location, requested.environment)
+            .await
+    {
+        return switch_error(&state, session.0, graft, &current, error);
+    }
+    save_execution_mode(
         &state,
         session.0,
         graft,
         &current,
         current.revision,
-        environment,
+        requested,
     )
+    .await
 }
 
-pub(crate) async fn replacement_environment_ready(
+pub(crate) async fn replacement_execution_ready(
     state: &AppState,
     record: &crate::conversations::ConversationRecord,
+    location: crate::execution::ToolLocation,
     environment: crate::environments::EnvironmentId,
 ) -> Result<(), &'static str> {
     record.model.as_ref().ok_or("Choose a model first.")?;
+    if location == crate::execution::ToolLocation::Host {
+        return Ok(());
+    }
     crate::workflows::validate_replacement_environment(
         &state.environments,
         &state.environment_snapshots,
@@ -428,25 +527,107 @@ pub(crate) async fn replacement_environment_ready(
     .map_err(|error| error.message())
 }
 
+fn execution_mode_from_form(
+    state: &AppState,
+    location: &str,
+    host_approval: &str,
+    environment: &str,
+    directory_access: &str,
+    current: &crate::execution::ExecutionSettings,
+) -> Result<RequestedExecutionMode, &'static str> {
+    let location = if location.trim().is_empty() {
+        current.location
+    } else {
+        crate::execution::ToolLocation::parse(location.trim()).ok_or("Choose where tools run.")?
+    };
+    let host_approval = if host_approval.trim().is_empty() {
+        current.host_approval
+    } else {
+        crate::execution::HostApprovalPolicy::parse(host_approval.trim())
+            .ok_or("Choose host command approval.")?
+    };
+    let environment = if environment.trim().is_empty() {
+        current.environment
+    } else if location == crate::execution::ToolLocation::Host {
+        crate::environments::EnvironmentId::parse(environment.trim())
+            .ok_or("Choose a valid environment.")?
+    } else {
+        super::selected_environment(state, environment)?
+    };
+    replacement_directory_access(current, directory_access)?;
+    Ok(RequestedExecutionMode {
+        location,
+        host_approval,
+        environment,
+        directory_access: directory_access.to_owned(),
+    })
+}
+
+fn execution_mode_changed(
+    current: &crate::execution::ExecutionSettings,
+    requested: &RequestedExecutionMode,
+) -> bool {
+    current.location != requested.location
+        || current.host_approval != requested.host_approval
+        || current.environment != requested.environment
+        || replacement_directory_access(current, &requested.directory_access)
+            .is_ok_and(|settings| settings.directories != current.directories)
+}
+
+pub(crate) fn replacement_directory_access(
+    current: &ExecutionSettings,
+    submitted: &str,
+) -> Result<ExecutionSettings, &'static str> {
+    let mut settings = current.clone();
+    if submitted.is_empty() {
+        return Ok(settings);
+    }
+    if submitted.len() > 4096 {
+        return Err("Choose valid directory strategies.");
+    }
+    let values: Vec<(String, String)> =
+        serde_json::from_str(submitted).map_err(|_| "Choose valid directory strategies.")?;
+    let mut seen = std::collections::HashSet::new();
+    for (id, access) in values {
+        if !seen.insert(id.clone()) {
+            return Err("Choose each directory once.");
+        }
+        let grant = settings
+            .directories
+            .iter_mut()
+            .find(|grant| grant.id.as_hex() == id)
+            .ok_or("Choose an existing directory.")?;
+        grant.access = crate::execution::DirectoryAccess::parse(&access)
+            .ok_or("Choose valid directory strategies.")?;
+    }
+    Ok(settings)
+}
+
 fn render_switch_preview(
     state: &AppState,
     session: crate::sessions::SessionId,
     graft: PatchGraft,
     record: &crate::conversations::ConversationRecord,
-    environment: crate::environments::EnvironmentId,
-    fields: Option<super::page::SubmittedSettingsFields<'_>>,
+    current: &crate::execution::ExecutionSettings,
+    requested: RequestedExecutionMode,
 ) -> AppResult<Response> {
-    let mut view = detail_view(state, session, record, &record.title, "");
-    if let Some(fields) = fields {
-        let effective_environment = view.environment_summary.clone();
-        view = view.with_settings_fields(state, fields);
-        view.environment_summary = effective_environment;
-    }
+    let view = detail_view(state, session, record, &record.title, "");
     let gate = view.saved().and_then(|saved| saved.pending_gate.clone());
+    let mut replacement = replacement_directory_access(current, &requested.directory_access)
+        .expect("validated directory strategies")
+        .with_location(requested.location)
+        .with_host_approval(requested.host_approval);
+    replacement.environment = requested.environment;
     render_detail_command(
         graft,
         PatchStatus::Ok,
-        view.with_environment_switch(state, environment, gate.as_ref()),
+        view.with_execution_switch(
+            state,
+            current,
+            &replacement,
+            &requested.directory_access,
+            gate.as_ref(),
+        ),
     )
 }
 
@@ -464,29 +645,62 @@ fn switch_error(
     )
 }
 
-fn save_environment(
+async fn save_execution_mode(
     state: &AppState,
     session: crate::sessions::SessionId,
     graft: PatchGraft,
     record: &crate::conversations::ConversationRecord,
     revision: u32,
-    environment: crate::environments::EnvironmentId,
+    requested: RequestedExecutionMode,
 ) -> AppResult<Response> {
+    let Some(current) = record.model.as_ref() else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                state,
+                session,
+                record,
+                &record.title,
+                "Choose a model first.",
+            )
+            .open_settings(),
+        );
+    };
+    let replacement =
+        match replacement_directory_access(&current.settings, &requested.directory_access) {
+            Ok(settings) => settings,
+            Err(error) => return switch_error(state, session, graft, record, error),
+        };
+    let mut settings = replacement
+        .with_location(requested.location)
+        .with_host_approval(requested.host_approval);
+    settings.environment = requested.environment;
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return switch_error(
+            state,
+            session,
+            graft,
+            record,
+            crate::local_data::HOST_PATH_RESET_PENDING,
+        );
+    };
     match state
         .conversations
-        .select_environment(&record.id, revision, environment)
+        .update_execution_settings(&record.id, revision, settings)
     {
         Ok(updated) => {
             state.access_consent.invalidate_conversation(record.id);
+            state.host_approvals.invalidate_conversation(record.id);
             render_detail_command(
                 graft,
                 PatchStatus::Ok,
                 detail_view(state, session, &updated, &updated.title, "").open_settings(),
             )
         }
-        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => {
-            Err(AppError::new("store conversation environment", error))
-        }
+        Err(error @ (ConversationError::Persist | ConversationError::Corrupt)) => Err(
+            AppError::new("store conversation execution settings", error),
+        ),
         Err(error) => render_detail_command(
             graft,
             status_for(error),
@@ -634,6 +848,19 @@ pub(super) async fn apply_preset(
             return preset_saved_error(&state, session.0, graft, &record, error.message());
         }
     };
+    if record.model.as_ref().is_some_and(|model| {
+        preset.settings.location == crate::execution::ToolLocation::Sandbox
+            && model.settings.location != preset.settings.location
+    }) && let Err(error) = replacement_execution_ready(
+        &state,
+        &record,
+        preset.settings.location,
+        preset.settings.environment,
+    )
+    .await
+    {
+        return preset_saved_error(&state, session.0, graft, &record, error);
+    }
     match state
         .conversations
         .apply_preset(&record.id, revision, &preset)

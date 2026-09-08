@@ -295,8 +295,13 @@ pub(crate) async fn run_agent_action(
             attempt: host.attempt.clone(),
             task_loop: host.task_loop.clone(),
         });
+        let sandbox = if spec.location == ToolLocation::Host {
+            None
+        } else {
+            spec.sandbox.as_deref()
+        };
         let context = tools::AgentToolContext {
-            sandbox: spec.sandbox.as_deref(),
+            sandbox,
             policy: &spec.policy,
             job: &job,
             tools: &spec.tool_ids,

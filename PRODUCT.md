@@ -162,9 +162,15 @@ They create environment recipes with an OCI image and an optional setup script. 
 
 An idle conversation owns no persistent sandbox. An environment change selects the ready snapshot for subsequent attempts only.
 
-An active task needs an explicit Stop task and switch action. Power Plant waits for managed cancellation and sandbox cleanup before it saves the selection.
+A change of backend, approval policy, directory strategy or environment has one combined preview in Settings. The preview describes effective values, not preset names.
 
-Pending reviewed changes need review or an exact-candidate discard before a switch. A discard retains immutable evidence, conversation history and existing host files.
+An idle conversation offers Change execution settings. Active or reviewed work needs explicit settlement first. Effective settings stay unchanged until settlement succeeds.
+
+An active task needs an explicit Stop task and switch action. Power Plant cancels waiting host commands, waits for managed cancellation and sandbox cleanup, then saves the selection. Uncertain completion blocks the switch.
+
+Pending reviewed changes need review or an exact-candidate discard before a switch. A discard retains immutable evidence, conversation history and existing host files. Direct writes and host side effects remain unchanged by the switch.
+
+A switch to Sandbox needs a ready snapshot, including an idle switch or a preset replacement from host mode. This computer needs no sandbox runtime or available recipe. Obsolete consent is invalid. Sensitive directories, Direct write and automatic host commands need new destination consent in the replacement configuration.
 
 Power Plant queues preparation for each recipe. A successful preparation creates a local snapshot. Each tool attempt pins the selected ready snapshot. The conversation does not own a persistent sandbox. Tool-free chat requires no sandbox runtime or snapshot.
 
@@ -299,7 +305,10 @@ Current capabilities:
 - Select an environment for each conversation and its later tool attempts.
 - Save conversation or draft settings as a named preset.
 - Preview and apply a preset as a complete settings replacement.
-- Stop active work or discard reviewed changes before an environment switch.
+- Stop active work or discard reviewed changes before a change of backend, approval policy or environment.
+- Keep current effective settings visible until an execution switch succeeds.
+- Require a ready snapshot before Sandbox becomes the next tool backend.
+- Invalidate waiting host commands on an accepted switch. Direct writes and host side effects remain.
 - Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
 - Send a Quick task from an independent conversation with no workflow selection.

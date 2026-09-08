@@ -26,6 +26,8 @@ export function initConversation(
         "tool_run",
         "environment",
         "location",
+        "host_approval",
+        "directory_access",
         "network",
         "network_domains",
         "preset",
@@ -491,6 +493,7 @@ export function initConversation(
                         "conversation-preset-form",
                         "conversation-preset-save-form",
                         "conversation-preset-apply-form",
+                        "conversation-execution-switch-form",
                     ].includes(context.detail.form.id)) ||
                 (context.cause === "patch" &&
                     context.detail.form.id === "conversation-composer" &&
@@ -536,6 +539,24 @@ export function initConversation(
                 if (label)
                     label.textContent =
                         unsavedSettings.get("model")?.value ?? "";
+            }
+            const access = root.querySelector<HTMLInputElement>(
+                "#execution-directory-access",
+            )?.value;
+            if (access) {
+                try {
+                    const values = new Map<string, string>(JSON.parse(access));
+                    root.querySelectorAll<HTMLSelectElement>(
+                        "[data-execution-directory]",
+                    ).forEach((select) => {
+                        const value = values.get(
+                            select.dataset.executionDirectory ?? "",
+                        );
+                        if (value) select.value = value;
+                    });
+                } catch {
+                    // The server rejects malformed strategy values. The editor keeps its current rows.
+                }
             }
             draftSettings = !!root.querySelector(
                 '[data-conversation-state="new"]',

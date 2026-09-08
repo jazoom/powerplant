@@ -90,6 +90,7 @@ async fn import_file(
         .begin_host_path_mutation()
         .await
         .map_err(|_| "Local data reset blocks file import.")?;
+    // Import always uses a read-only sandbox mount. Host work locations grant no import path.
     let grant = import_grant(state, session, record, &form.directory_id)?;
     let _execution = state
         .workflow_execution

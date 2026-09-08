@@ -169,8 +169,10 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Host command approval sits beside host-mode consent. Ask each time is the default. Run without approval needs a distinct destination consent.
 - A host approval preference change does not approve a waiting command. Active work must finish or stop before the new execution configuration takes effect.
 - Settings updates keep the panel open. Invalid updates reveal the panel and retain submitted fields.
-- Environment switches stay inline in Settings. Active work offers Stop task and switch, while reviewed work offers review or exact-candidate discard.
-- Environment switch warnings name temporary attempt loss. They state that conversation history and existing host files remain.
+- Execution setting switches stay inline in one Settings panel. Directory strategy selectors share the backend, approval policy and environment preview.
+- An idle switch requires Change execution settings after the preview. A preview or failed settlement leaves effective summaries unchanged.
+- Active work offers Stop task and switch. Reviewed work offers review or exact-candidate discard. Summaries keep the current effective settings until settlement succeeds.
+- Switch warnings name temporary attempt loss. They state that conversation history, existing host files, direct writes and host side effects remain.
 - New conversation settings remain draft values until a valid first message creates the conversation.
 - Conversation options contains rename and delete controls.
 - Saved documents uses a stable inline disclosure above the transcript, with a count when documents exist.

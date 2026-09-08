@@ -420,10 +420,23 @@ pub(super) struct HostCommandView {
     pub(super) explanation: String,
 }
 
-pub(super) struct EnvironmentSwitchView {
-    pub(super) requested_id: String,
-    pub(super) requested_name: String,
-    pub(super) current_name: String,
+pub(super) struct ExecutionSwitchView {
+    pub(super) requested_location: String,
+    pub(super) requested_host_approval: String,
+    pub(super) requested_environment: String,
+    pub(super) directory_access: String,
+    pub(super) current_backend: &'static str,
+    pub(super) requested_backend: &'static str,
+    pub(super) current_approval: &'static str,
+    pub(super) requested_approval: &'static str,
+    pub(super) current_environment: String,
+    pub(super) requested_environment_name: String,
+    pub(super) environment_changes: bool,
+    pub(super) backend_changes: bool,
+    pub(super) approval_changes: bool,
+    pub(super) access_lines: Vec<String>,
+    pub(super) host_effects_remain: bool,
+    pub(super) needs_new_consent: bool,
     pub(super) active_job: bool,
     pub(super) job_id: String,
     pub(super) gate: Option<EnvironmentSwitchGateView>,
@@ -493,7 +506,7 @@ pub(super) struct ConversationDetailView {
     pub(super) tool_options: Vec<ToolOption>,
     pub(super) environment_options: Vec<EnvironmentOption>,
     pub(super) environment_summary: String,
-    pub(super) environment_switch: Option<EnvironmentSwitchView>,
+    pub(super) execution_switch: Option<ExecutionSwitchView>,
     pub(super) network_options: Vec<NetworkOption>,
     pub(super) network_domains: String,
     pub(super) network_summary: String,
@@ -685,7 +698,7 @@ impl ConversationDetailView {
                 &state.environment_snapshots,
                 EnvironmentId::parse(&form.environment),
             ),
-            environment_switch: None,
+            execution_switch: None,
             network_options: network_options(&form.network),
             network_domains: form.network_domains,
             network_summary: network_summary_from_form(&form.network),
@@ -1066,7 +1079,7 @@ impl ConversationDetailView {
                 sources.environment_snapshots,
                 selected_environment,
             ),
-            environment_switch: None,
+            execution_switch: None,
             network_options: network_options.clone(),
             network_domains: network_domains.clone(),
             network_summary,
@@ -1268,44 +1281,47 @@ impl ConversationDetailView {
             &state.environment_snapshots,
             selected_environment,
         );
-        self.environment_summary = environment_summary(
-            &state.environments,
-            &state.environment_snapshots,
-            selected_environment,
-        );
+        if self.saved().is_none() {
+            self.environment_summary = environment_summary(
+                &state.environments,
+                &state.environment_snapshots,
+                selected_environment,
+            );
+        }
         self.network_options = network_options(fields.network);
         self.network_domains = fields.network_domains.to_owned();
-        self.network_summary = network_summary_from_form(fields.network);
-        self.location_host = fields.location == crate::execution::ToolLocation::Host.as_str();
-        self.host_approval_automatic = crate::execution::HostApprovalPolicy::parse(
-            if fields.host_approval.trim().is_empty() {
-                "ask-each-time"
-            } else {
-                fields.host_approval.trim()
-            },
-        )
-        .is_some_and(crate::execution::HostApprovalPolicy::automatic);
+        if self.saved().is_none() {
+            self.network_summary = network_summary_from_form(fields.network);
+            self.location_host = fields.location == crate::execution::ToolLocation::Host.as_str();
+            self.host_approval_automatic = crate::execution::HostApprovalPolicy::parse(
+                if fields.host_approval.trim().is_empty() {
+                    "ask-each-time"
+                } else {
+                    fields.host_approval.trim()
+                },
+            )
+            .is_some_and(crate::execution::HostApprovalPolicy::automatic);
+        }
         self.settings_open = true;
         self
     }
 
-    pub(super) fn with_environment_switch(
+    pub(super) fn with_execution_switch(
         mut self,
         state: &crate::state::AppState,
-        requested: EnvironmentId,
+        current: &crate::execution::ExecutionSettings,
+        replacement: &crate::execution::ExecutionSettings,
+        directory_access: &str,
         gate: Option<&PendingCodeGateView>,
     ) -> Self {
-        let current_name = self
-            .saved()
-            .and_then(|saved| crate::conversations::ConversationId::parse(&saved.id))
-            .and_then(|id| state.conversations.get(&id))
-            .and_then(|record| record.model.map(|model| model.settings.environment))
-            .and_then(|id| state.environments.get(&id))
-            .map_or_else(
-                || "Current environment unavailable".to_owned(),
-                |item| item.name,
-            );
-        let requested_name = state.environments.get(&requested).map_or_else(
+        let location = replacement.location;
+        let host_approval = replacement.host_approval;
+        let environment = replacement.environment;
+        let current_environment = state.environments.get(&current.environment).map_or_else(
+            || "Current environment unavailable".to_owned(),
+            |item| item.name,
+        );
+        let requested_environment_name = state.environments.get(&environment).map_or_else(
             || "Requested environment unavailable".to_owned(),
             |item| item.name,
         );
@@ -1316,13 +1332,31 @@ impl ConversationDetailView {
             candidate: gate.candidate.clone(),
             review_href: gate.diff_href.clone(),
         });
-        for option in &mut self.environment_options {
-            option.selected = option.id == requested.as_hex();
-        }
-        self.environment_switch = Some(EnvironmentSwitchView {
-            requested_id: requested.as_hex(),
-            requested_name,
-            current_name,
+        self.execution_switch = Some(ExecutionSwitchView {
+            requested_location: location.as_str().to_owned(),
+            requested_host_approval: host_approval.as_str().to_owned(),
+            requested_environment: environment.as_hex(),
+            directory_access: directory_access.to_owned(),
+            current_backend: backend_label(current.location),
+            requested_backend: backend_label(location),
+            current_approval: crate::slices::execution_settings::page::host_approval_label(
+                current.host_approval,
+            ),
+            requested_approval: crate::slices::execution_settings::page::host_approval_label(
+                host_approval,
+            ),
+            current_environment,
+            requested_environment_name,
+            environment_changes: current.environment != environment,
+            backend_changes: current.location != location,
+            approval_changes: current.host_approval != host_approval,
+            access_lines: execution_access_lines(state, current, replacement, location),
+            host_effects_remain: current.location == crate::execution::ToolLocation::Host
+                || current
+                    .directories
+                    .iter()
+                    .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite),
+            needs_new_consent: execution_switch_needs_consent(state, replacement, location),
             active_job: self.job_active,
             job_id: self
                 .saved()
@@ -1346,6 +1380,78 @@ impl ConversationDetailView {
     pub(super) fn contents(&self) -> impl Template + '_ {
         self.as_conversation_detail()
     }
+}
+
+fn backend_label(location: crate::execution::ToolLocation) -> &'static str {
+    match location {
+        crate::execution::ToolLocation::Sandbox => "Sandbox",
+        crate::execution::ToolLocation::Host => "This computer",
+    }
+}
+
+fn execution_access_lines(
+    state: &crate::state::AppState,
+    current: &crate::execution::ExecutionSettings,
+    replacement: &crate::execution::ExecutionSettings,
+    requested: crate::execution::ToolLocation,
+) -> Vec<String> {
+    if replacement.directories.is_empty() {
+        return vec![if requested == crate::execution::ToolLocation::Host {
+            "No work locations. Commands start in Power Plant's current directory. These paths do not confine host access.".to_owned()
+        } else {
+            "No host directory access. Tools use private scratch storage at /workspace.".to_owned()
+        }];
+    }
+    replacement
+        .directories
+        .iter()
+        .map(|grant| {
+            let label = crate::slices::execution_settings::page::directory_access_label;
+            let access = current.directories.iter().find(|old| old.id == grant.id)
+                .filter(|old| old.access != grant.access)
+                .map_or_else(|| label(grant.access).to_owned(), |old| format!("{} to {}", label(old.access), label(grant.access)));
+            let effects = match grant.access {
+                crate::execution::DirectoryAccess::DirectWrite => " Immediate host writes need no candidate approval. These writes can alter or corrupt live configuration and execution evidence.",
+                crate::execution::DirectoryAccess::ReviewBeforeApply => " Tools use an isolated copy. File application needs approval.",
+                crate::execution::DirectoryAccess::ReadOnly => "",
+            };
+            let sensitive = crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            );
+            let path = grant.host_path.display();
+            if requested == crate::execution::ToolLocation::Host {
+                if sensitive {
+                    format!(
+                        "{path} · Work location. Sandbox strategy: {access}. This path contains sensitive Power Plant data."
+                    )
+                } else {
+                    format!("{path} · Work location. Sandbox strategy: {access}.")
+                }
+            } else if sensitive {
+                format!("{path} · {access}.{effects} This path can expose credentials and private conversations, even with Network off.")
+            } else {
+                format!("{path} · {access}.{effects}")
+            }
+        })
+        .collect()
+}
+
+fn execution_switch_needs_consent(
+    state: &crate::state::AppState,
+    current: &crate::execution::ExecutionSettings,
+    location: crate::execution::ToolLocation,
+) -> bool {
+    if location == crate::execution::ToolLocation::Host {
+        return true;
+    }
+    current.directories.iter().any(|grant| {
+        grant.access != crate::execution::DirectoryAccess::ReadOnly
+            || crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            )
+    })
 }
 
 fn host_access_summary(location_host: bool, automatic: bool) -> String {

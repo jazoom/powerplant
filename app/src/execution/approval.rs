@@ -194,6 +194,20 @@ impl HostApprovalStore {
         lock(&self.inflight).retain(|_, pending| drop_job(pending));
     }
 
+    pub(crate) fn invalidate_conversation(&self, conversation: ConversationId) {
+        let drop_conversation = |pending: &Arc<PendingHostCommand>| {
+            if pending.request.conversation == conversation {
+                pending.invalidated.store(true, Ordering::Release);
+                pending.notify.notify_one();
+                false
+            } else {
+                true
+            }
+        };
+        lock(&self.pending).retain(|_, pending| drop_conversation(pending));
+        lock(&self.inflight).retain(|_, pending| drop_conversation(pending));
+    }
+
     pub(crate) fn retain_sessions(&self, live: impl Fn(&SessionId) -> bool) {
         let drop_session = |pending: &Arc<PendingHostCommand>| {
             if live(&pending.request.session) {

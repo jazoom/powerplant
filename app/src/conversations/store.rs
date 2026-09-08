@@ -1009,22 +1009,6 @@ impl ConversationStore {
         })
     }
 
-    pub(crate) fn select_environment(
-        &self,
-        id: &ConversationId,
-        expected_revision: u32,
-        environment: crate::environments::EnvironmentId,
-    ) -> Result<ConversationRecord, ConversationError> {
-        self.replace(id, expected_revision, |current| {
-            if current.active_job.is_some() {
-                return Err(ConversationError::Active);
-            }
-            let model = current.model.as_mut().ok_or(ConversationError::Selection)?;
-            model.settings.environment = environment;
-            Ok(())
-        })
-    }
-
     pub(crate) fn add_directory(
         &self,
         id: &ConversationId,

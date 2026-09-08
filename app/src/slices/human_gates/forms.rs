@@ -65,6 +65,9 @@ pub(super) struct EnvironmentSwitchDecisionForm {
     pub(super) candidate: String,
     pub(super) conversation_revision: u32,
     pub(super) environment: crate::environments::EnvironmentId,
+    pub(super) location: Option<crate::execution::ToolLocation>,
+    pub(super) host_approval: Option<crate::execution::HostApprovalPolicy>,
+    pub(super) directory_access: String,
     pub(super) conversation_surface: bool,
 }
 
@@ -74,6 +77,9 @@ impl EnvironmentSwitchDecisionForm {
         let mut candidate = None;
         let mut conversation_revision = None;
         let mut environment = None;
+        let mut location = None;
+        let mut host_approval = None;
+        let mut directory_access = String::new();
         let mut conversation_surface = false;
         let mut seen = Vec::new();
         for (key, value) in pairs {
@@ -86,6 +92,18 @@ impl EnvironmentSwitchDecisionForm {
                 "candidate" if !value.is_empty() => candidate = Some(value),
                 "conversation-revision" => conversation_revision = value.parse().ok(),
                 "environment" => environment = crate::environments::EnvironmentId::parse(&value),
+                "directory_access" if value.len() <= 4096 => directory_access = value,
+                "location" if !value.is_empty() => {
+                    location = Some(
+                        crate::execution::ToolLocation::parse(&value).ok_or(FormError::Invalid)?,
+                    );
+                }
+                "host_approval" if !value.is_empty() => {
+                    host_approval = Some(
+                        crate::execution::HostApprovalPolicy::parse(&value)
+                            .ok_or(FormError::Invalid)?,
+                    );
+                }
                 "surface" if value == "conversation" => conversation_surface = true,
                 _ => return Err(FormError::Invalid),
             }
@@ -95,6 +113,9 @@ impl EnvironmentSwitchDecisionForm {
             candidate: candidate.ok_or(FormError::Invalid)?,
             conversation_revision: conversation_revision.ok_or(FormError::Invalid)?,
             environment: environment.ok_or(FormError::Invalid)?,
+            location,
+            host_approval,
+            directory_access,
             conversation_surface,
         })
     }

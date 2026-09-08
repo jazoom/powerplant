@@ -2133,10 +2133,7 @@
             process user. Sandbox network restrictions and environment recipes
             do not apply to host commands.
           </p>
-          <fieldset
-            class="grid gap-2 sm:grid-cols-2"
-            {% if job_active %}disabled{% endif %}
-          >
+          <fieldset class="grid gap-2 sm:grid-cols-2">
             <legend class="sr-only">Where tools run</legend>
             <label
               class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
@@ -2165,8 +2162,13 @@
               <span>This computer</span>
             </label>
           </fieldset>
-          {% if location_host %}
+          <div
+            data-execution-host-policy
+            {% if !location_host %}hidden{% endif %}
+          >
             {% include "execution_settings/templates/host_approval.html" %}
+          </div>
+          {% if location_host %}
             <div class="alert alert-warning items-start">
               <div class="min-w-0 space-y-2 text-sm">
                 <p class="font-medium">
@@ -2274,19 +2276,13 @@
                 {% endif %}
               {% endif %}
             {% endif %}
-          {% else %}
-            <input
-              form="{{ self.model_form() }}"
-              type="hidden"
-              name="host_approval"
-              value="{% if host_approval_automatic %}automatic{% else %}ask-each-time{% endif %}"
-            />
           {% endif %}
         </section>
 
         <section
           class="border-base-300 mt-6 space-y-3 border-t pt-5"
           aria-labelledby="conversation-environment-heading"
+          data-execution-sandbox-settings
           {% if location_host %}hidden{% endif %}
         >
           <div class="flex flex-wrap items-start justify-between gap-3">
@@ -2333,141 +2329,12 @@
             Power Plant never substitutes another environment when this
             selection or its snapshot becomes unavailable.
           </p>
-          {% if let Some(saved) = self.saved() %}
-            {% if job_active || saved.pending_gate.is_some() %}
-              <button
-                form="conversation-settings-form"
-                formaction="/conversations/{{ saved.id }}/settings/environment"
-                class="btn btn-secondary"
-                type="submit"
-              >
-                Review environment switch
-              </button>
-            {% endif %}
-          {% endif %}
-          {% if let Some(saved) = self.saved() %}
-            {% if let Some(change) = environment_switch %}
-              <div
-                class="alert alert-warning mt-4 items-start"
-                role="alert"
-                data-environment-switch
-              >
-                <div class="min-w-0 space-y-3">
-                  <div>
-                    <h4 class="font-semibold">Change the next environment</h4>
-                    <p class="mt-1 text-sm break-words">
-                      Change from {{ change.current_name }} to
-                      {{ change.requested_name }}.
-                    </p>
-                  </div>
-                  {% if change.active_job %}
-                    <p class="text-sm">
-                      Stop task and switch cancels the active task. Power Plant
-                      waits for the task to stop and removes any temporary
-                      sandbox. Unsaved work in that sandbox is lost.
-                    </p>
-                    <p class="text-sm">
-                      Conversation history and existing host files remain. The
-                      new environment applies only to subsequent attempts.
-                    </p>
-                    <form
-                      data-graft
-                      method="post"
-                      action="/conversations/{{ saved.id }}/settings/environment/stop-and-switch"
-                      class="flex flex-wrap gap-2"
-                    >
-                      <input
-                        type="hidden"
-                        name="revision"
-                        value="{{ saved.revision }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="environment"
-                        value="{{ change.requested_id }}"
-                      />
-                      <input
-                        type="hidden"
-                        name="job"
-                        value="{{ change.job_id }}"
-                      />
-                      <button class="btn btn-warning" type="submit">
-                        Stop task and switch
-                      </button>
-                      <a
-                        href="/conversations/{{ saved.id }}"
-                        data-graft
-                        class="btn btn-ghost"
-                        >Cancel</a
-                      >
-                    </form>
-                  {% else if let Some(gate) = change.gate %}
-                    <p class="text-sm">
-                      This task has reviewed changes. Review them or discard the
-                      exact candidate before the environment changes.
-                    </p>
-                    <p class="text-sm">
-                      Discard keeps conversation history and existing host
-                      files. Immutable run evidence also remains.
-                    </p>
-                    <div class="flex flex-wrap gap-2">
-                      <a
-                        href="{{ gate.review_href }}"
-                        data-graft
-                        class="btn btn-secondary"
-                        >Review changes</a
-                      >
-                      <form
-                        data-graft
-                        method="post"
-                        action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/discard-and-switch"
-                      >
-                        <input
-                          type="hidden"
-                          name="gate-revision"
-                          value="{{ gate.revision }}"
-                        />
-                        <input
-                          type="hidden"
-                          name="candidate"
-                          value="{{ gate.candidate }}"
-                        />
-                        <input
-                          type="hidden"
-                          name="conversation-revision"
-                          value="{{ saved.revision }}"
-                        />
-                        <input
-                          type="hidden"
-                          name="environment"
-                          value="{{ change.requested_id }}"
-                        />
-                        <input
-                          type="hidden"
-                          name="surface"
-                          value="conversation"
-                        />
-                        <button class="btn btn-warning" type="submit">
-                          Discard changes and switch
-                        </button>
-                      </form>
-                      <a
-                        href="/conversations/{{ saved.id }}"
-                        data-graft
-                        class="btn btn-ghost"
-                        >Cancel</a
-                      >
-                    </div>
-                  {% endif %}
-                </div>
-              </div>
-            {% endif %}
-          {% endif %}
         </section>
 
         <section
           class="border-base-300 mt-6 space-y-3 border-t pt-5"
           aria-labelledby="conversation-network-heading"
+          data-execution-sandbox-settings
           {% if location_host %}hidden{% endif %}
         >
           <div>
@@ -2523,6 +2390,299 @@
             </span>
           </label>
         </section>
+
+        {% if let Some(saved) = self.saved() %}
+          {% if !directories.is_empty() %}
+            <fieldset class="border-base-300 mt-6 space-y-3 border-t pt-5">
+              <legend class="font-semibold">
+                Sandbox directory strategies
+              </legend>
+              <p class="text-quiet text-sm">
+                These strategies apply in Sandbox only. Host work locations do
+                not limit access.
+              </p>
+              <input
+                type="hidden"
+                name="directory_access"
+                value=""
+                form="conversation-settings-form"
+                id="execution-directory-access"
+              />
+              {% for directory in directories %}
+                <label class="flex min-w-0 flex-col gap-1">
+                  <span class="text-sm break-all"
+                    >{{ directory.host_path }}</span
+                  >
+                  <select
+                    class="select select-bordered w-full"
+                    data-execution-directory="{{ directory.id }}"
+                  >
+                    <option
+                      value="read-only"
+                      {% if !directory.review_before_apply && !directory.direct_write %}selected{% endif %}
+                    >
+                      Read only
+                    </option>
+                    <option
+                      value="review-before-apply"
+                      {% if directory.review_before_apply %}selected{% endif %}
+                    >
+                      Review before apply
+                    </option>
+                    <option
+                      value="direct-write"
+                      {% if directory.direct_write %}selected{% endif %}
+                    >
+                      Direct write
+                    </option>
+                  </select>
+                </label>
+              {% endfor %}
+            </fieldset>
+          {% endif %}
+          <button
+            id="conversation-execution-preview"
+            form="conversation-settings-form"
+            formaction="/conversations/{{ saved.id }}/settings/environment"
+            class="btn btn-secondary mt-6"
+            type="submit"
+          >
+            Review execution change
+          </button>
+          {% if let Some(change) = execution_switch %}
+            <div
+              class="alert alert-warning mt-4 items-start"
+              role="alert"
+              data-execution-switch
+            >
+              <div class="min-w-0 space-y-3">
+                <div>
+                  <h4 class="font-semibold">Change execution settings</h4>
+                  <p class="mt-1 text-sm">
+                    This decision changes execution settings only. Model,
+                    instruction, tool and network edits need a separate save
+                    after the switch.
+                  </p>
+                  {% if change.backend_changes %}
+                    <p class="mt-1 text-sm break-words">
+                      Change from {{ change.current_backend }} to
+                      {{ change.requested_backend }}.
+                    </p>
+                  {% endif %}
+                  {% if change.approval_changes %}
+                    <p class="mt-1 text-sm break-words">
+                      Host command approval changes from
+                      {{ change.current_approval }} to
+                      {{ change.requested_approval }}.
+                    </p>
+                  {% endif %}
+                  {% if change.environment_changes %}
+                    <p class="mt-1 text-sm break-words">
+                      Change the next environment from
+                      {{ change.current_environment }} to
+                      {{ change.requested_environment_name }}.
+                    </p>
+                  {% endif %}
+                </div>
+                <ul class="list-disc space-y-1 pl-5 text-sm">
+                  {% for line in change.access_lines %}
+                    <li class="break-words">{{ line }}</li>
+                  {% endfor %}
+                </ul>
+                {% if change.host_effects_remain %}
+                  <p class="text-sm">
+                    Direct writes and host side effects remain unchanged by this
+                    switch.
+                  </p>
+                {% endif %}
+                {% if change.needs_new_consent %}
+                  <p class="text-sm">
+                    The replacement configuration needs new approval for
+                    sensitive directories, Direct write or automatic host
+                    commands.
+                  </p>
+                {% endif %}
+                {% if change.active_job %}
+                  <p class="text-sm">
+                    Stop task and switch cancels the active task and any waiting
+                    host command. Power Plant waits for the task to stop and
+                    removes any temporary sandbox. Unsaved work in that sandbox
+                    is lost.
+                  </p>
+                  <p class="text-sm">
+                    Conversation history and existing host files remain. The new
+                    settings apply only to subsequent attempts.
+                  </p>
+                  <form
+                    data-graft
+                    method="post"
+                    id="conversation-execution-switch-form"
+                    action="/conversations/{{ saved.id }}/settings/environment/stop-and-switch"
+                    class="flex flex-wrap gap-2"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ saved.revision }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="location"
+                      value="{{ change.requested_location }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="host_approval"
+                      value="{{ change.requested_host_approval }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="environment"
+                      value="{{ change.requested_environment }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="job"
+                      value="{{ change.job_id }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="directory_access"
+                      value="{{ change.directory_access }}"
+                    />
+                    <button class="btn btn-warning" type="submit">
+                      Stop task and switch
+                    </button>
+                    <a
+                      href="/conversations/{{ saved.id }}"
+                      data-graft
+                      class="btn btn-ghost"
+                      >Cancel</a
+                    >
+                  </form>
+                {% else if let Some(gate) = change.gate %}
+                  <p class="text-sm">
+                    This task has reviewed changes. Review them or discard the
+                    exact candidate before execution settings change.
+                  </p>
+                  <p class="text-sm">
+                    Discard keeps conversation history, existing host files and
+                    immutable run evidence. Direct writes and host side effects
+                    remain unchanged by this switch.
+                  </p>
+                  <div class="flex flex-wrap gap-2">
+                    <a
+                      href="{{ gate.review_href }}"
+                      data-graft
+                      class="btn btn-secondary"
+                      >Review changes</a
+                    >
+                    <form
+                      data-graft
+                      method="post"
+                      id="conversation-execution-switch-form"
+                      action="/runs/{{ gate.run_id }}/gates/{{ gate.gate_id }}/discard-and-switch"
+                    >
+                      <input
+                        type="hidden"
+                        name="gate-revision"
+                        value="{{ gate.revision }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="candidate"
+                        value="{{ gate.candidate }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="conversation-revision"
+                        value="{{ saved.revision }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="location"
+                        value="{{ change.requested_location }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="host_approval"
+                        value="{{ change.requested_host_approval }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="environment"
+                        value="{{ change.requested_environment }}"
+                      />
+                      <input
+                        type="hidden"
+                        name="surface"
+                        value="conversation"
+                      />
+                      <input
+                        type="hidden"
+                        name="directory_access"
+                        value="{{ change.directory_access }}"
+                      />
+                      <button class="btn btn-warning" type="submit">
+                        Discard changes and switch
+                      </button>
+                    </form>
+                    <a
+                      href="/conversations/{{ saved.id }}"
+                      data-graft
+                      class="btn btn-ghost"
+                      >Cancel</a
+                    >
+                  </div>
+                {% else %}
+                  <form
+                    data-graft
+                    method="post"
+                    id="conversation-execution-switch-form"
+                    action="/conversations/{{ saved.id }}/settings/environment"
+                    class="flex flex-wrap gap-2"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ saved.revision }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="location"
+                      value="{{ change.requested_location }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="host_approval"
+                      value="{{ change.requested_host_approval }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="environment"
+                      value="{{ change.requested_environment }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="directory_access"
+                      value="{{ change.directory_access }}"
+                    />
+                    <input type="hidden" name="confirm" value="true" />
+                    <button class="btn btn-warning" type="submit">
+                      Change execution settings
+                    </button>
+                    <a
+                      href="/conversations/{{ saved.id }}"
+                      data-graft
+                      class="btn btn-ghost"
+                      >Cancel</a
+                    >
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+        {% endif %}
 
         <div
           class="border-base-300 mt-6 flex items-center justify-between gap-3 border-t pt-5"

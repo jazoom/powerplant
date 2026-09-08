@@ -2561,7 +2561,7 @@ async fn run_agent_step(
         } else {
             composed.push_str("Each shell command waits for user approval bound to this run. ");
         }
-        composed.push_str("Approval does not inspect script internals. Command output is sent to the hosted model.");
+        composed.push_str("Approval does not inspect script internals. Command output is sent to the hosted model. Sandbox guest paths such as /access/<alias> and /workspace from earlier turns are not host paths and grant no authority.");
     }
     let request_tools = crate::tools::definitions_for_step(
         &action.authority.tools,
@@ -4417,6 +4417,7 @@ fn settle_with_reply(
             }
         }
     }
+    state.host_approvals.invalidate_job(workflow.job.id());
     let _ = workflow.job.finish(status, error.as_deref());
 }
 

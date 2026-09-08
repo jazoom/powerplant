@@ -489,6 +489,52 @@ pub(crate) fn validate_launch_brief(brief: &str) -> Result<String, InputContextE
     Ok(brief.to_owned())
 }
 
+pub(crate) fn authorised_source_text(
+    settings: &crate::execution::ExecutionSettings,
+    writes_source: bool,
+) -> String {
+    if settings.location == crate::execution::ToolLocation::Host {
+        let directories = settings
+            .directories
+            .iter()
+            .map(|grant| format!("- {}: work location", grant.host_path.display()))
+            .collect::<Vec<_>>();
+        format!(
+            "Tools run on this computer. Work locations are conveniences, not confinement:\n{}\nSandbox guest paths such as /access/<alias> and /workspace from earlier turns grant no host authority. File import still uses an explicit read-only sandbox.",
+            if directories.is_empty() {
+                "None. Commands start in Power Plant's current directory.".to_owned()
+            } else {
+                directories.join("\n")
+            }
+        )
+    } else {
+        let directories = settings
+            .directories
+            .iter()
+            .map(|grant| {
+                let access = match grant.access {
+                    crate::execution::DirectoryAccess::DirectWrite => {
+                        "Direct write: immediate host changes. Discard and cancellation do not undo them."
+                    }
+                    crate::execution::DirectoryAccess::ReviewBeforeApply if writes_source => {
+                        "Review before apply"
+                    }
+                    _ => "Read only",
+                };
+                format!("- {}: {}", grant.guest_path(), access)
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "Private scratch: /workspace. Only the listed tools are available. Authorised directories:\n{}",
+            if directories.is_empty() {
+                "None".to_owned()
+            } else {
+                directories.join("\n")
+            }
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_attempt_packet_for_request(
     run: &WorkflowRun,
@@ -506,30 +552,8 @@ pub(crate) fn build_attempt_packet_for_request(
     let verified = verify_inputs(run, step, resolved, store)?;
     let project_instructions =
         ProjectInstructionSnapshot::from_verified(&verified, &project_instructions);
-    let source_available = if let Some(settings) = run.directory_settings() {
-        let directories = settings
-            .directories
-            .iter()
-            .map(|grant| {
-                let access = match grant.access {
-                    crate::execution::DirectoryAccess::DirectWrite => {
-                        "Direct write: immediate host changes. Discard and cancellation do not undo them."
-                    }
-                    crate::execution::DirectoryAccess::ReviewBeforeApply
-                        if step.writes_primary_source() => "Review before apply",
-                    _ => "Read only",
-                };
-                format!("- {}: {}", grant.guest_path(), access)
-            })
-            .collect::<Vec<_>>();
-        format!(
-            "Private scratch: /workspace. Only the listed tools are available. Authorised directories:\n{}",
-            if directories.is_empty() {
-                "None".to_owned()
-            } else {
-                directories.join("\n")
-            }
-        )
+    let source_available = if let Some(settings) = run.phase_settings(&step.key) {
+        authorised_source_text(settings, step.writes_primary_source())
     } else if matches!(run.source, super::run::RunSource::None) {
         let directories = match &step.action {
             StepAction::Agent(action) => action

@@ -7,12 +7,41 @@ import "./input.css";
 import { startApp } from "./hypergraft-bootstrap";
 import { listenForRequestSettled } from "hypergraft/browser";
 
+function syncExecutionModeFields() {
+    const location = document.querySelector<HTMLInputElement>(
+        'input[form="conversation-settings-form"][name="location"]:checked',
+    );
+    if (!location) return;
+    const host = location.value === "host";
+    document
+        .querySelectorAll<HTMLElement>("[data-execution-sandbox-settings]")
+        .forEach((section) => {
+            section.hidden = host;
+        });
+    const policy = document.querySelector<HTMLElement>(
+        "[data-execution-host-policy]",
+    );
+    if (policy) policy.hidden = !host;
+}
+
 listenForRequestSettled((detail) => {
     if (
         detail.outcome === "applied-patch" &&
         !detail.targetIds.includes("conversation-detail")
     ) {
         return;
+    }
+    syncExecutionModeFields();
+    const switchPreview = document.querySelector<HTMLButtonElement>(
+        "#conversation-execution-preview",
+    );
+    // A retained external submitter can retain transport-only ARIA state after a patch.
+    if (
+        switchPreview &&
+        !switchPreview.disabled &&
+        !switchPreview.hasAttribute("data-graft-submitter-pending")
+    ) {
+        switchPreview.removeAttribute("aria-disabled");
     }
     const requestedPanel = document.querySelector<HTMLElement>(
         '.conversation-panel[data-settings-open="true"], .conversation-panel[data-directories-open="true"]',
@@ -64,11 +93,44 @@ document.addEventListener("change", (event) => {
         if (preview?.form === field.form) field.form.requestSubmit(preview);
     }
     if (
-        event.target instanceof HTMLSelectElement &&
-        event.target.id === "conversation-environment"
+        field instanceof HTMLInputElement &&
+        field.name === "location" &&
+        field.form?.id === "conversation-settings-form"
+    ) {
+        syncExecutionModeFields();
+    }
+    if (
+        field instanceof HTMLSelectElement &&
+        field.matches("[data-execution-directory]")
+    ) {
+        const value = document.querySelector<HTMLInputElement>(
+            "#execution-directory-access",
+        );
+        if (value) {
+            value.value = JSON.stringify(
+                Array.from(
+                    document.querySelectorAll<HTMLSelectElement>(
+                        "[data-execution-directory]",
+                    ),
+                    (select) => [
+                        select.dataset.executionDirectory,
+                        select.value,
+                    ],
+                ),
+            );
+            value.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+    }
+    if (
+        (event.target instanceof HTMLSelectElement &&
+            (event.target.id === "conversation-environment" ||
+                event.target.matches("[data-execution-directory]"))) ||
+        (event.target instanceof HTMLInputElement &&
+            (event.target.name === "location" ||
+                event.target.name === "host_approval"))
     ) {
         document
-            .querySelector<HTMLElement>("[data-environment-switch]")
+            .querySelector<HTMLElement>("[data-execution-switch]")
             ?.setAttribute("hidden", "");
     }
 });

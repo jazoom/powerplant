@@ -138,15 +138,23 @@ pub(super) async fn run_host_tools(
     if !preamble.is_empty() {
         preamble.push_str("\n\n");
     }
-    preamble.push_str(
-        "Tools run on this computer as the Power Plant process user. Each shell command waits for user approval. Approval does not inspect script internals. Command output is sent to the hosted model.",
-    );
+    let settings = record.model.as_ref().map(|model| &model.settings);
+    if let Some(settings) = settings {
+        preamble.push_str(&crate::workflows::input_context::authorised_source_text(
+            settings, false,
+        ));
+        preamble.push_str("\n\n");
+        preamble.push_str(match settings.host_approval {
+            crate::execution::HostApprovalPolicy::AskEachTime => "Each shell command waits for user approval. ",
+            crate::execution::HostApprovalPolicy::Automatic => "Run without approval permits automatic commands within this conversation's authorised settings. ",
+        });
+    }
+    preamble.push_str("Commands use the Power Plant process user's authority. Approval does not inspect script internals. Command output is sent to the hosted model.");
     let secret = match connection.auth {
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
         crate::providers::AuthMethod::Plan => None,
     };
     let secret = secret.as_deref();
-    let settings = record.model.as_ref().map(|model| &model.settings);
     let tool_ids = settings
         .map(|settings| crate::tools::advertised(&settings.tools, settings.location))
         .unwrap_or_default();
