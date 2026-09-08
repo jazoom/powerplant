@@ -155,6 +155,16 @@ pub(crate) struct AgentStep {
     pub(crate) settings: ModelStepSettings,
 }
 
+impl AgentStep {
+    pub(crate) fn host_tools(&self) -> bool {
+        matches!(
+            &self.settings,
+            ModelStepSettings::Override(settings)
+                if settings.location == Some(crate::execution::ToolLocation::Host)
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) enum ModelStepSettings {
     #[default]
@@ -185,6 +195,7 @@ pub(crate) fn additional_access(
         .any(|tool| !defaults.tools.contains(tool))
         || resolved.network != defaults.network
         || resolved.location != defaults.location
+        || resolved.host_approval != defaults.host_approval
         || resolved.directories.iter().any(|grant| {
             defaults.directories.iter().all(|existing| {
                 existing.identity != grant.identity
@@ -409,7 +420,7 @@ impl DefinitionError {
                 "The workflow needs tools, directories or an explicit Git destination outside these settings."
             }
             Self::WriteStrategy => {
-                "A root cannot bypass candidate approval through Direct write. Read-only review phases cannot request direct writes."
+                "A root cannot bypass candidate approval through Direct write or unrestricted host execution. Read-only review phases cannot request direct writes."
             }
             Self::Name => "Enter a name of at most 80 bytes.",
             Self::Expertise => "Those expertise notes are too long.",
@@ -767,6 +778,30 @@ impl WorkflowDefinition {
             ) {
                 return Err(DefinitionError::Authority);
             }
+            if effective.location == crate::execution::ToolLocation::Host
+                && (requires_candidate_approval
+                    || self.steps.iter().any(|step| {
+                        step.writes_primary_source()
+                            || matches!(
+                                &step.action,
+                                StepAction::SystemCommand(action)
+                                    if matches!(
+                                        action.command,
+                                        SystemCommandId::CommitCandidate
+                                            | SystemCommandId::ApplyChanges
+                                    )
+                            )
+                    }))
+            {
+                return Err(DefinitionError::WriteStrategy);
+            }
+            if effective.location == crate::execution::ToolLocation::Host
+                && effective.directories.iter().any(|grant| {
+                    grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                })
+            {
+                return Err(DefinitionError::WriteStrategy);
+            }
             if effective.directories.iter().any(|grant| {
                 requires_candidate_approval
                     && grant.access == crate::execution::DirectoryAccess::DirectWrite
@@ -1078,10 +1113,11 @@ impl StepDefinition {
     }
 
     pub(crate) fn is_sandbox_backed(&self) -> bool {
-        matches!(
-            self.action,
-            StepAction::Agent(_) | StepAction::SystemCommand(_)
-        )
+        match &self.action {
+            StepAction::Agent(action) => !action.host_tools(),
+            StepAction::SystemCommand(_) => true,
+            StepAction::HumanGate(_) => false,
+        }
     }
 
     pub(crate) fn required_outputs(&self) -> &[RequiredOutput] {
@@ -2123,7 +2159,21 @@ fn reject_step_outputs(steps: &[StepDefinition]) -> Result<(), DefinitionError> 
     Ok(())
 }
 
+fn host_diagnostic_loop(steps: &[StepDefinition], mode: ExecutionMode) -> bool {
+    mode == ExecutionMode::TaskList
+        && !steps.is_empty()
+        && steps.iter().all(|step| match &step.action {
+            StepAction::Agent(action) => {
+                action.host_tools() && action.candidate_authority == CandidateAuthority::ReadOnly
+            }
+            StepAction::SystemCommand(_) | StepAction::HumanGate(_) => false,
+        })
+}
+
 fn supports_task_execution(steps: &[StepDefinition], mode: ExecutionMode) -> bool {
+    if host_diagnostic_loop(steps, mode) {
+        return true;
+    }
     let [body @ .., commit] = steps else {
         return false;
     };

@@ -290,6 +290,10 @@ pub(crate) async fn run_agent_action(
             conversation: host.conversation,
             execution_revision: host.execution_revision,
             directory: host.directory.clone(),
+            run: host.run.clone(),
+            step: host.step.clone(),
+            attempt: host.attempt.clone(),
+            task_loop: host.task_loop.clone(),
         });
         let context = tools::AgentToolContext {
             sandbox: spec.sandbox.as_deref(),
@@ -322,6 +326,13 @@ pub(crate) async fn run_agent_action(
                 job.push_tool(visible.clone());
                 reply.push_tool(visible);
                 output_visible = true;
+            }
+            if trace.failed && spec.host.as_ref().is_some_and(|host| host.run.is_some()) {
+                return AgentActionEnd {
+                    outcome: AgentOutcome::ToolFailure,
+                    error: Some(output),
+                    reply: reply.clone(),
+                };
             }
             extra.push(Message::tool_result(id, name, output));
         }

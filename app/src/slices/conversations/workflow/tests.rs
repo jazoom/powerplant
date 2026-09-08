@@ -1021,3 +1021,237 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
         conversation
     );
 }
+
+#[tokio::test]
+async fn host_workflows_gate_commands_and_stop_failed_task_loops_without_a_sandbox() {
+    use crate::execution::{HostApprovalPolicy, HostCommandDecision, ToolLocation};
+    use workflows::definition::{OutputKind, StepAction, WorkflowDefinition};
+
+    for (policy, mode, fail) in [
+        (HostApprovalPolicy::AskEachTime, ExecutionMode::Once, false),
+        (
+            HostApprovalPolicy::Automatic,
+            ExecutionMode::TaskList,
+            false,
+        ),
+        (HostApprovalPolicy::Automatic, ExecutionMode::TaskList, true),
+    ] {
+        let mut state = connected_state();
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("executed");
+        state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+            crate::providers::tests::ScriptedBackend::tool_then(
+                "run",
+                serde_json::json!({
+                    "command": format!("touch '{}'; exit {}", marker.display(), if fail { 7 } else { 0 }),
+                    "explanation": "Create the temporary test marker",
+                }),
+                "Diagnostic complete",
+            ).repeat_rounds(2),
+        ));
+        state
+            .sandboxes
+            .set_missing_runtime(crate::sandbox::MissingRuntime::Both);
+        let mut settings = directory_settings()
+            .with_location(ToolLocation::Host)
+            .with_host_approval(policy);
+        settings.model.thinking =
+            state
+                .models_dev
+                .effective_effort(settings.model.provider, &settings.model.model, None);
+        let mut location =
+            crate::execution::DirectoryGrant::from_selected(directory.path(), &[]).unwrap();
+        location.access = crate::execution::DirectoryAccess::DirectWrite;
+        settings.directories.push(location);
+        let conversation = state.conversations.create("Diagnostic".to_owned()).unwrap();
+        let conversation = state
+            .conversations
+            .update_execution_settings(&conversation.id, conversation.revision, settings.clone())
+            .unwrap();
+        let base = workflows::seeds::plan_a_change_definition(settings.environment)
+            .with_conversation_settings(&settings)
+            .unwrap();
+        let mut steps = base.steps().to_vec();
+        if let StepAction::Agent(action) = &mut steps[0].action {
+            action
+                .required_outputs
+                .retain(|output| output.kind == OutputKind::AssistantReply);
+        }
+        let definition = WorkflowDefinition::from_parts_with_mode(
+            "Diagnostic".to_owned(),
+            settings.environment,
+            base.roles().to_vec(),
+            steps,
+            mode,
+        )
+        .unwrap();
+        let workflow = state.workflows.create(definition.clone()).unwrap();
+        let selection = WorkflowSelection {
+            workflow_id: workflow.id,
+            definition_version: workflow.definition_version,
+        }
+        .as_token();
+        let token = crate::sessions::generate_session_token().unwrap();
+        state.sessions.insert(token.id());
+        let phase_choice =
+            phase_choice_token(definition.steps()[0].key.as_str(), &settings.model, None);
+        let encoded_phase: String = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("phase", &phase_choice)
+            .finish();
+        let mut phases = resolve_phase_models(&state, &definition, &[phase_choice]).unwrap();
+        resolve_directory_phase_settings(&definition, &settings, &mut phases).unwrap();
+        let preview = state
+            .access_consent
+            .request_launch(
+                token.id(),
+                conversation.id,
+                phases
+                    .iter()
+                    .filter_map(|phase| phase.settings.clone())
+                    .collect(),
+            )
+            .unwrap();
+        let document = if mode == ExecutionMode::TaskList {
+            let document = state
+                .documents
+                .create_task_list_from_text(
+                    conversation.id,
+                    "Tasks".to_owned(),
+                    "# Tasks\n\n- [ ] First\n- [ ] Second\n".to_owned(),
+                    None,
+                )
+                .unwrap();
+            format!(
+                "{}/1/{}",
+                document.id.as_hex(),
+                document.current().content_hash.as_str()
+            )
+        } else {
+            String::new()
+        };
+        let app = crate::slices::router()
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::sessions::resolve_session,
+            ))
+            .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+            .with_state(state.clone());
+        let response = app.oneshot(Request::builder().method("POST")
+            .uri(format!("/conversations/{}/workflow", conversation.id))
+            .header(header::COOKIE, format!("powerplant_session={}", token.raw().as_str()))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(hypergraft::GRAFT_REQUEST, "patch").header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+            .body(Body::from(format!("revision={}&workflow={selection}&preview_workflow={selection}&brief=Diagnose&{encoded_phase}&confirm_additional_access={preview}&task_document={document}&preview_task_document={document}", conversation.revision))).unwrap()).await.unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let current = state.conversations.get(&conversation.id).unwrap();
+                if fail
+                    && state
+                        .task_loops
+                        .for_conversation(&conversation.id)
+                        .iter()
+                        .any(|parent| parent.state == workflows::task_loop::TaskLoopState::Failed)
+                {
+                    break;
+                }
+                let Some(job) = current.active_job else {
+                    break;
+                };
+                if let Some(request) = state.host_approvals.pending_for(conversation.id, job) {
+                    assert_eq!(policy, HostApprovalPolicy::AskEachTime);
+                    assert!(!marker.exists());
+                    assert!(
+                        request.run.is_some()
+                            && request.step.is_some()
+                            && request.attempt.is_some()
+                    );
+                    state
+                        .host_approvals
+                        .decide(&request, HostCommandDecision::Approved)
+                        .unwrap();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the host workflow must settle or stop at its failed task");
+        assert!(marker.exists());
+        let runs: Vec<_> = if mode == ExecutionMode::TaskList {
+            state.task_loops.for_conversation(&conversation.id)[0]
+                .tasks
+                .iter()
+                .filter_map(|task| task.child_id)
+                .map(|id| state.workflow_runs.get(&id).unwrap())
+                .collect()
+        } else {
+            state.workflow_runs.for_conversation(&conversation.id)
+        };
+        if fail {
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].state, workflows::run::RunState::Failed);
+        } else {
+            assert_eq!(
+                runs.len(),
+                if mode == ExecutionMode::TaskList {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert!(runs.iter().all(|run| run.completed_host()));
+        }
+    }
+}
+
+#[test]
+fn host_workflow_consent_binds_the_destination_and_approval_policy() {
+    let mut settings = directory_settings()
+        .with_location(crate::execution::ToolLocation::Host)
+        .with_host_approval(crate::execution::HostApprovalPolicy::Automatic);
+    settings.tools = vec![crate::agents::ToolId::Run];
+    let consent = crate::execution::AccessConsentStore::default();
+    let session = crate::sessions::generate_session_token().unwrap().id();
+    let conversation = crate::conversations::ConversationId::generate().unwrap();
+    let run = workflows::RunId::generate().unwrap();
+    let other = workflows::RunId::generate().unwrap();
+    consent
+        .approve_host_conversation(
+            &consent
+                .request_host_conversation(session, conversation, &settings)
+                .unwrap(),
+            session,
+            conversation,
+            &settings,
+        )
+        .unwrap();
+    assert!(consent.authorised_host_conversation(session, conversation, &settings));
+    assert!(!consent.authorised_launch(run, session, conversation, &settings));
+    let preview = consent
+        .request_launch(session, conversation, vec![settings.clone()])
+        .unwrap();
+    consent
+        .approve_launch(&preview, run, session, conversation, vec![settings.clone()])
+        .unwrap();
+    assert!(consent.authorised_launch(run, session, conversation, &settings));
+    assert!(!consent.authorised_launch(other, session, conversation, &settings));
+    let loop_id = workflows::TaskLoopId::generate().unwrap();
+    let loop_preview = consent
+        .request_launch(session, conversation, vec![settings.clone()])
+        .unwrap();
+    consent
+        .approve_loop_launch(
+            &loop_preview,
+            loop_id,
+            session,
+            conversation,
+            vec![settings.clone()],
+        )
+        .unwrap();
+    assert!(consent.authorised_loop(loop_id, session, conversation, &settings));
+    let mut ask = settings.clone();
+    ask.host_approval = crate::execution::HostApprovalPolicy::AskEachTime;
+    assert!(!consent.authorised_loop(loop_id, session, conversation, &ask));
+}

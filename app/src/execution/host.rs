@@ -62,6 +62,25 @@ pub(crate) async fn run_shell(
     job: &Job,
     timeout: Duration,
 ) -> Result<String, &'static str> {
+    run_shell_inner(command, directory, job, timeout, false).await
+}
+
+pub(crate) async fn run_workflow_shell(
+    command: &str,
+    directory: &Path,
+    job: &Job,
+    timeout: Duration,
+) -> Result<String, &'static str> {
+    run_shell_inner(command, directory, job, timeout, true).await
+}
+
+async fn run_shell_inner(
+    command: &str,
+    directory: &Path,
+    job: &Job,
+    timeout: Duration,
+    require_success: bool,
+) -> Result<String, &'static str> {
     if job.cancel_requested() {
         return Err("Stopped.");
     }
@@ -128,7 +147,11 @@ pub(crate) async fn run_shell(
                     let _ = child.wait().await;
                     let mut output = merge_output(stdout_text, stderr_text);
                     crate::tools::mark_truncated(&mut output);
-                    return Ok(output);
+                    return if require_success {
+                        Err("The command exceeded the output limit. Host effects can remain incomplete.")
+                    } else {
+                        Ok(output)
+                    };
                 }
             }
             result = read_pipe(stderr.as_mut(), &mut stderr_text) => {
@@ -141,7 +164,11 @@ pub(crate) async fn run_shell(
                     let _ = child.wait().await;
                     let mut output = merge_output(stdout_text, stderr_text);
                     crate::tools::mark_truncated(&mut output);
-                    return Ok(output);
+                    return if require_success {
+                        Err("The command exceeded the output limit. Host effects can remain incomplete.")
+                    } else {
+                        Ok(output)
+                    };
                 }
             }
             result = child.wait(), if status.is_none() => {
@@ -150,6 +177,9 @@ pub(crate) async fn run_shell(
         }
     }
     let status = status.ok_or("Power Plant lost the command result. Try again.")?;
+    if require_success && !status.success() {
+        return Err("The host command failed. Earlier host effects remain unchanged.");
+    }
     let mut output = merge_output(stdout_text, stderr_text);
     if output.len() > tools_limit() {
         crate::tools::mark_truncated(&mut output);

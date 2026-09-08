@@ -309,6 +309,9 @@ impl WorkflowEvidenceStore {
             "command": text(&request.command, crate::tools::MAXIMUM_COMMAND_BYTES),
             "directory": text(&request.directory.to_string_lossy(), MAXIMUM_ACTIVITY_TEXT_BYTES),
             "explanation": text(&request.explanation, MAXIMUM_ACTIVITY_TEXT_BYTES),
+            "run": request.run.clone().unwrap_or_default(),
+            "step": request.step.clone().unwrap_or_default(),
+            "attempt": request.attempt.clone().unwrap_or_default(),
             "status": status,
             "output": text(output, crate::tools::MAXIMUM_TOOL_BYTES),
         });

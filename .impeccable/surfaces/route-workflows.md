@@ -46,13 +46,19 @@ Model and preset overrides stay collapsed until requested. Each model phase can 
 
 Review shows the exact phase settings and sensitive directory warnings. Approval applies to one run. Error responses retain field values and reveal the first invalid phase.
 
-Model phase fields include Direct write directories. The process preview names immediate host effects separately from reviewed candidates.
+Model phase fields include Direct write directories, Where tools run, and host command approval. The process preview names immediate host effects separately from reviewed candidates.
+
+This computer uses work locations. Sandbox network and environment stay separate. Host steps need no sandbox environment.
+
+A backend choice updates the inline execution controls. The form retains the host approval preference and unsaved instructions across these previews.
+
+Ask each time binds each command to the exact run, step and attempt. Run without approval needs explicit launch authorisation for that run or task loop.
 
 Direct changes remain after failure, discard or cancellation. Candidate approval covers reviewed roots only, not direct effects on separate roots.
 
 Each run needs destination consent for its resolved phase settings. Copied settings and parent conversation consent supply no run approval.
 
-A launch override cannot change a reviewed root to Direct write when the process requires candidate approval. Read-only narrowing remains valid.
+A launch override cannot change a reviewed root to Direct write when the process requires candidate approval. Host overrides cannot bypass required pre-application candidate guarantees. A commit action stays a registered system command. Read-only narrowing remains valid.
 
 The final review identifies selected context, effects, effective access, environment readiness and approval stops. Workers receive selected inputs, not the entire conversation history.
 

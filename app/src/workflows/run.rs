@@ -255,6 +255,7 @@ pub(crate) struct AttemptSandboxRecord {
 pub(crate) enum AttemptSandboxKind {
     IsolatedAttempt,
     FileApplication,
+    HostExecution,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -751,11 +752,37 @@ impl WorkflowRun {
         self.phase_models
             .iter()
             .filter_map(|phase| phase.settings.as_ref())
+            .filter(|settings| settings.location == crate::execution::ToolLocation::Sandbox)
             .any(|settings| {
                 settings
                     .directories
                     .iter()
                     .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
+            })
+    }
+
+    pub(crate) fn has_host_execution(&self) -> bool {
+        self.phase_models
+            .iter()
+            .filter_map(|phase| phase.settings.as_ref())
+            .any(|settings| settings.location == crate::execution::ToolLocation::Host)
+    }
+
+    pub(crate) fn completed_host(&self) -> bool {
+        self.state == RunState::Completed
+            && self.has_host_execution()
+            && self.reviewed_directories().is_empty()
+            && !self.has_direct_writes()
+            && self.attempts.iter().any(|attempt| {
+                attempt.action_kind == ActionKind::Agent
+                    && self.phase_settings(&attempt.step).is_some_and(|settings| {
+                        settings.location == crate::execution::ToolLocation::Host
+                    })
+            })
+            && self.attempts.iter().all(|attempt| {
+                attempt.cleanup == AttemptCleanupRecord::Complete
+                    && attempt.state == AttemptState::Completed
+                    && matches!(attempt.result, Some(AttemptResult::Completed { .. }))
             })
     }
 
@@ -1493,16 +1520,35 @@ impl WorkflowRun {
         if !capabilities_match_step(self, &capabilities, definition_step) {
             return Err(TransitionError::Invalid);
         }
-        let expected = self
-            .environments
-            .steps
-            .iter()
-            .find(|item| item.step == step)
-            .map(|item| &item.snapshot_digest);
-        if expected != Some(&sandbox.snapshot_digest)
-            || sandbox.kind != AttemptSandboxKind::IsolatedAttempt
-        {
+        let host_step = matches!(
+            &definition_step.action,
+            StepAction::Agent(action) if action.host_tools()
+        );
+        let apply_step = matches!(
+            &definition_step.action,
+            StepAction::SystemCommand(action)
+                if action.command == crate::workflows::commands::SystemCommandId::ApplyChanges
+        );
+        let expected_kind = if host_step {
+            AttemptSandboxKind::HostExecution
+        } else if apply_step {
+            AttemptSandboxKind::FileApplication
+        } else {
+            AttemptSandboxKind::IsolatedAttempt
+        };
+        if sandbox.kind != expected_kind {
             return Err(TransitionError::Invalid);
+        }
+        if !host_step {
+            let expected = self
+                .environments
+                .steps
+                .iter()
+                .find(|item| item.step == step)
+                .map(|item| &item.snapshot_digest);
+            if expected != Some(&sandbox.snapshot_digest) {
+                return Err(TransitionError::Invalid);
+            }
         }
         if let Some(reservation) = &mut self.revision_reservation {
             reservation.started = true;
@@ -3929,21 +3975,30 @@ fn validate_attempt_isolation(
         StepAction::SystemCommand(action)
             if action.command == crate::workflows::commands::SystemCommandId::ApplyChanges
     );
+    let host_execution = matches!(
+        &step.action,
+        StepAction::Agent(action) if action.host_tools()
+    );
     if (file_application && attempt.sandbox.kind != AttemptSandboxKind::FileApplication)
-        || (!file_application && attempt.sandbox.kind != AttemptSandboxKind::IsolatedAttempt)
+        || (host_execution && attempt.sandbox.kind != AttemptSandboxKind::HostExecution)
+        || (!file_application
+            && !host_execution
+            && attempt.sandbox.kind != AttemptSandboxKind::IsolatedAttempt)
     {
         return Err(RunRecordError::Corrupt);
     }
-    let Some(binding) = run
-        .environments
-        .steps
-        .iter()
-        .find(|item| item.step == attempt.step)
-    else {
-        return Err(RunRecordError::Corrupt);
-    };
-    if attempt.sandbox.snapshot_digest != binding.snapshot_digest {
-        return Err(RunRecordError::Corrupt);
+    if !host_execution {
+        let Some(binding) = run
+            .environments
+            .steps
+            .iter()
+            .find(|item| item.step == attempt.step)
+        else {
+            return Err(RunRecordError::Corrupt);
+        };
+        if attempt.sandbox.snapshot_digest != binding.snapshot_digest {
+            return Err(RunRecordError::Corrupt);
+        }
     }
     let apply = matches!(
         &step.action,
@@ -4422,6 +4477,7 @@ impl AttemptSandboxKind {
         match self {
             Self::IsolatedAttempt => "isolated-attempt",
             Self::FileApplication => "file-application",
+            Self::HostExecution => "host-execution",
         }
     }
 
@@ -4429,6 +4485,7 @@ impl AttemptSandboxKind {
         match value {
             "isolated-attempt" => Some(Self::IsolatedAttempt),
             "file-application" => Some(Self::FileApplication),
+            "host-execution" => Some(Self::HostExecution),
             _ => None,
         }
     }

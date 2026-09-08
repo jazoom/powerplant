@@ -13,7 +13,9 @@ pub(crate) use approval::{
 pub(crate) use authority::ProjectFreeAuthority;
 pub(crate) use consent::{AccessConsentStore, draft_nonce};
 pub(crate) use folder_picker::{FolderPick, FolderPicker};
-pub(crate) use host::{COMMAND_TIMEOUT, HostIdentity, command_directory, run_shell};
+pub(crate) use host::{
+    COMMAND_TIMEOUT, HostIdentity, command_directory, run_shell, run_workflow_shell,
+};
 pub(crate) use settings::{
     CanonicalDirectoryIdentity, DirectoryAccess, DirectoryGrant, DirectoryGrantError,
     DirectoryGrantId, ExecutionSettings, ExecutionSettingsFile, HostApprovalPolicy, ToolLocation,

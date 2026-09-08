@@ -248,6 +248,8 @@ pub(super) struct StepDraft {
     pub(super) settings_read_only: String,
     pub(super) settings_reviewed: String,
     pub(super) settings_direct: String,
+    pub(super) location: String,
+    pub(super) host_approval: String,
     pub(super) settings_preset: String,
     pub(super) settings_grants: Vec<DirectoryGrant>,
     pub(super) settings_inherit: Vec<String>,
@@ -977,6 +979,8 @@ enum StepPart {
     SettingsReadOnly,
     SettingsReviewed,
     SettingsDirect,
+    Location,
+    HostApproval,
     SettingsPreset,
     SettingsGrants,
     SettingsInherit(&'static str),
@@ -1074,6 +1078,8 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("read-only") => StepPart::SettingsReadOnly,
                 Some("reviewed") => StepPart::SettingsReviewed,
                 Some("direct") => StepPart::SettingsDirect,
+                Some("location") => StepPart::Location,
+                Some("settings-host-approval") => StepPart::HostApproval,
                 Some("settings-preset") => StepPart::SettingsPreset,
                 Some("settings-grants") => StepPart::SettingsGrants,
                 Some("inherit-model") => StepPart::SettingsInherit("model"),
@@ -1082,6 +1088,8 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("inherit-network") => StepPart::SettingsInherit("network"),
                 Some("inherit-environment") => StepPart::SettingsInherit("environment"),
                 Some("inherit-directories") => StepPart::SettingsInherit("directories"),
+                Some("inherit-location") => StepPart::SettingsInherit("location"),
+                Some("inherit-host-approval") => StepPart::SettingsInherit("host_approval"),
                 Some("dir") => {
                     let dir = parse_index(parts.next().ok_or(FormError::UnknownField)?)?;
                     let dir_part = match parts.next() {
@@ -1378,6 +1386,8 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             StepPart::SettingsReadOnly => step.settings_read_only = value,
             StepPart::SettingsReviewed => step.settings_reviewed = value,
             StepPart::SettingsDirect => step.settings_direct = value,
+            StepPart::Location => step.location = value,
+            StepPart::HostApproval => step.host_approval = value,
             StepPart::SettingsPreset => step.settings_preset = value,
             StepPart::SettingsInherit(field) => {
                 if value != "1" {
@@ -2258,6 +2268,8 @@ fn empty_step() -> StepDraft {
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: Vec::new(),
         settings_direct: String::new(),
+        location: String::new(),
+        host_approval: String::new(),
         settings_source: String::new(),
         provider: String::new(),
         model: String::new(),
@@ -2294,6 +2306,8 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: ToolId::ALL.to_vec(),
         settings_direct: String::new(),
+        location: String::new(),
+        host_approval: String::new(),
         settings_source: String::new(),
         provider: String::new(),
         model: String::new(),
@@ -2461,6 +2475,8 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                     DirectoryAccess::ReviewBeforeApply,
                 ),
                 settings_direct: settings_paths(&action.settings, DirectoryAccess::DirectWrite),
+                location: settings_location(&action.settings),
+                host_approval: settings_host_approval(&action.settings),
                 settings_preset: String::new(),
                 settings_grants: settings_grants(&action.settings),
                 settings_inherit: inherited_fields(&action.settings),
@@ -2487,6 +2503,8 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             candidate_access: String::new(),
             command: action.command.as_str().to_owned(),
             settings_direct: String::new(),
+            location: String::new(),
+            host_approval: String::new(),
             tools: Vec::new(),
             settings_source: "defaults".to_owned(),
             provider: String::new(),
@@ -2520,6 +2538,8 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 instructions: purpose.default_instructions().to_owned(),
                 action: "human-gate".to_owned(),
                 settings_direct: String::new(),
+                location: String::new(),
+                host_approval: String::new(),
                 environment: String::new(),
                 role: String::new(),
                 candidate_access: String::new(),
@@ -2622,6 +2642,8 @@ fn inherited_fields(settings: &ModelStepSettings) -> Vec<String> {
         ("network", settings.network.is_none()),
         ("directories", settings.directories.is_none()),
         ("environment", settings.environment.is_none()),
+        ("location", settings.location.is_none()),
+        ("host_approval", settings.host_approval.is_none()),
     ]
     .into_iter()
     .filter(|(_, inherit)| *inherit)
@@ -2707,6 +2729,26 @@ fn settings_paths(settings: &ModelStepSettings, access: DirectoryAccess) -> Stri
     }
 }
 
+fn settings_location(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .location
+            .map(|location| location.as_str().to_owned())
+            .unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_host_approval(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .host_approval
+            .map(|policy| policy.as_str().to_owned())
+            .unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
 fn settings_grants(settings: &ModelStepSettings) -> Vec<DirectoryGrant> {
     match settings {
         ModelStepSettings::Override(value) => value.directories.clone().unwrap_or_default(),
@@ -2754,6 +2796,8 @@ pub(super) fn fill_step_from_preset(step: &mut StepDraft, preset: &crate::preset
         .join("\n");
     step.settings_grants = settings.directories.clone();
     step.environment = settings.environment.as_hex();
+    step.location = settings.location.as_str().to_owned();
+    step.host_approval = settings.host_approval.as_str().to_owned();
 }
 
 fn parse_override_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<SettingsOverrides> {
@@ -2859,6 +2903,42 @@ fn parse_override_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<
             directories.push(grant);
         }
     }
+    let location = if inherits("location") {
+        None
+    } else {
+        Some(
+            crate::execution::ToolLocation::parse(if step.location.trim().is_empty() {
+                crate::execution::ToolLocation::Sandbox.as_str()
+            } else {
+                step.location.trim()
+            })
+            .ok_or_else(|| {
+                errors.settings = "Choose Sandbox or This computer.";
+            })
+            .ok()?,
+        )
+    };
+    if location == Some(crate::execution::ToolLocation::Host)
+        && (!step.settings_reviewed.trim().is_empty() || !step.settings_direct.trim().is_empty())
+    {
+        errors.settings = "Host steps use work locations, not sandbox write strategies.";
+        return None;
+    }
+    let host_approval = if inherits("host_approval") {
+        None
+    } else {
+        Some(
+            crate::execution::HostApprovalPolicy::parse(if step.host_approval.trim().is_empty() {
+                crate::execution::HostApprovalPolicy::AskEachTime.as_str()
+            } else {
+                step.host_approval.trim()
+            })
+            .ok_or_else(|| {
+                errors.settings = "Choose Ask each time or Run without approval.";
+            })
+            .ok()?,
+        )
+    };
     let settings = SettingsOverrides {
         model,
         environment,
@@ -2866,7 +2946,8 @@ fn parse_override_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<
         instructions: (!inherits("instructions")).then(|| step.settings_instructions.clone()),
         tools: (!inherits("tools")).then(|| step.tools.clone()),
         directories: (!inherits("directories")).then_some(directories),
-        location: None,
+        location,
+        host_approval,
     };
     if settings.validate().is_none() {
         errors.settings =

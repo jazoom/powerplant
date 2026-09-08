@@ -219,7 +219,7 @@ Model context identifies actual guest paths and effective access. Root instructi
 
 Explicit Git commands retain an explicit supported project binding. Directory order never selects a Git destination. Task-loop conversion remains separate from ordinary one-shot workflows.
 
-Task-loop completion recognises verified generic file application separately from commits. Every application root must report Applied or Unchanged, and managed cleanup must finish. Unsettled application transactions block completion, continuation and retry. Project-free task-loop launch remains unavailable.
+Task-loop completion recognises verified generic file application separately from commits. Every application root must report Applied or Unchanged, and managed cleanup must finish. Unsettled application transactions block completion, continuation and retry. Host task loops need no project registration or sandbox environment.
 
 Saved documents sits in a stable inline section above the transcript. Its summary shows the document count when documents exist.
 
@@ -320,6 +320,15 @@ Current capabilities:
 - Review and apply one immutable candidate set across multiple ordinary directories without a Git commit.
 - Recover interrupted file application from retained preimages and transaction progress.
 - Launch a configured workflow from a conversation.
+- Offer This computer and Ask each time or Run without approval on workflow model steps.
+- Use work locations for host workflow steps. Sandbox network and environment stay separate.
+- Preview each host phase approval policy, including Run without approval, before start.
+- Bind host workflow consent to the run or task loop. Parent conversation consent does not authorise the run.
+- Bind Ask each time host commands to the exact run, step and attempt.
+- Record host workflow completion separately from file application.
+- Stop host workflows after command failure, timeout or termination at the output limit. Earlier host effects remain unchanged.
+- Show the effective host approval mode and pending commands on the run and conversation.
+- Restart never resumes automatic host workflow commands.
 - Stream the reply into the transcript as HTML.
 - Run sandbox-backed workflow steps in isolated guests.
 - Expose the selected project at `/project` during sandbox-backed steps.
@@ -357,6 +366,7 @@ Current constraints:
 - Environment changes wait until active execution and pending reviewed work settle.
 - Tool-free chat needs no sandbox runtime or prepared environment.
 - Host commands need no sandbox runtime or prepared environment.
+- Host workflow steps cannot bypass required candidate approval. A commit action stays a registered system command.
 - Quick task never enters the workflow catalogue.
 
 Later work:

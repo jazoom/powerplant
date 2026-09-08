@@ -54,6 +54,9 @@ pub(crate) struct HostCommandRequest {
     pub(crate) command: String,
     pub(crate) directory: PathBuf,
     pub(crate) explanation: String,
+    pub(crate) run: Option<String>,
+    pub(crate) step: Option<String>,
+    pub(crate) attempt: Option<String>,
 }
 
 struct PendingHostCommand {

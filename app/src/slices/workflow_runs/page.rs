@@ -153,6 +153,14 @@ pub(super) struct StepView {
     pub(super) selected_route: String,
     pub(super) role: String,
     pub(super) model: String,
+    pub(super) host_approval: String,
+}
+
+pub(super) struct PendingHostCommandView {
+    pub(super) command: String,
+    pub(super) directory: String,
+    pub(super) explanation: String,
+    pub(super) step: String,
 }
 
 pub(super) struct TaskSelectionView {
@@ -266,7 +274,7 @@ fn index_row_from_run(summary: &RunSummary, projects: &ProjectStore) -> IndexRow
 }
 
 fn index_row_from_loop(summary: &LoopSummary, projects: &ProjectStore) -> IndexRow {
-    let (_, project_name) = project_presentation(Some(summary.project_id), projects);
+    let (_, project_name) = project_presentation(summary.project_id, projects);
     IndexRow {
         id: summary.id.as_hex(),
         href: format!("/runs/loops/{}", summary.id.as_hex()),
@@ -374,6 +382,7 @@ impl LoopDetailView {
                         crate::workflows::TaskOutcome::CompletedApplication => "Applied",
                         crate::workflows::TaskOutcome::CompletedUnchanged => "Unchanged",
                         crate::workflows::TaskOutcome::CompletedDirect => "Completed · direct host changes",
+                        crate::workflows::TaskOutcome::CompletedHost => "Completed · host commands",
                         crate::workflows::TaskOutcome::Failed => "Failed",
                         crate::workflows::TaskOutcome::Cancelled => "Cancelled",
                     },
@@ -441,6 +450,8 @@ pub(super) struct RunDetailView {
     pub(super) hierarchy: String,
     pub(super) context_boundaries: String,
     pub(super) process_phases: Vec<ProcessPhase>,
+    pub(super) host_approval: String,
+    pub(super) pending_host_command: Option<PendingHostCommandView>,
 }
 
 pub(super) struct ArtefactRow {
@@ -477,6 +488,8 @@ pub(super) struct RunDetailContents<'a> {
     pub(super) hierarchy: &'a str,
     pub(super) context_boundaries: &'a str,
     pub(super) process_phases: &'a [ProcessPhase],
+    pub(super) host_approval: &'a str,
+    pub(super) pending_host_command: &'a Option<PendingHostCommandView>,
 }
 
 impl RunDetailView {
@@ -635,6 +648,18 @@ impl RunDetailView {
                             _ => String::new(),
                         },
                         model: phase_model_label(run, step),
+                        host_approval: run
+                            .phase_settings(&step.key)
+                            .filter(|settings| {
+                                settings.location == crate::execution::ToolLocation::Host
+                            })
+                            .map(|settings| {
+                                crate::slices::execution_settings::page::host_approval_label(
+                                    settings.host_approval,
+                                )
+                                .to_owned()
+                            })
+                            .unwrap_or_default(),
                     }
                 })
                 .collect(),
@@ -734,7 +759,39 @@ impl RunDetailView {
             } else {
                 Vec::new()
             },
+            host_approval: run
+                .phase_models
+                .iter()
+                .filter_map(|phase| phase.settings.as_ref())
+                .find(|settings| settings.location == crate::execution::ToolLocation::Host)
+                .map(|settings| {
+                    crate::slices::execution_settings::page::host_approval_label(
+                        settings.host_approval,
+                    )
+                    .to_owned()
+                })
+                .unwrap_or_default(),
+            pending_host_command: None,
         }
+    }
+
+    pub(super) fn with_pending_host_command(
+        mut self,
+        command: Option<crate::execution::HostCommandRequest>,
+    ) -> Self {
+        self.pending_host_command = command
+            .filter(|command| command.run.as_deref() == Some(self.run_id.as_str()))
+            .map(|command| PendingHostCommandView {
+                command: command.command,
+                directory: command.directory.display().to_string(),
+                explanation: if command.explanation.is_empty() {
+                    "The model did not explain this command.".to_owned()
+                } else {
+                    command.explanation
+                },
+                step: command.step.unwrap_or_default(),
+            });
+        self
     }
 
     pub(super) fn contents(&self) -> RunDetailContents<'_> {
@@ -761,6 +818,8 @@ impl RunDetailView {
             hierarchy: &self.hierarchy,
             context_boundaries: &self.context_boundaries,
             process_phases: &self.process_phases,
+            host_approval: &self.host_approval,
+            pending_host_command: &self.pending_host_command,
         }
     }
 }

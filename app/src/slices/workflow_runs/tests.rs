@@ -280,6 +280,7 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
             selected_route: String::new(),
             role: String::new(),
             model: String::new(),
+            host_approval: String::new(),
         }],
         environments: Vec::new(),
         task_selection: None,
@@ -290,6 +291,8 @@ fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
         hierarchy: String::new(),
         context_boundaries: String::new(),
         process_phases: Vec::new(),
+        host_approval: String::new(),
+        pending_host_command: None,
     };
 
     let rendered = view.render().expect("render timeline");
@@ -715,7 +718,10 @@ fn paused_loop() -> (
     let (state, token, session, parent) = crate::slices::human_gates::tests::loop_at_gate();
     let child = parent.current_child().expect("child");
     let continuation = state.gate_continuations.take(&child).expect("continuation");
-    let project = state.projects.get(&parent.project_id).expect("project");
+    let project = state
+        .projects
+        .get(&parent.project_id.expect("project"))
+        .expect("project");
     for args in [
         vec!["add", "."],
         vec![
@@ -797,7 +803,10 @@ async fn paused_commands_preserve_busy_reservations_and_reject_source_drift() {
             .sessions
             .release_job_reservation(&session, Some(other.id), other_job.id())
     );
-    let project = state.projects.get(&parent.project_id).expect("project");
+    let project = state
+        .projects
+        .get(&parent.project_id.expect("project"))
+        .expect("project");
     std::fs::write(
         project.host_path.join("external-change.txt"),
         "outside edit",
@@ -1001,7 +1010,10 @@ fn recovered_retry_uses_the_recorded_base_not_a_new_host_capture() {
     let (state, _, _, parent) = crate::slices::human_gates::tests::loop_at_gate();
     let failed = state.task_loops.fail(&parent.id).expect("failed task");
     let before = super::loop_checkpoint_source(&state, &failed).expect("recorded base");
-    let project = state.projects.get(&parent.project_id).expect("project");
+    let project = state
+        .projects
+        .get(&parent.project_id.expect("project"))
+        .expect("project");
     std::fs::write(
         project.host_path.join("external-change.txt"),
         "outside edit",

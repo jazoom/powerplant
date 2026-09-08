@@ -29,6 +29,35 @@ async fn host_output_is_bounded_even_when_both_pipes_produce_output() {
 }
 
 #[tokio::test]
+async fn workflow_commands_require_success_without_output_limit_termination() {
+    let directory = tempfile::tempdir().unwrap();
+    for command in [
+        "touch changed; exit 7",
+        "touch changed; head -c 262144 /dev/zero",
+        "touch changed; head -c 262144 /dev/zero >&2",
+    ] {
+        assert!(
+            super::run_workflow_shell(command, directory.path(), &job(), Duration::from_secs(5))
+                .await
+                .is_err()
+        );
+        assert!(directory.path().join("changed").exists());
+        std::fs::remove_file(directory.path().join("changed")).unwrap();
+    }
+    assert_eq!(
+        super::run_workflow_shell(
+            "printf diagnostic",
+            directory.path(),
+            &job(),
+            Duration::from_secs(5)
+        )
+        .await
+        .unwrap(),
+        "diagnostic",
+    );
+}
+
+#[tokio::test]
 async fn timeout_covers_descendant_pipes_after_the_shell_exits() {
     let directory = tempfile::tempdir().unwrap();
     let result = tokio::time::timeout(

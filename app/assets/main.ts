@@ -42,6 +42,17 @@ document.addEventListener("change", (event) => {
     const field = event.target;
     if (
         field instanceof HTMLInputElement &&
+        field.matches("[data-workflow-location]")
+    ) {
+        const preview = field
+            .closest("fieldset")
+            ?.querySelector<HTMLButtonElement>(
+                "[data-workflow-location-preview]",
+            );
+        if (preview && field.form) field.form.requestSubmit(preview);
+    }
+    if (
+        field instanceof HTMLInputElement &&
         field.form?.id === "conversation-composer" &&
         (field.name === "location" ||
             field.name === "tool_run" ||

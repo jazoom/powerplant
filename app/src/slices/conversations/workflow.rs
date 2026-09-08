@@ -786,11 +786,35 @@ pub(super) async fn launch(
             )
             .await;
         }
+        let loop_id = workflows::TaskLoopId::generate()
+            .map_err(|error| AppError::new("create task loop identifier", error))?;
+        if directory_launch
+            && state
+                .access_consent
+                .approve_loop_launch(
+                    &form.confirm_additional_access,
+                    loop_id,
+                    session.0,
+                    current.id,
+                    phase_models
+                        .iter()
+                        .filter_map(|phase| phase.settings.clone())
+                        .collect(),
+                )
+                .is_err()
+        {
+            return error_view(
+                PatchStatus::Conflict,
+                "Review and approve the exact phase settings before start.",
+            )
+            .await;
+        }
         return launch_task_loop(
             state,
             session.0,
             current,
-            authority.expect("task loop project authority"),
+            authority,
+            project_free,
             connection,
             execution,
             brief,
@@ -799,6 +823,7 @@ pub(super) async fn launch(
             phase_models,
             snapshot,
             tasks,
+            loop_id,
         )
         .await;
     }
@@ -985,7 +1010,8 @@ async fn launch_task_loop(
     state: AppState,
     session: crate::sessions::SessionId,
     current: ConversationRecord,
-    authority: crate::agents::EffectiveAuthority,
+    authority: Option<crate::agents::EffectiveAuthority>,
+    project_free: Option<crate::execution::ProjectFreeAuthority>,
     connection: crate::providers::ProviderConnection,
     execution: crate::workflows::ExecutionGuard,
     brief: String,
@@ -994,15 +1020,14 @@ async fn launch_task_loop(
     phase_models: Vec<PhaseModelSelection>,
     snapshot: workflows::TaskListSnapshot,
     tasks: Vec<workflows::TaskLoopItem>,
+    loop_id: workflows::TaskLoopId,
 ) -> AppResult<Response> {
-    let loop_id = workflows::TaskLoopId::generate()
-        .map_err(|error| AppError::new("create task loop identifier", error))?;
     let record = workflows::TaskLoop::create(
         loop_id,
         workflows::now_ms(),
         current.id,
-        authority.project_id,
-        crate::agents::AgentId::generate().expect("conversation authority identity"),
+        authority.as_ref().map(|authority| authority.project_id),
+        None,
         brief.clone(),
         pinned,
         phase_models.clone(),
@@ -1097,21 +1122,38 @@ async fn launch_task_loop(
         WorkflowJob {
             run_id: child_id,
             session_id: session,
-            project_id: Some(authority.project_id),
-            agent_id: Some(loop_record.agent_id),
-            agent_revision: authority.revision,
+            project_id: authority.as_ref().map(|authority| authority.project_id),
+            agent_id: loop_record.agent_id,
+            agent_revision: authority
+                .as_ref()
+                .map(|authority| authority.revision)
+                .unwrap_or(current.revision),
             conversation_id: Some(started.id),
-            authority: Some(authority.clone()),
-            project_free_authority: None,
-            grant_alias: authority.grant_alias.clone(),
-            grant_access: authority.grant_access,
+            authority: authority.clone(),
+            project_free_authority: project_free.clone(),
+            grant_alias: authority
+                .as_ref()
+                .map(|authority| authority.grant_alias.clone())
+                .unwrap_or_default(),
+            grant_access: authority
+                .as_ref()
+                .map(|authority| authority.grant_access)
+                .unwrap_or(AccessMode::ReadWrite),
             connection,
             phase_providers: phase_models
                 .iter()
                 .map(|phase| phase.selection.provider)
                 .collect(),
             active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            host_policy: authority.policy.clone(),
+            host_policy: authority
+                .as_ref()
+                .map(|authority| authority.policy.clone())
+                .or_else(|| {
+                    project_free
+                        .as_ref()
+                        .map(|authority| authority.policy.clone())
+                })
+                .expect("workflow authority"),
             turns: Vec::new(),
             job: job.clone(),
             eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
@@ -1921,8 +1963,9 @@ async fn preview_phase_access(
             .step(&phase.step)
             .map(|step| step.name.as_str())
             .unwrap_or(phase.step.as_str());
+        let host = settings.location == crate::execution::ToolLocation::Host;
         view.phase_summaries.push(format!(
-            "{name}: {} · {} · Tools: {} · Network: {} · Environment: {}{}",
+            "{name}: {} · {} · Tools: {} · {}{}",
             settings.model.provider.label(),
             settings.model.model,
             settings
@@ -1931,18 +1974,52 @@ async fn preview_phase_access(
                 .map(|tool| tool.as_str())
                 .collect::<Vec<_>>()
                 .join(", "),
-            network_label(&settings.network),
-            settings.environment.as_hex(),
+            if host {
+                format!(
+                    "This computer · {}",
+                    crate::slices::execution_settings::page::host_approval_label(
+                        settings.host_approval,
+                    )
+                )
+            } else {
+                format!(
+                    "Network: {} · Environment: {}",
+                    network_label(&settings.network),
+                    settings.environment.as_hex()
+                )
+            },
             if workflows::definition::additional_access(&defaults, settings) {
                 " · Additional access"
             } else {
                 ""
             }
         ));
+        if host {
+            view.phase_summaries
+                .push(crate::execution::HostIdentity::current().authority_summary());
+            view.phase_summaries.push(
+                "Unrestricted host access. Work locations do not confine commands. Approval covers the submitted shell request, not script internals. Output is sent to the hosted model. Host commands can alter live configuration and credentials. Failure and cancellation do not undo host changes.".to_owned(),
+            );
+            if settings.host_approval.automatic() {
+                view.phase_summaries.push(
+                    "This run authorises Run without approval for host commands. Copied conversation consent does not apply.".to_owned(),
+                );
+            } else {
+                view.phase_summaries.push(
+                    "Each host command waits for approval bound to this run, step and attempt."
+                        .to_owned(),
+                );
+            }
+        }
         let writes = definition
             .step(&phase.step)
             .is_some_and(|step| step.writes_primary_source());
         for grant in &settings.directories {
+            if host {
+                view.phase_summaries
+                    .push(format!("{} · Work location", grant.host_path.display()));
+                continue;
+            }
             view.phase_summaries.push(format!(
                 "{} → {} · {}",
                 grant.host_path.display(),
@@ -1950,10 +2027,12 @@ async fn preview_phase_access(
                 match grant.access {
                     crate::execution::DirectoryAccess::ReadOnly => "Read only",
                     crate::execution::DirectoryAccess::DirectWrite => "Direct write",
-                    crate::execution::DirectoryAccess::ReviewBeforeApply if writes =>
-                        "Review before apply",
-                    crate::execution::DirectoryAccess::ReviewBeforeApply =>
-                        "Read only · isolated reviewed copy",
+                    crate::execution::DirectoryAccess::ReviewBeforeApply if writes => {
+                        "Review before apply"
+                    }
+                    crate::execution::DirectoryAccess::ReviewBeforeApply => {
+                        "Read only · isolated reviewed copy"
+                    }
                 }
             ));
             if grant.access == crate::execution::DirectoryAccess::DirectWrite {
@@ -1987,9 +2066,16 @@ async fn preview_phase_access(
             }
         }
     }
-    view.environment_summary = match environments {
-        Ok(_) => "Selected phase environments are ready.".to_owned(),
-        Err(error) => error.message().to_owned(),
+    view.environment_summary = if snapshots
+        .iter()
+        .all(|settings| settings.location == crate::execution::ToolLocation::Host)
+    {
+        "Host steps need no sandbox environment.".to_owned()
+    } else {
+        match environments {
+            Ok(_) => "Selected phase environments are ready.".to_owned(),
+            Err(error) => error.message().to_owned(),
+        }
     };
     view.access_preview = state
         .access_consent
@@ -1999,12 +2085,11 @@ async fn preview_phase_access(
 }
 
 fn uses_conversation_directories(definition: &workflows::definition::WorkflowDefinition) -> bool {
-    definition.execution_mode() == ExecutionMode::Once
-        && !definition.steps().iter().any(|step| {
-            matches!(&step.action,
+    !definition.steps().iter().any(|step| {
+        matches!(&step.action,
             workflows::definition::StepAction::SystemCommand(action)
                 if action.command != workflows::commands::SystemCommandId::ApplyChanges)
-        })
+    })
 }
 
 fn resolve_phase_models(

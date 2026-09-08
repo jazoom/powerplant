@@ -66,6 +66,9 @@ async fn host_command_approval_rejects_tampering_duplicates_and_stale_jobs() {
             command: "printf hi".to_owned(),
             directory: std::env::current_dir().unwrap(),
             explanation: "Print a greeting".to_owned(),
+            run: None,
+            step: None,
+            attempt: None,
         })
         .unwrap();
     job.set_awaiting_decision();

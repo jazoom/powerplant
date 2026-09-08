@@ -76,6 +76,9 @@
             </p>
           {% endif %}
           <p>{{ state_note }}</p>
+          {% if host_approval != "" %}
+            <p class="mt-2 text-sm">Host commands: {{ host_approval }}</p>
+          {% endif %}
           {% if hierarchy != "" %}
             <p class="mt-2 text-sm">
               {% if parent_href != "" %}
@@ -100,6 +103,37 @@
           >
         {% endif %}
       </section>
+
+      {% if let Some(command) = pending_host_command %}
+        <section
+          class="file-section mt-7 space-y-3"
+          aria-labelledby="run-host-command-title"
+        >
+          <h2 id="run-host-command-title" class="text-lg font-semibold">
+            Run command?
+          </h2>
+          <p class="text-quiet max-w-[65ch] text-sm">
+            This command waits on the owning conversation. Approval is bound to
+            this run and step. Output is sent to the hosted model.
+          </p>
+          <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+            <dt class="text-quiet">Command</dt>
+            <dd class="font-mono break-all whitespace-pre-wrap">
+              {{ command.command }}
+            </dd>
+            <dt class="text-quiet">Work location</dt>
+            <dd class="font-mono break-all">{{ command.directory }}</dd>
+            <dt class="text-quiet">Explanation</dt>
+            <dd class="break-words whitespace-pre-wrap">
+              {{ command.explanation }}
+            </dd>
+            {% if command.step != "" %}
+              <dt class="text-quiet">Step</dt>
+              <dd>{{ command.step }}</dd>
+            {% endif %}
+          </dl>
+        </section>
+      {% endif %}
 
       {% if let Some(task) = task_selection %}
         <section
@@ -149,6 +183,11 @@
                     </p>
                     {% if step.model != "" %}
                       <p class="text-quiet text-sm">Model · {{ step.model }}</p>
+                    {% endif %}
+                    {% if step.host_approval != "" %}
+                      <p class="text-quiet text-sm">
+                        This computer · {{ step.host_approval }}
+                      </p>
                     {% endif %}
                   </div>
                   <span

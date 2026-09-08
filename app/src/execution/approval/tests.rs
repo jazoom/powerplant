@@ -22,6 +22,9 @@ fn request(
         command: command.to_owned(),
         directory: PathBuf::from("/tmp"),
         explanation: explanation.to_owned(),
+        run: None,
+        step: None,
+        attempt: None,
     }
 }
 
@@ -192,4 +195,30 @@ async fn session_expiry_wakes_pending_waiters_and_restart_rejects_replay() {
         restarted.decide(&submitted, HostCommandDecision::Approved),
         Err(ApprovalError::Invalid)
     );
+}
+
+#[test]
+fn workflow_request_identity_includes_run_step_and_attempt() {
+    let store = HostApprovalStore::new();
+    let owner = session();
+    let conversation = crate::conversations::ConversationId::generate().unwrap();
+    let (job_id, _) = job();
+    let mut bound = request(owner, job_id, conversation, 1, "true", "diagnose");
+    bound.run = Some("a".repeat(32));
+    bound.step = Some("diagnose".to_owned());
+    bound.attempt = Some("b".repeat(32));
+    bound.token = store.submit(bound.clone()).unwrap();
+    for field in ["run", "step", "attempt"] {
+        let mut tampered = bound.clone();
+        match field {
+            "run" => tampered.run = Some("c".repeat(32)),
+            "step" => tampered.step = Some("other".to_owned()),
+            _ => tampered.attempt = Some("d".repeat(32)),
+        }
+        assert_eq!(
+            store.decide(&tampered, HostCommandDecision::Approved),
+            Err(ApprovalError::Invalid)
+        );
+    }
+    store.decide(&bound, HostCommandDecision::Approved).unwrap();
 }

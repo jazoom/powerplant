@@ -6,7 +6,7 @@ use crate::{
     providers::ModelSelection,
 };
 
-use super::{DirectoryGrant, ExecutionSettings, ToolLocation};
+use super::{DirectoryGrant, ExecutionSettings, HostApprovalPolicy, ToolLocation};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SettingsOverrides {
@@ -17,6 +17,7 @@ pub(crate) struct SettingsOverrides {
     pub(crate) network: Option<NetworkAccess>,
     pub(crate) directories: Option<Vec<DirectoryGrant>>,
     pub(crate) location: Option<ToolLocation>,
+    pub(crate) host_approval: Option<HostApprovalPolicy>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -29,6 +30,7 @@ pub(crate) struct SettingsOverridesFile {
     network: Option<NetworkFile>,
     directories: Option<Vec<super::settings::DirectoryGrantFile>>,
     location: Option<String>,
+    host_approval: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,6 +50,7 @@ impl SettingsOverrides {
             network: Some(settings.network),
             directories: Some(settings.directories),
             location: Some(settings.location),
+            host_approval: Some(settings.host_approval),
         }
     }
 
@@ -69,7 +72,7 @@ impl SettingsOverrides {
                 .clone()
                 .unwrap_or_else(|| defaults.directories.clone()),
             location: self.location.unwrap_or(defaults.location),
-            host_approval: defaults.host_approval,
+            host_approval: self.host_approval.unwrap_or(defaults.host_approval),
         }
     }
 
@@ -107,6 +110,7 @@ impl SettingsOverrides {
                     .collect()
             }),
             location: self.location.map(|location| location.as_str().to_owned()),
+            host_approval: self.host_approval.map(|policy| policy.as_str().to_owned()),
         }
     }
 
@@ -144,6 +148,10 @@ impl SettingsOverrides {
             },
             location: match file.location {
                 Some(location) => Some(ToolLocation::parse(&location)?),
+                None => None,
+            },
+            host_approval: match file.host_approval {
+                Some(policy) => Some(HostApprovalPolicy::parse(&policy)?),
                 None => None,
             },
         };

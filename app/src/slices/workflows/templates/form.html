@@ -593,14 +593,73 @@
                           maxlength="64"
                         />
                       </label>
+                      <fieldset class="space-y-2">
+                        <legend class="text-sm font-medium">
+                          Where tools run
+                        </legend>
+                        <p class="text-quiet text-xs">
+                          This computer uses work locations, not sandbox mounts.
+                          Sandbox network and environment do not apply to host
+                          commands.
+                        </p>
+                        <label class="flex items-center gap-2 text-sm">
+                          <input
+                            class="radio radio-sm"
+                            type="radio"
+                            name="step_{{ step.index }}_location"
+                            data-workflow-location
+                            value="sandbox"
+                            {% if !step.location_host %}checked{% endif %}
+                          />
+                          Sandbox
+                        </label>
+                        <label class="flex items-center gap-2 text-sm">
+                          <input
+                            class="radio radio-sm"
+                            type="radio"
+                            name="step_{{ step.index }}_location"
+                            data-workflow-location
+                            value="host"
+                            {% if step.location_host %}checked{% endif %}
+                          />
+                          This computer
+                        </label>
+                        <button
+                          class="btn btn-outline btn-sm"
+                          type="submit"
+                          name="intent"
+                          value="update-mode"
+                          id="workflow-location-preview-{{ step.index }}-{% if step.location_host %}host{% else %}sandbox{% endif %}"
+                          data-workflow-location-preview
+                          formnovalidate
+                        >
+                          Update execution controls
+                        </button>
+                      </fieldset>
+                      {% if step.location_host %}
+                        {% let settings_form = "" %}
+                        {% let field_prefix = step.field_prefix %}
+                        {% let host_approval_automatic = step.host_approval_automatic %}
+                        {% let job_active = false %}
+                        {% include "execution_settings/templates/host_approval.html" %}
+                      {% else %}
+                        <input
+                          type="hidden"
+                          name="step_{{ step.index }}_settings-host-approval"
+                          value="{% if step.host_approval_automatic %}automatic{% else %}ask-each-time{% endif %}"
+                        />
+                      {% endif %}
                       {% let settings_form = "" %}
                       {% let field_prefix = step.field_prefix %}
                       {% let instructions = step.settings_instructions %}
                       {% let tool_options = step.settings_tool_options %}
                       {% let job_active = false %}
-                      {% let tools_host = false %}
+                      {% let tools_host = step.location_host %}
                       {% include "execution_settings/templates/fields.html" %}
-                      <label class="flex flex-col gap-1">
+                      <label
+                        class="flex flex-col gap-1"
+                        {% if step.location_host %}hidden{% endif %}
+                      >
                         <span class="text-sm">Sandbox network</span>
                         <select
                           class="select select-bordered"
@@ -626,7 +685,10 @@
                           </option>
                         </select>
                       </label>
-                      <label class="flex flex-col gap-1">
+                      <label
+                        class="flex flex-col gap-1"
+                        {% if step.location_host %}hidden{% endif %}
+                      >
                         <span class="text-sm">Restricted domains</span>
                         <textarea
                           class="textarea textarea-bordered"
@@ -636,7 +698,13 @@
 {{ step.network_domains }}</textarea>
                       </label>
                       <label class="flex flex-col gap-1">
-                        <span class="text-sm">Read only directories</span>
+                        <span class="text-sm"
+                          >{% if step.location_host %}
+                            Work locations
+                          {% else %}
+                            Read only directories
+                          {% endif %}</span
+                        >
                         <textarea
                           class="textarea textarea-bordered"
                           name="step_{{ step.index }}_read-only"
@@ -644,7 +712,10 @@
                         >
 {{ step.settings_read_only }}</textarea>
                       </label>
-                      <label class="flex flex-col gap-1">
+                      <label
+                        class="flex flex-col gap-1"
+                        {% if step.location_host %}hidden{% endif %}
+                      >
                         <span class="text-sm"
                           >Review before apply directories</span
                         >
@@ -655,7 +726,10 @@
                         >
 {{ step.settings_reviewed }}</textarea>
                       </label>
-                      <label class="flex flex-col gap-1">
+                      <label
+                        class="flex flex-col gap-1"
+                        {% if step.location_host %}hidden{% endif %}
+                      >
                         <span class="text-sm">Direct write directories</span>
                         <textarea
                           class="textarea textarea-bordered"

@@ -524,6 +524,9 @@ async fn host_approval_policy_needs_fresh_consent_and_does_not_settle_pending_co
             command: "printf hi".to_owned(),
             directory: std::env::current_dir().unwrap(),
             explanation: "Print a greeting".to_owned(),
+            run: None,
+            step: None,
+            attempt: None,
         })
         .unwrap();
     job.set_awaiting_decision();

@@ -723,23 +723,28 @@ pub(crate) async fn execute_run(
                 return;
             }
         };
-        let Some(snapshot_digest) = run
-            .environments
-            .steps
-            .iter()
-            .find(|item| item.step == step.key)
-            .map(|item| item.snapshot_digest.clone())
-        else {
-            fail_operational(&state, &job);
-            return;
-        };
-        let sandbox_record = crate::workflows::run::AttemptSandboxRecord {
-            kind: if apply_step {
-                crate::workflows::run::AttemptSandboxKind::FileApplication
-            } else {
-                crate::workflows::run::AttemptSandboxKind::IsolatedAttempt
-            },
-            snapshot_digest,
+        let host_step = step_is_host(&run, &step);
+        let sandbox_record = if host_step {
+            host_sandbox_record()
+        } else {
+            let Some(snapshot_digest) = run
+                .environments
+                .steps
+                .iter()
+                .find(|item| item.step == step.key)
+                .map(|item| item.snapshot_digest.clone())
+            else {
+                fail_operational(&state, &job);
+                return;
+            };
+            crate::workflows::run::AttemptSandboxRecord {
+                kind: if apply_step {
+                    crate::workflows::run::AttemptSandboxKind::FileApplication
+                } else {
+                    crate::workflows::run::AttemptSandboxKind::IsolatedAttempt
+                },
+                snapshot_digest,
+            }
         };
         if let Some(loop_id) = job.task_loop {
             let Some(parent) = state.task_loops.get(&loop_id) else {
@@ -1114,6 +1119,28 @@ async fn isolate_and_run(
     let drafts = std::sync::Arc::new(std::sync::Mutex::new(
         crate::workflows::artefacts::output::OutputDrafts::default(),
     ));
+    if let Some(run) = state.workflow_runs.get(&job.run_id)
+        && step_is_host(&run, step)
+    {
+        let StepAction::Agent(action) = &step.action else {
+            return IsolatedRun::Finished {
+                outcome: StepOutcome::Failed {
+                    category: FailureCategory::Definition,
+                    error: Some("Host steps must be model steps.".to_owned()),
+                },
+                cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+                drafts,
+                captured: None,
+            };
+        };
+        let outcome = run_agent_step(state, job, action, None, drafts.clone()).await;
+        return IsolatedRun::Finished {
+            outcome,
+            cleanup: crate::workflows::run::AttemptCleanupRecord::Complete,
+            drafts,
+            captured: None,
+        };
+    }
     job.job.set_step_label("Materialising source".to_owned());
     if job.job.cancel_requested() {
         return IsolatedRun::Finished {
@@ -2220,7 +2247,9 @@ async fn dispatch_step(
     drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
 ) -> StepOutcome {
     match &step.action {
-        StepAction::Agent(action) => run_agent_step(state, job, action, sandbox, drafts).await,
+        StepAction::Agent(action) => {
+            run_agent_step(state, job, action, Some(sandbox), drafts).await
+        }
         StepAction::SystemCommand(action) => match action.command {
             SystemCommandId::ApplyChanges | SystemCommandId::CommitCandidate => {
                 StepOutcome::Failed {
@@ -2239,11 +2268,28 @@ async fn dispatch_step(
     }
 }
 
+fn step_is_host(run: &crate::workflows::WorkflowRun, step: &StepDefinition) -> bool {
+    run.phase_settings(&step.key)
+        .is_some_and(|settings| settings.location == crate::execution::ToolLocation::Host)
+        || matches!(&step.action, StepAction::Agent(action) if action.host_tools())
+}
+
+fn host_sandbox_record() -> crate::workflows::run::AttemptSandboxRecord {
+    crate::workflows::run::AttemptSandboxRecord {
+        kind: crate::workflows::run::AttemptSandboxKind::HostExecution,
+        snapshot_digest: crate::environments::SnapshotDigest::parse(&format!(
+            "sha256:{}",
+            "0".repeat(64)
+        ))
+        .expect("host snapshot digest"),
+    }
+}
+
 async fn run_agent_step(
     state: &AppState,
     job: &WorkflowJob,
     action: &AgentStep,
-    sandbox: &std::sync::Arc<GuestSandbox>,
+    sandbox: Option<&std::sync::Arc<GuestSandbox>>,
     drafts: std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
 ) -> StepOutcome {
     if job.authority.is_some()
@@ -2453,11 +2499,18 @@ async fn run_agent_step(
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
-    let directory_instructions = if let Some(authority) = phase_directory_authority.as_ref() {
-        crate::workflows::input_context::read_directory_instructions(sandbox, authority, secret)
-            .await
-    } else {
-        crate::workflows::input_context::read_project_instructions(sandbox, secret).await
+    let directory_instructions = match sandbox {
+        None => Ok(crate::workflows::input_context::ProjectInstructions::Absent),
+        Some(sandbox) => {
+            if let Some(authority) = phase_directory_authority.as_ref() {
+                crate::workflows::input_context::read_directory_instructions(
+                    sandbox, authority, secret,
+                )
+                .await
+            } else {
+                crate::workflows::input_context::read_project_instructions(sandbox, secret).await
+            }
+        }
     };
     let project_instructions = match directory_instructions {
         Ok(instructions) => instructions,
@@ -2494,8 +2547,27 @@ async fn run_agent_step(
     if let Some(language) = state.sessions.language(&job.session_id) {
         language.append_instructions(&mut composed);
     }
-    let request_tools =
-        crate::tools::definitions_for_step(&action.authority.tools, &action.required_outputs);
+    let location = run
+        .phase_settings(&step_key)
+        .map(|settings| settings.location)
+        .unwrap_or(crate::execution::ToolLocation::Sandbox);
+    if location == crate::execution::ToolLocation::Host {
+        composed.push_str("\n\nTools run on this computer as the Power Plant process user. ");
+        if run
+            .phase_settings(&step_key)
+            .is_some_and(|settings| settings.automatic_host_commands())
+        {
+            composed.push_str("This run authorises Run without approval. ");
+        } else {
+            composed.push_str("Each shell command waits for user approval bound to this run. ");
+        }
+        composed.push_str("Approval does not inspect script internals. Command output is sent to the hosted model.");
+    }
+    let request_tools = crate::tools::definitions_for_step(
+        &action.authority.tools,
+        &action.required_outputs,
+        location,
+    );
     let model_context_limit = state
         .models_dev
         .context_limit(connection.kind, &connection.model);
@@ -2543,6 +2615,39 @@ async fn run_agent_step(
         attempt_id,
         step_key.as_str(),
     );
+    let host = if location == crate::execution::ToolLocation::Host {
+        let settings = run
+            .phase_settings(&step_key)
+            .cloned()
+            .or_else(|| run.directory_settings())
+            .ok_or_else(|| StepOutcome::Failed {
+                category: FailureCategory::Authority,
+                error: Some("The pinned host settings are unavailable.".to_owned()),
+            });
+        let settings = match settings {
+            Ok(settings) => settings,
+            Err(outcome) => return outcome,
+        };
+        let Some(conversation) = job.conversation_id else {
+            return StepOutcome::Failed {
+                category: FailureCategory::Authority,
+                error: Some("Host workflow steps need a conversation.".to_owned()),
+            };
+        };
+        Some(crate::tools::HostRunSpec {
+            session: job.session_id,
+            conversation,
+            execution_revision: job.agent_revision,
+            directory: crate::execution::command_directory(&settings.directories),
+            settings,
+            run: Some(job.run_id.as_hex()),
+            step: Some(step_key.as_str().to_owned()),
+            attempt: Some(attempt_id.as_hex()),
+            task_loop: job.task_loop.map(|id| id.as_hex()),
+        })
+    } else {
+        None
+    };
     let spec = AgentRunSpec {
         agent_id: job.agent_id,
         revision: 0,
@@ -2551,9 +2656,9 @@ async fn run_agent_step(
         tool_ids: packet.tool_ids(),
         policy,
         connection: connection.clone(),
-        location: crate::execution::ToolLocation::Sandbox,
-        sandbox: Some(sandbox.clone()),
-        host: None,
+        location,
+        sandbox: sandbox.cloned(),
+        host,
         output_drafts: Some(drafts),
         required_outputs: action.required_outputs.clone(),
         evidence: Some(evidence.clone()),
@@ -3164,7 +3269,14 @@ fn confirm_run_authority(
                     job.session_id,
                     conversation_id,
                     settings,
-                ) {
+                ) || job.task_loop.is_some_and(|loop_id| {
+                    state.access_consent.authorised_loop(
+                        loop_id,
+                        job.session_id,
+                        conversation_id,
+                        settings,
+                    )
+                }) {
                     return false;
                 }
                 // Configured overrides need run-bound consent, including tool-only and network-only expansions.
@@ -4392,6 +4504,7 @@ fn recovery_project_path(
 }
 
 pub(crate) fn recover_task_loops(state: &AppState) -> Result<(), &'static str> {
+    // Restart restores reservations. It never resumes automatic host commands.
     let unfinished: std::collections::HashSet<_> = state
         .task_loops
         .list()
@@ -4459,17 +4572,22 @@ pub(crate) fn reconstruct_loop_job(
         .conversations
         .get(&record.conversation_id)
         .ok_or("The conversation for this task loop is no longer available.")?;
-    let resolved = crate::conversations::resolve_workflow_authority(
-        &conversation,
-        &state.projects,
-        &state.agents,
-    )
-    .ok()
-    .flatten()
-    .ok_or("The conversation authority does not match this run.")?;
-    if resolved.effective.project_id != record.project_id {
-        return Err("The conversation authority does not match this run.");
-    }
+    let resolved = if record.project_id.is_some() {
+        let resolved = crate::conversations::resolve_workflow_authority(
+            &conversation,
+            &state.projects,
+            &state.agents,
+        )
+        .ok()
+        .flatten()
+        .ok_or("The conversation authority does not match this run.")?;
+        if Some(resolved.effective.project_id) != record.project_id {
+            return Err("The conversation authority does not match this run.");
+        }
+        Some(resolved)
+    } else {
+        None
+    };
     for phase in &record.phase_models {
         validate_phase_selection(state, &phase.selection)
             .map_err(|_| "A selected phase provider is no longer available.")?;
@@ -4488,17 +4606,56 @@ pub(crate) fn reconstruct_loop_job(
             .connection_for(selection)
             .ok_or("The provider for this phase is no longer stored.")?
     };
+    let project_free = if record.project_id.is_none() {
+        let settings = crate::execution::ExecutionSettings::combined(
+            record
+                .phase_models
+                .iter()
+                .filter_map(|phase| phase.settings.as_ref()),
+        )
+        .or_else(|| {
+            conversation
+                .model
+                .as_ref()
+                .map(|model| model.settings.clone())
+        })
+        .ok_or("The conversation settings are unavailable.")?;
+        Some(
+            crate::execution::ProjectFreeAuthority::from_settings(conversation.revision, &settings)
+                .map_err(|_| "A pinned directory changed identity before dispatch.")?,
+        )
+    } else {
+        None
+    };
+    let host_policy = resolved
+        .as_ref()
+        .map(|resolved| resolved.effective.policy.clone())
+        .or_else(|| {
+            project_free
+                .as_ref()
+                .map(|authority| authority.policy.clone())
+        })
+        .ok_or("The conversation authority does not match this run.")?;
     Ok(WorkflowJob {
         run_id: child_id,
         session_id,
-        project_id: Some(record.project_id),
-        agent_id: Some(record.agent_id),
-        agent_revision: resolved.effective.revision,
+        project_id: record.project_id,
+        agent_id: record.agent_id,
+        agent_revision: resolved
+            .as_ref()
+            .map(|resolved| resolved.effective.revision)
+            .unwrap_or(conversation.revision),
         conversation_id: Some(record.conversation_id),
-        authority: Some(resolved.effective.clone()),
-        project_free_authority: None,
-        grant_alias: resolved.effective.grant_alias.clone(),
-        grant_access: resolved.effective.grant_access,
+        authority: resolved.as_ref().map(|resolved| resolved.effective.clone()),
+        project_free_authority: project_free,
+        grant_alias: resolved
+            .as_ref()
+            .map(|resolved| resolved.effective.grant_alias.clone())
+            .unwrap_or_default(),
+        grant_access: resolved
+            .as_ref()
+            .map(|resolved| resolved.effective.grant_access)
+            .unwrap_or(AccessMode::ReadWrite),
         connection,
         phase_providers: record
             .phase_models
@@ -4506,7 +4663,7 @@ pub(crate) fn reconstruct_loop_job(
             .map(|phase| phase.selection.provider)
             .collect(),
         active_connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        host_policy: resolved.effective.policy.clone(),
+        host_policy,
         turns: Vec::new(),
         job,
         eligible_reply: std::sync::Arc::new(std::sync::Mutex::new(String::new())),

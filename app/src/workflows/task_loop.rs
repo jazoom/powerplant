@@ -32,8 +32,8 @@ pub(crate) struct TaskLoop {
     pub(crate) id: TaskLoopId,
     pub(crate) created_at_ms: u64,
     pub(crate) conversation_id: ConversationId,
-    pub(crate) project_id: ProjectId,
-    pub(crate) agent_id: AgentId,
+    pub(crate) project_id: Option<ProjectId>,
+    pub(crate) agent_id: Option<AgentId>,
     pub(crate) launch_brief: String,
     pub(crate) pinned: PinnedWorkflowDefinition,
     pub(crate) phase_models: Vec<PhaseModelSelection>,
@@ -70,6 +70,7 @@ pub(crate) enum TaskOutcome {
     CompletedApplication,
     CompletedUnchanged,
     CompletedDirect,
+    CompletedHost,
     Failed,
     Cancelled,
 }
@@ -173,8 +174,8 @@ impl TaskLoop {
         id: TaskLoopId,
         created_at_ms: u64,
         conversation_id: ConversationId,
-        project_id: ProjectId,
-        agent_id: AgentId,
+        project_id: Option<ProjectId>,
+        agent_id: Option<AgentId>,
         launch_brief: String,
         pinned: PinnedWorkflowDefinition,
         phase_models: Vec<PhaseModelSelection>,
@@ -368,17 +369,32 @@ impl TaskLoop {
         {
             return Err(TaskLoopError::Conflict);
         }
-        let mut run = WorkflowRun::create_configured_for_conversation(
-            child_id,
-            created_at_ms,
-            self.project_id,
-            self.conversation_id,
-            self.launch_brief.clone(),
-            self.pinned.clone(),
-            self.environments.clone(),
-            self.phase_models.clone(),
-        );
-        run.agent_id = Some(self.agent_id);
+        let mut run = if let Some(project_id) = self.project_id {
+            let mut run = WorkflowRun::create_configured_for_conversation(
+                child_id,
+                created_at_ms,
+                project_id,
+                self.conversation_id,
+                self.launch_brief.clone(),
+                self.pinned.clone(),
+                self.environments.clone(),
+                self.phase_models.clone(),
+            );
+            run.agent_id = self.agent_id;
+            run
+        } else {
+            let mut run = WorkflowRun::create_source_free_for_conversation(
+                child_id,
+                created_at_ms,
+                self.conversation_id,
+                self.pinned.clone(),
+                self.environments.clone(),
+                self.phase_models.clone(),
+            );
+            run.kind = super::run::RunKind::Configured;
+            run.launch_brief = self.launch_brief.clone();
+            run
+        };
         run.set_parent_loop(self.id)
             .map_err(|_| TaskLoopError::Conflict)?;
         run.set_task_selection(TaskSelection {
@@ -861,11 +877,11 @@ impl TaskLoopStore {
                 return Err(TaskLoopError::DuplicateDispatch);
             }
             if child.conversation_id != Some(record.conversation_id)
-                || child.project_id != Some(record.project_id)
+                || child.project_id != record.project_id
                 || child.pinned != record.pinned
                 || child.phase_models != record.phase_models
                 || child.environments != record.environments
-                || child.agent_id != Some(record.agent_id)
+                || child.agent_id != record.agent_id
             {
                 return Err(TaskLoopError::Conflict);
             }
@@ -1026,7 +1042,7 @@ impl TaskLoopStore {
 #[derive(Clone, Debug)]
 pub(crate) struct LoopSummary {
     pub(crate) id: TaskLoopId,
-    pub(crate) project_id: ProjectId,
+    pub(crate) project_id: Option<ProjectId>,
     pub(crate) name: String,
     pub(crate) state: String,
     pub(crate) created_at_ms: u64,
@@ -1075,11 +1091,11 @@ fn reconcile_record(
         if created.as_ref().is_some_and(|child| {
             child.parent_loop != Some(record.id)
                 || child.conversation_id != Some(record.conversation_id)
-                || child.project_id != Some(record.project_id)
+                || child.project_id != record.project_id
                 || child.pinned != record.pinned
                 || child.phase_models != record.phase_models
                 || child.environments != record.environments
-                || child.agent_id != Some(record.agent_id)
+                || child.agent_id != record.agent_id
                 || child.task_selection.as_ref().is_none_or(|selection| {
                     selection.document_id != record.task_list.document_id
                         || selection.revision != record.task_list.revision
@@ -1159,6 +1175,7 @@ fn reconcile_record(
                     | TaskOutcome::CompletedCommit
                     | TaskOutcome::CompletedUnchanged
                     | TaskOutcome::CompletedDirect
+                    | TaskOutcome::CompletedHost
             )
         })
     {
@@ -1178,6 +1195,7 @@ fn completed_outcome(outcome: TaskOutcome) -> bool {
             | TaskOutcome::CompletedApplication
             | TaskOutcome::CompletedUnchanged
             | TaskOutcome::CompletedDirect
+            | TaskOutcome::CompletedHost
     )
 }
 
@@ -1224,6 +1242,7 @@ fn child_outcome(run: &WorkflowRun) -> Option<TaskOutcome> {
             Some(TaskOutcome::CompletedApplication)
         }
         RunState::Completed if run.completed_direct() => Some(TaskOutcome::CompletedDirect),
+        RunState::Completed if run.completed_host() => Some(TaskOutcome::CompletedHost),
         RunState::Completed if run.completed_without_changes() => {
             Some(TaskOutcome::CompletedUnchanged)
         }
@@ -1340,8 +1359,8 @@ impl TaskLoop {
             id: self.id.as_hex(),
             created_at_ms: self.created_at_ms,
             conversation_id: self.conversation_id.as_hex(),
-            project_id: self.project_id.as_hex(),
-            agent_id: self.agent_id.as_hex(),
+            project_id: self.project_id.map(|id| id.as_hex()).unwrap_or_default(),
+            agent_id: self.agent_id.map(|id| id.as_hex()).unwrap_or_default(),
             launch_brief: self.launch_brief.clone(),
             workflow_id: self.pinned.workflow_id.map(|id| id.as_hex()),
             version: self.pinned.version.as_hex(),
@@ -1385,8 +1404,16 @@ impl TaskLoop {
             created_at_ms: file.created_at_ms,
             conversation_id: ConversationId::parse(&file.conversation_id)
                 .ok_or(TaskLoopError::Corrupt)?,
-            project_id: ProjectId::parse(&file.project_id).ok_or(TaskLoopError::Corrupt)?,
-            agent_id: AgentId::parse(&file.agent_id).ok_or(TaskLoopError::Corrupt)?,
+            project_id: if file.project_id.is_empty() {
+                None
+            } else {
+                Some(ProjectId::parse(&file.project_id).ok_or(TaskLoopError::Corrupt)?)
+            },
+            agent_id: if file.agent_id.is_empty() {
+                None
+            } else {
+                Some(AgentId::parse(&file.agent_id).ok_or(TaskLoopError::Corrupt)?)
+            },
             launch_brief: file.launch_brief,
             pinned: PinnedWorkflowDefinition {
                 workflow_id: match file.workflow_id {
@@ -1434,6 +1461,7 @@ fn outcome_as_str(outcome: TaskOutcome) -> &'static str {
         TaskOutcome::CompletedApplication => "completed-application",
         TaskOutcome::CompletedUnchanged => "completed-unchanged",
         TaskOutcome::CompletedDirect => "completed-direct",
+        TaskOutcome::CompletedHost => "completed-host",
         TaskOutcome::Failed => "failed",
         TaskOutcome::Cancelled => "cancelled",
     }
@@ -1448,6 +1476,7 @@ fn outcome_from_str(value: &str) -> Option<TaskOutcome> {
         "completed-application" => Some(TaskOutcome::CompletedApplication),
         "completed-unchanged" => Some(TaskOutcome::CompletedUnchanged),
         "completed-direct" => Some(TaskOutcome::CompletedDirect),
+        "completed-host" => Some(TaskOutcome::CompletedHost),
         "failed" => Some(TaskOutcome::Failed),
         "cancelled" => Some(TaskOutcome::Cancelled),
         _ => None,

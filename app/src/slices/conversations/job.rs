@@ -161,6 +161,10 @@ pub(super) async fn run_host_tools(
         execution_revision: record.revision,
         directory,
         settings: settings.clone(),
+        run: None,
+        step: None,
+        attempt: None,
+        task_loop: None,
     });
     let history = match history_with_review(&state, &record, secret) {
         Ok(history) => history,

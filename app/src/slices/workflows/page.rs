@@ -204,6 +204,8 @@ pub(super) struct StepRow {
     pub(super) settings_read_only: String,
     pub(super) settings_reviewed: String,
     pub(super) settings_direct: String,
+    pub(super) location_host: bool,
+    pub(super) host_approval_automatic: bool,
     pub(super) settings_preset: String,
     pub(super) settings_grants: String,
     pub(super) inherited_fields: Vec<InheritedField>,
@@ -595,6 +597,15 @@ fn step_row(
         settings_read_only: step.settings_read_only.clone(),
         settings_reviewed: step.settings_reviewed.clone(),
         settings_direct: step.settings_direct.clone(),
+        location_host: step.location == crate::execution::ToolLocation::Host.as_str(),
+        host_approval_automatic: crate::execution::HostApprovalPolicy::parse(
+            if step.host_approval.trim().is_empty() {
+                crate::execution::HostApprovalPolicy::AskEachTime.as_str()
+            } else {
+                step.host_approval.trim()
+            },
+        )
+        .is_some_and(|policy| policy.automatic()),
         settings_preset: step.settings_preset.clone(),
         inherited_fields: [
             ("model", "Model and reasoning effort"),
@@ -603,6 +614,8 @@ fn step_row(
             ("network", "Network"),
             ("directories", "Directories"),
             ("environment", "Environment"),
+            ("location", "Where tools run"),
+            ("host_approval", "Host command approval"),
         ]
         .into_iter()
         .map(|(name, label)| InheritedField {

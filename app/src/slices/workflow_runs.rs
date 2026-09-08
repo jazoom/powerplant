@@ -116,6 +116,13 @@ async fn detail(
         return Ok(responses::request_navigation(graft, "/runs"));
     };
     let parent = run.parent_loop.and_then(|id| state.task_loops.get(&id));
+    let pending = run.conversation_id.and_then(|conversation| {
+        state
+            .conversations
+            .get(&conversation)
+            .and_then(|record| record.active_job)
+            .and_then(|job_id| state.host_approvals.pending_for(conversation, job_id))
+    });
     let view = RunDetailView::from_run(
         &run,
         &state.workflows,
@@ -123,7 +130,8 @@ async fn detail(
         &state.projects,
         &state.workflow_evidence,
         parent.as_ref(),
-    );
+    )
+    .with_pending_host_command(pending);
     match graft {
         GraftRequest::Document => {
             let mut response = responses::chat_page_response(page::DETAIL_TITLE, &state, &view)?;
@@ -828,7 +836,10 @@ fn revalidate_paused_loop(
     job: &crate::workflows::WorkflowJob,
     source: &crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
 ) -> Result<(), &'static str> {
-    let Some(project) = state.projects.get(&record.project_id) else {
+    let Some(project_id) = record.project_id else {
+        return Ok(());
+    };
+    let Some(project) = state.projects.get(&project_id) else {
         return Err("The target project is no longer available.");
     };
     if !project.host_path_is_available() {
@@ -1105,9 +1116,12 @@ fn loop_checkpoint_source(
             "No durable task base exists. This task remains available for inspection only.",
         );
     }
+    let project_id = record
+        .project_id
+        .ok_or("No durable task base exists. This task remains available for inspection only.")?;
     let project = state
         .projects
-        .get(&record.project_id)
+        .get(&project_id)
         .ok_or("The target project is no longer available.")?;
     crate::workflows::artefacts::CandidateCapture::capture_host(
         &project.host_path,

@@ -84,10 +84,6 @@ pub(crate) fn advertised(selected: &[ToolId], location: ToolLocation) -> Vec<Too
     }
 }
 
-pub(crate) fn definitions(selected: &[ToolId]) -> Vec<ToolDefinition> {
-    definitions_for(selected, ToolLocation::Sandbox)
-}
-
 pub(crate) fn definitions_for(selected: &[ToolId], location: ToolLocation) -> Vec<ToolDefinition> {
     advertised(selected, location)
         .into_iter()
@@ -102,8 +98,9 @@ pub(crate) fn definitions_for(selected: &[ToolId], location: ToolLocation) -> Ve
 pub(crate) fn definitions_for_step(
     selected: &[ToolId],
     outputs: &[crate::workflows::definition::RequiredOutput],
+    location: ToolLocation,
 ) -> Vec<ToolDefinition> {
-    let mut tools = definitions(selected);
+    let mut tools = definitions_for(selected, location);
     if outputs.iter().any(|output| {
         matches!(
             output.kind,
@@ -169,6 +166,10 @@ pub(crate) struct HostRunSpec {
     pub(crate) execution_revision: u32,
     pub(crate) directory: std::path::PathBuf,
     pub(crate) settings: crate::execution::ExecutionSettings,
+    pub(crate) run: Option<String>,
+    pub(crate) step: Option<String>,
+    pub(crate) attempt: Option<String>,
+    pub(crate) task_loop: Option<String>,
 }
 
 pub(crate) struct HostToolContext<'a> {
@@ -179,6 +180,10 @@ pub(crate) struct HostToolContext<'a> {
     pub(crate) conversation: crate::conversations::ConversationId,
     pub(crate) execution_revision: u32,
     pub(crate) directory: std::path::PathBuf,
+    pub(crate) run: Option<String>,
+    pub(crate) step: Option<String>,
+    pub(crate) attempt: Option<String>,
+    pub(crate) task_loop: Option<String>,
 }
 
 pub(crate) struct AgentToolContext<'a> {
@@ -196,6 +201,7 @@ pub(crate) struct AgentToolContext<'a> {
 pub(crate) struct ToolTrace {
     pub(crate) label: String,
     pub(crate) output: String,
+    pub(crate) failed: bool,
 }
 
 pub(crate) async fn invoke(
@@ -207,6 +213,7 @@ pub(crate) async fn invoke(
         return ToolTrace {
             label: name.to_owned(),
             output: "Stopped.".to_owned(),
+            failed: true,
         };
     }
     if name == SUBMIT_WORKFLOW_OUTPUT {
@@ -216,13 +223,19 @@ pub(crate) async fn invoke(
         return ToolTrace {
             label: name.to_owned(),
             output: "That tool is not available.".to_owned(),
+            failed: true,
         };
     };
     match dispatch(context, kind, arguments).await {
-        Ok((label, output)) => ToolTrace { label, output },
+        Ok((label, output)) => ToolTrace {
+            label,
+            output,
+            failed: false,
+        },
         Err(message) => ToolTrace {
             label: kind.as_str().to_owned(),
             output: message.to_owned(),
+            failed: true,
         },
     }
 }
@@ -236,6 +249,7 @@ fn submit_output(context: &AgentToolContext<'_>, arguments: &serde_json::Value) 
         return ToolTrace {
             label: SUBMIT_WORKFLOW_OUTPUT.to_owned(),
             output: "That tool is not available.".to_owned(),
+            failed: true,
         };
     };
     let key = arguments
@@ -252,6 +266,7 @@ fn submit_output(context: &AgentToolContext<'_>, arguments: &serde_json::Value) 
             output: crate::workflows::artefacts::output::OutputDraftError::Kind
                 .message()
                 .to_owned(),
+            failed: true,
         };
     };
     let markdown = arguments
@@ -278,10 +293,12 @@ fn submit_output(context: &AgentToolContext<'_>, arguments: &serde_json::Value) 
         Ok(()) => ToolTrace {
             label: format!("submit `{key}`"),
             output: "Stored.".to_owned(),
+            failed: false,
         },
         Err(error) => ToolTrace {
             label: SUBMIT_WORKFLOW_OUTPUT.to_owned(),
             output: error.message().to_owned(),
+            failed: true,
         },
     }
 }
@@ -405,6 +422,9 @@ async fn host_run(
         command: command.to_owned(),
         directory: host.directory.clone(),
         explanation: explanation.to_owned(),
+        run: host.run.clone(),
+        step: host.step.clone(),
+        attempt: host.attempt.clone(),
     };
     if host.settings.automatic_host_commands() {
         request.token = crate::execution::command_token().map_err(|error| error.message())?;
@@ -468,13 +488,23 @@ async fn dispatch_host_command(
 ) -> Result<(String, String), &'static str> {
     validate_host_dispatch(host, job)?;
     record_host_evidence(host, request, "dispatching", "")?;
-    let result = crate::execution::run_shell(
-        command,
-        &host.directory,
-        job,
-        crate::execution::COMMAND_TIMEOUT,
-    )
-    .await;
+    let result = if host.run.is_some() {
+        crate::execution::run_workflow_shell(
+            command,
+            &host.directory,
+            job,
+            crate::execution::COMMAND_TIMEOUT,
+        )
+        .await
+    } else {
+        crate::execution::run_shell(
+            command,
+            &host.directory,
+            job,
+            crate::execution::COMMAND_TIMEOUT,
+        )
+        .await
+    };
     let output = result.as_deref().unwrap_or_else(|error| error);
     record_host_evidence(
         host,
@@ -491,9 +521,12 @@ fn validate_host_dispatch(host: &HostToolContext<'_>, job: &Job) -> Result<(), &
         .conversations
         .get(&host.conversation)
         .ok_or("This conversation is not available.")?;
-    if job.cancel_requested()
-        || !host.state.sessions.contains_live(&host.session)
-        || record.active_job != Some(job.id())
+    if job.cancel_requested() || !host.state.sessions.contains_live(&host.session) {
+        return Err("Host access expired or changed. Approve the current settings again.");
+    }
+    if host.run.is_some() {
+        validate_workflow_host_dispatch(host, job, &record)?;
+    } else if record.active_job != Some(job.id())
         || record
             .model
             .as_ref()
@@ -510,6 +543,80 @@ fn validate_host_dispatch(host: &HostToolContext<'_>, job: &Job) -> Result<(), &
         grant
             .revalidate()
             .map_err(|_| "A work location changed or is not available.")?;
+    }
+    Ok(())
+}
+
+fn validate_workflow_host_dispatch(
+    host: &HostToolContext<'_>,
+    job: &Job,
+    record: &crate::conversations::ConversationRecord,
+) -> Result<(), &'static str> {
+    if record.active_job != Some(job.id()) {
+        return Err("Host access expired or changed. Approve the current settings again.");
+    }
+    let run_id = host
+        .run
+        .as_deref()
+        .and_then(crate::workflows::RunId::parse)
+        .ok_or("That host command is not bound to this run.")?;
+    let step = host
+        .step
+        .as_deref()
+        .and_then(|step| crate::workflows::definition::StepKey::parse(step).ok())
+        .ok_or("That host command is not bound to this step.")?;
+    let run = host
+        .state
+        .workflow_runs
+        .get(&run_id)
+        .ok_or("The workflow run is unavailable.")?;
+    let loop_id = host
+        .task_loop
+        .as_deref()
+        .and_then(crate::workflows::TaskLoopId::parse);
+    if run.conversation_id != Some(host.conversation)
+        || run.parent_loop != loop_id
+        || run
+            .active_attempt()
+            .and_then(|id| run.attempts.iter().find(|attempt| attempt.id == id))
+            .is_none_or(|attempt| {
+                Some(attempt.id.as_hex()) != host.attempt
+                    || attempt.step != step
+                    || attempt.state != crate::workflows::run::AttemptState::Active
+                    || attempt.sandbox.kind
+                        != crate::workflows::run::AttemptSandboxKind::HostExecution
+            })
+    {
+        return Err("That host command is not bound to the active run, step and attempt.");
+    }
+    let settings = run
+        .phase_settings(&step)
+        .cloned()
+        .or_else(|| run.directory_settings())
+        .ok_or("The pinned host settings are unavailable.")?;
+    if settings != *host.settings || !settings.host_tools() {
+        return Err("Host access expired or changed. Approve the current settings again.");
+    }
+    let launch_ok = host.state.access_consent.authorised_launch(
+        run_id,
+        host.session,
+        host.conversation,
+        host.settings,
+    );
+    let loop_ok = host
+        .task_loop
+        .as_deref()
+        .and_then(crate::workflows::TaskLoopId::parse)
+        .is_some_and(|loop_id| {
+            host.state.access_consent.authorised_loop(
+                loop_id,
+                host.session,
+                host.conversation,
+                host.settings,
+            )
+        });
+    if !launch_ok && !loop_ok {
+        return Err("Host access needs explicit approval for this run.");
     }
     Ok(())
 }

@@ -519,9 +519,14 @@ async fn configured_dispatch_excludes_history_but_quick_tasks_keep_it() {
         let crate::workflows::definition::StepAction::Agent(action) = &step.action else {
             panic!("agent phase")
         };
-        let outcome =
-            super::run_agent_step(&state, &job, action, &sandbox, std::sync::Arc::new(drafts))
-                .await;
+        let outcome = super::run_agent_step(
+            &state,
+            &job,
+            action,
+            Some(&sandbox),
+            std::sync::Arc::new(drafts),
+        )
+        .await;
         if backend.last_preamble().is_none()
             && let StepOutcome::Failed { error, .. } = outcome
         {
@@ -815,7 +820,7 @@ async fn a_configured_phase_uses_its_pinned_provider_model() {
         panic!("agent phase")
     };
     let drafts = std::sync::Arc::new(drafts);
-    let outcome = super::run_agent_step(&state, &job, action, &sandbox, drafts.clone()).await;
+    let outcome = super::run_agent_step(&state, &job, action, Some(&sandbox), drafts.clone()).await;
     if let StepOutcome::Failed { error, .. } = &outcome {
         panic!("phase failed: {error:?}");
     }
@@ -860,7 +865,7 @@ async fn a_configured_phase_uses_its_pinned_provider_model() {
     state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
         unavailable_backend.clone(),
     ));
-    let outcome = super::run_agent_step(&state, &job, action, &sandbox, drafts).await;
+    let outcome = super::run_agent_step(&state, &job, action, Some(&sandbox), drafts).await;
     assert!(matches!(
         outcome,
         StepOutcome::Failed {
@@ -2278,8 +2283,8 @@ fn child_settlement_retains_parent_ownership_until_the_last_task() {
     workflow.task_loop = Some(parent.id);
     workflow.conversation_id = Some(conversation.id);
     workflow.session_id = token.id();
-    workflow.project_id = Some(parent.project_id);
-    workflow.agent_id = Some(parent.agent_id);
+    workflow.project_id = parent.project_id;
+    workflow.agent_id = parent.agent_id;
     workflow.job = job;
     let lease = state.workflow_execution.acquire().expect("execution");
     assert!(!super::finish_driven_job(

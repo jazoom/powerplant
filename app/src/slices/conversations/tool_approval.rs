@@ -124,8 +124,12 @@ async fn decide(
                 .map(|request| request.directory.clone())
                 .unwrap_or_default(),
             explanation: pending
-                .map(|request| request.explanation)
+                .as_ref()
+                .map(|request| request.explanation.clone())
                 .unwrap_or_default(),
+            run: pending.as_ref().and_then(|request| request.run.clone()),
+            step: pending.as_ref().and_then(|request| request.step.clone()),
+            attempt: pending.and_then(|request| request.attempt),
         },
         decision,
     ) {

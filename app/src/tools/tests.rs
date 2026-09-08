@@ -1,4 +1,6 @@
-use super::{MAXIMUM_TOOL_BYTES, advertised, authorised_tool, definitions, mark_truncated, redact};
+use super::{
+    MAXIMUM_TOOL_BYTES, advertised, authorised_tool, definitions_for, mark_truncated, redact,
+};
 use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, DirectoryPolicy, ToolId};
 use crate::execution::ToolLocation;
 
@@ -33,7 +35,7 @@ fn policy() -> DirectoryPolicy {
 #[test]
 fn definitions_and_dispatch_use_the_same_selected_tool_set() {
     let selected = [ToolId::Read, ToolId::List];
-    let names: Vec<_> = definitions(&selected)
+    let names: Vec<_> = definitions_for(&selected, ToolLocation::Sandbox)
         .into_iter()
         .map(|definition| definition.name)
         .collect();

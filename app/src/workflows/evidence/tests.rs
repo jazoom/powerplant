@@ -27,6 +27,9 @@ fn host_evidence_redacts_secrets_and_rejects_path_tokens() {
         command: format!("printf {secret}"),
         directory: PathBuf::from(format!("/tmp/{secret}")),
         explanation: secret.to_owned(),
+        run: None,
+        step: None,
+        attempt: None,
     };
     store
         .host_command(&request, "dispatching", secret, Some(secret))
