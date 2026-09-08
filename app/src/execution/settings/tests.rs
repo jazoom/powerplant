@@ -128,6 +128,17 @@ fn sandbox_and_host_locations_cannot_combine() {
             .location,
         super::ToolLocation::Host
     );
+    assert_eq!(host.host_approval, super::HostApprovalPolicy::AskEachTime);
+    let automatic = host
+        .clone()
+        .with_host_approval(super::HostApprovalPolicy::Automatic);
+    assert!(ExecutionSettings::combined([&host, &automatic]).is_none());
+    assert_eq!(
+        ExecutionSettings::from_file(automatic.to_file())
+            .unwrap()
+            .host_approval,
+        super::HostApprovalPolicy::Automatic
+    );
 }
 
 #[test]

@@ -43,7 +43,9 @@ document.addEventListener("change", (event) => {
     if (
         field instanceof HTMLInputElement &&
         field.form?.id === "conversation-composer" &&
-        (field.name === "location" || field.name === "tool_run")
+        (field.name === "location" ||
+            field.name === "tool_run" ||
+            field.name === "host_approval")
     ) {
         const preview = document.querySelector<HTMLButtonElement>(
             "[data-location-preview]",

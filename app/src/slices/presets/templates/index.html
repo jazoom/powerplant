@@ -138,12 +138,13 @@
       {% let settings_form = self.model_form() %}
       {% let field_prefix = "" %}
       {% let tools_host = form.location == "host" %}
+      {% let host_approval_automatic = form.host_approval == "automatic" %}
       {% include "execution_settings/templates/fields.html" %}
       <fieldset class="space-y-2">
         <legend class="text-sm font-medium">Where tools run</legend>
         <p class="text-quiet text-xs">
           This computer stores the preference only. It does not authorise host
-          commands.
+          commands or Run without approval.
         </p>
         <label class="flex items-center gap-2 text-sm"
           ><input
@@ -164,6 +165,15 @@
           />This computer</label
         >
       </fieldset>
+      {% if form.location == "host" %}
+        {% include "execution_settings/templates/host_approval.html" %}
+      {% else %}
+        <input
+          type="hidden"
+          name="host_approval"
+          value="{% if host_approval_automatic %}automatic{% else %}ask-each-time{% endif %}"
+        />
+      {% endif %}
       <label class="flex flex-col gap-1"
         >Environment<select
           class="select select-bordered w-full"

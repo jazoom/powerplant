@@ -313,6 +313,7 @@ struct ConversationModelFile {
     environment: String,
     directories: Vec<DirectoryGrantFile>,
     location: String,
+    host_approval: String,
     #[serde(deserialize_with = "crate::storage::required_option")]
     preset: Option<AppliedPresetFile>,
 }
@@ -1592,10 +1593,16 @@ fn model_from_file(
         .ok_or(ConversationError::Corrupt)?;
     let location =
         crate::execution::ToolLocation::parse(&file.location).ok_or(ConversationError::Corrupt)?;
+    let host_approval = crate::execution::HostApprovalPolicy::parse(&file.host_approval)
+        .ok_or(ConversationError::Corrupt)?;
     let settings =
         crate::execution::ExecutionSettings::new(selection, file.instructions, tools, environment)
             .and_then(|settings| settings.with_directories(directories))
-            .map(|settings| settings.with_location(location))
+            .map(|settings| {
+                settings
+                    .with_location(location)
+                    .with_host_approval(host_approval)
+            })
             .ok_or(ConversationError::Corrupt)?;
     let preset = match file.preset {
         Some(preset)
@@ -1642,6 +1649,7 @@ fn model_to_file(model: &ConversationModelConfiguration) -> ConversationModelFil
             })
             .collect(),
         location: model.settings.location.as_str().to_owned(),
+        host_approval: model.settings.host_approval.as_str().to_owned(),
         preset: model.preset.as_ref().map(|preset| AppliedPresetFile {
             id: preset.id.as_hex(),
             revision: preset.revision,

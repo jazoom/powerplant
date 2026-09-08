@@ -305,10 +305,13 @@ Current capabilities:
 - Send a Quick task from an independent conversation with no workflow selection.
 - Choose Sandbox or This computer for where tools run.
 - Use sandbox tools with private scratch storage and no project.
-- Run approved host commands without a sandbox runtime.
+- Run host commands without a sandbox runtime.
 - Retain redacted command evidence, including rejection, dispatch and completion states. Evidence never authorises replay after restart.
-- Approve or reject each host command before it runs.
-- Show unrestricted host access and work locations when tools run on this computer.
+- Choose Ask each time or Run without approval for host commands. Ask each time is the default.
+- Approve or reject each host command before it runs when Ask each time is in force.
+- Require a fresh destination consent that names Run without approval before automatic host commands.
+- Copy the requested host approval policy into presets and new conversations without approval tokens or automatic authorisation.
+- Show unrestricted host access, the effective approval policy and work locations when tools run on this computer.
 - Set sandbox network access to Off, restricted domains or public internet.
 - Grant Read only, Review before apply or Direct write access to multiple directories without project registration.
 - Preserve stable guest aliases and canonical host identity for conversation directories.

@@ -81,13 +81,13 @@
             <path d="m6 9 6 6 6-6" />
           </svg>
         </button>
-        {% if location_host %}
+        {% if !host_summary.is_empty() %}
           <button
             type="button"
-            class="btn btn-ghost btn-sm min-h-10"
+            class="btn btn-ghost btn-sm min-h-10 max-w-full"
             popovertarget="conversation-settings"
           >
-            Unrestricted host access
+            <span class="truncate">{{ host_summary }}</span>
           </button>
         {% else %}
           <button
@@ -2166,9 +2166,16 @@
             </label>
           </fieldset>
           {% if location_host %}
+            {% include "execution_settings/templates/host_approval.html" %}
             <div class="alert alert-warning items-start">
               <div class="min-w-0 space-y-2 text-sm">
-                <p class="font-medium">Unrestricted host access</p>
+                <p class="font-medium">
+                  {% if host_approval_automatic %}
+                    Run without approval
+                  {% else %}
+                    Unrestricted host access
+                  {% endif %}
+                </p>
                 <p class="break-words">{{ host_identity }}</p>
                 {% if host_elevated %}
                   <p>
@@ -2177,12 +2184,18 @@
                   </p>
                 {% endif %}
                 <p>
-                  Command output is sent to the hosted model. Approval does not
-                  inspect script internals. Directory rows become work
-                  locations, not access limits.
+                  Command output is sent to the hosted model. Directory rows
+                  become work locations, not access limits.
+                  {% if host_approval_automatic %}
+                    Run without approval starts each submitted shell command
+                    without a further decision. It does not inspect script
+                    internals.
+                  {% else %}
+                    Approval does not inspect script internals.
+                  {% endif %}
                 </p>
                 {% if host_pending_approval %}
-                  <p>Approval is pending.</p>
+                  <p>Pending approval</p>
                 {% endif %}
               </div>
             </div>
@@ -2227,7 +2240,11 @@
                   class="btn btn-warning"
                   type="submit"
                 >
-                  Approve unrestricted host access
+                  {% if host_approval_automatic %}
+                    Approve Run without approval
+                  {% else %}
+                    Approve unrestricted host access
+                  {% endif %}
                 </button>
               {% else %}
                 {% if let Some(saved) = self.saved() %}
@@ -2247,12 +2264,23 @@
                       value="{{ host_consent_request }}"
                     />
                     <button class="btn btn-warning" type="submit">
-                      Approve unrestricted host access
+                      {% if host_approval_automatic %}
+                        Approve Run without approval
+                      {% else %}
+                        Approve unrestricted host access
+                      {% endif %}
                     </button>
                   </form>
                 {% endif %}
               {% endif %}
             {% endif %}
+          {% else %}
+            <input
+              form="{{ self.model_form() }}"
+              type="hidden"
+              name="host_approval"
+              value="{% if host_approval_automatic %}automatic{% else %}ask-each-time{% endif %}"
+            />
           {% endif %}
         </section>
 

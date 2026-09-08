@@ -166,6 +166,8 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Conversation pages keep the transcript and composer within the viewport. The empty transcript offers a short invitation, not setup forms or task suggestions.
 - A model shortcut and Project access stay visible above the transcript.
 - The model shortcut opens one Settings panel with inline model, instructions, tool and preset controls.
+- Host command approval sits beside host-mode consent. Ask each time is the default. Run without approval needs a distinct destination consent.
+- A host approval preference change does not approve a waiting command. Active work must finish or stop before the new execution configuration takes effect.
 - Settings updates keep the panel open. Invalid updates reveal the panel and retain submitted fields.
 - Environment switches stay inline in Settings. Active work offers Stop task and switch, while reviewed work offers review or exact-candidate discard.
 - Environment switch warnings name temporary attempt loss. They state that conversation history and existing host files remain.

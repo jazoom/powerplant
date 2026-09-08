@@ -69,6 +69,7 @@ impl SettingsOverrides {
                 .clone()
                 .unwrap_or_else(|| defaults.directories.clone()),
             location: self.location.unwrap_or(defaults.location),
+            host_approval: defaults.host_approval,
         }
     }
 

@@ -1,0 +1,34 @@
+<fieldset class="space-y-2" {% if job_active %}disabled{% endif %}>
+  <legend class="text-sm font-medium">Host command approval</legend>
+  <p class="text-quiet max-w-[65ch] text-xs">
+    Ask each time is the default. Run without approval needs a separate
+    destination consent. A later change does not approve a command that is
+    already waiting.
+  </p>
+  <label
+    class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+  >
+    <input
+      {% if !settings_form.is_empty() %}form="{{ settings_form }}"{% endif %}
+      class="radio radio-sm"
+      type="radio"
+      name="{{ field_prefix }}{% if field_prefix.is_empty() %}host_approval{% else %}settings-host-approval{% endif %}"
+      value="ask-each-time"
+      {% if !host_approval_automatic %}checked{% endif %}
+    />
+    <span>Ask each time</span>
+  </label>
+  <label
+    class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+  >
+    <input
+      {% if !settings_form.is_empty() %}form="{{ settings_form }}"{% endif %}
+      class="radio radio-sm"
+      type="radio"
+      name="{{ field_prefix }}{% if field_prefix.is_empty() %}host_approval{% else %}settings-host-approval{% endif %}"
+      value="automatic"
+      {% if host_approval_automatic %}checked{% endif %}
+    />
+    <span>Run without approval</span>
+  </label>
+</fieldset>

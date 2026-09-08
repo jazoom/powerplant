@@ -576,6 +576,7 @@ fn settings_digest(settings: &super::ExecutionSettings) -> [u8; 32] {
         digest.update(domain);
     }
     digest.update(settings.location.as_str());
+    digest.update(settings.host_approval.as_str());
     digest.finalize().into()
 }
 

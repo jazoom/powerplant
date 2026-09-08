@@ -41,6 +41,7 @@ pub(super) struct SettingsForm {
     pub(super) tool_write: String,
     pub(super) tool_run: String,
     pub(super) location: String,
+    pub(super) host_approval: String,
     pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
@@ -88,6 +89,7 @@ impl SettingsForm {
             instructions: self.instructions.clone(),
             tools: self.tool_values(),
             location: &self.location,
+            host_approval: &self.host_approval,
             environment: &self.environment,
             network: &self.network,
             network_domains: &self.network_domains,
@@ -121,6 +123,13 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
         form.location.trim()
     })
     .ok_or("Choose where tools run.")?;
+    let host_approval =
+        crate::execution::HostApprovalPolicy::parse(if form.host_approval.trim().is_empty() {
+            "ask-each-time"
+        } else {
+            form.host_approval.trim()
+        })
+        .ok_or("Choose host command approval.")?;
     ExecutionSettings::new(
         selection,
         form.instructions.clone(),
@@ -128,7 +137,11 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
         environment,
     )
     .and_then(|settings| settings.with_network(network))
-    .map(|settings| settings.with_location(location))
+    .map(|settings| {
+        settings
+            .with_location(location)
+            .with_host_approval(host_approval)
+    })
     .ok_or("Enter instructions within 32 KiB without unsupported control characters.")
 }
 
@@ -239,6 +252,7 @@ pub(super) async fn update(
             || model.settings.network != settings.network
             || model.settings.environment != settings.environment
             || model.settings.location != settings.location
+            || model.settings.host_approval != settings.host_approval
     });
     let selection = settings.model.clone();
     match state
@@ -792,6 +806,7 @@ pub(super) fn copy_settings_to_draft(
         String::new()
     };
     form.location = settings.location.as_str().to_owned();
+    form.host_approval = settings.host_approval.as_str().to_owned();
     form.environment = settings.environment.as_hex();
     form.network = settings.network.as_str().to_owned();
     form.network_domains = settings.network.domains().join("\n");
@@ -840,7 +855,13 @@ fn preset_preview_view(
         },
         location: match settings.location {
             crate::execution::ToolLocation::Sandbox => "Sandbox".to_owned(),
-            crate::execution::ToolLocation::Host => "This computer".to_owned(),
+            crate::execution::ToolLocation::Host => {
+                if settings.host_approval.automatic() {
+                    "This computer · Run without approval".to_owned()
+                } else {
+                    "This computer · Ask each time".to_owned()
+                }
+            }
         },
         directories: settings
             .directories

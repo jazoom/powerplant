@@ -38,6 +38,33 @@ impl ToolLocation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HostApprovalPolicy {
+    AskEachTime,
+    Automatic,
+}
+
+impl HostApprovalPolicy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::AskEachTime => "ask-each-time",
+            Self::Automatic => "automatic",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ask-each-time" | "" => Some(Self::AskEachTime),
+            "automatic" => Some(Self::Automatic),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn automatic(self) -> bool {
+        self == Self::Automatic
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ExecutionSettings {
     pub(crate) model: ModelSelection,
@@ -47,6 +74,7 @@ pub(crate) struct ExecutionSettings {
     pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
     pub(crate) location: ToolLocation,
+    pub(crate) host_approval: HostApprovalPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,6 +145,7 @@ pub(crate) struct ExecutionSettingsFile {
     network_domains: Vec<String>,
     directories: Vec<DirectoryGrantFile>,
     location: String,
+    host_approval: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -167,7 +196,8 @@ impl ExecutionSettings {
                     combined.directories.push(grant.clone());
                 }
             }
-            if combined.location != phase.location {
+            if combined.location != phase.location || combined.host_approval != phase.host_approval
+            {
                 return None;
             }
         }
@@ -189,6 +219,7 @@ impl ExecutionSettings {
             network: NetworkAccess::None,
             directories: Vec::new(),
             location: ToolLocation::Sandbox,
+            host_approval: HostApprovalPolicy::AskEachTime,
         })
     }
 
@@ -208,8 +239,17 @@ impl ExecutionSettings {
         self
     }
 
+    pub(crate) fn with_host_approval(mut self, host_approval: HostApprovalPolicy) -> Self {
+        self.host_approval = host_approval;
+        self
+    }
+
     pub(crate) fn host_tools(&self) -> bool {
         self.location == ToolLocation::Host && self.tools.contains(&ToolId::Run)
+    }
+
+    pub(crate) fn automatic_host_commands(&self) -> bool {
+        self.host_tools() && self.host_approval.automatic()
     }
 
     pub(crate) fn to_file(&self) -> ExecutionSettingsFile {
@@ -230,6 +270,7 @@ impl ExecutionSettings {
                 .map(DirectoryGrantFile::from)
                 .collect(),
             location: self.location.as_str().to_owned(),
+            host_approval: self.host_approval.as_str().to_owned(),
         }
     }
 
@@ -251,7 +292,8 @@ impl ExecutionSettings {
             Self::new(file.model, file.instructions, tools, environment)?
                 .with_network(network)?
                 .with_directories(directories)?
-                .with_location(ToolLocation::parse(&file.location)?),
+                .with_location(ToolLocation::parse(&file.location)?)
+                .with_host_approval(HostApprovalPolicy::parse(&file.host_approval)?),
         )
     }
 }

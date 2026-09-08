@@ -155,8 +155,53 @@ fn host_consent_is_destination_bound_and_not_copied() {
         .unwrap();
     assert!(store.authorised_host_conversation(owner, conversation, &settings));
     assert!(!store.authorised_host_conversation(owner, conversation, &sandbox));
+    let automatic = settings
+        .clone()
+        .with_host_approval(crate::execution::HostApprovalPolicy::Automatic);
+    assert!(!store.authorised_host_conversation(owner, conversation, &automatic));
     store.retain_sessions(|_| false);
     assert!(!store.authorised_host_conversation(owner, conversation, &settings));
+}
+
+#[test]
+fn automatic_host_consent_does_not_reuse_ask_each_time_approval() {
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "model".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        vec![crate::agents::ToolId::Run],
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_location(crate::execution::ToolLocation::Host);
+    let automatic = settings
+        .clone()
+        .with_host_approval(crate::execution::HostApprovalPolicy::Automatic);
+    let store = AccessConsentStore::new();
+    let owner = session();
+    let conversation = ConversationId::generate().unwrap();
+    let request = store
+        .request_host_conversation(owner, conversation, &settings)
+        .unwrap();
+    store
+        .approve_host_conversation(&request, owner, conversation, &settings)
+        .unwrap();
+    assert!(store.authorised_host_conversation(owner, conversation, &settings));
+    assert!(!store.authorised_host_conversation(owner, conversation, &automatic));
+    let automatic_request = store
+        .request_host_conversation(owner, conversation, &automatic)
+        .unwrap();
+    store
+        .approve_host_conversation(&automatic_request, owner, conversation, &automatic)
+        .unwrap();
+    assert!(store.authorised_host_conversation(owner, conversation, &automatic));
+    assert!(!store.authorised_host_conversation(owner, conversation, &settings));
+    store.retain_sessions(|_| false);
+    assert!(!store.authorised_host_conversation(owner, conversation, &automatic));
 }
 
 #[test]

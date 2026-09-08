@@ -406,18 +406,16 @@ async fn host_run(
         directory: host.directory.clone(),
         explanation: explanation.to_owned(),
     };
+    if host.settings.automatic_host_commands() {
+        request.token = crate::execution::command_token().map_err(|error| error.message())?;
+        return dispatch_host_command(host, context.job, command, &request).await;
+    }
     let approvals = &host.state.host_approvals;
     let token = approvals
         .submit(request.clone())
         .map_err(|error| error.message())?;
     request.token = token.clone();
-    let evidence = |status, output| {
-        host.state
-            .workflow_evidence
-            .host_command(&request, status, output, host.secret)
-            .map_err(|error| error.message())
-    };
-    if let Err(error) = evidence("awaiting_approval", "") {
+    if let Err(error) = record_host_evidence(host, &request, "awaiting_approval", "") {
         approvals.invalidate_job(context.job.id());
         return Err(error);
     }
@@ -429,33 +427,62 @@ async fn host_run(
     let _ = context.job.resume();
     match decision {
         Ok(crate::execution::HostCommandDecision::Approved) => {
-            validate_host_dispatch(host, context.job)?;
-            evidence("dispatching", "")?;
-            let result = crate::execution::run_shell(
-                command,
-                &host.directory,
-                context.job,
-                crate::execution::COMMAND_TIMEOUT,
-            )
-            .await;
-            evidence(
-                if result.is_ok() { "finished" } else { "failed" },
-                result.as_deref().unwrap_or_else(|error| error),
-            )?;
-            Ok((format!("run `{command}`"), result?))
+            dispatch_host_command(host, context.job, command, &request).await
         }
         Ok(crate::execution::HostCommandDecision::Rejected) => {
-            evidence("rejected", "The user rejected this command.")?;
+            record_host_evidence(
+                host,
+                &request,
+                "rejected",
+                "The user rejected this command.",
+            )?;
             Ok((
                 format!("run `{command}`"),
                 "The user rejected this command.".to_owned(),
             ))
         }
         Err(error) => {
-            evidence("invalidated", error.message())?;
+            record_host_evidence(host, &request, "invalidated", error.message())?;
             Err(error.message())
         }
     }
+}
+
+fn record_host_evidence(
+    host: &HostToolContext<'_>,
+    request: &crate::execution::HostCommandRequest,
+    status: &str,
+    output: &str,
+) -> Result<(), &'static str> {
+    host.state
+        .workflow_evidence
+        .host_command(request, status, output, host.secret)
+        .map_err(|error| error.message())
+}
+
+async fn dispatch_host_command(
+    host: &HostToolContext<'_>,
+    job: &Job,
+    command: &str,
+    request: &crate::execution::HostCommandRequest,
+) -> Result<(String, String), &'static str> {
+    validate_host_dispatch(host, job)?;
+    record_host_evidence(host, request, "dispatching", "")?;
+    let result = crate::execution::run_shell(
+        command,
+        &host.directory,
+        job,
+        crate::execution::COMMAND_TIMEOUT,
+    )
+    .await;
+    let output = result.as_deref().unwrap_or_else(|error| error);
+    record_host_evidence(
+        host,
+        request,
+        if result.is_ok() { "finished" } else { "failed" },
+        output,
+    )?;
+    Ok((format!("run `{command}`"), result?))
 }
 
 fn validate_host_dispatch(host: &HostToolContext<'_>, job: &Job) -> Result<(), &'static str> {

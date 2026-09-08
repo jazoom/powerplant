@@ -448,6 +448,7 @@ pub(super) struct SubmittedSettingsFields<'a> {
     pub(super) instructions: String,
     pub(super) tools: Vec<String>,
     pub(super) location: &'a str,
+    pub(super) host_approval: &'a str,
     pub(super) environment: &'a str,
     pub(super) network: &'a str,
     pub(super) network_domains: &'a str,
@@ -501,6 +502,7 @@ pub(super) struct ConversationDetailView {
     pub(super) host_summary: String,
     pub(super) host_identity: String,
     pub(super) host_elevated: bool,
+    pub(super) host_approval_automatic: bool,
     pub(super) host_pending_approval: bool,
     pub(super) host_consent_request: String,
     pub(super) pending_host_command: Option<HostCommandView>,
@@ -541,6 +543,13 @@ impl ConversationDetailView {
         let selected_tools = form.tool_values();
         let host_identity = crate::execution::HostIdentity::current();
         let location_host = form.location == crate::execution::ToolLocation::Host.as_str();
+        let host_approval_automatic =
+            crate::execution::HostApprovalPolicy::parse(if form.host_approval.trim().is_empty() {
+                "ask-each-time"
+            } else {
+                form.host_approval.trim()
+            })
+            .is_some_and(crate::execution::HostApprovalPolicy::automatic);
         let host_pending_approval = super::new::settings_snapshot(state, session, &form)
             .ok()
             .flatten()
@@ -682,13 +691,10 @@ impl ConversationDetailView {
             network_summary: network_summary_from_form(&form.network),
             network_detail: String::new(),
             location_host,
-            host_summary: if location_host {
-                "Unrestricted host access".to_owned()
-            } else {
-                String::new()
-            },
+            host_summary: host_access_summary(location_host, host_approval_automatic),
             host_identity: host_identity.authority_summary(),
             host_elevated: host_identity.elevated(),
+            host_approval_automatic,
             host_pending_approval,
             host_consent_request,
             pending_host_command: None,
@@ -973,6 +979,8 @@ impl ConversationDetailView {
         };
         let location_host = configuration
             .is_some_and(|model| model.settings.location == crate::execution::ToolLocation::Host);
+        let host_approval_automatic =
+            configuration.is_some_and(|model| model.settings.host_approval.automatic());
         let host_identity = crate::execution::HostIdentity::current();
         // Plan controls and the escaped model catalogue share the transcript envelope.
         let message_budget = (800_usize * 1024)
@@ -1064,13 +1072,10 @@ impl ConversationDetailView {
             network_summary,
             network_detail,
             location_host,
-            host_summary: if location_host {
-                "Unrestricted host access".to_owned()
-            } else {
-                String::new()
-            },
+            host_summary: host_access_summary(location_host, host_approval_automatic),
             host_identity: host_identity.authority_summary(),
             host_elevated: host_identity.elevated(),
+            host_approval_automatic,
             host_pending_approval: false,
             host_consent_request: String::new(),
             pending_host_command: None,
@@ -1139,11 +1144,9 @@ impl ConversationDetailView {
             }
             self.location_host =
                 configuration.settings.location == crate::execution::ToolLocation::Host;
-            self.host_summary = if self.location_host {
-                "Unrestricted host access".to_owned()
-            } else {
-                String::new()
-            };
+            self.host_approval_automatic = configuration.settings.host_approval.automatic();
+            self.host_summary =
+                host_access_summary(self.location_host, self.host_approval_automatic);
             self.host_pending_approval = configuration.settings.host_tools()
                 && !state.access_consent.authorised_host_conversation(
                     session,
@@ -1274,11 +1277,14 @@ impl ConversationDetailView {
         self.network_domains = fields.network_domains.to_owned();
         self.network_summary = network_summary_from_form(fields.network);
         self.location_host = fields.location == crate::execution::ToolLocation::Host.as_str();
-        self.host_summary = if self.location_host {
-            "Unrestricted host access".to_owned()
-        } else {
-            String::new()
-        };
+        self.host_approval_automatic = crate::execution::HostApprovalPolicy::parse(
+            if fields.host_approval.trim().is_empty() {
+                "ask-each-time"
+            } else {
+                fields.host_approval.trim()
+            },
+        )
+        .is_some_and(crate::execution::HostApprovalPolicy::automatic);
         self.settings_open = true;
         self
     }
@@ -1339,6 +1345,21 @@ impl ConversationDetailView {
 
     pub(super) fn contents(&self) -> impl Template + '_ {
         self.as_conversation_detail()
+    }
+}
+
+fn host_access_summary(location_host: bool, automatic: bool) -> String {
+    if !location_host {
+        String::new()
+    } else {
+        format!(
+            "Unrestricted host access · {}",
+            crate::slices::execution_settings::page::host_approval_label(if automatic {
+                crate::execution::HostApprovalPolicy::Automatic
+            } else {
+                crate::execution::HostApprovalPolicy::AskEachTime
+            })
+        )
     }
 }
 

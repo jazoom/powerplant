@@ -16,6 +16,7 @@ pub(super) struct NewForm {
     pub(super) tool_write: String,
     pub(super) tool_run: String,
     pub(super) location: String,
+    pub(super) host_approval: String,
     pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
@@ -119,6 +120,7 @@ impl NewForm {
             &self.tool_write,
             &self.tool_run,
             &self.location,
+            &self.host_approval,
             &self.environment,
             &self.network,
             &self.network_domains,
@@ -261,6 +263,13 @@ pub(super) fn settings_snapshot(
         form.location.trim()
     })
     .ok_or("Choose where tools run.")?;
+    let host_approval =
+        crate::execution::HostApprovalPolicy::parse(if form.host_approval.trim().is_empty() {
+            "ask-each-time"
+        } else {
+            form.host_approval.trim()
+        })
+        .ok_or("Choose host command approval.")?;
     let settings = crate::execution::ExecutionSettings::new(
         selection,
         form.instructions.clone(),
@@ -269,7 +278,11 @@ pub(super) fn settings_snapshot(
     )
     .and_then(|settings| settings.with_network(network))
     .and_then(|settings| settings.with_directories(form.directories().ok()?))
-    .map(|settings| settings.with_location(location))
+    .map(|settings| {
+        settings
+            .with_location(location)
+            .with_host_approval(host_approval)
+    })
     .ok_or("Enter valid conversation settings.")?;
     let preset = state
         .presets

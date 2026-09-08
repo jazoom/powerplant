@@ -61,6 +61,11 @@ async fn settings_update_validates_the_complete_form_and_revision() {
 
     for fields in [
         format!(
+            "revision={}&provider=xai&model=grok-4.6&thinking={}&host_approval=unknown",
+            updated.revision,
+            effort.as_str()
+        ),
+        format!(
             "revision={}&provider=xai&model=grok-4.6&thinking={}&tool_read=unknown",
             updated.revision,
             effort.as_str()
@@ -401,5 +406,163 @@ async fn preset_application_uses_the_preview_snapshot_and_requires_fresh_access_
             .unwrap()
             .name,
         "Pinned"
+    );
+}
+
+#[tokio::test]
+async fn host_approval_policy_needs_fresh_consent_and_does_not_settle_pending_commands() {
+    let state = test_state();
+    let token = connected(&state);
+    let session = super::super::tests::session_id(&token);
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            Some(effort.clone()),
+        )
+        .unwrap(),
+        String::new(),
+        vec![ToolId::Run],
+        super::super::default_environment(&state).unwrap(),
+    )
+    .unwrap()
+    .with_location(crate::execution::ToolLocation::Host);
+    let record = state
+        .conversations
+        .create("Host policy".to_owned())
+        .unwrap();
+    let record = state
+        .conversations
+        .update_execution_settings(&record.id, record.revision, settings.clone())
+        .unwrap();
+    state
+        .access_consent
+        .approve_host_conversation(
+            &state
+                .access_consent
+                .request_host_conversation(session, record.id, &settings)
+                .unwrap(),
+            session,
+            record.id,
+            &settings,
+        )
+        .unwrap();
+    assert!(
+        state
+            .access_consent
+            .authorised_host_conversation(session, record.id, &settings)
+    );
+
+    let path = format!("/conversations/{}/settings", record.id);
+    let automatic = format!(
+        "revision={}&provider=xai&model=grok-4.6&thinking={}&location=host&tool_run=run&host_approval=automatic&environment={}",
+        record.revision,
+        effort.as_str(),
+        settings.environment
+    );
+    let response = app(&state)
+        .oneshot(command(&path, &token, &automatic))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = text(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("Pending approval"));
+    assert!(body.contains("Run without approval"));
+    let updated = state.conversations.get(&record.id).unwrap();
+    let stored = updated.model.as_ref().unwrap().settings.clone();
+    assert_eq!(
+        stored.host_approval,
+        crate::execution::HostApprovalPolicy::Automatic
+    );
+    assert!(
+        !state
+            .access_consent
+            .authorised_host_conversation(session, record.id, &stored)
+    );
+    assert!(
+        !state
+            .access_consent
+            .authorised_host_conversation(session, record.id, &settings)
+    );
+
+    let request = state
+        .access_consent
+        .request_host_conversation(session, updated.id, &stored)
+        .unwrap();
+    state
+        .access_consent
+        .approve_host_conversation(&request, session, updated.id, &stored)
+        .unwrap();
+    let job = state
+        .sessions
+        .begin_conversation_job(&session, updated.id, 1)
+        .unwrap();
+    let current = state.conversations.get(&updated.id).unwrap();
+    state
+        .conversations
+        .begin_message_with_model(
+            &current.id,
+            current.revision,
+            current.model.clone(),
+            job.id(),
+            "Question".to_owned(),
+        )
+        .unwrap();
+    let token_request = state
+        .host_approvals
+        .submit(crate::execution::HostCommandRequest {
+            token: String::new(),
+            session,
+            job: job.id(),
+            conversation: current.id,
+            execution_revision: current.revision,
+            command: "printf hi".to_owned(),
+            directory: std::env::current_dir().unwrap(),
+            explanation: "Print a greeting".to_owned(),
+        })
+        .unwrap();
+    job.set_awaiting_decision();
+    let active = state.conversations.get(&current.id).unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &path,
+            &token,
+            &format!(
+                "revision={}&provider=xai&model=grok-4.6&thinking={}&location=host&tool_run=run&host_approval=ask-each-time&environment={}",
+                active.revision,
+                effort.as_str(),
+                stored.environment
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = text(response).await;
+    assert!(body.contains("Unrestricted host access · Run without approval"));
+    assert!(!body.contains("Unrestricted host access · Ask each time"));
+    assert_eq!(
+        state
+            .conversations
+            .get(&active.id)
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .settings
+            .host_approval,
+        crate::execution::HostApprovalPolicy::Automatic
+    );
+    assert_eq!(
+        state
+            .host_approvals
+            .pending_for(active.id, job.id())
+            .unwrap()
+            .token,
+        token_request
     );
 }

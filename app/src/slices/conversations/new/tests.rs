@@ -999,6 +999,176 @@ async fn host_first_message_runs_without_a_sandbox_runtime() {
     assert_eq!(evidence["command"], shell);
 }
 
+#[tokio::test]
+async fn copied_host_policy_requires_new_consent() {
+    let state = test_state();
+    let token = connected(&state);
+    let session = session_id(&token);
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+            .unwrap(),
+        String::new(),
+        vec![crate::agents::ToolId::Run],
+        super::super::default_environment(&state).unwrap(),
+    )
+    .unwrap()
+    .with_location(crate::execution::ToolLocation::Host)
+    .with_host_approval(crate::execution::HostApprovalPolicy::Automatic);
+    let source = state
+        .conversations
+        .create("Host source".to_owned())
+        .unwrap();
+    let source = state
+        .conversations
+        .update_execution_settings(&source.id, source.revision, settings.clone())
+        .unwrap();
+    state
+        .access_consent
+        .approve_host_conversation(
+            &state
+                .access_consent
+                .request_host_conversation(session, source.id, &settings)
+                .unwrap(),
+            session,
+            source.id,
+            &settings,
+        )
+        .unwrap();
+    let response = app(&state)
+        .oneshot(document(
+            &format!("/conversations/new?source={}", source.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Pending approval"));
+    assert!(body.contains("Run without approval"));
+    assert!(
+        body.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("name=\"consent_reference\" value=\"\"")
+    );
+    assert!(
+        state
+            .access_consent
+            .authorised_host_conversation(session, source.id, &settings)
+    );
+}
+
+#[tokio::test]
+async fn automatic_host_first_message_runs_without_command_approval() {
+    let mut state = test_state();
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("automatic-command");
+    let shell = format!(
+        "printf approved > '{}'\nprintf 'finished\\n'",
+        marker.display()
+    );
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        crate::providers::tests::ScriptedBackend::tool_then(
+            "run",
+            serde_json::json!({
+                "command": shell,
+                "explanation": "Write an approval marker in the temporary test directory",
+            }),
+            "Done",
+        ),
+    ));
+    state.workflow_evidence = std::sync::Arc::new(
+        crate::workflows::WorkflowEvidenceStore::open(directory.path().join("evidence")).unwrap(),
+    );
+    let token = connected(&state);
+    state
+        .sandboxes
+        .set_missing_runtime(crate::sandbox::MissingRuntime::Both);
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let fields = format!(
+        "action=send&provider=xai&model=grok-4.6&thinking={}&message=Hello&location=host&tool_run=run&host_approval=automatic",
+        effort.as_str()
+    );
+    let denied = app(&state)
+        .oneshot(command("/conversations/new", &token, &fields))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(state.conversations.list().is_empty());
+
+    let preview = app(&state)
+        .oneshot(command(
+            "/conversations/new/settings/host-consent",
+            &token,
+            &fields,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let body = text(preview).await;
+    assert!(body.contains("Approve Run without approval"));
+    let request = host_consent_request(&body);
+    let approved = app(&state)
+        .oneshot(command(
+            "/conversations/new/settings/host-consent/approve",
+            &token,
+            &format!("{fields}&host_consent_request={request}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        approved.status(),
+        StatusCode::OK,
+        "{}",
+        text(approved).await
+    );
+    let body = text(approved).await;
+    let reference = hidden_named(&body, "consent_reference");
+    let nonce = hidden_named(&body, "draft_nonce");
+    let created = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
+            &format!("{fields}&consent_reference={reference}&draft_nonce={nonce}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK, "{}", text(created).await);
+    assert_eq!(state.conversations.list().len(), 1);
+    let record = state.conversations.list()[0].clone();
+    assert_eq!(
+        record.model.as_ref().unwrap().settings.host_approval,
+        crate::execution::HostApprovalPolicy::Automatic
+    );
+    let job_id = record.active_job.unwrap();
+    let job = state.sessions.conversation_job(record.id, job_id).unwrap();
+    assert!(
+        job.wait_for_terminal(std::time::Duration::from_secs(2))
+            .await
+    );
+    assert!(
+        state
+            .host_approvals
+            .pending_for(record.id, job_id)
+            .is_none()
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "approved");
+    let evidence_dir = directory.path().join("evidence/host");
+    let evidence_file = std::fs::read_dir(&evidence_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let evidence: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(evidence_file).unwrap()).unwrap();
+    assert_eq!(evidence["status"], "finished");
+    assert_eq!(evidence["command"], shell);
+}
+
 fn host_consent_request(body: &str) -> String {
     hidden_named(body, "host_consent_request")
 }

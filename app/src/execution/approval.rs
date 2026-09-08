@@ -206,6 +206,10 @@ impl HostApprovalStore {
     }
 }
 
+pub(crate) fn command_token() -> Result<String, ApprovalError> {
+    fresh_token()
+}
+
 fn fresh_token() -> Result<String, ApprovalError> {
     let mut bytes = [0_u8; 32];
     SysRng

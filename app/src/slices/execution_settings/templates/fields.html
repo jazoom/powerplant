@@ -24,8 +24,8 @@
   <legend class="text-sm font-semibold">Available tools</legend>
   <p class="text-quiet text-xs">
     {% if tools_host %}
-      Only Run is available on this computer. Each command needs approval. Work
-      locations do not limit host access.
+      Only Run is available on this computer. Work locations do not limit host
+      access.
     {% else %}
       Tools use private scratch storage at /workspace without directory access.
       Plain chat needs no sandbox.
@@ -48,8 +48,11 @@
         <span
           ><span class="block text-sm font-medium">{{ tool.label }}</span
           ><span class="text-quiet mt-0.5 block text-xs"
-            >{% if tools_host && tool.value == "run" %}Run approved commands on
-            this computer.{% else %}{{ tool.detail }}{% endif %}</span
+            >{% if tools_host && tool.value == "run" %}
+              Run commands on this computer.
+            {% else %}
+              {{ tool.detail }}
+            {% endif %}</span
           ></span
         >
       </label>

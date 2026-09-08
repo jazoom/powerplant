@@ -44,6 +44,7 @@ struct PresetForm {
     tool_write: String,
     tool_run: String,
     location: String,
+    host_approval: String,
     environment: String,
     network: String,
     network_domains: String,
@@ -67,6 +68,7 @@ impl PresetForm {
             &self.tool_write,
             &self.tool_run,
             &self.location,
+            &self.host_approval,
             &self.environment,
             &self.network,
             &self.network_domains,
@@ -117,6 +119,13 @@ impl PresetForm {
             self.location.trim()
         })
         .ok_or("Choose where tools run.")?;
+        let host_approval =
+            crate::execution::HostApprovalPolicy::parse(if self.host_approval.trim().is_empty() {
+                "ask-each-time"
+            } else {
+                self.host_approval.trim()
+            })
+            .ok_or("Choose host command approval.")?;
         let network = NetworkAccess::parse_form(&self.network, &self.network_domains)
             .map_err(|_| "Enter valid network access and domains.")?;
         if self.read_only.len() + self.reviewed.len() + self.direct_write.len() > 32 * 1024 {
@@ -180,7 +189,7 @@ impl PresetForm {
         ExecutionSettings::new(model, self.instructions.clone(), tools, environment)
             .and_then(|s| s.with_network(network))
             .and_then(|s| s.with_directories(directories))
-            .map(|s| s.with_location(location))
+            .map(|s| s.with_location(location).with_host_approval(host_approval))
             .ok_or("Use bounded instructions, unique tools and at most eight distinct directory roots.")
     }
 }
@@ -424,6 +433,7 @@ impl From<&PresetRecord> for PresetForm {
             tool_write: tool(ToolId::Write),
             tool_run: tool(ToolId::Run),
             location: s.location.as_str().to_owned(),
+            host_approval: s.host_approval.as_str().to_owned(),
             environment: s.environment.as_hex(),
             network: s.network.as_str().to_owned(),
             network_domains: s.network.domains().join("\n"),
