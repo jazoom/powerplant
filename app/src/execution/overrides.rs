@@ -6,7 +6,7 @@ use crate::{
     providers::ModelSelection,
 };
 
-use super::{DirectoryGrant, ExecutionSettings};
+use super::{DirectoryGrant, ExecutionSettings, ToolLocation};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SettingsOverrides {
@@ -16,6 +16,7 @@ pub(crate) struct SettingsOverrides {
     pub(crate) environment: Option<EnvironmentId>,
     pub(crate) network: Option<NetworkAccess>,
     pub(crate) directories: Option<Vec<DirectoryGrant>>,
+    pub(crate) location: Option<ToolLocation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -27,6 +28,7 @@ pub(crate) struct SettingsOverridesFile {
     environment: Option<String>,
     network: Option<NetworkFile>,
     directories: Option<Vec<super::settings::DirectoryGrantFile>>,
+    location: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -45,6 +47,7 @@ impl SettingsOverrides {
             environment: Some(settings.environment),
             network: Some(settings.network),
             directories: Some(settings.directories),
+            location: Some(settings.location),
         }
     }
 
@@ -65,6 +68,7 @@ impl SettingsOverrides {
                 .directories
                 .clone()
                 .unwrap_or_else(|| defaults.directories.clone()),
+            location: self.location.unwrap_or(defaults.location),
         }
     }
 
@@ -101,6 +105,7 @@ impl SettingsOverrides {
                     .map(super::settings::DirectoryGrantFile::from)
                     .collect()
             }),
+            location: self.location.map(|location| location.as_str().to_owned()),
         }
     }
 
@@ -134,6 +139,10 @@ impl SettingsOverrides {
                         .map(super::settings::DirectoryGrantFile::into_grant)
                         .collect::<Option<Vec<_>>>()?,
                 ),
+                None => None,
+            },
+            location: match file.location {
+                Some(location) => Some(ToolLocation::parse(&location)?),
                 None => None,
             },
         };

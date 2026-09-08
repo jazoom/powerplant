@@ -13,6 +13,39 @@ impl WorkflowEvidenceStore {
     }
 }
 
+#[test]
+fn host_evidence_redacts_secrets_and_rejects_path_tokens() {
+    let root = tempfile::tempdir().unwrap();
+    let store = WorkflowEvidenceStore::open(root.path().to_owned()).unwrap();
+    let secret = "provider-secret-for-evidence";
+    let mut request = crate::execution::HostCommandRequest {
+        token: "a".repeat(64),
+        session: crate::sessions::generate_session_token().unwrap().id(),
+        conversation: crate::conversations::ConversationId::generate().unwrap(),
+        job: crate::sessions::JobId::generate().unwrap(),
+        execution_revision: 1,
+        command: format!("printf {secret}"),
+        directory: PathBuf::from(format!("/tmp/{secret}")),
+        explanation: secret.to_owned(),
+    };
+    store
+        .host_command(&request, "dispatching", secret, Some(secret))
+        .unwrap();
+    let bytes = fs::read(
+        root.path()
+            .join("host")
+            .join(format!("{}.json", request.token)),
+    )
+    .unwrap();
+    assert!(!String::from_utf8(bytes).unwrap().contains(secret));
+    request.token = "../escape".to_owned();
+    assert_eq!(
+        store.host_command(&request, "dispatching", "", None),
+        Err(EvidenceError::Corrupt)
+    );
+    assert!(!root.path().join("escape.json").exists());
+}
+
 fn ids() -> (RunId, AttemptId) {
     (
         RunId::generate().expect("run"),

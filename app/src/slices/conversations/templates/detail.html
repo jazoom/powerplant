@@ -81,29 +81,39 @@
             <path d="m6 9 6 6 6-6" />
           </svg>
         </button>
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm min-h-10"
-          popovertarget="conversation-settings"
-          data-conversation-network-summary
-        >
-          {{ network_summary }}
-        </button>
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm min-h-10 max-w-full"
-          popovertarget="conversation-settings"
-        >
-          <span class="truncate" data-conversation-environment-summary
-            >{{ environment_summary }}</span
+        {% if location_host %}
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-10"
+            popovertarget="conversation-settings"
           >
-        </button>
+            Unrestricted host access
+          </button>
+        {% else %}
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-10"
+            popovertarget="conversation-settings"
+            data-conversation-network-summary
+          >
+            {{ network_summary }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm min-h-10 max-w-full"
+            popovertarget="conversation-settings"
+          >
+            <span class="truncate" data-conversation-environment-summary
+              >{{ environment_summary }}</span
+            >
+          </button>
+        {% endif %}
         <button
           type="button"
           class="btn btn-ghost btn-sm min-h-10 [anchor-name:--conversation-directories]"
           popovertarget="conversation-directory-settings"
         >
-          Directories
+          {% if location_host %}Work locations{% else %}Directories{% endif %}
           {% if !directories.is_empty() %}· {{ directories.len() }}{% endif %}
         </button>
         {% if !attached_projects.is_empty() || !self.draft_project().is_empty() %}
@@ -705,6 +715,99 @@
             </section>
           {% endif %}
 
+          {% if let Some(command) = pending_host_command %}
+            <section
+              id="conversation-host-command"
+              class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+              aria-labelledby="conversation-host-command-heading"
+            >
+              <div>
+                <h2
+                  id="conversation-host-command-heading"
+                  class="text-lg font-semibold"
+                >
+                  Run command?
+                </h2>
+                <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+                  This command runs on this computer with unrestricted host
+                  access. Approval covers the submitted shell request, not every
+                  action inside a script. Output is sent to the hosted model.
+                </p>
+              </div>
+              <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+                <dt class="text-quiet">Command</dt>
+                <dd class="font-mono break-all whitespace-pre-wrap">
+                  {{ command.command }}
+                </dd>
+                <dt class="text-quiet">Work location</dt>
+                <dd class="font-mono break-all">{{ command.directory }}</dd>
+                <dt class="text-quiet">Explanation</dt>
+                <dd class="break-words whitespace-pre-wrap">
+                  {{ command.explanation }}
+                </dd>
+              </dl>
+              <div class="flex flex-wrap gap-3 border-t pt-4">
+                <form
+                  data-graft
+                  method="post"
+                  action="/conversations/{{ saved.id }}/host-command/approve"
+                >
+                  <input
+                    type="hidden"
+                    name="revision"
+                    value="{{ command.revision }}"
+                  />
+                  <input type="hidden" name="job" value="{{ command.job }}" />
+                  <input
+                    type="hidden"
+                    name="request"
+                    value="{{ command.request }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="command"
+                    value="{{ command.command_input }}"
+                  />
+                  <button
+                    id="host-command-approve-{{ command.request }}"
+                    class="btn btn-primary"
+                    type="submit"
+                  >
+                    Run command
+                  </button>
+                </form>
+                <form
+                  data-graft
+                  method="post"
+                  action="/conversations/{{ saved.id }}/host-command/reject"
+                >
+                  <input
+                    type="hidden"
+                    name="revision"
+                    value="{{ command.revision }}"
+                  />
+                  <input type="hidden" name="job" value="{{ command.job }}" />
+                  <input
+                    type="hidden"
+                    name="request"
+                    value="{{ command.request }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="command"
+                    value="{{ command.command_input }}"
+                  />
+                  <button
+                    id="host-command-reject-{{ command.request }}"
+                    class="btn btn-outline"
+                    type="submit"
+                  >
+                    Reject
+                  </button>
+                </form>
+              </div>
+            </section>
+          {% endif %}
           {% if let Some(gate) = saved.pending_gate %}
             <section
               id="conversation-candidate"
@@ -848,7 +951,7 @@
       </section>
       {% if let Some(saved) = self.saved() %}
         <div id="conversation-observe" hidden>
-          {% let active = job_active %}{% let id = saved.id %}{% let job_id = saved.job_id %}{% let cursor = saved.cursor %}{% include "conversations/templates/observe.html" %}
+          {% let active = observe_active %}{% let id = saved.id %}{% let job_id = saved.job_id %}{% let cursor = saved.cursor %}{% include "conversations/templates/observe.html" %}
         </div>
       {% endif %}
       <div id="conversation-composer-dock" class="composer-dock">
@@ -878,7 +981,11 @@
           {% if !directories.is_empty() %}
             <div
               class="text-composer-quiet mb-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs"
-              aria-label="Directory access"
+              aria-label="{% if location_host %}
+                Work locations
+              {% else %}
+                Directory access
+              {% endif %}"
             >
               {% for directory in directories %}
                 <span class="inline-flex min-w-0 items-center gap-1">
@@ -887,7 +994,10 @@
                   >
                   <span aria-hidden="true">·</span>
                   <span>
-                    {% if !directory.available %}
+                    {% if location_host %}
+                      {% if !directory.available %}Unavailable ·{% endif %}
+                      Work location
+                    {% else if !directory.available %}
                       Unavailable · {{ directory.access_label }}
                     {% else if directory.pending_approval %}
                       Pending approval · {{ directory.access_label }}
@@ -895,7 +1005,7 @@
                       {% if directory.sensitive %}Sensitive access ·{% endif %}
                       {{ directory.access_label }}
                     {% endif %}
-                    {% if directory.direct_write %}
+                    {% if directory.direct_write && !location_host %}
                       · Immediate host changes remain after discard,
                       cancellation and environment changes.
                     {% endif %}
@@ -963,6 +1073,11 @@
                 type="hidden"
                 name="consent_request"
                 value="{{ consent_request }}"
+              />
+              <input
+                type="hidden"
+                name="host_consent_request"
+                value="{{ host_consent_request }}"
               />
               <input
                 type="hidden"
@@ -1056,12 +1171,17 @@
               id="conversation-directory-heading"
               class="text-lg font-semibold"
             >
-              Directories
+              {% if location_host %}Work locations{% else %}Directories{% endif %}
             </h2>
             <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-              Review before apply uses an isolated copy and requires approval.
-              Direct write changes host files immediately. Read only does not
-              permit writes through that mount.
+              {% if location_host %}
+                Host commands start in the first work location. These paths are
+                conveniences, not sandbox access limits.
+              {% else %}
+                Review before apply uses an isolated copy and requires approval.
+                Direct write changes host files immediately. Read only does not
+                permit writes through that mount.
+              {% endif %}
             </p>
           </div>
           <button
@@ -1085,8 +1205,13 @@
         {% endif %}
         {% if directories.is_empty() %}
           <p class="text-quiet text-sm">
-            No host directory access. Tools use private scratch storage at
-            <code>/workspace</code>.
+            {% if location_host %}
+              Commands start in Power Plant's current directory. Work locations
+              do not limit host access.
+            {% else %}
+              No host directory access. Tools use private scratch storage at
+              <code>/workspace</code>.
+            {% endif %}
           </p>
         {% else %}
           <ul class="record-list" aria-label="Authorised directories">
@@ -1101,7 +1226,7 @@
                       <span class="badge badge-error badge-sm"
                         >Unavailable</span
                       >
-                    {% else if directory.pending_approval %}
+                    {% else if directory.pending_approval && !location_host %}
                       <span class="badge badge-warning badge-sm"
                         >Pending approval</span
                       >
@@ -1112,7 +1237,7 @@
                     {% endif %}
                     <span
                       class="badge badge-outline badge-sm shrink-0 whitespace-nowrap"
-                      >{{ directory.access_label }}</span
+                      >{% if location_host %}Work location{% else %}{{ directory.access_label }}{% endif %}</span
                     >
                   </div>
                   <dl
@@ -1122,16 +1247,18 @@
                     <dd class="min-w-0 font-mono break-all">
                       {{ directory.host_path }}
                     </dd>
-                    <dt class="text-quiet">Guest path</dt>
-                    <dd class="min-w-0 font-mono break-all">
-                      {{ directory.guest_path }}
-                    </dd>
-                    <dt class="text-quiet">Alias</dt>
-                    <dd class="min-w-0 font-mono break-all">
-                      {{ directory.alias }}
-                    </dd>
+                    {% if !location_host %}
+                      <dt class="text-quiet">Guest path</dt>
+                      <dd class="min-w-0 font-mono break-all">
+                        {{ directory.guest_path }}
+                      </dd>
+                      <dt class="text-quiet">Alias</dt>
+                      <dd class="min-w-0 font-mono break-all">
+                        {{ directory.alias }}
+                      </dd>
+                    {% endif %}
                   </dl>
-                  {% if directory.review_before_apply && !directory.exclusions.is_empty() %}
+                  {% if !location_host && directory.review_before_apply && !directory.exclusions.is_empty() %}
                     <div class="mt-3 text-xs">
                       <p class="font-medium">Excluded engine paths</p>
                       <ul class="text-quiet mt-1 space-y-1">
@@ -1144,45 +1271,47 @@
                 </div>
                 {% if self.is_new() %}
                   <div class="flex flex-wrap gap-2 self-start">
-                    {% if directory.pending_approval && consent_request == "" %}
-                      <button
-                        form="conversation-composer"
-                        formaction="/conversations/new/directories/{{ directory.id }}/consent"
-                        formmethod="post"
-                        class="btn btn-warning btn-sm min-h-11"
-                        type="submit"
-                      >
-                        Review access
-                      </button>
-                    {% endif %}
-                    {% if !directory.direct_write %}
+                    {% if !location_host %}
+                      {% if directory.pending_approval && consent_request == "" %}
+                        <button
+                          form="conversation-composer"
+                          formaction="/conversations/new/directories/{{ directory.id }}/consent"
+                          formmethod="post"
+                          class="btn btn-warning btn-sm min-h-11"
+                          type="submit"
+                        >
+                          Review access
+                        </button>
+                      {% endif %}
+                      {% if !directory.direct_write %}
+                        <button
+                          form="conversation-composer"
+                          formaction="/conversations/new/directories/{{ directory.id }}/access"
+                          formmethod="post"
+                          name="action"
+                          value="direct-write"
+                          class="btn btn-warning btn-sm min-h-11"
+                          type="submit"
+                        >
+                          Direct write
+                        </button>
+                      {% endif %}
                       <button
                         form="conversation-composer"
                         formaction="/conversations/new/directories/{{ directory.id }}/access"
                         formmethod="post"
                         name="action"
-                        value="direct-write"
-                        class="btn btn-warning btn-sm min-h-11"
+                        value="{% if directory.review_before_apply || directory.direct_write %}read-only{% else %}review-before-apply{% endif %}"
+                        class="btn btn-secondary btn-sm min-h-11"
                         type="submit"
                       >
-                        Direct write
+                        {% if directory.review_before_apply || directory.direct_write %}
+                          Use read only
+                        {% else %}
+                          Review before apply
+                        {% endif %}
                       </button>
                     {% endif %}
-                    <button
-                      form="conversation-composer"
-                      formaction="/conversations/new/directories/{{ directory.id }}/access"
-                      formmethod="post"
-                      name="action"
-                      value="{% if directory.review_before_apply || directory.direct_write %}read-only{% else %}review-before-apply{% endif %}"
-                      class="btn btn-secondary btn-sm min-h-11"
-                      type="submit"
-                    >
-                      {% if directory.review_before_apply || directory.direct_write %}
-                        Use read only
-                      {% else %}
-                        Review before apply
-                      {% endif %}
-                    </button>
                     <button
                       form="conversation-composer"
                       formaction="/conversations/new/directories/{{ directory.id }}/remove"
@@ -1213,41 +1342,43 @@
                         value="{{ saved.revision }}"
                       />
                       <div class="flex flex-wrap gap-2">
-                        {% if !directory.direct_write %}
+                        {% if !location_host %}
+                          {% if !directory.direct_write %}
+                            <button
+                              class="btn btn-warning btn-sm min-h-11"
+                              type="submit"
+                              name="access"
+                              value="direct-write"
+                              formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/access"
+                              {% if job_active || session_busy %}disabled{% endif %}
+                            >
+                              Direct write
+                            </button>
+                          {% endif %}
                           <button
-                            class="btn btn-warning btn-sm min-h-11"
+                            class="btn btn-secondary btn-sm min-h-11"
                             type="submit"
                             name="access"
-                            value="direct-write"
+                            value="{% if directory.review_before_apply || directory.direct_write %}read-only{% else %}review-before-apply{% endif %}"
                             formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/access"
                             {% if job_active || session_busy %}disabled{% endif %}
                           >
-                            Direct write
+                            {% if directory.review_before_apply || directory.direct_write %}
+                              Use read only
+                            {% else %}
+                              Review before apply
+                            {% endif %}
                           </button>
-                        {% endif %}
-                        <button
-                          class="btn btn-secondary btn-sm min-h-11"
-                          type="submit"
-                          name="access"
-                          value="{% if directory.review_before_apply || directory.direct_write %}read-only{% else %}review-before-apply{% endif %}"
-                          formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/access"
-                          {% if job_active || session_busy %}disabled{% endif %}
-                        >
-                          {% if directory.review_before_apply || directory.direct_write %}
-                            Use read only
-                          {% else %}
-                            Review before apply
+                          {% if directory.pending_approval && consent_request == "" %}
+                            <button
+                              class="btn btn-warning btn-sm min-h-11"
+                              type="submit"
+                              formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/consent"
+                              {% if job_active || session_busy %}disabled{% endif %}
+                            >
+                              Review access
+                            </button>
                           {% endif %}
-                        </button>
-                        {% if directory.pending_approval && consent_request == "" %}
-                          <button
-                            class="btn btn-warning btn-sm min-h-11"
-                            type="submit"
-                            formaction="/conversations/{{ saved.id }}/directories/{{ directory.id }}/consent"
-                            {% if job_active || session_busy %}disabled{% endif %}
-                          >
-                            Review access
-                          </button>
                         {% endif %}
                         <button
                           class="btn btn-ghost btn-sm min-h-11"
@@ -1902,6 +2033,8 @@
                 <dd>{{ preview.tools }}</dd>
                 <dt class="text-quiet">Network</dt>
                 <dd>{{ preview.network }}</dd>
+                <dt class="text-quiet">Where tools run</dt>
+                <dd>{{ preview.location }}</dd>
                 <dt class="text-quiet">Directories</dt>
                 <dd>
                   {% if preview.directories.is_empty() %}
@@ -1971,11 +2104,162 @@
 
         {% let settings_form = self.model_form() %}
         {% let field_prefix = "" %}
+        {% let tools_host = location_host %}
         {% include "execution_settings/templates/fields.html" %}
+
+        {% if self.is_new() %}
+          <button
+            form="conversation-composer"
+            data-location-preview
+            type="submit"
+            name="action"
+            value="settings"
+            formnovalidate
+            hidden
+          >
+            Update settings
+          </button>
+        {% endif %}
+        <section
+          class="border-base-300 mt-6 space-y-3 border-t pt-5"
+          aria-labelledby="conversation-location-heading"
+        >
+          <h3 id="conversation-location-heading" class="text-sm font-semibold">
+            Where tools run
+          </h3>
+          <p class="text-quiet max-w-[65ch] text-xs">
+            Sandbox tools use the selected environment and directory mounts.
+            This computer runs approved shell commands as the Power Plant
+            process user. Sandbox network restrictions and environment recipes
+            do not apply to host commands.
+          </p>
+          <fieldset
+            class="grid gap-2 sm:grid-cols-2"
+            {% if job_active %}disabled{% endif %}
+          >
+            <legend class="sr-only">Where tools run</legend>
+            <label
+              class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+            >
+              <input
+                form="{{ self.model_form() }}"
+                class="radio radio-sm"
+                type="radio"
+                name="location"
+                value="sandbox"
+                {% if !location_host %}checked{% endif %}
+              />
+              <span>Sandbox</span>
+            </label>
+            <label
+              class="border-base-300 flex min-h-12 items-center gap-2 border p-3 text-sm"
+            >
+              <input
+                form="{{ self.model_form() }}"
+                class="radio radio-sm"
+                type="radio"
+                name="location"
+                value="host"
+                {% if location_host %}checked{% endif %}
+              />
+              <span>This computer</span>
+            </label>
+          </fieldset>
+          {% if location_host %}
+            <div class="alert alert-warning items-start">
+              <div class="min-w-0 space-y-2 text-sm">
+                <p class="font-medium">Unrestricted host access</p>
+                <p class="break-words">{{ host_identity }}</p>
+                {% if host_elevated %}
+                  <p>
+                    This process already has elevated privileges. Host commands
+                    inherit that authority.
+                  </p>
+                {% endif %}
+                <p>
+                  Command output is sent to the hosted model. Approval does not
+                  inspect script internals. Directory rows become work
+                  locations, not access limits.
+                </p>
+                {% if host_pending_approval %}
+                  <p>Approval is pending.</p>
+                {% endif %}
+              </div>
+            </div>
+            {% if host_pending_approval && host_consent_request.is_empty() %}
+              {% if self.is_new() %}
+                <button
+                  form="conversation-composer"
+                  id="conversation-host-consent-preview"
+                  formaction="/conversations/new/settings/host-consent"
+                  formmethod="post"
+                  class="btn btn-warning"
+                  type="submit"
+                >
+                  Review host access
+                </button>
+              {% else %}
+                {% if let Some(saved) = self.saved() %}
+                  <form
+                    data-graft
+                    method="post"
+                    action="/conversations/{{ saved.id }}/settings/host-consent"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ saved.revision }}"
+                    />
+                    <button class="btn btn-warning" type="submit">
+                      Review host access
+                    </button>
+                  </form>
+                {% endif %}
+              {% endif %}
+            {% endif %}
+            {% if host_consent_request != "" %}
+              {% if self.is_new() %}
+                <button
+                  form="conversation-composer"
+                  id="conversation-host-consent-approve"
+                  formaction="/conversations/new/settings/host-consent/approve"
+                  formmethod="post"
+                  class="btn btn-warning"
+                  type="submit"
+                >
+                  Approve unrestricted host access
+                </button>
+              {% else %}
+                {% if let Some(saved) = self.saved() %}
+                  <form
+                    data-graft
+                    method="post"
+                    action="/conversations/{{ saved.id }}/settings/host-consent/approve"
+                  >
+                    <input
+                      type="hidden"
+                      name="revision"
+                      value="{{ saved.revision }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="consent_request"
+                      value="{{ host_consent_request }}"
+                    />
+                    <button class="btn btn-warning" type="submit">
+                      Approve unrestricted host access
+                    </button>
+                  </form>
+                {% endif %}
+              {% endif %}
+            {% endif %}
+          {% endif %}
+        </section>
 
         <section
           class="border-base-300 mt-6 space-y-3 border-t pt-5"
           aria-labelledby="conversation-environment-heading"
+          {% if location_host %}hidden{% endif %}
         >
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -2156,6 +2440,7 @@
         <section
           class="border-base-300 mt-6 space-y-3 border-t pt-5"
           aria-labelledby="conversation-network-heading"
+          {% if location_host %}hidden{% endif %}
         >
           <div>
             <h3 id="conversation-network-heading" class="text-sm font-semibold">

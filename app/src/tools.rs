@@ -2,6 +2,7 @@ use rig_core::completion::ToolDefinition;
 use serde::Deserialize;
 
 use crate::agents::{DirectoryPolicy, ToolId};
+use crate::execution::ToolLocation;
 use crate::sandbox::{GuestExec, GuestSandbox};
 use crate::sessions::Job;
 
@@ -10,18 +11,23 @@ pub(crate) const MAXIMUM_WRITE_BYTES: usize = 256 * 1024;
 pub(crate) const MAXIMUM_COMMAND_BYTES: usize = 32_768;
 
 impl ToolId {
-    fn description(self) -> &'static str {
-        match self {
-            Self::List => "List files in a granted directory.",
-            Self::Read => "Read a file inside a granted directory.",
-            Self::Write => {
+    fn description_for(self, location: ToolLocation) -> &'static str {
+        match (self, location) {
+            (Self::List, _) => "List files in a granted directory.",
+            (Self::Read, _) => "Read a file inside a granted directory.",
+            (Self::Write, _) => {
                 "Write a file inside a writable granted directory. Creates parent directories."
             }
-            Self::Run => "Run a shell command. Starts in the primary directory.",
+            (Self::Run, ToolLocation::Host) => {
+                "Run a shell command on this computer after the user approves the exact command. Starts in the selected work location. Approval does not inspect script internals."
+            }
+            (Self::Run, ToolLocation::Sandbox) => {
+                "Run a shell command. Starts in the primary directory."
+            }
         }
     }
 
-    fn parameters(self) -> serde_json::Value {
+    fn parameters(self, location: ToolLocation) -> serde_json::Value {
         match self {
             Self::List | Self::Read => serde_json::json!({
                 "type": "object",
@@ -53,24 +59,42 @@ impl ToolId {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Shell command to run. Starts in the primary directory."
+                        "description": "Shell command to run. Starts in the primary directory or selected host work location."
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": "Why this command is needed. Shown to the user before host approval."
                     }
                 },
-                "required": ["command"],
+                "required": if location == ToolLocation::Host { vec!["command", "explanation"] } else { vec!["command"] },
                 "additionalProperties": false
             }),
         }
     }
 }
 
+pub(crate) fn advertised(selected: &[ToolId], location: ToolLocation) -> Vec<ToolId> {
+    match location {
+        ToolLocation::Sandbox => selected.to_vec(),
+        ToolLocation::Host => selected
+            .iter()
+            .copied()
+            .filter(|tool| *tool == ToolId::Run)
+            .collect(),
+    }
+}
+
 pub(crate) fn definitions(selected: &[ToolId]) -> Vec<ToolDefinition> {
-    selected
-        .iter()
-        .copied()
+    definitions_for(selected, ToolLocation::Sandbox)
+}
+
+pub(crate) fn definitions_for(selected: &[ToolId], location: ToolLocation) -> Vec<ToolDefinition> {
+    advertised(selected, location)
+        .into_iter()
         .map(|kind| ToolDefinition {
             name: kind.as_str().to_owned(),
-            description: kind.description().to_owned(),
-            parameters: kind.parameters(),
+            description: kind.description_for(location).to_owned(),
+            parameters: kind.parameters(location),
         })
         .collect()
 }
@@ -138,11 +162,32 @@ fn submit_definition(outputs: &[crate::workflows::definition::RequiredOutput]) -
 
 pub(crate) const SUBMIT_WORKFLOW_OUTPUT: &str = "submit_workflow_output";
 
+#[derive(Clone, Debug)]
+pub(crate) struct HostRunSpec {
+    pub(crate) session: crate::sessions::SessionId,
+    pub(crate) conversation: crate::conversations::ConversationId,
+    pub(crate) execution_revision: u32,
+    pub(crate) directory: std::path::PathBuf,
+    pub(crate) settings: crate::execution::ExecutionSettings,
+}
+
+pub(crate) struct HostToolContext<'a> {
+    pub(crate) state: &'a crate::state::AppState,
+    pub(crate) settings: &'a crate::execution::ExecutionSettings,
+    pub(crate) secret: Option<&'a str>,
+    pub(crate) session: crate::sessions::SessionId,
+    pub(crate) conversation: crate::conversations::ConversationId,
+    pub(crate) execution_revision: u32,
+    pub(crate) directory: std::path::PathBuf,
+}
+
 pub(crate) struct AgentToolContext<'a> {
-    pub(crate) sandbox: &'a GuestSandbox,
+    pub(crate) sandbox: Option<&'a GuestSandbox>,
     pub(crate) policy: &'a DirectoryPolicy,
     pub(crate) job: &'a Job,
     pub(crate) tools: &'a [ToolId],
+    pub(crate) location: ToolLocation,
+    pub(crate) host: Option<HostToolContext<'a>>,
     pub(crate) output_drafts:
         Option<&'a std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>,
     pub(crate) required_outputs: &'a [crate::workflows::definition::RequiredOutput],
@@ -167,7 +212,7 @@ pub(crate) async fn invoke(
     if name == SUBMIT_WORKFLOW_OUTPUT {
         return submit_output(context, arguments);
     }
-    let Some(kind) = authorised_tool(context.tools, name) else {
+    let Some(kind) = authorised_tool(context.tools, name, context.location) else {
         return ToolTrace {
             label: name.to_owned(),
             output: "That tool is not available.".to_owned(),
@@ -182,8 +227,8 @@ pub(crate) async fn invoke(
     }
 }
 
-fn authorised_tool(selected: &[ToolId], name: &str) -> Option<ToolId> {
-    ToolId::parse(name).filter(|kind| selected.contains(kind))
+fn authorised_tool(selected: &[ToolId], name: &str, location: ToolLocation) -> Option<ToolId> {
+    ToolId::parse(name).filter(|kind| advertised(selected, location).contains(kind))
 }
 
 fn submit_output(context: &AgentToolContext<'_>, arguments: &serde_json::Value) -> ToolTrace {
@@ -246,6 +291,9 @@ async fn dispatch(
     kind: ToolId,
     arguments: &serde_json::Value,
 ) -> Result<(String, String), &'static str> {
+    if context.location == ToolLocation::Host && kind != ToolId::Run {
+        return Err("That tool is not available on this computer.");
+    }
     match kind {
         ToolId::List => {
             let args: PathArgs = parse_args(arguments)?;
@@ -322,6 +370,12 @@ async fn dispatch(
             if command.len() > MAXIMUM_COMMAND_BYTES {
                 return Err("That command is too long.");
             }
+            if context.location == ToolLocation::Host {
+                if args.explanation.trim().is_empty() {
+                    return Err("Explain why this command is necessary.");
+                }
+                return host_run(context, command, args.explanation.trim()).await;
+            }
             let output = capture(
                 context,
                 GuestExec::shell(command).in_dir(context.policy.primary_guest()),
@@ -330,6 +384,107 @@ async fn dispatch(
             Ok((format!("run `{command}`"), output))
         }
     }
+}
+
+async fn host_run(
+    context: &AgentToolContext<'_>,
+    command: &str,
+    explanation: &str,
+) -> Result<(String, String), &'static str> {
+    let host = context
+        .host
+        .as_ref()
+        .ok_or("Host execution is not available.")?;
+    validate_host_dispatch(host, context.job)?;
+    let mut request = crate::execution::HostCommandRequest {
+        token: String::new(),
+        session: host.session,
+        job: context.job.id(),
+        conversation: host.conversation,
+        execution_revision: host.execution_revision,
+        command: command.to_owned(),
+        directory: host.directory.clone(),
+        explanation: explanation.to_owned(),
+    };
+    let approvals = &host.state.host_approvals;
+    let token = approvals
+        .submit(request.clone())
+        .map_err(|error| error.message())?;
+    request.token = token.clone();
+    let evidence = |status, output| {
+        host.state
+            .workflow_evidence
+            .host_command(&request, status, output, host.secret)
+            .map_err(|error| error.message())
+    };
+    if let Err(error) = evidence("awaiting_approval", "") {
+        approvals.invalidate_job(context.job.id());
+        return Err(error);
+    }
+    if context.job.set_awaiting_decision().is_none() && context.job.cancel_requested() {
+        approvals.invalidate_job(context.job.id());
+        return Err("Stopped.");
+    }
+    let decision = approvals.wait(&token, context.job).await;
+    let _ = context.job.resume();
+    match decision {
+        Ok(crate::execution::HostCommandDecision::Approved) => {
+            validate_host_dispatch(host, context.job)?;
+            evidence("dispatching", "")?;
+            let result = crate::execution::run_shell(
+                command,
+                &host.directory,
+                context.job,
+                crate::execution::COMMAND_TIMEOUT,
+            )
+            .await;
+            evidence(
+                if result.is_ok() { "finished" } else { "failed" },
+                result.as_deref().unwrap_or_else(|error| error),
+            )?;
+            Ok((format!("run `{command}`"), result?))
+        }
+        Ok(crate::execution::HostCommandDecision::Rejected) => {
+            evidence("rejected", "The user rejected this command.")?;
+            Ok((
+                format!("run `{command}`"),
+                "The user rejected this command.".to_owned(),
+            ))
+        }
+        Err(error) => {
+            evidence("invalidated", error.message())?;
+            Err(error.message())
+        }
+    }
+}
+
+fn validate_host_dispatch(host: &HostToolContext<'_>, job: &Job) -> Result<(), &'static str> {
+    let record = host
+        .state
+        .conversations
+        .get(&host.conversation)
+        .ok_or("This conversation is not available.")?;
+    if job.cancel_requested()
+        || !host.state.sessions.contains_live(&host.session)
+        || record.active_job != Some(job.id())
+        || record
+            .model
+            .as_ref()
+            .is_none_or(|model| model.settings != *host.settings)
+        || !host.state.access_consent.authorised_host_conversation(
+            host.session,
+            host.conversation,
+            host.settings,
+        )
+    {
+        return Err("Host access expired or changed. Approve the current settings again.");
+    }
+    for grant in &host.settings.directories {
+        grant
+            .revalidate()
+            .map_err(|_| "A work location changed or is not available.")?;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -347,6 +502,8 @@ struct WriteArgs {
 #[derive(Deserialize)]
 struct RunArgs {
     command: String,
+    #[serde(default)]
+    explanation: String,
 }
 
 fn parse_args<T: for<'de> Deserialize<'de>>(
@@ -475,8 +632,8 @@ async fn capture(
     context: &AgentToolContext<'_>,
     request: GuestExec,
 ) -> Result<String, &'static str> {
-    let mut session = context
-        .sandbox
+    let sandbox = context.sandbox.ok_or("That tool is not available.")?;
+    let mut session = sandbox
         .exec_cmd(request)
         .await
         .map_err(|error| error.message())?;

@@ -15,6 +15,29 @@ pub(crate) const MAXIMUM_DIRECTORY_GRANTS: usize = 8;
 const MAXIMUM_FORM_GRANT_BYTES: usize = 8 * 1024;
 const MAXIMUM_ALIAS_BYTES: usize = 32;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolLocation {
+    Sandbox,
+    Host,
+}
+
+impl ToolLocation {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Sandbox => "sandbox",
+            Self::Host => "host",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "sandbox" | "" => Some(Self::Sandbox),
+            "host" => Some(Self::Host),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ExecutionSettings {
     pub(crate) model: ModelSelection,
@@ -23,6 +46,7 @@ pub(crate) struct ExecutionSettings {
     pub(crate) environment: EnvironmentId,
     pub(crate) network: NetworkAccess,
     pub(crate) directories: Vec<DirectoryGrant>,
+    pub(crate) location: ToolLocation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,6 +116,7 @@ pub(crate) struct ExecutionSettingsFile {
     network: String,
     network_domains: Vec<String>,
     directories: Vec<DirectoryGrantFile>,
+    location: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -142,6 +167,9 @@ impl ExecutionSettings {
                     combined.directories.push(grant.clone());
                 }
             }
+            if combined.location != phase.location {
+                return None;
+            }
         }
         Some(combined)
     }
@@ -160,6 +188,7 @@ impl ExecutionSettings {
             environment,
             network: NetworkAccess::None,
             directories: Vec::new(),
+            location: ToolLocation::Sandbox,
         })
     }
 
@@ -172,6 +201,15 @@ impl ExecutionSettings {
         validate_directories(&directories).ok()?;
         self.directories = directories;
         Some(self)
+    }
+
+    pub(crate) fn with_location(mut self, location: ToolLocation) -> Self {
+        self.location = location;
+        self
+    }
+
+    pub(crate) fn host_tools(&self) -> bool {
+        self.location == ToolLocation::Host && self.tools.contains(&ToolId::Run)
     }
 
     pub(crate) fn to_file(&self) -> ExecutionSettingsFile {
@@ -191,6 +229,7 @@ impl ExecutionSettings {
                 .iter()
                 .map(DirectoryGrantFile::from)
                 .collect(),
+            location: self.location.as_str().to_owned(),
         }
     }
 
@@ -208,9 +247,12 @@ impl ExecutionSettings {
             .into_iter()
             .map(DirectoryGrantFile::into_grant)
             .collect::<Option<Vec<_>>>()?;
-        Self::new(file.model, file.instructions, tools, environment)?
-            .with_network(network)?
-            .with_directories(directories)
+        Some(
+            Self::new(file.model, file.instructions, tools, environment)?
+                .with_network(network)?
+                .with_directories(directories)?
+                .with_location(ToolLocation::parse(&file.location)?),
+        )
     }
 }
 

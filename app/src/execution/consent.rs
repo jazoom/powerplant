@@ -34,10 +34,16 @@ enum Subject {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum ConsentTarget {
+    Grant(GrantBinding),
+    Host,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ConsentBinding {
     session: SessionId,
     subject: Subject,
-    grant: GrantBinding,
+    target: ConsentTarget,
 }
 
 #[derive(Default)]
@@ -80,7 +86,7 @@ impl AccessConsentStore {
                 nonce: nonce.to_owned(),
                 digest: access_digest(directories),
             },
-            grant: grant.into(),
+            target: ConsentTarget::Grant(grant.into()),
         })
     }
 
@@ -97,7 +103,7 @@ impl AccessConsentStore {
                 id: conversation,
                 digest: settings_digest(settings),
             },
-            grant: grant.into(),
+            target: ConsentTarget::Grant(grant.into()),
         })
     }
 
@@ -117,7 +123,7 @@ impl AccessConsentStore {
                     nonce: nonce.to_owned(),
                     digest: access_digest(directories),
                 },
-                grant: grant.into(),
+                target: ConsentTarget::Grant(grant.into()),
             },
         )
     }
@@ -139,7 +145,7 @@ impl AccessConsentStore {
                     id: conversation,
                     digest,
                 },
-                grant: grant.into(),
+                target: ConsentTarget::Grant(grant.into()),
             },
         )?;
         lock(&self.approved).retain(|_, binding| {
@@ -169,7 +175,7 @@ impl AccessConsentStore {
                 nonce: nonce.to_owned(),
                 digest: access_digest(directories),
             },
-            grant: grant.into(),
+            target: ConsentTarget::Grant(grant.into()),
         };
         reference
             .split(',')
@@ -204,7 +210,7 @@ impl AccessConsentStore {
             let expected = ConsentBinding {
                 session,
                 subject: subject.clone(),
-                grant: grant.into(),
+                target: ConsentTarget::Grant(grant.into()),
             };
             if !reference
                 .split(',')
@@ -220,7 +226,27 @@ impl AccessConsentStore {
                         id: conversation,
                         digest: settings_digest(settings),
                     },
-                    grant: grant.into(),
+                    target: ConsentTarget::Grant(grant.into()),
+                },
+            ));
+        }
+        if settings.location == super::ToolLocation::Host {
+            let expected = host_draft_binding(session, nonce, settings);
+            if !reference
+                .split(',')
+                .any(|key| approved.get(key) == Some(&expected))
+            {
+                return Err(ConsentError::Invalid);
+            }
+            replacements.push((
+                fresh_token()?,
+                ConsentBinding {
+                    session,
+                    subject: Subject::Conversation {
+                        id: conversation,
+                        digest: settings_digest(settings),
+                    },
+                    target: ConsentTarget::Host,
                 },
             ));
         }
@@ -329,13 +355,105 @@ impl AccessConsentStore {
         settings: &super::ExecutionSettings,
         grant: &DirectoryGrant,
     ) -> bool {
+        self.authorised_target(
+            session,
+            conversation,
+            settings,
+            ConsentTarget::Grant(grant.into()),
+        )
+    }
+
+    pub(crate) fn request_host_draft(
+        &self,
+        session: SessionId,
+        nonce: &str,
+        settings: &super::ExecutionSettings,
+    ) -> Result<String, ConsentError> {
+        self.request(host_draft_binding(session, nonce, settings))
+    }
+
+    pub(crate) fn request_host_conversation(
+        &self,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: &super::ExecutionSettings,
+    ) -> Result<String, ConsentError> {
+        self.request(host_conversation_binding(session, conversation, settings))
+    }
+
+    pub(crate) fn approve_host_draft(
+        &self,
+        request: &str,
+        session: SessionId,
+        nonce: &str,
+        settings: &super::ExecutionSettings,
+    ) -> Result<String, ConsentError> {
+        self.approve(request, host_draft_binding(session, nonce, settings))
+    }
+
+    pub(crate) fn approve_host_conversation(
+        &self,
+        request: &str,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: &super::ExecutionSettings,
+    ) -> Result<String, ConsentError> {
+        let digest = settings_digest(settings);
+        let reference = self.approve(
+            request,
+            host_conversation_binding(session, conversation, settings),
+        )?;
+        lock(&self.approved).retain(|_, binding| {
+            !(binding.target == ConsentTarget::Host
+                && matches!(
+                    binding.subject,
+                    Subject::Conversation { id, digest: stored }
+                        if id == conversation && stored != digest
+                ))
+        });
+        lock(&self.pending).retain(|_, binding| {
+            !(binding.target == ConsentTarget::Host
+                && matches!(binding.subject, Subject::Conversation { id, .. } if id == conversation))
+        });
+        Ok(reference)
+    }
+
+    pub(crate) fn authorised_host_draft(
+        &self,
+        reference: &str,
+        session: SessionId,
+        nonce: &str,
+        settings: &super::ExecutionSettings,
+    ) -> bool {
+        let expected = host_draft_binding(session, nonce, settings);
+        reference
+            .split(',')
+            .any(|reference| self.approved(reference).as_ref() == Some(&expected))
+    }
+
+    pub(crate) fn authorised_host_conversation(
+        &self,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: &super::ExecutionSettings,
+    ) -> bool {
+        self.authorised_target(session, conversation, settings, ConsentTarget::Host)
+    }
+
+    fn authorised_target(
+        &self,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: &super::ExecutionSettings,
+        target: ConsentTarget,
+    ) -> bool {
         let expected = ConsentBinding {
             session,
             subject: Subject::Conversation {
                 id: conversation,
                 digest: settings_digest(settings),
             },
-            grant: grant.into(),
+            target,
         };
         lock(&self.approved)
             .values()
@@ -414,6 +532,36 @@ fn access_digest(directories: &[DirectoryGrant]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+fn host_draft_binding(
+    session: SessionId,
+    nonce: &str,
+    settings: &super::ExecutionSettings,
+) -> ConsentBinding {
+    ConsentBinding {
+        session,
+        subject: Subject::Draft {
+            nonce: nonce.to_owned(),
+            digest: settings_digest(settings),
+        },
+        target: ConsentTarget::Host,
+    }
+}
+
+fn host_conversation_binding(
+    session: SessionId,
+    conversation: ConversationId,
+    settings: &super::ExecutionSettings,
+) -> ConsentBinding {
+    ConsentBinding {
+        session,
+        subject: Subject::Conversation {
+            id: conversation,
+            digest: settings_digest(settings),
+        },
+        target: ConsentTarget::Host,
+    }
+}
+
 fn settings_digest(settings: &super::ExecutionSettings) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(access_digest(&settings.directories));
@@ -427,6 +575,7 @@ fn settings_digest(settings: &super::ExecutionSettings) -> [u8; 32] {
         digest.update([0]);
         digest.update(domain);
     }
+    digest.update(settings.location.as_str());
     digest.finalize().into()
 }
 

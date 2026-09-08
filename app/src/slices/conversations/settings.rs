@@ -40,6 +40,7 @@ pub(super) struct SettingsForm {
     pub(super) tool_read: String,
     pub(super) tool_write: String,
     pub(super) tool_run: String,
+    pub(super) location: String,
     pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
@@ -86,6 +87,7 @@ impl SettingsForm {
             thinking: &self.thinking,
             instructions: self.instructions.clone(),
             tools: self.tool_values(),
+            location: &self.location,
             environment: &self.environment,
             network: &self.network,
             network_domains: &self.network_domains,
@@ -113,6 +115,12 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
     };
     let network = NetworkAccess::parse_form(network_mode, &form.network_domains)
         .map_err(|_| "Choose valid network access. Restricted access needs 1 to 32 domains.")?;
+    let location = crate::execution::ToolLocation::parse(if form.location.trim().is_empty() {
+        "sandbox"
+    } else {
+        form.location.trim()
+    })
+    .ok_or("Choose where tools run.")?;
     ExecutionSettings::new(
         selection,
         form.instructions.clone(),
@@ -120,6 +128,7 @@ fn validate(state: &AppState, form: &SettingsForm) -> Result<ExecutionSettings, 
         environment,
     )
     .and_then(|settings| settings.with_network(network))
+    .map(|settings| settings.with_location(location))
     .ok_or("Enter instructions within 32 KiB without unsupported control characters.")
 }
 
@@ -229,6 +238,7 @@ pub(super) async fn update(
         model.settings.tools != settings.tools
             || model.settings.network != settings.network
             || model.settings.environment != settings.environment
+            || model.settings.location != settings.location
     });
     let selection = settings.model.clone();
     match state
@@ -781,6 +791,7 @@ pub(super) fn copy_settings_to_draft(
     } else {
         String::new()
     };
+    form.location = settings.location.as_str().to_owned();
     form.environment = settings.environment.as_hex();
     form.network = settings.network.as_str().to_owned();
     form.network_domains = settings.network.domains().join("\n");
@@ -826,6 +837,10 @@ fn preset_preview_view(
             NetworkAccess::None => "Off".to_owned(),
             NetworkAccess::Public => "Public internet".to_owned(),
             NetworkAccess::Restricted(domains) => format!("Restricted: {}", domains.join(", ")),
+        },
+        location: match settings.location {
+            crate::execution::ToolLocation::Sandbox => "Sandbox".to_owned(),
+            crate::execution::ToolLocation::Host => "This computer".to_owned(),
         },
         directories: settings
             .directories
@@ -874,6 +889,253 @@ fn preset_saved_error(
         },
         detail_view(state, session, record, &record.title, error).open_settings(),
     )
+}
+
+#[derive(Deserialize)]
+pub(super) struct HostConsentForm {
+    pub(super) revision: String,
+    #[serde(default)]
+    pub(super) consent_request: String,
+}
+
+pub(super) async fn request_host(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(_form): Form<HostConsentForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(model) = record.model.as_ref() else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose conversation settings first.",
+            )
+            .open_settings(),
+        );
+    };
+    if model.settings.location != crate::execution::ToolLocation::Host {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose This computer before you approve unrestricted host access.",
+            )
+            .open_settings(),
+        );
+    }
+    let request =
+        match state
+            .access_consent
+            .request_host_conversation(session.0, record.id, &model.settings)
+        {
+            Ok(request) => request,
+            Err(_) => {
+                return render_detail_command(
+                    graft,
+                    PatchStatus::UnprocessableEntity,
+                    detail_view(
+                        &state,
+                        session.0,
+                        &record,
+                        &record.title,
+                        "Power Plant could not start host access approval. Try again.",
+                    )
+                    .open_settings(),
+                );
+            }
+        };
+    render_detail_command(
+        graft,
+        PatchStatus::Ok,
+        detail_view(&state, session.0, &record, &record.title, "")
+            .open_settings()
+            .with_host_consent_request(request),
+    )
+}
+
+pub(super) async fn approve_host(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path(conversation_id): Path<String>,
+    Form(form): Form<HostConsentForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(revision) = parse_revision(&form.revision) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE)
+                .open_settings(),
+        );
+    };
+    if revision != record.revision {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE)
+                .open_settings(),
+        );
+    }
+    let Some(model) = record.model.as_ref() else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "Choose conversation settings first.",
+            )
+            .open_settings(),
+        );
+    };
+    if state
+        .access_consent
+        .approve_host_conversation(&form.consent_request, session.0, record.id, &model.settings)
+        .is_err()
+    {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "The host access request expired or changed. Review it again.",
+            )
+            .open_settings(),
+        );
+    }
+    render_detail_command(
+        graft,
+        PatchStatus::Ok,
+        detail_view(&state, session.0, &record, &record.title, "").open_settings(),
+    )
+}
+
+pub(super) async fn request_host_draft(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    _graft: PatchGraft,
+    Form(form): Form<super::new::NewForm>,
+) -> AppResult<Response> {
+    let settings = match super::new::settings_snapshot(&state, session.0, &form) {
+        Ok(Some(model)) => model.settings,
+        Ok(None) => {
+            return render_draft_preset(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                "Choose a stored provider.",
+            );
+        }
+        Err(error) => {
+            return render_draft_preset(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                error,
+            );
+        }
+    };
+    if settings.location != crate::execution::ToolLocation::Host {
+        return render_draft_preset(
+            &state,
+            session.0,
+            form,
+            PatchStatus::UnprocessableEntity,
+            "Choose This computer before you approve unrestricted host access.",
+        );
+    }
+    let mut form = form;
+    match state
+        .access_consent
+        .request_host_draft(session.0, &form.consent_nonce(), &settings)
+    {
+        Ok(request) => form.host_consent_request = request,
+        Err(_) => {
+            return render_draft_preset(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                "Power Plant could not start host access approval. Try again.",
+            );
+        }
+    }
+    render_draft_preset(&state, session.0, form, PatchStatus::Ok, "")
+}
+
+pub(super) async fn approve_host_draft(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    _graft: PatchGraft,
+    Form(mut form): Form<super::new::NewForm>,
+) -> AppResult<Response> {
+    let settings = match super::new::settings_snapshot(&state, session.0, &form) {
+        Ok(Some(model)) => model.settings,
+        Ok(None) => {
+            return render_draft_preset(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                "Choose a stored provider.",
+            );
+        }
+        Err(error) => {
+            return render_draft_preset(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                error,
+            );
+        }
+    };
+    let reference = match state.access_consent.approve_host_draft(
+        &form.host_consent_request,
+        session.0,
+        &form.consent_nonce(),
+        &settings,
+    ) {
+        Ok(reference) => reference,
+        Err(_) => {
+            return render_draft_preset(
+                &state,
+                session.0,
+                form,
+                PatchStatus::UnprocessableEntity,
+                "The host access request expired or changed. Review it again.",
+            );
+        }
+    };
+    if !form.consent_reference.is_empty() {
+        form.consent_reference.push(',');
+    }
+    form.consent_reference.push_str(&reference);
+    form.host_consent_request.clear();
+    render_draft_preset(&state, session.0, form, PatchStatus::Ok, "")
 }
 
 #[cfg(test)]

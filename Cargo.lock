@@ -4336,6 +4336,7 @@ dependencies = [
  "futures-util",
  "hypergraft",
  "microsandbox",
+ "nix 0.31.3",
  "pulldown-cmark",
  "quick-xml 0.39.4",
  "rand 0.10.2",

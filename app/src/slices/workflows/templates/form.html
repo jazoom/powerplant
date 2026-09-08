@@ -598,6 +598,7 @@
                       {% let instructions = step.settings_instructions %}
                       {% let tool_options = step.settings_tool_options %}
                       {% let job_active = false %}
+                      {% let tools_host = false %}
                       {% include "execution_settings/templates/fields.html" %}
                       <label class="flex flex-col gap-1">
                         <span class="text-sm">Sandbox network</span>

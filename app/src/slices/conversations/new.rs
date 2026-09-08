@@ -15,6 +15,7 @@ pub(super) struct NewForm {
     pub(super) tool_read: String,
     pub(super) tool_write: String,
     pub(super) tool_run: String,
+    pub(super) location: String,
     pub(super) environment: String,
     pub(super) network: String,
     pub(super) network_domains: String,
@@ -30,6 +31,7 @@ pub(super) struct NewForm {
     pub(super) consent_reference: String,
     pub(super) pending_directory: String,
     pub(super) consent_request: String,
+    pub(super) host_consent_request: String,
     pub(super) consent_existing: String,
     pub(super) title: String,
     pub(super) message: String,
@@ -116,6 +118,7 @@ impl NewForm {
             &self.tool_read,
             &self.tool_write,
             &self.tool_run,
+            &self.location,
             &self.environment,
             &self.network,
             &self.network_domains,
@@ -252,6 +255,12 @@ pub(super) fn settings_snapshot(
     };
     let network = crate::agents::NetworkAccess::parse_form(network_mode, &form.network_domains)
         .map_err(|_| "Choose valid network access. Restricted access needs 1 to 32 domains.")?;
+    let location = crate::execution::ToolLocation::parse(if form.location.trim().is_empty() {
+        "sandbox"
+    } else {
+        form.location.trim()
+    })
+    .ok_or("Choose where tools run.")?;
     let settings = crate::execution::ExecutionSettings::new(
         selection,
         form.instructions.clone(),
@@ -260,6 +269,7 @@ pub(super) fn settings_snapshot(
     )
     .and_then(|settings| settings.with_network(network))
     .and_then(|settings| settings.with_directories(form.directories().ok()?))
+    .map(|settings| settings.with_location(location))
     .ok_or("Enter valid conversation settings.")?;
     let preset = state
         .presets
@@ -324,6 +334,9 @@ pub(super) async fn save(
             ConversationDetailView::from_new(&state, session.0, form, error).open_settings(),
         )
     };
+    if form.action == "settings" {
+        return reject_settings(PatchStatus::Ok, "", form);
+    }
     if form.action != "send" {
         return reject(
             PatchStatus::UnprocessableEntity,
@@ -388,11 +401,12 @@ pub(super) async fn save(
         .directories
         .iter()
         .filter(|grant| {
-            grant.access != crate::execution::DirectoryAccess::ReadOnly
-                || crate::execution::authority::sensitive_directory(
-                    &grant.host_path,
-                    state.local_data.root(),
-                )
+            model.settings.location == crate::execution::ToolLocation::Sandbox
+                && (grant.access != crate::execution::DirectoryAccess::ReadOnly
+                    || crate::execution::authority::sensitive_directory(
+                        &grant.host_path,
+                        state.local_data.root(),
+                    ))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -409,6 +423,21 @@ pub(super) async fn save(
         return reject(
             PatchStatus::UnprocessableEntity,
             "Directory access needs explicit approval.",
+            form,
+        );
+    }
+    if model.settings.host_tools()
+        && (!state.sessions.contains_live(&session.0)
+            || !state.access_consent.authorised_host_draft(
+                &form.consent_reference,
+                session.0,
+                &form.consent_nonce(),
+                &model.settings,
+            ))
+    {
+        return reject(
+            PatchStatus::UnprocessableEntity,
+            "Unrestricted host access needs explicit approval.",
             form,
         );
     }
@@ -440,7 +469,7 @@ pub(super) async fn save(
         Ok(record) => record,
         Err(error) => return reject(status_for(error), error.message(), form),
     };
-    if !consent_grants.is_empty()
+    if (!consent_grants.is_empty() || model.settings.host_tools())
         && state
             .access_consent
             .consume_draft(

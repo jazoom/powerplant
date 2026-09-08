@@ -7,6 +7,7 @@ use rig_core::completion::{AssistantContent, Message};
 
 use crate::{
     agents::{AgentId, DirectoryPolicy, ToolId},
+    execution::ToolLocation,
     providers::{
         AssistantActivity, AssistantReply, ChatTurn, ModelEvent, ModelUsage, ProviderConnection,
         ProviderError, ToolOutput,
@@ -28,7 +29,9 @@ pub(crate) struct AgentRunSpec {
     pub(crate) tool_ids: Vec<ToolId>,
     pub(crate) policy: DirectoryPolicy,
     pub(crate) connection: ProviderConnection,
-    pub(crate) sandbox: std::sync::Arc<GuestSandbox>,
+    pub(crate) location: ToolLocation,
+    pub(crate) sandbox: Option<std::sync::Arc<GuestSandbox>>,
+    pub(crate) host: Option<tools::HostRunSpec>,
     pub(crate) output_drafts:
         Option<std::sync::Arc<std::sync::Mutex<crate::workflows::artefacts::output::OutputDrafts>>>,
     pub(crate) required_outputs: Vec<crate::workflows::definition::RequiredOutput>,
@@ -279,11 +282,22 @@ pub(crate) async fn run_agent_action(
             &mut thinking_progress,
         );
         extra.push(assistant_tool_message(&text, &calls));
+        let host = spec.host.as_ref().map(|host| tools::HostToolContext {
+            state,
+            settings: &host.settings,
+            secret,
+            session: host.session,
+            conversation: host.conversation,
+            execution_revision: host.execution_revision,
+            directory: host.directory.clone(),
+        });
         let context = tools::AgentToolContext {
-            sandbox: &spec.sandbox,
+            sandbox: spec.sandbox.as_deref(),
             policy: &spec.policy,
             job: &job,
             tools: &spec.tool_ids,
+            location: spec.location,
+            host,
             output_drafts: spec.output_drafts.as_deref(),
             required_outputs: &spec.required_outputs,
         };

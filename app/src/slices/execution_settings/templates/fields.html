@@ -23,12 +23,20 @@
 >
   <legend class="text-sm font-semibold">Available tools</legend>
   <p class="text-quiet text-xs">
-    Tools use private scratch storage at /workspace without directory access.
-    Plain chat needs no sandbox.
+    {% if tools_host %}
+      Only Run is available on this computer. Each command needs approval. Work
+      locations do not limit host access.
+    {% else %}
+      Tools use private scratch storage at /workspace without directory access.
+      Plain chat needs no sandbox.
+    {% endif %}
   </p>
   <div class="grid gap-2 sm:grid-cols-2">
     {% for tool in tool_options %}
-      <label class="border-base-300 flex min-h-16 items-start gap-3 border p-3">
+      <label
+        class="border-base-300 flex min-h-16 items-start gap-3 border p-3"
+        {% if tools_host && tool.value != "run" %}hidden{% endif %}
+      >
         <input
           {% if !settings_form.is_empty() %}form="{{ settings_form }}"{% endif %}
           type="checkbox"
@@ -40,7 +48,8 @@
         <span
           ><span class="block text-sm font-medium">{{ tool.label }}</span
           ><span class="text-quiet mt-0.5 block text-xs"
-            >{{ tool.detail }}</span
+            >{% if tools_host && tool.value == "run" %}Run approved commands on
+            this computer.{% else %}{{ tool.detail }}{% endif %}</span
           ></span
         >
       </label>

@@ -842,3 +842,170 @@ async fn busy_session_and_full_store_reject_first_send_without_new_record() {
     assert_eq!(state.conversations.list().len(), 128);
     assert!(!state.sessions.busy(&session_id(&token)));
 }
+
+#[tokio::test]
+async fn host_first_message_runs_without_a_sandbox_runtime() {
+    let mut state = test_state();
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("approved-command");
+    let shell = format!(
+        "printf approved > '{}'\nprintf 'finished\\n'",
+        marker.display()
+    );
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        crate::providers::tests::ScriptedBackend::tool_then(
+            "run",
+            serde_json::json!({
+                "command": shell,
+                "explanation": "Write an approval marker in the temporary test directory",
+            }),
+            "Done",
+        ),
+    ));
+    state.workflow_evidence = std::sync::Arc::new(
+        crate::workflows::WorkflowEvidenceStore::open(directory.path().join("evidence")).unwrap(),
+    );
+    let token = connected(&state);
+    state
+        .sandboxes
+        .set_missing_runtime(crate::sandbox::MissingRuntime::Both);
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let fields = format!(
+        "action=send&provider=xai&model=grok-4.6&thinking={}&message=Hello&location=host&tool_run=run",
+        effort.as_str()
+    );
+    let preview_settings = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
+            &fields.replacen("action=send", "action=settings", 1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preview_settings.status(), StatusCode::OK);
+    assert!(state.conversations.list().is_empty());
+    assert!(!state.sessions.busy(&session_id(&token)));
+    let denied = app(&state)
+        .oneshot(command("/conversations/new", &token, &fields))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(state.conversations.list().is_empty());
+
+    let preview = app(&state)
+        .oneshot(command(
+            "/conversations/new/settings/host-consent",
+            &token,
+            &fields,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let body = text(preview).await;
+    assert!(body.contains("Approve unrestricted host access"));
+    let request = host_consent_request(&body);
+    let approved = app(&state)
+        .oneshot(command(
+            "/conversations/new/settings/host-consent/approve",
+            &token,
+            &format!("{fields}&host_consent_request={request}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        approved.status(),
+        StatusCode::OK,
+        "{}",
+        text(approved).await
+    );
+    let body = text(approved).await;
+    let reference = hidden_named(&body, "consent_reference");
+    let nonce = hidden_named(&body, "draft_nonce");
+    let created = app(&state)
+        .oneshot(command(
+            "/conversations/new",
+            &token,
+            &format!("{fields}&consent_reference={reference}&draft_nonce={nonce}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK, "{}", text(created).await);
+    assert_eq!(state.conversations.list().len(), 1);
+    assert!(state.workflow_runs.summaries().is_empty());
+    let settings = state.conversations.list()[0]
+        .model
+        .as_ref()
+        .unwrap()
+        .settings
+        .clone();
+    assert_eq!(settings.location, crate::execution::ToolLocation::Host);
+    assert_eq!(settings.tools, vec![crate::agents::ToolId::Run]);
+    let record = state.conversations.list()[0].clone();
+    let job_id = record.active_job.unwrap();
+    let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(request) = state.host_approvals.pending_for(record.id, job_id) {
+                break request;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!marker.exists());
+    let reloaded = app(&state)
+        .oneshot(super::super::tests::document(
+            &format!("/conversations/{}", record.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert!(text(reloaded).await.contains(&request.token));
+    let job = state.sessions.conversation_job(record.id, job_id).unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/host-command/approve", record.id),
+            &token,
+            &format!(
+                "revision={}&job={}&request={}&command={}",
+                request.execution_revision,
+                job_id,
+                request.token,
+                super::super::tests::form_value(&serde_json::to_string(&shell).unwrap())
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        job.wait_for_terminal(std::time::Duration::from_secs(2))
+            .await
+    );
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "approved");
+    let evidence: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            directory
+                .path()
+                .join("evidence/host")
+                .join(format!("{}.json", request.token)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(evidence["status"], "finished");
+    assert_eq!(evidence["command"], shell);
+}
+
+fn host_consent_request(body: &str) -> String {
+    hidden_named(body, "host_consent_request")
+}
+
+fn hidden_named(body: &str, name: &str) -> String {
+    let marker = format!("name=\"{name}\"");
+    let tail = &body[body.find(&marker).expect(name) + marker.len()..];
+    let value = &tail[tail.find("value=\"").expect("value") + 7..];
+    value[..value.find('"').expect("value end")].to_owned()
+}

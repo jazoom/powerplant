@@ -184,6 +184,7 @@ pub(crate) fn additional_access(
         .iter()
         .any(|tool| !defaults.tools.contains(tool))
         || resolved.network != defaults.network
+        || resolved.location != defaults.location
         || resolved.directories.iter().any(|grant| {
             defaults.directories.iter().all(|existing| {
                 existing.identity != grant.identity

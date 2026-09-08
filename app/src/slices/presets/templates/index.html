@@ -137,7 +137,33 @@
       {% endif %}
       {% let settings_form = self.model_form() %}
       {% let field_prefix = "" %}
+      {% let tools_host = form.location == "host" %}
       {% include "execution_settings/templates/fields.html" %}
+      <fieldset class="space-y-2">
+        <legend class="text-sm font-medium">Where tools run</legend>
+        <p class="text-quiet text-xs">
+          This computer stores the preference only. It does not authorise host
+          commands.
+        </p>
+        <label class="flex items-center gap-2 text-sm"
+          ><input
+            class="radio radio-sm"
+            type="radio"
+            name="location"
+            value="sandbox"
+            {% if form.location != "host" %}checked{% endif %}
+          />Sandbox</label
+        >
+        <label class="flex items-center gap-2 text-sm"
+          ><input
+            class="radio radio-sm"
+            type="radio"
+            name="location"
+            value="host"
+            {% if form.location == "host" %}checked{% endif %}
+          />This computer</label
+        >
+      </fieldset>
       <label class="flex flex-col gap-1"
         >Environment<select
           class="select select-bordered w-full"

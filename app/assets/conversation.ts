@@ -25,6 +25,7 @@ export function initConversation(
         "tool_write",
         "tool_run",
         "environment",
+        "location",
         "network",
         "network_domains",
         "preset",

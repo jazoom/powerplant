@@ -112,6 +112,25 @@ fn direct_write_does_not_replace_reviewed_authority_for_the_same_root() {
 }
 
 #[test]
+fn sandbox_and_host_locations_cannot_combine() {
+    let sandbox = ExecutionSettings::new(
+        model(),
+        String::new(),
+        vec![ToolId::Run],
+        crate::tests::test_environment_id(),
+    )
+    .unwrap();
+    let host = sandbox.clone().with_location(super::ToolLocation::Host);
+    assert!(ExecutionSettings::combined([&sandbox, &host]).is_none());
+    assert_eq!(
+        ExecutionSettings::from_file(host.to_file())
+            .unwrap()
+            .location,
+        super::ToolLocation::Host
+    );
+}
+
+#[test]
 fn settings_reject_overlapping_directory_roots() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("root");

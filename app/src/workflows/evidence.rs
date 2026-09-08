@@ -272,6 +272,50 @@ impl WorkflowEvidenceStore {
         })
     }
 
+    /// This record describes command evidence, never permission to replay a command.
+    pub(crate) fn host_command(
+        &self,
+        request: &crate::execution::HostCommandRequest,
+        status: &str,
+        output: &str,
+        secret: Option<&str>,
+    ) -> Result<(), EvidenceError> {
+        if request.token.len() != 64 || !request.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(EvidenceError::Corrupt);
+        }
+        let Some(dir) = &self.dir else {
+            return Ok(());
+        };
+        let _guard = self.lock();
+        let dir = dir.join("host");
+        crate::storage::ensure_private_dir(&dir).map_err(|_| EvidenceError::Persist)?;
+        let path = dir.join(format!("{}.json", request.token));
+        if !path.exists()
+            && fs::read_dir(&dir)
+                .map_err(|_| EvidenceError::Persist)?
+                .count()
+                >= MAXIMUM_EVIDENCE_RECORDS
+        {
+            return Err(EvidenceError::Full);
+        }
+        let text =
+            |value: &str, maximum| bounded_text(&crate::tools::redact(value, secret), maximum).0;
+        let record = serde_json::json!({
+            "version": 1,
+            "conversation": request.conversation.to_string(),
+            "job": request.job.to_string(),
+            "execution_revision": request.execution_revision,
+            "command": text(&request.command, crate::tools::MAXIMUM_COMMAND_BYTES),
+            "directory": text(&request.directory.to_string_lossy(), MAXIMUM_ACTIVITY_TEXT_BYTES),
+            "explanation": text(&request.explanation, MAXIMUM_ACTIVITY_TEXT_BYTES),
+            "status": status,
+            "output": text(output, crate::tools::MAXIMUM_TOOL_BYTES),
+        });
+        let bytes = serde_json::to_vec(&record).map_err(|_| EvidenceError::Persist)?;
+        crate::storage::write_private(&path, &bytes).map_err(|_| EvidenceError::Persist)
+    }
+
     pub(crate) fn get(&self, run_id: &RunId, attempt_id: &AttemptId) -> Option<AttemptEvidence> {
         self.lock().get(&(*run_id, *attempt_id)).cloned()
     }

@@ -122,6 +122,157 @@ pub(super) async fn run(
     }
 }
 
+pub(super) async fn run_host_tools(
+    state: AppState,
+    session: SessionId,
+    conversation: ConversationId,
+    record: ConversationRecord,
+    connection: ProviderConnection,
+    job: Arc<Job>,
+) {
+    let language = state.sessions.language(&session);
+    let mut preamble = instructions(&state, &record);
+    if let Some(language) = &language {
+        language.append_instructions(&mut preamble);
+    }
+    if !preamble.is_empty() {
+        preamble.push_str("\n\n");
+    }
+    preamble.push_str(
+        "Tools run on this computer as the Power Plant process user. Each shell command waits for user approval. Approval does not inspect script internals. Command output is sent to the hosted model.",
+    );
+    let secret = match connection.auth {
+        crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose().to_owned()),
+        crate::providers::AuthMethod::Plan => None,
+    };
+    let secret = secret.as_deref();
+    let settings = record.model.as_ref().map(|model| &model.settings);
+    let tool_ids = settings
+        .map(|settings| crate::tools::advertised(&settings.tools, settings.location))
+        .unwrap_or_default();
+    let directory = crate::execution::command_directory(
+        settings
+            .map(|settings| settings.directories.as_slice())
+            .unwrap_or(&[]),
+    );
+    let host = settings.map(|settings| crate::tools::HostRunSpec {
+        session,
+        conversation,
+        execution_revision: record.revision,
+        directory,
+        settings: settings.clone(),
+    });
+    let history = match history_with_review(&state, &record, secret) {
+        Ok(history) => history,
+        Err(error) => {
+            finish_host_job(
+                &state,
+                session,
+                conversation,
+                &job,
+                HostJobEnd {
+                    reply: String::new(),
+                    status: JobStatus::Failed,
+                    message_status: MessageStatus::Failed,
+                    error: Some(error.to_owned()),
+                    language,
+                },
+            );
+            return;
+        }
+    };
+    let spec = crate::slices::AgentRunSpec {
+        agent_id: None,
+        revision: record.revision,
+        preamble,
+        tools: crate::tools::definitions_for(&tool_ids, crate::execution::ToolLocation::Host),
+        tool_ids,
+        policy: crate::agents::DirectoryPolicy::from_grants_with_workspace(
+            Vec::new(),
+            "workspace".to_owned(),
+        ),
+        connection,
+        location: crate::execution::ToolLocation::Host,
+        sandbox: None,
+        host,
+        output_drafts: None,
+        required_outputs: Vec::new(),
+        evidence: None,
+    };
+    let ended = crate::slices::run_agent_action(&state, spec, history, job.clone()).await;
+    let result = match ended.outcome {
+        crate::slices::AgentOutcome::Completed => Ok(()),
+        crate::slices::AgentOutcome::Cancelled => Err(Failure::Cancelled),
+        crate::slices::AgentOutcome::ProviderFailure | crate::slices::AgentOutcome::ToolFailure => {
+            Err(Failure::Provider(ProviderError::Unreachable))
+        }
+    };
+    let reply = ended.reply.text;
+    let (status, message_status, error) = match result {
+        Ok(()) => (JobStatus::Completed, MessageStatus::Complete, None),
+        Err(Failure::Cancelled) => (JobStatus::Cancelled, MessageStatus::Interrupted, None),
+        Err(_) => (
+            JobStatus::Failed,
+            MessageStatus::Failed,
+            ended.error.and_then(|text| {
+                crate::providers::sanitise_detail(&crate::tools::redact(&text, secret))
+            }),
+        ),
+    };
+    finish_host_job(
+        &state,
+        session,
+        conversation,
+        &job,
+        HostJobEnd {
+            reply,
+            status,
+            message_status,
+            error,
+            language,
+        },
+    );
+}
+
+struct HostJobEnd {
+    reply: String,
+    status: JobStatus,
+    message_status: MessageStatus,
+    error: Option<String>,
+    language: Option<crate::sessions::BrowserLanguage>,
+}
+
+fn finish_host_job(
+    state: &AppState,
+    session: SessionId,
+    conversation: ConversationId,
+    job: &Job,
+    end: HostJobEnd,
+) {
+    let settlement = state.conversations.settle_message(
+        &conversation,
+        job.id(),
+        end.reply,
+        end.message_status,
+        end.error.clone(),
+    );
+    if settlement.is_ok() {
+        crate::conversations::titles::start(state, conversation, end.language);
+    }
+    if settlement.is_ok() || settlement == Err(crate::conversations::ConversationError::Conflict) {
+        job.finish(end.status, end.error.as_deref());
+        state
+            .sessions
+            .finish_conversation_job(&session, conversation, job.id());
+    } else {
+        job.finish(
+            JobStatus::Failed,
+            Some("Power Plant could not store the reply. Try again."),
+        );
+    }
+    state.host_approvals.invalidate_job(job.id());
+}
+
 enum Failure {
     Context(&'static str),
     Provider(ProviderError),

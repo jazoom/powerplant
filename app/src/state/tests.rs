@@ -39,6 +39,7 @@ pub(crate) fn test_state(config: RuntimeConfig) -> AppState {
         projects: Arc::new(ProjectStore::in_memory()),
         folder_picker: crate::execution::FolderPicker::scripted(),
         access_consent: Arc::new(crate::execution::AccessConsentStore::new()),
+        host_approvals: Arc::new(crate::execution::HostApprovalStore::new()),
         local_data: crate::local_data::LocalDataReset::detached(),
         sandboxes: Arc::new(SandboxFleet::scripted()),
         agent_leases: Arc::new(AgentLeaseCoordinator::new()),

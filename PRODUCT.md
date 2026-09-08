@@ -16,7 +16,7 @@ They already have a provider API key or a ChatGPT or SuperGrok plan. They want a
 
 Power Plant is a local coding agent. The user runs a web server on their machine. They talk to a hosted model in a browser. Agents work in sandboxes.
 
-The Power Plant process stays on the host. It owns model calls, credentials, and sandbox lifecycle. Agent tools run only inside a guest virtual machine.
+The Power Plant process stays on the host. It owns model calls, credentials, and sandbox lifecycle. Tools use a sandbox or explicitly authorised host execution.
 
 The product stays local and account-free. The user brings a key or a plan login.
 
@@ -263,7 +263,7 @@ Ordinary reviewed starters require a human decision before file application. Rea
 
 The run list shows the newest fifty runs.
 
-Rig streams model replies on the host. An agent step can use the allowed list, read, write and run tools. Those tools run only in the guest. The transcript shows the reply as HTML. Tool traces appear in the transcript.
+Rig streams model replies on the host. Sandbox steps can use the allowed list, read, write and run tools. Host conversations expose Run only. The transcript shows the reply as HTML. Tool traces appear in the transcript.
 
 Forget removes one provider. The connect page stays available so they can add another provider.
 
@@ -303,7 +303,12 @@ Current capabilities:
 - Create workflow definitions, including Run once and For each task modes.
 - Edit and delete workflow definitions.
 - Send a Quick task from an independent conversation with no workflow selection.
+- Choose Sandbox or This computer for where tools run.
 - Use sandbox tools with private scratch storage and no project.
+- Run approved host commands without a sandbox runtime.
+- Retain redacted command evidence, including rejection, dispatch and completion states. Evidence never authorises replay after restart.
+- Approve or reject each host command before it runs.
+- Show unrestricted host access and work locations when tools run on this computer.
 - Set sandbox network access to Off, restricted domains or public internet.
 - Grant Read only, Review before apply or Direct write access to multiple directories without project registration.
 - Preserve stable guest aliases and canonical host identity for conversation directories.
@@ -336,7 +341,7 @@ Current constraints:
 
 - The product does not create user accounts.
 - A conversation stays a transcript plus composer with explicit project controls.
-- Agent tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig.
+- Sandbox tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig. Host mode runs approved shell commands as the Power Plant process user. It adds no privileges. Approval covers the submitted command, not script internals. Command output is sent to the hosted model.
 - Conversation history, presets, project records, run records and artefacts persist locally. The old project desk routes no longer exist.
 - One session command can be active at a time.
 - One unfinished operation can reserve a conversation.
@@ -348,6 +353,7 @@ Current constraints:
 - Sandbox-backed Quick task needs the selected ready snapshot. The product does not fall back to another environment.
 - Environment changes wait until active execution and pending reviewed work settle.
 - Tool-free chat needs no sandbox runtime or prepared environment.
+- Host commands need no sandbox runtime or prepared environment.
 - Quick task never enters the workflow catalogue.
 
 Later work:

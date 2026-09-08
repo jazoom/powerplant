@@ -2,6 +2,7 @@ mod directories;
 mod job;
 mod new;
 mod title;
+mod tool_approval;
 pub(super) use title::live_router;
 mod page;
 pub(crate) mod settings;
@@ -132,8 +133,32 @@ pub(super) fn router() -> Router<AppState> {
             post(cancel_message),
         )
         .route(
+            "/conversations/{conversation_id}/host-command/approve",
+            post(tool_approval::approve),
+        )
+        .route(
+            "/conversations/{conversation_id}/host-command/reject",
+            post(tool_approval::reject),
+        )
+        .route(
             "/conversations/{conversation_id}/settings",
             post(settings::update),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings/host-consent",
+            post(settings::request_host),
+        )
+        .route(
+            "/conversations/{conversation_id}/settings/host-consent/approve",
+            post(settings::approve_host),
+        )
+        .route(
+            "/conversations/new/settings/host-consent",
+            post(settings::request_host_draft),
+        )
+        .route(
+            "/conversations/new/settings/host-consent/approve",
+            post(settings::approve_host_draft),
         )
         .route(
             "/conversations/{conversation_id}/settings/environment",
@@ -1931,7 +1956,8 @@ pub(super) async fn preflight_execution(
     conversation: Option<ConversationId>,
     model: &ConversationModelConfiguration,
 ) -> Result<(), StartMessageError> {
-    if let Some(conversation) = conversation
+    if model.settings.location == crate::execution::ToolLocation::Sandbox
+        && let Some(conversation) = conversation
         && model.settings.directories.iter().any(|grant| {
             (grant.access != crate::execution::DirectoryAccess::ReadOnly
                 || crate::execution::authority::sensitive_directory(
@@ -1951,6 +1977,33 @@ pub(super) async fn preflight_execution(
             PatchStatus::UnprocessableEntity,
             "Directory access needs explicit approval. Open Directories to approve it.",
         ));
+    }
+    if model.settings.location == crate::execution::ToolLocation::Host {
+        if model.settings.host_tools() {
+            for grant in &model.settings.directories {
+                grant.revalidate().map_err(|_| {
+                    StartMessageError::User(
+                        PatchStatus::UnprocessableEntity,
+                        "A work location changed or is not available.",
+                    )
+                })?;
+            }
+        }
+        if model.settings.host_tools()
+            && let Some(conversation) = conversation
+            && (!state.sessions.contains_live(&session)
+                || !state.access_consent.authorised_host_conversation(
+                    session,
+                    conversation,
+                    &model.settings,
+                ))
+        {
+            return Err(StartMessageError::User(
+                PatchStatus::UnprocessableEntity,
+                "Unrestricted host access needs explicit approval. Open Settings to approve it.",
+            ));
+        }
+        return Ok(());
     }
     if model.settings.tools.is_empty() {
         return Ok(());
@@ -2058,7 +2111,10 @@ async fn start_message_mode(
             ));
         }
     };
-    let workflow = if !model.settings.tools.is_empty() {
+    let advertised_tools = crate::tools::advertised(&model.settings.tools, model.settings.location);
+    let workflow = if model.settings.location != crate::execution::ToolLocation::Host
+        && !advertised_tools.is_empty()
+    {
         if authority.is_some() && !model.settings.directories.is_empty() {
             return Err(StartMessageError::User(
                 PatchStatus::Conflict,
@@ -2301,6 +2357,15 @@ async fn start_message_mode(
             None,
             execution,
         ));
+    } else if !advertised_tools.is_empty() {
+        tokio::spawn(job::run_host_tools(
+            state.clone(),
+            session,
+            started.id,
+            started,
+            connection,
+            job,
+        ));
     } else {
         tokio::spawn(job::run(
             state.clone(),
@@ -2345,6 +2410,7 @@ async fn cancel_message(
         );
     };
     job.request_cancel();
+    state.host_approvals.invalidate_job(job.id());
     render_detail_command(
         graft,
         PatchStatus::Ok,
@@ -3319,6 +3385,11 @@ fn detail_view(
         linked_candidate_reviews,
     )
     .with_access_status(state, session, record)
+    .with_pending_host_command(
+        record
+            .active_job
+            .and_then(|job_id| state.host_approvals.pending_for(record.id, job_id)),
+    )
     .with_workflow_progress(workflow_progress)
 }
 

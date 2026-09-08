@@ -96,11 +96,17 @@ fn existing_or_restore(state: &AppState, token: &ValidatedToken) -> ResolvedSess
         state
             .access_consent
             .retain_sessions(|session| state.sessions.contains_live(session));
+        state
+            .host_approvals
+            .retain_sessions(|session| state.sessions.contains_live(session));
         return ResolvedSession::Invalid;
     }
     // A restored cookie starts a new session lifetime, not a renewal of execution consent.
     state
         .access_consent
+        .retain_sessions(|session| state.sessions.contains_live(session));
+    state
+        .host_approvals
         .retain_sessions(|session| state.sessions.contains_live(session));
     if state.sessions.contains_expired(&id) {
         if crate::workflows::interrupt_session_continuations(state, id).is_err() {
@@ -209,6 +215,9 @@ pub(crate) async fn purge_expired_sessions(state: AppState) {
         interval.tick().await;
         state
             .access_consent
+            .retain_sessions(|session| state.sessions.contains_live(session));
+        state
+            .host_approvals
             .retain_sessions(|session| state.sessions.contains_live(session));
         for session in state.sessions.expired_ids() {
             if crate::workflows::interrupt_session_continuations(&state, session).is_err() {

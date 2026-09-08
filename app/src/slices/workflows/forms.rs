@@ -2866,6 +2866,7 @@ fn parse_override_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<
         instructions: (!inherits("instructions")).then(|| step.settings_instructions.clone()),
         tools: (!inherits("tools")).then(|| step.tools.clone()),
         directories: (!inherits("directories")).then_some(directories),
+        location: None,
     };
     if settings.validate().is_none() {
         errors.settings =

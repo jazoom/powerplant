@@ -1,5 +1,6 @@
-use super::{MAXIMUM_TOOL_BYTES, authorised_tool, definitions, mark_truncated, redact};
+use super::{MAXIMUM_TOOL_BYTES, advertised, authorised_tool, definitions, mark_truncated, redact};
 use crate::agents::{AccessMode, AgentId, AgentRecord, DirectoryGrant, DirectoryPolicy, ToolId};
+use crate::execution::ToolLocation;
 
 fn policy() -> DirectoryPolicy {
     DirectoryPolicy::from_record_with_primary(
@@ -37,9 +38,26 @@ fn definitions_and_dispatch_use_the_same_selected_tool_set() {
         .map(|definition| definition.name)
         .collect();
     assert_eq!(names, vec!["read", "list"]);
-    assert_eq!(authorised_tool(&selected, "read"), Some(ToolId::Read));
-    assert_eq!(authorised_tool(&selected, "write"), None);
-    assert_eq!(authorised_tool(&selected, "forged"), None);
+    assert_eq!(
+        authorised_tool(&selected, "read", ToolLocation::Sandbox),
+        Some(ToolId::Read)
+    );
+    assert_eq!(
+        authorised_tool(&selected, "write", ToolLocation::Sandbox),
+        None
+    );
+    assert_eq!(
+        authorised_tool(&selected, "forged", ToolLocation::Sandbox),
+        None
+    );
+    assert_eq!(
+        advertised(&[ToolId::List, ToolId::Run], ToolLocation::Host),
+        vec![ToolId::Run]
+    );
+    assert_eq!(
+        authorised_tool(&[ToolId::List, ToolId::Run], "list", ToolLocation::Host),
+        None
+    );
 }
 
 #[test]

@@ -123,6 +123,43 @@ fn direct_write_consent_is_destination_bound_and_single_use() {
 }
 
 #[test]
+fn host_consent_is_destination_bound_and_not_copied() {
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "model".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        vec![crate::agents::ToolId::Run],
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_location(crate::execution::ToolLocation::Host);
+    let store = AccessConsentStore::new();
+    let owner = session();
+    let request = store.request_host_draft(owner, "draft", &settings).unwrap();
+    let reference = store
+        .approve_host_draft(&request, owner, "draft", &settings)
+        .unwrap();
+    assert!(store.authorised_host_draft(&reference, owner, "draft", &settings));
+    assert!(!store.authorised_host_draft(&reference, owner, "copy", &settings));
+    let sandbox = settings
+        .clone()
+        .with_location(crate::execution::ToolLocation::Sandbox);
+    assert!(!store.authorised_host_draft(&reference, owner, "draft", &sandbox));
+    let conversation = ConversationId::generate().unwrap();
+    store
+        .consume_draft(&reference, owner, "draft", &settings, conversation, &[])
+        .unwrap();
+    assert!(store.authorised_host_conversation(owner, conversation, &settings));
+    assert!(!store.authorised_host_conversation(owner, conversation, &sandbox));
+    store.retain_sessions(|_| false);
+    assert!(!store.authorised_host_conversation(owner, conversation, &settings));
+}
+
+#[test]
 fn consent_rejects_another_session_strategy_or_root_identity() {
     let parent = tempfile::tempdir().unwrap();
     let first = parent.path().join("first");

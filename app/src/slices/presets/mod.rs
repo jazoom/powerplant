@@ -43,6 +43,7 @@ struct PresetForm {
     tool_read: String,
     tool_write: String,
     tool_run: String,
+    location: String,
     environment: String,
     network: String,
     network_domains: String,
@@ -65,6 +66,7 @@ impl PresetForm {
             &self.tool_read,
             &self.tool_write,
             &self.tool_run,
+            &self.location,
             &self.environment,
             &self.network,
             &self.network_domains,
@@ -109,6 +111,12 @@ impl PresetForm {
             .iter()
             .map(|v| ToolId::parse(v).ok_or("Choose only available tools."))
             .collect::<Result<Vec<_>, _>>()?;
+        let location = crate::execution::ToolLocation::parse(if self.location.trim().is_empty() {
+            "sandbox"
+        } else {
+            self.location.trim()
+        })
+        .ok_or("Choose where tools run.")?;
         let network = NetworkAccess::parse_form(&self.network, &self.network_domains)
             .map_err(|_| "Enter valid network access and domains.")?;
         if self.read_only.len() + self.reviewed.len() + self.direct_write.len() > 32 * 1024 {
@@ -172,6 +180,7 @@ impl PresetForm {
         ExecutionSettings::new(model, self.instructions.clone(), tools, environment)
             .and_then(|s| s.with_network(network))
             .and_then(|s| s.with_directories(directories))
+            .map(|s| s.with_location(location))
             .ok_or("Use bounded instructions, unique tools and at most eight distinct directory roots.")
     }
 }
@@ -414,6 +423,7 @@ impl From<&PresetRecord> for PresetForm {
             tool_read: tool(ToolId::Read),
             tool_write: tool(ToolId::Write),
             tool_run: tool(ToolId::Run),
+            location: s.location.as_str().to_owned(),
             environment: s.environment.as_hex(),
             network: s.network.as_str().to_owned(),
             network_domains: s.network.domains().join("\n"),

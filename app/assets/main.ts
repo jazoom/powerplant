@@ -39,6 +39,17 @@ listenForRequestSettled((detail) => {
 });
 
 document.addEventListener("change", (event) => {
+    const field = event.target;
+    if (
+        field instanceof HTMLInputElement &&
+        field.form?.id === "conversation-composer" &&
+        (field.name === "location" || field.name === "tool_run")
+    ) {
+        const preview = document.querySelector<HTMLButtonElement>(
+            "[data-location-preview]",
+        );
+        if (preview?.form === field.form) field.form.requestSubmit(preview);
+    }
     if (
         event.target instanceof HTMLSelectElement &&
         event.target.id === "conversation-environment"

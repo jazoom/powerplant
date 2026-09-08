@@ -391,6 +391,7 @@ pub(super) struct PresetPreviewView {
     pub(super) environment: String,
     pub(super) tools: String,
     pub(super) network: String,
+    pub(super) location: String,
     pub(super) directories: Vec<String>,
 }
 
@@ -407,6 +408,16 @@ pub(super) struct NetworkOption {
     pub(super) value: &'static str,
     pub(super) label: &'static str,
     pub(super) selected: bool,
+}
+
+pub(super) struct HostCommandView {
+    pub(super) request: String,
+    pub(super) job: String,
+    pub(super) revision: String,
+    pub(super) command: String,
+    pub(super) command_input: String,
+    pub(super) directory: String,
+    pub(super) explanation: String,
 }
 
 pub(super) struct EnvironmentSwitchView {
@@ -436,6 +447,7 @@ pub(super) struct SubmittedSettingsFields<'a> {
     pub(super) thinking: &'a str,
     pub(super) instructions: String,
     pub(super) tools: Vec<String>,
+    pub(super) location: &'a str,
     pub(super) environment: &'a str,
     pub(super) network: &'a str,
     pub(super) network_domains: &'a str,
@@ -485,6 +497,14 @@ pub(super) struct ConversationDetailView {
     pub(super) network_domains: String,
     pub(super) network_summary: String,
     pub(super) network_detail: String,
+    pub(super) location_host: bool,
+    pub(super) host_summary: String,
+    pub(super) host_identity: String,
+    pub(super) host_elevated: bool,
+    pub(super) host_pending_approval: bool,
+    pub(super) host_consent_request: String,
+    pub(super) pending_host_command: Option<HostCommandView>,
+    pub(super) observe_active: bool,
     pub(super) settings_open: bool,
     pub(super) directories_open: bool,
     pub(super) model_available: bool,
@@ -519,6 +539,21 @@ impl ConversationDetailView {
         error: &'static str,
     ) -> Self {
         let selected_tools = form.tool_values();
+        let host_identity = crate::execution::HostIdentity::current();
+        let location_host = form.location == crate::execution::ToolLocation::Host.as_str();
+        let host_pending_approval = super::new::settings_snapshot(state, session, &form)
+            .ok()
+            .flatten()
+            .is_some_and(|model| {
+                model.settings.host_tools()
+                    && !state.access_consent.authorised_host_draft(
+                        &form.consent_reference,
+                        session,
+                        &form.consent_nonce(),
+                        &model.settings,
+                    )
+            });
+        let host_consent_request = form.host_consent_request.clone();
         let draft_directories = form.directories().unwrap_or_default();
         let mut directories = directory_views(&draft_directories);
         for (view, grant) in directories.iter_mut().zip(&draft_directories) {
@@ -646,6 +681,18 @@ impl ConversationDetailView {
             network_domains: form.network_domains,
             network_summary: network_summary_from_form(&form.network),
             network_detail: String::new(),
+            location_host,
+            host_summary: if location_host {
+                "Unrestricted host access".to_owned()
+            } else {
+                String::new()
+            },
+            host_identity: host_identity.authority_summary(),
+            host_elevated: host_identity.elevated(),
+            host_pending_approval,
+            host_consent_request,
+            pending_host_command: None,
+            observe_active: false,
             settings_open: false,
             directories_open: false,
             model_available: !form.model.is_empty(),
@@ -915,12 +962,18 @@ impl ConversationDetailView {
                 )
             },
         );
-        let (job_id, cursor, job_active) = match job {
+        let (job_id, cursor, job_active, observe_active) = match job {
             Some(job) if job.status == JobStatus::Running => {
-                (job.id.as_hex(), job.latest_seq, true)
+                (job.id.as_hex(), job.latest_seq, true, true)
             }
-            _ => (String::new(), 0, false),
+            Some(job) if job.status == JobStatus::AwaitingDecision => {
+                (job.id.as_hex(), job.latest_seq, true, false)
+            }
+            _ => (String::new(), 0, false, false),
         };
+        let location_host = configuration
+            .is_some_and(|model| model.settings.location == crate::execution::ToolLocation::Host);
+        let host_identity = crate::execution::HostIdentity::current();
         // Plan controls and the escaped model catalogue share the transcript envelope.
         let message_budget = (800_usize * 1024)
             .saturating_sub(plans.len() * 3072)
@@ -1010,6 +1063,18 @@ impl ConversationDetailView {
             network_domains: network_domains.clone(),
             network_summary,
             network_detail,
+            location_host,
+            host_summary: if location_host {
+                "Unrestricted host access".to_owned()
+            } else {
+                String::new()
+            },
+            host_identity: host_identity.authority_summary(),
+            host_elevated: host_identity.elevated(),
+            host_pending_approval: false,
+            host_consent_request: String::new(),
+            pending_host_command: None,
+            observe_active,
             settings_open: false,
             directories_open: false,
             job_active,
@@ -1072,7 +1137,46 @@ impl ConversationDetailView {
                         grant,
                     );
             }
+            self.location_host =
+                configuration.settings.location == crate::execution::ToolLocation::Host;
+            self.host_summary = if self.location_host {
+                "Unrestricted host access".to_owned()
+            } else {
+                String::new()
+            };
+            self.host_pending_approval = configuration.settings.host_tools()
+                && !state.access_consent.authorised_host_conversation(
+                    session,
+                    record.id,
+                    &configuration.settings,
+                );
         }
+        self
+    }
+
+    pub(super) fn with_host_consent_request(mut self, request: String) -> Self {
+        self.host_consent_request = request;
+        self.settings_open = true;
+        self
+    }
+
+    pub(super) fn with_pending_host_command(
+        mut self,
+        command: Option<crate::execution::HostCommandRequest>,
+    ) -> Self {
+        self.pending_host_command = command.map(|command| HostCommandView {
+            request: command.token,
+            job: command.job.as_hex(),
+            revision: command.execution_revision.to_string(),
+            command_input: serde_json::to_string(&command.command).unwrap_or_default(),
+            command: command.command,
+            directory: command.directory.display().to_string(),
+            explanation: if command.explanation.is_empty() {
+                "The model did not explain this command.".to_owned()
+            } else {
+                command.explanation
+            },
+        });
         self
     }
 
@@ -1169,6 +1273,12 @@ impl ConversationDetailView {
         self.network_options = network_options(fields.network);
         self.network_domains = fields.network_domains.to_owned();
         self.network_summary = network_summary_from_form(fields.network);
+        self.location_host = fields.location == crate::execution::ToolLocation::Host.as_str();
+        self.host_summary = if self.location_host {
+            "Unrestricted host access".to_owned()
+        } else {
+            String::new()
+        };
         self.settings_open = true;
         self
     }
