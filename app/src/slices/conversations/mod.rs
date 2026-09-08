@@ -339,9 +339,9 @@ struct NetworkForm {
 }
 
 #[derive(Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct CatalogueQuery {
-    project: String,
+    directory: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -365,17 +365,20 @@ async fn catalogue(
     graft: GraftRequest,
     Query(query): Query<CatalogueQuery>,
 ) -> AppResult<Response> {
-    let filter = if query.project.is_empty() {
-        None
-    } else {
-        ProjectId::parse(&query.project).filter(|project| state.projects.get(project).is_some())
-    };
-    let error = if query.project.is_empty() || filter.is_some() {
+    let valid = query.directory.is_empty()
+        || (query.directory.len() == 33
+            && state
+                .conversations
+                .list()
+                .iter()
+                .flat_map(page::history_grants)
+                .any(|grant| page::history_directory_key(grant) == query.directory));
+    let error = if valid {
         ""
     } else {
-        "Choose a project from the catalogue."
+        "Choose a directory from conversation history."
     };
-    render_catalogue(&state, graft, filter, error)
+    render_catalogue(&state, graft, &query.directory, error)
 }
 
 async fn create(
@@ -3681,7 +3684,7 @@ fn status_for(error: ConversationError) -> PatchStatus {
 fn render_catalogue(
     state: &AppState,
     graft: GraftRequest,
-    filter: Option<ProjectId>,
+    filter: &str,
     error: &'static str,
 ) -> AppResult<Response> {
     render_page(
@@ -3693,22 +3696,12 @@ fn render_catalogue(
             PatchStatus::UnprocessableEntity
         },
         page::CATALOGUE_TITLE,
-        &CatalogueView::from_records(
-            &state.conversations.list(),
-            &state.projects.list(),
-            filter,
-            error,
-        ),
+        &CatalogueView::from_records(&state.conversations.list(), filter, error),
     )
 }
 
 fn creation_error(state: &AppState, error: &'static str) -> AppResult<Response> {
-    let view = CatalogueView::from_records(
-        &state.conversations.list(),
-        &state.projects.list(),
-        None,
-        error,
-    );
+    let view = CatalogueView::from_records(&state.conversations.list(), "", error);
     let mut patches = hypergraft::PatchSet::new().title(page::CATALOGUE_TITLE);
     patches.children("chat-main", &view)?;
     patches.replace_location("/conversations")?;

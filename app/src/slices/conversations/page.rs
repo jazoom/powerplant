@@ -14,7 +14,7 @@ use crate::{
     },
     environments::{EnvironmentCatalogue, EnvironmentId, EnvironmentSnapshotRepository},
     models::models_dev::ModelsDevCatalogue,
-    projects::{ProjectId, ProjectRecord},
+    projects::ProjectRecord,
     providers::ModelSelection,
     sessions::{JobSnapshot, JobStatus},
     vault::ProviderVault,
@@ -94,43 +94,81 @@ pub(super) struct PendingCodeGateView {
 )]
 pub(super) struct CatalogueView {
     pub(super) conversations: Vec<ConversationListItem>,
-    pub(super) projects: Vec<CatalogueProjectOption>,
+    pub(super) directories: Vec<HistoryDirectoryOption>,
     pub(super) filter: String,
     pub(super) error: &'static str,
+}
+
+pub(super) struct HistoryDirectoryOption {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) selected: bool,
+    available: bool,
 }
 
 impl CatalogueView {
     pub(super) fn from_records(
         records: &[ConversationRecord],
-        project_records: &[ProjectRecord],
-        filter: Option<ProjectId>,
+        filter: &str,
         error: &'static str,
     ) -> Self {
         let mut conversations: Vec<_> = records
             .iter()
-            .filter(|record| filter.is_none_or(|project| record.projects.contains(&project)))
+            .filter(|record| {
+                filter.is_empty()
+                    || history_grants(record).any(|grant| history_directory_key(grant) == filter)
+            })
             .map(|record| ConversationListItem {
                 id: record.id.as_hex(),
                 title: record.title.clone(),
             })
             .collect();
         conversations.sort_by(|left, right| left.title.cmp(&right.title));
-        let mut projects: Vec<_> = project_records
-            .iter()
-            .map(|project| CatalogueProjectOption {
-                id: project.id.as_hex(),
-                name: project.name.clone(),
-                selected: filter.is_some_and(|selected| selected == project.id),
-            })
-            .collect();
-        projects.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut directories = std::collections::BTreeMap::new();
+        for grant in records.iter().flat_map(history_grants) {
+            let id = history_directory_key(grant);
+            let available = grant.is_available();
+            let option = HistoryDirectoryOption {
+                selected: filter == id,
+                id: id.clone(),
+                name: format!(
+                    "{}{}",
+                    grant.host_path.display(),
+                    if available { "" } else { " — Unavailable" }
+                ),
+                available,
+            };
+            let existing = directories.entry(id).or_insert(option);
+            if available && !existing.available {
+                existing.name = grant.host_path.display().to_string();
+                existing.available = true;
+            }
+        }
+        let mut directories: Vec<_> = directories.into_values().collect();
+        directories.sort_by(|left, right| left.name.cmp(&right.name));
         Self {
             conversations,
-            projects,
-            filter: filter.map_or_else(String::new, |project| project.as_hex()),
+            directories,
+            filter: filter.to_owned(),
             error,
         }
     }
+}
+
+pub(super) fn history_grants(
+    record: &ConversationRecord,
+) -> impl Iterator<Item = &crate::execution::DirectoryGrant> {
+    record
+        .model
+        .iter()
+        .flat_map(|model| &model.settings.directories)
+}
+
+pub(super) fn history_directory_key(grant: &crate::execution::DirectoryGrant) -> String {
+    format!(
+        "{:016x}-{:016x}",
+        grant.identity.device, grant.identity.inode
+    )
 }
 
 pub(super) struct ReviewProjectOption {

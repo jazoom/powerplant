@@ -11,44 +11,53 @@
           local browser session can open it.
         </p>
       </div>
-      <a
-        href="/conversations/new{% if !filter.is_empty() %}?project={{ filter }}{% endif %}"
-        data-graft
-        class="btn btn-primary btn-sm"
+      <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
         >New conversation</a
       >
     </div>
-    {% if !projects.is_empty() %}
+    {% if !directories.is_empty() || !filter.is_empty() %}
       <form
         method="get"
         action="/conversations"
-        data-graft
         class="border-base-300 flex flex-wrap items-end gap-3 border-y py-4"
       >
         <label
-          class="flex min-w-56 flex-col gap-1"
-          for="conversation-project-filter"
+          class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
+          for="conversation-directory-filter"
         >
-          <span class="text-sm">Project</span>
+          <span class="text-sm">Directory</span>
           <select
-            id="conversation-project-filter"
-            class="select select-bordered"
-            name="project"
+            id="conversation-directory-filter"
+            class="select select-bordered w-full"
+            name="directory"
           >
             <option value="" {% if filter.is_empty() %}selected{% endif %}>
-              All projects
+              All directories
             </option>
-            {% for project in projects %}
+            {% for directory in directories %}
               <option
-                value="{{ project.id }}"
-                {% if project.selected %}selected{% endif %}
+                value="{{ directory.id }}"
+                {% if directory.selected %}selected{% endif %}
               >
-                {{ project.name }}
+                {{ directory.name }}
               </option>
             {% endfor %}
           </select>
         </label>
         <button class="btn btn-secondary btn-sm" type="submit">Filter</button>
+        {% if !filter.is_empty() %}
+          <a href="/conversations" data-graft class="btn btn-ghost btn-sm"
+            >Clear filter</a
+          >
+        {% endif %}
+        {% for directory in directories %}
+          {% if directory.selected %}
+            <p class="w-full text-sm break-all">{{ directory.name }}</p>
+          {% endif %}
+        {% endfor %}
+        <p class="text-quiet w-full text-sm">
+          This filter shows history only. It grants no directory access.
+        </p>
       </form>
     {% endif %}
     {% if error != "" %}
@@ -60,13 +69,9 @@
       <section class="file-section space-y-3">
         <h2 class="text-lg font-semibold">Start a conversation</h2>
         <p class="text-quiet max-w-[60ch]">
-          Create a discussion without a project, preset or provider selection.
-          You can add those details later.
+          A new conversation starts without directory access.
         </p>
-        <a
-          href="/conversations/new{% if !filter.is_empty() %}?project={{ filter }}{% endif %}"
-          data-graft
-          class="btn btn-primary btn-sm"
+        <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
           >New conversation</a
         >
       </section>
@@ -79,6 +84,12 @@
               data-graft
               class="link link-hover min-w-0 break-words"
               >{{ conversation.title }}</a
+            >
+            <a
+              href="/conversations/new?source={{ conversation.id }}"
+              data-graft
+              class="link link-hover text-sm"
+              >New with same settings</a
             >
           </li>
         {% endfor %}

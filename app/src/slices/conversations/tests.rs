@@ -650,11 +650,132 @@ async fn rename_and_delete_use_independent_conversation_identity() {
 }
 
 #[tokio::test]
+async fn directory_history_matches_identity_without_granting_access() {
+    let state = test_state();
+    let token = connected(&state);
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first/code");
+    let second = root.path().join("second/code");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(&first, &[]).unwrap();
+    let copied = crate::execution::DirectoryGrant::from_selected(&first, &[]).unwrap();
+    assert_ne!(grant.id, copied.id);
+    let other = crate::execution::DirectoryGrant::from_selected(&second, &[]).unwrap();
+    let key = super::page::history_directory_key(&grant);
+    for (title, directory) in [
+        ("Original history", grant),
+        ("Copied history", copied),
+        ("Other history", other),
+    ] {
+        let mut model = crate::conversations::ConversationModelConfiguration::direct(
+            ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
+            crate::tests::test_environment_id(),
+        );
+        model.settings.directories = vec![directory];
+        state
+            .conversations
+            .create_saved(
+                crate::conversations::ConversationId::generate().unwrap(),
+                None,
+                Some(title.to_owned()),
+                Some(model),
+                None,
+            )
+            .unwrap();
+    }
+    let path = format!("/conversations?directory={key}");
+    let patch = Request::builder()
+        .uri(&path)
+        .header(header::COOKIE, cookie(&token))
+        .header("graft-request", "patch")
+        .header(header::ACCEPT, "text/vnd.hypergraft.patches+html")
+        .body(Body::empty())
+        .unwrap();
+    for request in [document(&path, &token), navigation(&path, &token), patch] {
+        let response = app(&state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = text(response).await;
+        assert!(body.contains("Original history"));
+        assert!(body.contains("Copied history"));
+        assert!(!body.contains("Other history"));
+        assert!(body.contains(first.to_str().unwrap()));
+        assert!(body.contains(second.to_str().unwrap()));
+        assert!(body.contains("href=\"/conversations/new\""));
+        assert!(body.contains("Clear filter"));
+    }
+    std::fs::rename(&first, root.path().join("old-code")).unwrap();
+    std::fs::create_dir(&first).unwrap();
+    let replacement = crate::execution::DirectoryGrant::from_selected(&first, &[]).unwrap();
+    assert_ne!(key, super::page::history_directory_key(&replacement));
+    let body = text(app(&state).oneshot(document(&path, &token)).await.unwrap()).await;
+    assert!(body.contains("Unavailable"));
+    assert!(body.contains("Copied history"));
+    for query in [
+        "directory=invalid",
+        "directory=0000000000000000-0000000000000000",
+    ] {
+        let response = app(&state)
+            .oneshot(document(&format!("/conversations?{query}"), &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!text(response).await.contains("Original history"));
+    }
+    for query in ["directory=a&directory=b", "project=abc"] {
+        assert_eq!(
+            app(&state)
+                .oneshot(document(&format!("/conversations?{query}"), &token))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(state.conversations.list().len(), 3);
+
+    let mut records = state.conversations.list();
+    let original = records
+        .iter()
+        .find(|record| record.title == "Original history")
+        .unwrap()
+        .clone();
+    let mut moved = original.clone();
+    let moved_path = root.path().join("old-code");
+    moved.model.as_mut().unwrap().settings.directories =
+        vec![crate::execution::DirectoryGrant::from_selected(&moved_path, &[]).unwrap()];
+    for pair in [[original.clone(), moved.clone()], [moved, original]] {
+        let view = super::page::CatalogueView::from_records(&pair, &key, "");
+        assert_eq!(view.conversations.len(), 2);
+        assert_eq!(view.directories.len(), 1);
+        assert_eq!(view.directories[0].name, moved_path.display().to_string());
+    }
+
+    let mut replacement_record = records[0].clone();
+    replacement_record.id = crate::conversations::ConversationId::generate().unwrap();
+    replacement_record.title = "Replacement history".to_owned();
+    replacement_record
+        .model
+        .as_mut()
+        .unwrap()
+        .settings
+        .directories = vec![replacement];
+    records.push(replacement_record);
+    let view = super::page::CatalogueView::from_records(&records, &key, "");
+    assert_eq!(view.conversations.len(), 2);
+    assert!(
+        view.conversations
+            .iter()
+            .all(|record| record.title != "Replacement history")
+    );
+}
+
+#[tokio::test]
 async fn project_entry_carries_context_without_creating_a_record() {
     let state = test_state();
     let token = connected(&state);
     let project = register_project(&state, "Context project");
-    let catalogue_path = format!("/conversations?project={}", project.id.as_hex());
+    let catalogue_path = "/conversations".to_owned();
     let catalogue = app(&state)
         .oneshot(document(&catalogue_path, &token))
         .await
@@ -1145,25 +1266,6 @@ async fn project_context_references_are_distinct_and_do_not_expose_paths() {
         .conversations
         .create("Unrelated conversation".to_owned())
         .expect("unrelated conversation");
-    let filter_path = format!("/conversations?project={}", first.id);
-    let patch = Request::builder()
-        .uri(&filter_path)
-        .header(header::COOKIE, cookie(&token))
-        .header("graft-request", "patch")
-        .header(header::ACCEPT, "text/vnd.hypergraft.patches+html")
-        .body(Body::empty())
-        .expect("patch request");
-    for request in [
-        document(&filter_path, &token),
-        navigation(&filter_path, &token),
-        patch,
-    ] {
-        let response = app(&state).oneshot(request).await.expect("filter");
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = text(response).await;
-        assert!(body.contains("Discussion"));
-        assert!(!body.contains("Unrelated conversation"));
-    }
 
     std::fs::remove_dir_all(&first.host_path).expect("remove project directory");
     let response = app(&state)
