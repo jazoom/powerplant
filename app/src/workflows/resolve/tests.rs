@@ -75,6 +75,7 @@ fn definition(default: crate::environments::EnvironmentId) -> WorkflowDefinition
                 role: RoleKey::parse("agent").expect("role"),
                 candidate_authority: CandidateAuthority::Edit,
                 authority,
+                settings: crate::workflows::definition::ModelStepSettings::SameAsRunDefaults,
                 required_outputs: vec![
                     RequiredOutput {
                         key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),

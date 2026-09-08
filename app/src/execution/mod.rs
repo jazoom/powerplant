@@ -1,7 +1,9 @@
 pub(crate) mod authority;
 mod consent;
 mod folder_picker;
+mod overrides;
 mod settings;
+pub(crate) use overrides::{SettingsOverrides, SettingsOverridesFile};
 
 pub(crate) use authority::ProjectFreeAuthority;
 pub(crate) use consent::{AccessConsentStore, draft_nonce};

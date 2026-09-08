@@ -45,6 +45,15 @@ pub(crate) struct AccessConsentStore {
     pending: Mutex<HashMap<String, ConsentBinding>>,
     approved: Mutex<HashMap<String, ConsentBinding>>,
     consumed_drafts: Mutex<HashSet<(SessionId, String)>>,
+    launch_previews: Mutex<HashMap<String, LaunchConsent>>,
+    launches: Mutex<HashMap<crate::workflows::RunId, LaunchConsent>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LaunchConsent {
+    session: SessionId,
+    conversation: ConversationId,
+    settings: Vec<super::ExecutionSettings>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -232,10 +241,14 @@ impl AccessConsentStore {
         lock(&self.pending).retain(|_, binding| live(&binding.session));
         lock(&self.approved).retain(|_, binding| live(&binding.session));
         lock(&self.consumed_drafts).retain(|(session, _)| live(session));
+        lock(&self.launch_previews).retain(|_, binding| live(&binding.session));
+        lock(&self.launches).retain(|_, binding| live(&binding.session));
     }
 
     pub(crate) fn invalidate_conversation(&self, conversation: ConversationId) {
         self.invalidate_approvals(conversation);
+        lock(&self.launch_previews).retain(|_, binding| binding.conversation != conversation);
+        lock(&self.launches).retain(|_, binding| binding.conversation != conversation);
         lock(&self.pending).retain(|_, binding| {
             !matches!(binding.subject, Subject::Conversation { id, .. } if id == conversation)
         });
@@ -245,6 +258,68 @@ impl AccessConsentStore {
         lock(&self.approved).retain(|_, binding| {
             !matches!(binding.subject, Subject::Conversation { id, .. } if id == conversation)
         });
+    }
+
+    pub(crate) fn request_launch(
+        &self,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: Vec<super::ExecutionSettings>,
+    ) -> Result<String, ConsentError> {
+        let mut previews = lock(&self.launch_previews);
+        if previews.len() >= MAXIMUM_RUNTIME_RECORDS {
+            return Err(ConsentError::Invalid);
+        }
+        let token = fresh_token()?;
+        previews.insert(
+            token.clone(),
+            LaunchConsent {
+                session,
+                conversation,
+                settings,
+            },
+        );
+        Ok(token)
+    }
+
+    pub(crate) fn approve_launch(
+        &self,
+        request: &str,
+        run: crate::workflows::RunId,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: Vec<super::ExecutionSettings>,
+    ) -> Result<(), ConsentError> {
+        let expected = LaunchConsent {
+            session,
+            conversation,
+            settings,
+        };
+        let mut previews = lock(&self.launch_previews);
+        if previews.get(request) != Some(&expected) {
+            return Err(ConsentError::Invalid);
+        }
+        let mut launches = lock(&self.launches);
+        if launches.len() >= MAXIMUM_RUNTIME_RECORDS || launches.contains_key(&run) {
+            return Err(ConsentError::Invalid);
+        }
+        previews.remove(request);
+        launches.insert(run, expected);
+        Ok(())
+    }
+
+    pub(crate) fn authorised_launch(
+        &self,
+        run: crate::workflows::RunId,
+        session: SessionId,
+        conversation: ConversationId,
+        settings: &super::ExecutionSettings,
+    ) -> bool {
+        lock(&self.launches).get(&run).is_some_and(|binding| {
+            binding.session == session
+                && binding.conversation == conversation
+                && binding.settings.contains(settings)
+        })
     }
 
     pub(crate) fn authorised_conversation(

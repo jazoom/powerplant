@@ -60,6 +60,7 @@ fn two_step(include_command: bool) -> WorkflowDefinition {
             role: RoleKey::parse("agent").expect("role"),
             candidate_authority: CandidateAuthority::Edit,
             authority,
+            settings: crate::workflows::definition::ModelStepSettings::SameAsRunDefaults,
             required_outputs: vec![
                 RequiredOutput {
                     key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
@@ -270,6 +271,7 @@ fn completed_fixing_review_run() -> WorkflowRun {
             role: role_key.clone(),
             candidate_authority: CandidateAuthority::Edit,
             authority: AgentAuthority::new(vec![ToolId::List], Vec::new()).expect("authority"),
+            settings: crate::workflows::definition::ModelStepSettings::SameAsRunDefaults,
             required_outputs: vec![
                 RequiredOutput {
                     key: OutputKey::parse(ASSISTANT_REPLY).expect("reply"),

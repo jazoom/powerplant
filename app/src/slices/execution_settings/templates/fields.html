@@ -1,16 +1,16 @@
 <section
   class="border-base-300 mt-6 space-y-3 border-t pt-5"
-  aria-labelledby="conversation-instructions-heading"
+  aria-labelledby="{{ field_prefix }}instructions-heading"
 >
-  <h3 id="conversation-instructions-heading" class="text-sm font-semibold">
+  <h3 id="{{ field_prefix }}instructions-heading" class="text-sm font-semibold">
     Instructions
   </h3>
   <p class="text-quiet text-xs">Persistent guidance for model replies.</p>
   <textarea
-    form="{{ self.model_form() }}"
-    id="conversation-instructions"
-    aria-labelledby="conversation-instructions-heading"
-    name="instructions"
+    {% if !settings_form.is_empty() %}form="{{ settings_form }}"{% endif %}
+    id="{{ field_prefix }}instructions"
+    aria-labelledby="{{ field_prefix }}instructions-heading"
+    name="{{ field_prefix }}{% if field_prefix.is_empty() %}instructions{% else %}settings-instructions{% endif %}"
     class="textarea textarea-bordered min-h-28 w-full"
     maxlength="32768"
     {% if job_active %}disabled{% endif %}
@@ -30,10 +30,10 @@
     {% for tool in tool_options %}
       <label class="border-base-300 flex min-h-16 items-start gap-3 border p-3">
         <input
-          form="{{ self.model_form() }}"
+          {% if !settings_form.is_empty() %}form="{{ settings_form }}"{% endif %}
           type="checkbox"
           class="checkbox checkbox-sm mt-0.5"
-          name="{{ tool.field_name }}"
+          name="{{ field_prefix }}{{ tool.field_name }}"
           value="{{ tool.value }}"
           {% if tool.selected %}checked{% endif %}
         />

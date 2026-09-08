@@ -1,9 +1,10 @@
 use crate::agents::{AccessMode, ToolId};
+use crate::execution::{DirectoryAccess, DirectoryGrant, SettingsOverrides};
 use crate::workflows::definition::{
     AgentAuthority, AgentStep, ArtefactKind, ArtefactSource, CandidateAuthority, ExecutionMode,
     GuestDirectoryAccess, HumanGateStep, HumanRevisionPolicy, InputKey, MAXIMUM_DIRECTORIES,
-    MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, OutputKey, OutputKind,
-    RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction,
+    MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES, MAXIMUM_STEPS, ModelStepSettings, OutputKey,
+    OutputKind, RequiredInput, RequiredOutput, ReviewPolicy, RoleDefinition, RoleKey, StepAction,
     StepDefinition, StepEnvironment, StepKey, SystemCommandId, SystemCommandStep,
     WorkflowDefinition, candidate_revision_output, initial_candidate_input,
 };
@@ -181,6 +182,7 @@ pub(super) enum FormIntent {
     MoveOutputDown { step: usize, output: usize },
     AddInput(usize),
     RemoveInput { step: usize, input: usize },
+    ApplyPreset { step: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -236,6 +238,18 @@ pub(super) struct StepDraft {
     pub(super) candidate_access: String,
     pub(super) command: String,
     pub(super) tools: Vec<ToolId>,
+    pub(super) settings_source: String,
+    pub(super) provider: String,
+    pub(super) model: String,
+    pub(super) thinking: String,
+    pub(super) settings_instructions: String,
+    pub(super) network: String,
+    pub(super) network_domains: String,
+    pub(super) settings_read_only: String,
+    pub(super) settings_reviewed: String,
+    pub(super) settings_preset: String,
+    pub(super) settings_grants: Vec<DirectoryGrant>,
+    pub(super) settings_inherit: Vec<String>,
     pub(super) directories: Vec<DirectoryDraft>,
     pub(super) inputs: Vec<InputDraft>,
     pub(super) outputs: Vec<OutputDraft>,
@@ -291,6 +305,7 @@ pub(super) struct StepErrors {
     pub(super) role: &'static str,
     pub(super) candidate_access: &'static str,
     pub(super) command: &'static str,
+    pub(super) settings: &'static str,
     pub(super) review_policy: &'static str,
     pub(super) report_output: &'static str,
     pub(super) revision_target: &'static str,
@@ -392,6 +407,7 @@ impl StepErrors {
             || !step.role.is_empty()
             || !step.candidate_access.is_empty()
             || !step.command.is_empty()
+            || !step.settings.is_empty()
             || !step.review_policy.is_empty()
             || !step.report_output.is_empty()
             || !step.revision_target.is_empty()
@@ -720,6 +736,13 @@ impl WorkflowFormState {
                 let row = self.steps.get_mut(step).ok_or(FormError::Index)?;
                 move_item(&mut row.outputs, output, false)
             }
+            FormIntent::ApplyPreset { step } => {
+                if step >= self.steps.len() {
+                    return Err(FormError::Index);
+                }
+                self.steps[step].settings_source = "override".to_owned();
+                Ok(())
+            }
         }
     }
 
@@ -943,6 +966,18 @@ enum StepPart {
     RevisionTarget,
     AttemptLimit,
     Tool(ToolId),
+    SettingsSource,
+    Provider,
+    Model,
+    Thinking,
+    SettingsInstructions,
+    Network,
+    NetworkDomains,
+    SettingsReadOnly,
+    SettingsReviewed,
+    SettingsPreset,
+    SettingsGrants,
+    SettingsInherit(&'static str),
     Dir { index: usize, part: DirPart },
     Input { index: usize, part: InputPart },
     Output { index: usize, part: OutputPart },
@@ -1027,6 +1062,23 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                         part: StepPart::Tool(tool),
                     });
                 }
+                Some("settings-source") => StepPart::SettingsSource,
+                Some("provider") => StepPart::Provider,
+                Some("model") => StepPart::Model,
+                Some("thinking") => StepPart::Thinking,
+                Some("settings-instructions") => StepPart::SettingsInstructions,
+                Some("network") => StepPart::Network,
+                Some("network-domains") => StepPart::NetworkDomains,
+                Some("read-only") => StepPart::SettingsReadOnly,
+                Some("reviewed") => StepPart::SettingsReviewed,
+                Some("settings-preset") => StepPart::SettingsPreset,
+                Some("settings-grants") => StepPart::SettingsGrants,
+                Some("inherit-model") => StepPart::SettingsInherit("model"),
+                Some("inherit-instructions") => StepPart::SettingsInherit("instructions"),
+                Some("inherit-tools") => StepPart::SettingsInherit("tools"),
+                Some("inherit-network") => StepPart::SettingsInherit("network"),
+                Some("inherit-environment") => StepPart::SettingsInherit("environment"),
+                Some("inherit-directories") => StepPart::SettingsInherit("directories"),
                 Some("dir") => {
                     let dir = parse_index(parts.next().ok_or(FormError::UnknownField)?)?;
                     let dir_part = match parts.next() {
@@ -1157,6 +1209,7 @@ fn parse_indexed_intent(raw: &str) -> Result<FormIntent, FormError> {
         "update-review-policy" if parts.next().is_none() => {
             Ok(FormIntent::UpdateReviewPolicy(first))
         }
+        "apply-preset" if parts.next().is_none() => Ok(FormIntent::ApplyPreset { step: first }),
         "set-purpose" => {
             let purpose = parts
                 .next()
@@ -1305,9 +1358,38 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
                 review_detail_seen[index][2] = true;
             }
             StepPart::Tool(tool) => {
-                if is_checked(&value) && !step.tools.contains(&tool) {
+                if !is_checked(&value) && value != tool.as_str() {
+                    return Err(FormError::UnknownField);
+                }
+                if !step.tools.contains(&tool) {
                     step.tools.push(tool);
                 }
+            }
+            StepPart::SettingsSource => step.settings_source = value,
+            StepPart::Provider => step.provider = value,
+            StepPart::Model => step.model = value,
+            StepPart::Thinking => step.thinking = value,
+            StepPart::SettingsInstructions => step.settings_instructions = value,
+            StepPart::Network => step.network = value,
+            StepPart::NetworkDomains => step.network_domains = value,
+            StepPart::SettingsReadOnly => step.settings_read_only = value,
+            StepPart::SettingsReviewed => step.settings_reviewed = value,
+            StepPart::SettingsPreset => step.settings_preset = value,
+            StepPart::SettingsInherit(field) => {
+                if value != "1" {
+                    return Err(FormError::UnknownField);
+                }
+                step.settings_inherit.push(field.to_owned());
+            }
+            StepPart::SettingsGrants => {
+                let values: Vec<String> =
+                    serde_json::from_str(&value).map_err(|_| FormError::UnknownField)?;
+                step.settings_grants = values
+                    .iter()
+                    .map(|value| DirectoryGrant::parse_form(value).ok_or(FormError::UnknownField))
+                    .collect::<Result<_, _>>()?;
+                crate::execution::validate_directories(&step.settings_grants)
+                    .map_err(|_| FormError::Excessive)?;
             }
             StepPart::Dir {
                 index: dir,
@@ -2152,8 +2234,14 @@ fn empty_human_revision() -> HumanRevisionDraft {
     }
 }
 
+fn with_empty_settings(mut step: StepDraft) -> StepDraft {
+    step.settings_source = "defaults".to_owned();
+    step.network = "none".to_owned();
+    step
+}
+
 fn empty_step() -> StepDraft {
-    StepDraft {
+    with_empty_settings(StepDraft {
         key: String::new(),
         name: String::new(),
         purpose: String::new(),
@@ -2165,16 +2253,28 @@ fn empty_step() -> StepDraft {
         candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: Vec::new(),
+        settings_source: String::new(),
+        provider: String::new(),
+        model: String::new(),
+        thinking: String::new(),
+        settings_instructions: String::new(),
+        network: String::new(),
+        network_domains: String::new(),
+        settings_read_only: String::new(),
+        settings_reviewed: String::new(),
+        settings_preset: String::new(),
+        settings_grants: Vec::new(),
+        settings_inherit: Vec::new(),
         directories: Vec::new(),
         inputs: Vec::new(),
         outputs: Vec::new(),
         review_policy: None,
         human_revision: None,
-    }
+    })
 }
 
 fn blank_agent_step(key: &str, role: &str) -> StepDraft {
-    StepDraft {
+    with_empty_settings(StepDraft {
         key: key.to_owned(),
         name: String::new(),
         purpose: PhasePurpose::Implementation.as_str().to_owned(),
@@ -2188,6 +2288,18 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: ToolId::ALL.to_vec(),
+        settings_source: String::new(),
+        provider: String::new(),
+        model: String::new(),
+        thinking: String::new(),
+        settings_instructions: String::new(),
+        network: String::new(),
+        network_domains: String::new(),
+        settings_read_only: String::new(),
+        settings_reviewed: String::new(),
+        settings_preset: String::new(),
+        settings_grants: Vec::new(),
+        settings_inherit: Vec::new(),
         directories: Vec::new(),
         inputs: vec![input_from_required(&initial_candidate_input())],
         review_policy: None,
@@ -2199,7 +2311,7 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
             },
             output_from_required(&candidate_revision_output()),
         ],
-    }
+    })
 }
 
 fn phase_draft(key: &str, purpose: PhasePurpose, role: &str) -> StepDraft {
@@ -2308,11 +2420,43 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 expertise: String::new(),
                 instructions: String::new(),
                 action: "agent".to_owned(),
-                environment: step_environment_token(action.environment),
+                environment: match &action.settings {
+                    ModelStepSettings::Override(settings) => settings
+                        .environment
+                        .map(|value| value.as_hex())
+                        .unwrap_or_default(),
+                    ModelStepSettings::SameAsRunDefaults => {
+                        step_environment_token(action.environment)
+                    }
+                },
                 role: action.role.as_str().to_owned(),
                 candidate_access: action.candidate_authority.as_str().to_owned(),
                 command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
-                tools: action.authority.tools.clone(),
+                tools: match &action.settings {
+                    ModelStepSettings::Override(settings) => {
+                        settings.tools.clone().unwrap_or_default()
+                    }
+                    ModelStepSettings::SameAsRunDefaults => action.authority.tools.clone(),
+                },
+                settings_source: if action.settings.is_same_as_defaults() {
+                    "defaults".to_owned()
+                } else {
+                    "override".to_owned()
+                },
+                provider: settings_provider(&action.settings),
+                model: settings_model(&action.settings),
+                thinking: settings_thinking(&action.settings),
+                settings_instructions: settings_instructions_value(&action.settings),
+                network: settings_network(&action.settings),
+                network_domains: settings_network_domains(&action.settings),
+                settings_read_only: settings_paths(&action.settings, DirectoryAccess::ReadOnly),
+                settings_reviewed: settings_paths(
+                    &action.settings,
+                    DirectoryAccess::ReviewBeforeApply,
+                ),
+                settings_preset: String::new(),
+                settings_grants: settings_grants(&action.settings),
+                settings_inherit: inherited_fields(&action.settings),
                 directories,
                 inputs: step.inputs.iter().map(input_from_required).collect(),
                 outputs: action
@@ -2336,6 +2480,18 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             candidate_access: String::new(),
             command: action.command.as_str().to_owned(),
             tools: Vec::new(),
+            settings_source: "defaults".to_owned(),
+            provider: String::new(),
+            model: String::new(),
+            thinking: String::new(),
+            settings_instructions: String::new(),
+            network: "none".to_owned(),
+            network_domains: String::new(),
+            settings_read_only: String::new(),
+            settings_reviewed: String::new(),
+            settings_preset: String::new(),
+            settings_grants: Vec::new(),
+            settings_inherit: Vec::new(),
             directories: Vec::new(),
             inputs: step.inputs.iter().map(input_from_required).collect(),
             outputs: action
@@ -2360,6 +2516,18 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 candidate_access: String::new(),
                 command: String::new(),
                 tools: Vec::new(),
+                settings_source: "defaults".to_owned(),
+                provider: String::new(),
+                model: String::new(),
+                thinking: String::new(),
+                settings_instructions: String::new(),
+                network: "none".to_owned(),
+                network_domains: String::new(),
+                settings_read_only: String::new(),
+                settings_reviewed: String::new(),
+                settings_preset: String::new(),
+                settings_grants: Vec::new(),
+                settings_inherit: Vec::new(),
                 directories: Vec::new(),
                 inputs: step.inputs.iter().map(input_from_required).collect(),
                 outputs: vec![output_from_required(&action.required_output)],
@@ -2434,6 +2602,275 @@ fn build_step(step: &StepDraft, errors: &mut StepErrors) -> Option<StepDefinitio
     })
 }
 
+fn inherited_fields(settings: &ModelStepSettings) -> Vec<String> {
+    let ModelStepSettings::Override(settings) = settings else {
+        return Vec::new();
+    };
+    [
+        ("model", settings.model.is_none()),
+        ("instructions", settings.instructions.is_none()),
+        ("tools", settings.tools.is_none()),
+        ("network", settings.network.is_none()),
+        ("directories", settings.directories.is_none()),
+        ("environment", settings.environment.is_none()),
+    ]
+    .into_iter()
+    .filter(|(_, inherit)| *inherit)
+    .map(|(name, _)| name.to_owned())
+    .collect()
+}
+
+fn settings_provider(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .model
+            .as_ref()
+            .map(|model| model.provider.as_str().to_owned())
+            .unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_model(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .model
+            .as_ref()
+            .map(|model| model.model.clone())
+            .unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_thinking(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .model
+            .as_ref()
+            .and_then(|model| model.thinking.as_ref())
+            .map(|effort| effort.as_str().to_owned())
+            .unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_instructions_value(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value.instructions.clone().unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_network(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .network
+            .as_ref()
+            .map(|network| network.as_str().to_owned())
+            .unwrap_or_else(|| "none".to_owned()),
+        ModelStepSettings::SameAsRunDefaults => "none".to_owned(),
+    }
+}
+
+fn settings_network_domains(settings: &ModelStepSettings) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .network
+            .as_ref()
+            .map(|network| network.domains().join("\n"))
+            .unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_paths(settings: &ModelStepSettings, access: DirectoryAccess) -> String {
+    match settings {
+        ModelStepSettings::Override(value) => value
+            .directories
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|grant| grant.access == access)
+            .map(|grant| grant.host_path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        ModelStepSettings::SameAsRunDefaults => String::new(),
+    }
+}
+
+fn settings_grants(settings: &ModelStepSettings) -> Vec<DirectoryGrant> {
+    match settings {
+        ModelStepSettings::Override(value) => value.directories.clone().unwrap_or_default(),
+        ModelStepSettings::SameAsRunDefaults => Vec::new(),
+    }
+}
+
+pub(super) fn fill_step_from_preset(step: &mut StepDraft, preset: &crate::presets::PresetRecord) {
+    let settings = &preset.settings;
+    step.settings_source = "override".to_owned();
+    step.settings_inherit.clear();
+    step.settings_preset = preset.id.as_hex();
+    step.provider = settings.model.provider.as_str().to_owned();
+    step.model = settings.model.model.clone();
+    step.thinking = settings
+        .model
+        .thinking
+        .as_ref()
+        .map(|effort| effort.as_str().to_owned())
+        .unwrap_or_default();
+    step.settings_instructions = settings.instructions.clone();
+    step.tools.clone_from(&settings.tools);
+    step.network = settings.network.as_str().to_owned();
+    step.network_domains = settings.network.domains().join("\n");
+    step.settings_read_only = settings
+        .directories
+        .iter()
+        .filter(|grant| grant.access == DirectoryAccess::ReadOnly)
+        .map(|grant| grant.host_path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    step.settings_reviewed = settings
+        .directories
+        .iter()
+        .filter(|grant| grant.access == DirectoryAccess::ReviewBeforeApply)
+        .map(|grant| grant.host_path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    step.settings_grants = settings.directories.clone();
+    step.environment = settings.environment.as_hex();
+}
+
+fn parse_override_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<SettingsOverrides> {
+    let inherits = |field: &str| step.settings_inherit.iter().any(|value| value == field);
+    use crate::agents::NetworkAccess;
+    use crate::environments::EnvironmentId;
+    use crate::providers::{ModelSelection, ProviderKind, ThinkingEffort};
+    let model = if inherits("model") {
+        None
+    } else {
+        let provider = match ProviderKind::parse(step.provider.trim()) {
+            Some(provider) => provider,
+            None => {
+                errors.settings = "Choose a listed provider.";
+                return None;
+            }
+        };
+        let thinking = if step.thinking.trim().is_empty() {
+            None
+        } else {
+            match ThinkingEffort::new(step.thinking.clone()) {
+                Some(effort) => Some(effort),
+                None => {
+                    errors.settings = "Enter a valid reasoning effort.";
+                    return None;
+                }
+            }
+        };
+        let model = match ModelSelection::new(provider, step.model.clone(), thinking) {
+            Some(model) => model,
+            None => {
+                errors.settings = "Enter a valid model name.";
+                return None;
+            }
+        };
+        Some(model)
+    };
+    let environment = if inherits("environment") {
+        None
+    } else {
+        Some(match EnvironmentId::parse(&step.environment) {
+            Some(id) => id,
+            None if step.environment.is_empty() => {
+                errors.environment = "Choose an environment.";
+                return None;
+            }
+            None => {
+                errors.environment = "Choose a ready environment.";
+                return None;
+            }
+        })
+    };
+    let network = if inherits("network") {
+        None
+    } else {
+        let network_mode = if step.network.trim().is_empty() {
+            "none"
+        } else {
+            step.network.as_str()
+        };
+        let network = match NetworkAccess::parse_form(network_mode, &step.network_domains) {
+            Ok(network) => network,
+            Err(_) => {
+                errors.settings =
+                    "Choose valid network access. Restricted access needs 1 to 32 domains.";
+                return None;
+            }
+        };
+        Some(network)
+    };
+    let mut reserved = step.settings_grants.clone();
+    let mut directories = Vec::new();
+    for (text, access) in [
+        (&step.settings_read_only, DirectoryAccess::ReadOnly),
+        (&step.settings_reviewed, DirectoryAccess::ReviewBeforeApply),
+    ]
+    .into_iter()
+    .filter(|_| !inherits("directories"))
+    {
+        for path in text.lines().filter(|line| !line.trim().is_empty()) {
+            let existing = step
+                .settings_grants
+                .iter()
+                .find(|grant| grant.host_path == std::path::Path::new(path));
+            let mut grant = match existing {
+                Some(grant) => grant.clone(),
+                None => {
+                    match DirectoryGrant::from_selected(std::path::Path::new(path), &reserved) {
+                        Ok(grant) => {
+                            reserved.push(grant.clone());
+                            grant
+                        }
+                        Err(_) => {
+                            errors.settings =
+                                "Choose existing, distinct directories without overlapping roots.";
+                            return None;
+                        }
+                    }
+                }
+            };
+            grant.access = access;
+            directories.push(grant);
+        }
+    }
+    let settings = SettingsOverrides {
+        model,
+        environment,
+        network,
+        instructions: (!inherits("instructions")).then(|| step.settings_instructions.clone()),
+        tools: (!inherits("tools")).then(|| step.tools.clone()),
+        directories: (!inherits("directories")).then_some(directories),
+    };
+    if settings.validate().is_none() {
+        errors.settings =
+            "Use bounded instructions, unique tools and at most eight distinct directory roots.";
+        return None;
+    }
+    Some(settings)
+}
+
+fn step_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<ModelStepSettings> {
+    match step.settings_source.as_str() {
+        "" | "defaults" => Some(ModelStepSettings::SameAsRunDefaults),
+        "override" => Some(ModelStepSettings::Override(Box::new(
+            parse_override_settings(step, errors)?,
+        ))),
+        _ => {
+            errors.settings = "Choose Same as run defaults or custom settings.";
+            None
+        }
+    }
+}
+
 fn build_agent_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepAction> {
     let role = match RoleKey::parse(&step.role) {
         Ok(role) => role,
@@ -2503,6 +2940,7 @@ fn build_agent_action(step: &StepDraft, errors: &mut StepErrors) -> Option<StepA
         candidate_authority,
         authority,
         required_outputs: outputs,
+        settings: step_settings(step, errors)?,
     }))
 }
 

@@ -773,6 +773,7 @@ fn agent_step(
             candidate_authority,
             authority: AgentAuthority::new(tools, Vec::new()).expect("authority"),
             required_outputs: outputs,
+            settings: super::definition::ModelStepSettings::SameAsRunDefaults,
         }),
         review,
     }

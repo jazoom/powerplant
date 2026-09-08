@@ -1931,6 +1931,8 @@
           </div>
         </section>
 
+        {% let settings_form = self.model_form() %}
+        {% let field_prefix = "" %}
         {% include "execution_settings/templates/fields.html" %}
 
         <section

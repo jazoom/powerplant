@@ -395,7 +395,7 @@ fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun
                 .as_ref()?
                 .model
                 .as_ref()
-                .map(|model| &model.settings)
+                .map(|model| model.settings.clone())
         })
         .map(|settings| {
             settings
@@ -1191,25 +1191,13 @@ fn continuation_authority(
         let Some(record) = state.conversations.get(&conversation_id) else {
             return ContinuationAuthority::Stale;
         };
-        let Ok(current) =
-            crate::conversations::resolve_project_free_authority(&record, &state.agents)
-        else {
-            return ContinuationAuthority::Stale;
-        };
-        if current.tools != pinned.tools
-            || current.network != pinned.network
-            || current.policy != pinned.policy
-            || current.reviewed_aliases != pinned.reviewed_aliases
-        {
-            return ContinuationAuthority::Stale;
-        }
         let Some(settings) = run
             .directory_settings()
-            .or_else(|| record.model.as_ref().map(|model| &model.settings))
+            .or_else(|| record.model.as_ref().map(|model| model.settings.clone()))
         else {
             return ContinuationAuthority::Stale;
         };
-        if !crate::execution::ProjectFreeAuthority::from_settings(pinned.revision, settings)
+        if !crate::execution::ProjectFreeAuthority::from_settings(pinned.revision, &settings)
             .is_ok_and(|authority| authority == *pinned)
             || !state.sessions.contains_live(&continuation.session_id)
         {
@@ -1228,9 +1216,22 @@ fn continuation_authority(
             if !state.access_consent.authorised_conversation(
                 continuation.session_id,
                 conversation_id,
-                settings,
+                &settings,
                 grant,
-            ) {
+            ) && !run.model_phases().any(|phase| {
+                phase.settings.as_ref().is_some_and(|phase_settings| {
+                    phase_settings
+                        .directories
+                        .iter()
+                        .any(|root| root.identity == grant.identity && root.access == grant.access)
+                        && state.access_consent.authorised_launch(
+                            run.id,
+                            continuation.session_id,
+                            conversation_id,
+                            phase_settings,
+                        )
+                })
+            }) {
                 return ContinuationAuthority::Stale;
             }
         }

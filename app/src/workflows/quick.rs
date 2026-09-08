@@ -72,6 +72,7 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
                 CandidateAuthority::ReadOnly
             },
             authority: AgentAuthority::new(tools.to_vec(), directories)?,
+            settings: super::definition::ModelStepSettings::SameAsRunDefaults,
             required_outputs: if reviewed {
                 vec![assistant_output(), candidate_revision_output()]
             } else {
@@ -133,6 +134,7 @@ fn agent_step(
             environment: StepEnvironment::WorkflowDefault,
             candidate_authority,
             authority: AgentAuthority::new(tools.to_vec(), secondary)?,
+            settings: super::definition::ModelStepSettings::SameAsRunDefaults,
             required_outputs,
         }),
         review: None,

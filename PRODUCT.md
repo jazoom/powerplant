@@ -52,7 +52,11 @@ Preset previews expire after 30 minutes. Each preview binds its replacement to t
 
 Preset application removes legacy project permissions. Missing providers, environments and directories remain requested values without substitutions or access approval.
 
-Configured workflow phases reject preset access expansions and environment differences. Project-backed phases also reject presets that omit their required source directory.
+Model steps use conversation settings at start, or explicit field overrides. Each field can use Same as run defaults independently. An empty overridden list removes that access for the phase.
+
+The final review shows each phase's directories, network policy and environment. Additional access needs run-only approval and never changes the parent conversation. A single-use preview binds approval to the exact settings and one run.
+
+Project-backed phases still reject presets that omit their required source directory.
 
 A conversation can grant ad hoc Read only access to as many as eight host directories. A directory needs no project or Git registration.
 
@@ -169,9 +173,9 @@ The ordinary implementation starters prepare candidate sets across authorised re
 
 A read-only review inspects isolated candidate copies, not live host files. Other authorised reference directories remain read only. The first authorised directory supplies the command directory.
 
-Each model phase receives its pinned model and instructions. The run retains directory identities, aliases, tools, sandbox network policy and the selected environment snapshot.
+Each model phase receives its pinned model, instructions, tools, directories, sandbox network policy and environment snapshot. Same as run defaults copies the conversation settings. Custom or preset values replace the corresponding lists for that phase.
 
-Preset changes and deletion do not change those values. A phase preset cannot add access or replace the run environment.
+Preset changes and deletion do not change those pinned values. Additional requested access needs explicit run-only approval.
 
 Dispatch revalidates pinned directory identities and session-bound destination consent. Transcript and title changes do not constitute access approval.
 

@@ -2,7 +2,6 @@ use askama::Template;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::agents::ToolId;
 use crate::workflows::definition::{
     ExecutionMode, MAXIMUM_DIRECTORIES, MAXIMUM_INPUTS, MAXIMUM_OUTPUTS, MAXIMUM_ROLES,
     MAXIMUM_STEPS,
@@ -20,6 +19,22 @@ pub(super) struct EnvironmentOption {
     pub(super) name: String,
     pub(super) context: String,
     pub(super) selected: bool,
+}
+
+pub(super) struct InheritedField {
+    pub(super) name: &'static str,
+    pub(super) label: &'static str,
+    pub(super) selected: bool,
+}
+
+pub(super) struct PresetChoice {
+    pub(super) id: String,
+    pub(super) name: String,
+}
+
+pub(super) struct ProviderChoice {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
 }
 
 pub(super) const INDEX_TITLE: &str = "Workflows | Power Plant";
@@ -70,12 +85,6 @@ impl CatalogueView {
             unavailable_starters,
         }
     }
-}
-
-pub(super) struct ToolChoice {
-    pub(super) name: &'static str,
-    pub(super) label: &'static str,
-    pub(super) checked: bool,
 }
 
 pub(super) struct DirectoryRow {
@@ -183,11 +192,25 @@ pub(super) struct StepRow {
     pub(super) role_error: &'static str,
     pub(super) candidate_access: String,
     pub(super) candidate_access_error: &'static str,
+    pub(super) settings_source: String,
+    pub(super) settings_error: &'static str,
+    pub(super) field_prefix: String,
+    pub(super) provider: String,
+    pub(super) model: String,
+    pub(super) thinking: String,
+    pub(super) settings_instructions: String,
+    pub(super) network: String,
+    pub(super) network_domains: String,
+    pub(super) settings_read_only: String,
+    pub(super) settings_reviewed: String,
+    pub(super) settings_preset: String,
+    pub(super) settings_grants: String,
+    pub(super) inherited_fields: Vec<InheritedField>,
+    pub(super) settings_tool_options: Vec<crate::slices::execution_settings::page::ToolOption>,
     pub(super) command_choices: Vec<CommandChoice>,
     pub(super) command_error: &'static str,
     pub(super) command_consequence: &'static str,
     pub(super) show_outputs: bool,
-    pub(super) tools: Vec<ToolChoice>,
     pub(super) directories: Vec<DirectoryRow>,
     pub(super) can_add_directory: bool,
     pub(super) inputs: Vec<InputRow>,
@@ -221,6 +244,8 @@ pub(super) struct WorkflowFormView {
     pub(super) repeating: bool,
     pub(super) environment_options: Vec<EnvironmentOption>,
     pub(super) no_ready_environment: bool,
+    pub(super) presets: Vec<PresetChoice>,
+    pub(super) providers: Vec<ProviderChoice>,
     pub(super) revision: String,
     pub(super) summary_error: &'static str,
     pub(super) roles: Vec<RoleRow>,
@@ -247,6 +272,8 @@ pub(super) struct WorkflowFormContents<'a> {
     pub(super) repeating: bool,
     pub(super) environment_options: &'a [EnvironmentOption],
     pub(super) no_ready_environment: bool,
+    pub(super) presets: &'a [PresetChoice],
+    pub(super) providers: &'a [ProviderChoice],
     pub(super) revision: &'a str,
     pub(super) summary_error: &'static str,
     pub(super) roles: &'a [RoleRow],
@@ -339,6 +366,8 @@ impl WorkflowFormView {
             repeating: state.execution_mode == ExecutionMode::TaskList,
             environment_options: Vec::new(),
             no_ready_environment: false,
+            presets: Vec::new(),
+            providers: Vec::new(),
             revision,
             summary_error: errors.summary,
             roles: state
@@ -380,9 +409,21 @@ impl WorkflowFormView {
 
     pub(super) fn with_environments(
         mut self,
-        options: Vec<EnvironmentOption>,
+        mut options: Vec<EnvironmentOption>,
         no_ready: bool,
     ) -> Self {
+        for id in std::iter::once(&self.default_environment)
+            .chain(self.steps.iter().map(|step| &step.environment))
+        {
+            if !id.is_empty() && !options.iter().any(|option| option.id == *id) {
+                options.push(EnvironmentOption {
+                    id: id.clone(),
+                    name: format!("Unavailable environment · {id}"),
+                    context: "No ready snapshot".to_owned(),
+                    selected: *id == self.default_environment,
+                });
+            }
+        }
         let default_name = options
             .iter()
             .find(|option| option.id == self.default_environment)
@@ -405,6 +446,16 @@ impl WorkflowFormView {
         self
     }
 
+    pub(super) fn with_catalogues(
+        mut self,
+        presets: Vec<PresetChoice>,
+        providers: Vec<ProviderChoice>,
+    ) -> Self {
+        self.presets = presets;
+        self.providers = providers;
+        self
+    }
+
     pub(super) fn contents(&self) -> WorkflowFormContents<'_> {
         WorkflowFormContents {
             action: &self.action,
@@ -418,6 +469,8 @@ impl WorkflowFormView {
             repeating: self.repeating,
             environment_options: &self.environment_options,
             no_ready_environment: self.no_ready_environment,
+            presets: &self.presets,
+            providers: &self.providers,
             revision: &self.revision,
             summary_error: self.summary_error,
             roles: &self.roles,
@@ -521,6 +574,56 @@ fn step_row(
         role_error: errors.role,
         candidate_access: step.candidate_access.clone(),
         candidate_access_error: errors.candidate_access,
+        settings_source: if step.settings_source.is_empty() {
+            "defaults".to_owned()
+        } else {
+            step.settings_source.clone()
+        },
+        settings_error: errors.settings,
+        field_prefix: format!("step_{index}_"),
+        provider: step.provider.clone(),
+        model: step.model.clone(),
+        thinking: step.thinking.clone(),
+        settings_instructions: step.settings_instructions.clone(),
+        network: if step.network.is_empty() {
+            "none".to_owned()
+        } else {
+            step.network.clone()
+        },
+        network_domains: step.network_domains.clone(),
+        settings_read_only: step.settings_read_only.clone(),
+        settings_reviewed: step.settings_reviewed.clone(),
+        settings_preset: step.settings_preset.clone(),
+        inherited_fields: [
+            ("model", "Model and reasoning effort"),
+            ("instructions", "Instructions"),
+            ("tools", "Tools"),
+            ("network", "Network"),
+            ("directories", "Directories"),
+            ("environment", "Environment"),
+        ]
+        .into_iter()
+        .map(|(name, label)| InheritedField {
+            name,
+            label,
+            selected: step.settings_inherit.iter().any(|value| value == name),
+        })
+        .collect(),
+        settings_grants: serde_json::to_string(
+            &step
+                .settings_grants
+                .iter()
+                .map(|grant| grant.form_value())
+                .collect::<Vec<_>>(),
+        )
+        .expect("directory form values"),
+        settings_tool_options: crate::slices::execution_settings::page::tool_options(
+            &step
+                .tools
+                .iter()
+                .map(|tool| tool.as_str().to_owned())
+                .collect::<Vec<_>>(),
+        ),
         command_choices: crate::workflows::definition::SystemCommandId::all()
             .into_iter()
             .map(|command| CommandChoice {
@@ -534,14 +637,6 @@ fn step_row(
             .map(crate::workflows::definition::SystemCommandId::consequence)
             .unwrap_or(""),
         show_outputs,
-        tools: ToolId::ALL
-            .into_iter()
-            .map(|tool| ToolChoice {
-                name: tool.as_str(),
-                label: tool.label(),
-                checked: step.tools.contains(&tool),
-            })
-            .collect(),
         directories: step
             .directories
             .iter()

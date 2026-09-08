@@ -79,7 +79,7 @@ pub(crate) enum DirectoryGrantError {
     Invalid,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct ExecutionSettingsFile {
     model: ModelSelection,
@@ -91,9 +91,9 @@ pub(crate) struct ExecutionSettingsFile {
     directories: Vec<DirectoryGrantFile>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-struct DirectoryGrantFile {
+pub(super) struct DirectoryGrantFile {
     id: String,
     host_path: PathBuf,
     identity: CanonicalDirectoryIdentity,
@@ -112,24 +112,40 @@ struct DirectoryGrantForm {
 }
 
 impl ExecutionSettings {
+    // This union supplies capture and application authority, never a model step's tool authority.
+    pub(crate) fn combined<'a>(settings: impl IntoIterator<Item = &'a Self>) -> Option<Self> {
+        let mut settings = settings.into_iter();
+        let mut combined = settings.next()?.clone();
+        for phase in settings {
+            for tool in &phase.tools {
+                if !combined.tools.contains(tool) {
+                    combined.tools.push(*tool);
+                }
+            }
+            for grant in &phase.directories {
+                if let Some(existing) = combined
+                    .directories
+                    .iter_mut()
+                    .find(|existing| existing.identity == grant.identity)
+                {
+                    if grant.access == DirectoryAccess::ReviewBeforeApply {
+                        existing.access = grant.access;
+                    }
+                } else {
+                    combined.directories.push(grant.clone());
+                }
+            }
+        }
+        Some(combined)
+    }
+
     pub(crate) fn new(
         model: ModelSelection,
         instructions: String,
         tools: Vec<ToolId>,
         environment: EnvironmentId,
     ) -> Option<Self> {
-        if instructions.len() > MAXIMUM_INSTRUCTION_BYTES
-            || instructions
-                .chars()
-                .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
-            || tools.len() > ToolId::ALL.len()
-            || tools
-                .iter()
-                .enumerate()
-                .any(|(index, tool)| tools[..index].contains(tool))
-        {
-            return None;
-        }
+        validate_text_and_tools(&instructions, &tools)?;
         Some(Self {
             model,
             instructions,
@@ -166,13 +182,7 @@ impl ExecutionSettings {
             directories: self
                 .directories
                 .iter()
-                .map(|grant| DirectoryGrantFile {
-                    id: grant.id.as_hex(),
-                    host_path: grant.host_path.clone(),
-                    identity: grant.identity,
-                    alias: grant.alias.clone(),
-                    access: grant.access,
-                })
+                .map(DirectoryGrantFile::from)
                 .collect(),
         }
     }
@@ -189,19 +199,48 @@ impl ExecutionSettings {
         let directories = file
             .directories
             .into_iter()
-            .map(|grant| {
-                Some(DirectoryGrant {
-                    id: DirectoryGrantId::parse(&grant.id)?,
-                    host_path: grant.host_path,
-                    identity: grant.identity,
-                    alias: grant.alias,
-                    access: grant.access,
-                })
-            })
+            .map(DirectoryGrantFile::into_grant)
             .collect::<Option<Vec<_>>>()?;
         Self::new(file.model, file.instructions, tools, environment)?
             .with_network(network)?
             .with_directories(directories)
+    }
+}
+
+pub(super) fn validate_text_and_tools(instructions: &str, tools: &[ToolId]) -> Option<()> {
+    (instructions.len() <= MAXIMUM_INSTRUCTION_BYTES
+        && !instructions
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+        && tools.len() <= ToolId::ALL.len()
+        && !tools
+            .iter()
+            .enumerate()
+            .any(|(index, tool)| tools[..index].contains(tool)))
+    .then_some(())
+}
+
+impl From<&DirectoryGrant> for DirectoryGrantFile {
+    fn from(grant: &DirectoryGrant) -> Self {
+        Self {
+            id: grant.id.as_hex(),
+            host_path: grant.host_path.clone(),
+            identity: grant.identity,
+            alias: grant.alias.clone(),
+            access: grant.access,
+        }
+    }
+}
+
+impl DirectoryGrantFile {
+    pub(super) fn into_grant(self) -> Option<DirectoryGrant> {
+        Some(DirectoryGrant {
+            id: DirectoryGrantId::parse(&self.id)?,
+            host_path: self.host_path,
+            identity: self.identity,
+            alias: self.alias,
+            access: self.access,
+        })
     }
 }
 

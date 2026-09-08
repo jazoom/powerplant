@@ -546,6 +546,7 @@ fn fixing_publication_fixture() -> (
             candidate_authority: CandidateAuthority::Edit,
             authority: AgentAuthority::new(vec![crate::agents::ToolId::List], Vec::new())
                 .expect("authority"),
+            settings: crate::workflows::definition::ModelStepSettings::SameAsRunDefaults,
             required_outputs: vec![
                 RequiredOutput {
                     key: OutputKey::parse("assistant-reply").expect("reply"),

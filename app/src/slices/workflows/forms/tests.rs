@@ -109,6 +109,63 @@ fn saved_plan_authoring_derives_keys_and_rejects_a_wrong_input_kind() {
 }
 
 #[test]
+fn custom_settings_reject_invalid_model_and_unknown_tools() {
+    let mut pairs = valid_pairs();
+    pairs.extend([
+        pair("step_0_settings-source", "override"),
+        pair("step_0_provider", "not-a-provider"),
+        pair("step_0_model", "model"),
+        pair("step_0_network", "none"),
+    ]);
+    let (form, _) = WorkflowFormState::parse(pairs).expect("form");
+    assert!(form.to_definition().is_err());
+    let mut pairs = valid_pairs();
+    pairs.extend([
+        pair("step_0_settings-source", "bogus"),
+        pair("step_0_provider", "xai"),
+        pair("step_0_model", "grok-4.6"),
+        pair("step_0_network", "none"),
+    ]);
+    let (form, _) = WorkflowFormState::parse(pairs).expect("form");
+    assert!(form.to_definition().is_err());
+    let mut pairs = valid_pairs();
+    pairs.push(pair("step_0_tool_destroy", "on"));
+    assert!(WorkflowFormState::parse(pairs).is_err());
+}
+
+#[test]
+fn inherited_fields_allow_an_instruction_only_override_and_retain_tool_values() {
+    let mut pairs = valid_pairs();
+    pairs.retain(|(name, _)| !name.starts_with("step_0_tool_"));
+    pairs.extend([
+        pair("step_0_settings-source", "override"),
+        pair("step_0_inherit-model", "1"),
+        pair("step_0_inherit-environment", "1"),
+        pair("step_0_inherit-directories", "1"),
+        pair("step_0_inherit-network", "1"),
+        pair("step_0_settings-instructions", "Keep this guidance."),
+        pair("step_0_tool_read", "read"),
+    ]);
+    let (form, _) = WorkflowFormState::parse(pairs).unwrap();
+    let definition = form.to_definition().unwrap();
+    let crate::workflows::definition::StepAction::Agent(action) = &definition.steps()[0].action
+    else {
+        panic!("model step");
+    };
+    let crate::workflows::definition::ModelStepSettings::Override(settings) = &action.settings
+    else {
+        panic!("override");
+    };
+    assert!(settings.model.is_none());
+    assert!(settings.environment.is_none());
+    assert_eq!(
+        settings.instructions.as_deref(),
+        Some("Keep this guidance.")
+    );
+    assert_eq!(settings.tools, Some(vec![crate::agents::ToolId::Read]));
+}
+
+#[test]
 fn purpose_phases_build_without_manual_identifiers_or_roles() {
     let (form, intent) = WorkflowFormState::parse(purpose_only_pairs()).expect("purpose form");
     assert_eq!(intent, FormIntent::Save);

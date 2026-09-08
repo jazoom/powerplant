@@ -32,6 +32,7 @@ pub(crate) enum CatalogueResetConflict {
     AgentGrant,
     ConversationGrant,
     PresetGrant,
+    WorkflowGrant,
 }
 
 #[derive(Debug)]
@@ -50,6 +51,9 @@ impl CatalogueResetConflict {
                 "A conversation grant is inside the Power Plant data directory."
             }
             Self::PresetGrant => "A preset grant is inside the Power Plant data directory.",
+            Self::WorkflowGrant => {
+                "A workflow directory setting is inside the Power Plant data directory."
+            }
         }
     }
 }
@@ -146,6 +150,7 @@ impl LocalDataReset {
         agents: &AgentStore,
         conversations: &ConversationStore,
         presets: &crate::presets::PresetStore,
+        workflows: &crate::workflows::WorkflowCatalogue,
     ) -> Result<ResetRequest, ResetError> {
         if self.is_pending() {
             return Ok(ResetRequest::Pending);
@@ -164,6 +169,7 @@ impl LocalDataReset {
             &agents.list(),
             &conversations.list(),
             &presets.list(),
+            &workflows.list(),
         ) {
             return Err(ResetError::Catalogue(conflict));
         }
@@ -179,6 +185,7 @@ impl LocalDataReset {
         agents: &[AgentRecord],
         conversations: &[ConversationRecord],
         presets: &[crate::presets::PresetRecord],
+        workflows: &[crate::workflows::WorkflowRecord],
     ) -> Option<CatalogueResetConflict> {
         if projects
             .iter()
@@ -213,6 +220,14 @@ impl LocalDataReset {
                 .any(|grant| path_under_root(&self.root, &grant.host_path))
         }) {
             return Some(CatalogueResetConflict::PresetGrant);
+        }
+        if workflows.iter().any(|workflow| {
+            workflow
+                .definition
+                .directory_grants()
+                .any(|grant| path_under_root(&self.root, &grant.host_path))
+        }) {
+            return Some(CatalogueResetConflict::WorkflowGrant);
         }
         None
     }

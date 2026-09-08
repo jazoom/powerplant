@@ -385,8 +385,9 @@
                     </h2>
                     <p class="text-quiet mt-1 max-w-[65ch] text-sm">
                       Each model phase copies its selected model and
-                      instructions. Conversation directory access stays fixed
-                      for this run. A preset cannot add execution access.
+                      instructions. Custom or preset lists replace conversation
+                      lists for this run only. Additional directory access needs
+                      explicit approval and does not change the conversation.
                     </p>
                   </div>
                   <div class="grid gap-4">
@@ -534,7 +535,33 @@
               <dt class="text-quiet">Effective model</dt>
               <dd>{{ model_summary }}</dd>
               <dt class="text-quiet">Effective access</dt>
-              <dd>{{ access_summary }}</dd>
+              <dd>
+                {{ access_summary }}
+                {% if !access_preview.is_empty() %}
+                  <ul class="mt-2 space-y-2 break-words">
+                    {% for summary in phase_summaries %}
+                      <li>{{ summary }}</li>
+                    {% endfor %}
+                  </ul>
+                  <p class="mt-2 text-sm">
+                    Model-provider traffic is separate from sandbox network
+                    access.
+                  </p>
+                  <label class="mt-2 flex items-start gap-2">
+                    <input
+                      class="checkbox checkbox-sm mt-0.5"
+                      type="checkbox"
+                      name="confirm_additional_access"
+                      value="{{ access_preview }}"
+                      required
+                    />
+                    <span class="text-sm"
+                      >Approve these phase settings for this run only. This does
+                      not change the conversation grants.</span
+                    >
+                  </label>
+                {% endif %}
+              </dd>
               <dt class="text-quiet">Environment readiness</dt>
               <dd>{{ environment_summary }}</dd>
               <dt class="text-quiet">Selected process</dt>

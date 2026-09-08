@@ -97,6 +97,7 @@ fn agent_step(tools: Vec<ToolId>, writable: bool) -> StepDefinition {
                 CandidateAuthority::ReadOnly
             },
             authority,
+            settings: crate::workflows::definition::ModelStepSettings::SameAsRunDefaults,
             required_outputs: Vec::new(),
         }),
         review: None,
@@ -488,5 +489,51 @@ fn secondary_write_authority_is_rejected_before_dispatch() {
     assert_eq!(
         AttemptCapabilities::derive_for_authority(&step, &authority),
         Err(CapabilityError::Authority)
+    );
+}
+
+#[test]
+fn read_only_reviews_stay_read_only_with_reviewed_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let mut grant = crate::execution::DirectoryGrant::from_selected(root.path(), &[]).unwrap();
+    grant.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        crate::agents::ToolId::ALL.to_vec(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![grant])
+    .unwrap();
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let mut step = agent_step(vec![ToolId::List, ToolId::Read, ToolId::Run], false);
+    let StepAction::Agent(action) = &mut step.action else {
+        panic!("agent");
+    };
+    action.authority = AgentAuthority::new(
+        vec![ToolId::List, ToolId::Read, ToolId::Run],
+        settings
+            .directories
+            .iter()
+            .map(|grant| GuestDirectoryAccess {
+                alias: grant.alias.clone(),
+                access: AccessMode::ReadOnly,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let capabilities =
+        AttemptCapabilities::derive_project_free(&step, &authority).expect("read-only");
+    assert!(
+        capabilities
+            .directories
+            .iter()
+            .all(|directory| directory.access == AccessMode::ReadOnly)
     );
 }

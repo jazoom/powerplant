@@ -23,7 +23,9 @@ use crate::{
 use crate::environments::SnapshotAvailability;
 
 use self::{
-    forms::{FormError, FormErrors, FormIntent, WorkflowFormState, parse_delete},
+    forms::{
+        FormError, FormErrors, FormIntent, WorkflowFormState, fill_step_from_preset, parse_delete,
+    },
     page::{CatalogueView, WorkflowFormView},
 };
 
@@ -95,6 +97,18 @@ async fn create(
             )
             .await;
         }
+        if let FormIntent::ApplyPreset { step } = intent
+            && let Err(error) = apply_form_preset(&state, &mut form, step)
+        {
+            return render_form_command(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                page::NEW_TITLE,
+                WorkflowFormView::create(form, FormErrors::summary(error)),
+            )
+            .await;
+        }
         return render_form_command(
             &state,
             graft,
@@ -117,7 +131,7 @@ async fn create(
             .await;
         }
     };
-    if let Some(errors) = reject_unready_environments(&state, &form, &definition).await {
+    if let Some(errors) = reject_invalid_settings(&state, &form, &definition).await {
         return render_form_command(
             &state,
             graft,
@@ -127,6 +141,16 @@ async fn create(
         )
         .await;
     }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::NEW_TITLE,
+            WorkflowFormView::create(form, FormErrors::summary("Local data reset is pending.")),
+        )
+        .await;
+    };
     match state.workflows.create(definition) {
         Ok(record) => Ok(responses::request_navigation(
             graft,
@@ -199,6 +223,18 @@ async fn update_configuration(
             )
             .await;
         }
+        if let FormIntent::ApplyPreset { step } = intent
+            && let Err(error) = apply_form_preset(&state, &mut form, step)
+        {
+            return render_form_command(
+                &state,
+                graft,
+                PatchStatus::UnprocessableEntity,
+                page::CONFIG_TITLE,
+                WorkflowFormView::edit(&record, form, FormErrors::summary(error), ""),
+            )
+            .await;
+        }
         return render_form_command(
             &state,
             graft,
@@ -236,7 +272,7 @@ async fn update_configuration(
             .await;
         }
     };
-    if let Some(errors) = reject_unready_environments(&state, &form, &definition).await {
+    if let Some(errors) = reject_invalid_settings(&state, &form, &definition).await {
         return render_form_command(
             &state,
             graft,
@@ -246,6 +282,21 @@ async fn update_configuration(
         )
         .await;
     }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::CONFIG_TITLE,
+            WorkflowFormView::edit(
+                &record,
+                form,
+                FormErrors::summary("Local data reset is pending."),
+                "",
+            ),
+        )
+        .await;
+    };
     match state.workflows.update(&record.id, revision, definition) {
         Ok(updated) => {
             render_form_command(
@@ -307,6 +358,20 @@ async fn delete_workflow(
         )
         .await;
     }
+    let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
+        return render_form_command(
+            &state,
+            graft,
+            PatchStatus::Conflict,
+            page::CONFIG_TITLE,
+            WorkflowFormView::edit_state(
+                &record,
+                FormErrors::default(),
+                "Local data reset is pending.",
+            ),
+        )
+        .await;
+    };
     match state.workflows.delete(&record.id, revision) {
         Ok(()) => Ok(responses::request_navigation(graft, "/workflows")),
         Err(error) => {
@@ -322,13 +387,13 @@ async fn delete_workflow(
     }
 }
 
-async fn reject_unready_environments(
+async fn reject_invalid_settings(
     state: &AppState,
     form: &WorkflowFormState,
     definition: &crate::workflows::definition::WorkflowDefinition,
 ) -> Option<FormErrors> {
     let mut errors = FormErrors::for_state(form);
-    errors.summary = "Choose a ready environment.";
+    errors.summary = "Fix the highlighted settings.";
     let mut invalid = false;
     let mut ready = Vec::new();
     for record in state.environments.list() {
@@ -352,6 +417,26 @@ async fn reject_unready_environments(
         invalid = true;
     }
     for (index, step) in definition.steps().iter().enumerate() {
+        if let crate::workflows::definition::StepAction::Agent(action) = &step.action
+            && let crate::workflows::definition::ModelStepSettings::Override(settings) =
+                &action.settings
+            && let Some(model) = &settings.model
+            && state
+                .models_dev
+                .model(model.provider, &model.model)
+                .is_some()
+        {
+            let efforts = state.models_dev.efforts(model.provider, &model.model);
+            if model
+                .thinking
+                .as_ref()
+                .map_or(!efforts.is_empty(), |effort| !efforts.contains(effort))
+            {
+                errors.steps[index].settings =
+                    "Choose a reasoning effort that this model supports.";
+                invalid = true;
+            }
+        }
         if let Some(crate::workflows::definition::StepEnvironment::Override { environment_id }) =
             step.environment()
             && !ready.contains(&environment_id)
@@ -421,7 +506,43 @@ async fn attach_environments(state: &AppState, view: WorkflowFormView) -> Workfl
         });
     }
     let no_ready = options.is_empty();
+    let presets = state
+        .presets
+        .list()
+        .into_iter()
+        .map(|preset| page::PresetChoice {
+            id: preset.id.as_hex(),
+            name: preset.name,
+        })
+        .collect();
+    let providers = crate::providers::ProviderKind::ALL
+        .into_iter()
+        .map(|kind| page::ProviderChoice {
+            value: kind.as_str(),
+            label: kind.label(),
+        })
+        .collect();
     view.with_environments(options, no_ready)
+        .with_catalogues(presets, providers)
+}
+
+fn apply_form_preset(
+    state: &AppState,
+    form: &mut WorkflowFormState,
+    step: usize,
+) -> Result<(), &'static str> {
+    let draft = form.steps.get_mut(step).ok_or("Choose a model phase.")?;
+    if draft.action != "agent" {
+        return Err("Presets apply only to model phases.");
+    }
+    let id = crate::presets::PresetId::parse(&draft.settings_preset)
+        .ok_or("Choose an available preset.")?;
+    let preset = state
+        .presets
+        .get(&id)
+        .ok_or("That preset is unavailable. Choose another preset.")?;
+    fill_step_from_preset(draft, &preset);
+    Ok(())
 }
 
 async fn render_form_page(

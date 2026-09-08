@@ -34,6 +34,7 @@ pub(crate) fn test_named_definition(name: &str) -> WorkflowDefinition {
                 role: RoleKey::parse("agent").expect("role"),
                 candidate_authority: CandidateAuthority::Edit,
                 authority,
+                settings: ModelStepSettings::SameAsRunDefaults,
                 required_outputs: vec![
                     RequiredOutput {
                         key: OutputKey::parse(ASSISTANT_REPLY).expect("output"),
@@ -106,6 +107,7 @@ fn write_agent_step(
             environment: StepEnvironment::WorkflowDefault,
             candidate_authority: CandidateAuthority::Edit,
             authority: authority(),
+            settings: ModelStepSettings::SameAsRunDefaults,
             required_outputs: outputs,
         }),
         review,
@@ -914,6 +916,84 @@ fn version_one_keyed_review_loops_round_trip() {
         Some("commit")
     );
     assert!(loaded.step_position(&policy.revision_target) < loaded.step_position(&reviewer_key));
+}
+
+#[test]
+fn phase_settings_replace_tool_lists_in_pinned_authority() {
+    let definition = crate::workflows::seeds::plan_a_change_definition(test_environment_id());
+    let defaults = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        "defaults".to_owned(),
+        vec![ToolId::List, ToolId::Read, ToolId::Write],
+        test_environment_id(),
+    )
+    .unwrap();
+    let override_settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        "override".to_owned(),
+        vec![ToolId::Run],
+        test_environment_id(),
+    )
+    .unwrap();
+    let pinned = definition
+        .with_phase_settings(
+            &defaults,
+            &[(definition.first_step().clone(), override_settings.clone())],
+        )
+        .expect("phase settings");
+    let StepAction::Agent(action) = &pinned.steps()[0].action else {
+        panic!("agent");
+    };
+    assert_eq!(action.authority.tools, vec![ToolId::Run]);
+}
+
+#[test]
+fn persisted_field_overrides_distinguish_empty_lists_from_inheritance() {
+    let mut definition = one_agent();
+    let StepAction::Agent(action) = &mut definition.steps[0].action else {
+        panic!("agent");
+    };
+    action.settings = ModelStepSettings::Override(Box::new(crate::execution::SettingsOverrides {
+        instructions: Some("Override instructions".to_owned()),
+        tools: Some(Vec::new()),
+        directories: Some(Vec::new()),
+        network: Some(crate::agents::NetworkAccess::Public),
+        ..Default::default()
+    }));
+    let bytes = serde_json::to_vec(&definition.to_file()).unwrap();
+    let loaded = WorkflowDefinition::from_file_bytes(&bytes).unwrap();
+    let StepAction::Agent(action) = &loaded.steps[0].action else {
+        panic!("agent");
+    };
+    let defaults = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        "Run instructions".to_owned(),
+        vec![ToolId::Read],
+        test_environment_id(),
+    )
+    .unwrap();
+    let resolved = action.settings.resolve(&defaults);
+    assert_eq!(resolved.model, defaults.model);
+    assert_eq!(resolved.environment, defaults.environment);
+    assert_eq!(resolved.instructions, "Override instructions");
+    assert!(resolved.tools.is_empty());
+    assert!(resolved.directories.is_empty());
+    assert_eq!(resolved.network, crate::agents::NetworkAccess::Public);
 }
 
 #[test]

@@ -130,9 +130,13 @@
           selections remain requested values.</span
         ></label
       >
-      {% if !thinking_efforts.is_empty() %}<p class="text-quiet text-sm">
-        Listed reasoning efforts: {{ thinking_efforts }}.
-      </p>{% endif %}
+      {% if !thinking_efforts.is_empty() %}
+        <p class="text-quiet text-sm">
+          Listed reasoning efforts: {{ thinking_efforts }}.
+        </p>
+      {% endif %}
+      {% let settings_form = self.model_form() %}
+      {% let field_prefix = "" %}
       {% include "execution_settings/templates/fields.html" %}
       <label class="flex flex-col gap-1"
         >Environment<select
@@ -221,8 +225,11 @@
           aria-disabled="false"
           class="btn btn-primary"
         >
-          {% if form.preset_id.is_empty() %}Create preset{% else %}Save preset
-          changes{% endif %}</button
+          {% if form.preset_id.is_empty() %}
+            Create preset
+          {% else %}
+            Save preset changes
+          {% endif %}</button
         ><a href="/presets" data-graft class="btn btn-ghost">Cancel</a>
       </div>
     </form>

@@ -79,6 +79,8 @@ pub(super) struct WorkflowLaunchForm {
     preview_task_index: String,
     #[serde(default)]
     phase: Vec<String>,
+    #[serde(default)]
+    confirm_additional_access: String,
 }
 
 struct WorkflowOption {
@@ -186,6 +188,8 @@ struct WorkflowLaunchView {
     phase_models: Vec<PhaseModelOption>,
     model_summary: String,
     access_summary: String,
+    access_preview: String,
+    phase_summaries: Vec<String>,
     environment_summary: String,
     input_summary: String,
     launch_blocked: bool,
@@ -215,6 +219,8 @@ struct WorkflowLaunchContents<'a> {
     phase_models: &'a [PhaseModelOption],
     model_summary: &'a str,
     access_summary: &'a str,
+    access_preview: &'a str,
+    phase_summaries: &'a [String],
     environment_summary: &'a str,
     input_summary: &'a str,
     launch_blocked: bool,
@@ -244,6 +250,8 @@ impl WorkflowLaunchView {
             phase_models: &self.phase_models,
             model_summary: &self.model_summary,
             access_summary: &self.access_summary,
+            access_preview: &self.access_preview,
+            phase_summaries: &self.phase_summaries,
             environment_summary: &self.environment_summary,
             input_summary: &self.input_summary,
             launch_blocked: self.launch_blocked,
@@ -270,7 +278,7 @@ fn parse_fields<T: serde::de::DeserializeOwned>(
 
 pub(super) async fn show(
     State(state): State<AppState>,
-    _session: RequiredSession,
+    session: RequiredSession,
     graft: GraftRequest,
     Path(conversation_id): Path<String>,
     Query(fields): Query<Vec<(String, String)>>,
@@ -343,7 +351,24 @@ pub(super) async fn show(
                 query.phase.clone()
             };
             match resolve_phase_models(&state, &definition.pinned.definition, &phases) {
-                Ok(_) => view.stage = "review",
+                Ok(mut resolved) => {
+                    view.stage = "review";
+                    if view.directory_launch {
+                        let result = preview_phase_access(
+                            &state,
+                            session.0,
+                            &record,
+                            &definition.pinned.definition,
+                            &mut resolved,
+                            &mut view,
+                        )
+                        .await;
+                        if let Err(error) = result {
+                            view.error = error;
+                            view.stage = "inputs";
+                        }
+                    }
+                }
                 Err(error) => view.error = error,
             }
         }
@@ -505,29 +530,13 @@ pub(super) async fn launch(
     }
     let directory_launch = uses_conversation_directories(&pinned.definition);
     let settings = super::effective_model(&state, &record).map(|model| model.settings);
-    let project_free = if directory_launch {
-        let Some(settings) = settings.as_ref() else {
-            return error_view(
-                PatchStatus::UnprocessableEntity,
-                "Choose a model before you start a workflow.",
-            )
-            .await;
-        };
-        let definition = match pinned.definition.with_conversation_settings(settings) {
-            Ok(definition) => definition,
-            Err(error) => {
-                return error_view(PatchStatus::UnprocessableEntity, error.message()).await;
-            }
-        };
-        pinned =
-            workflows::definition::PinnedWorkflowDefinition::pin(pinned.workflow_id, definition);
-        match conversation_directory_authority(&state, session.0, &record, settings) {
-            Ok(authority) => Some(authority),
-            Err(error) => return error_view(PatchStatus::UnprocessableEntity, error).await,
-        }
-    } else {
-        None
-    };
+    if directory_launch && settings.is_none() {
+        return error_view(
+            PatchStatus::UnprocessableEntity,
+            "Choose a model before you start a workflow.",
+        )
+        .await;
+    }
     let target = ProjectId::parse(form.target.trim());
     let mut target_record = record.clone();
     let authority = if directory_launch {
@@ -597,25 +606,45 @@ pub(super) async fn launch(
     }
     if directory_launch {
         let defaults = settings.as_ref().expect("directory settings");
-        for phase in &mut phase_models {
-            if let Some(requested) = &phase.settings
-                && (requested.directories != defaults.directories
-                    || requested.tools != defaults.tools
-                    || requested.network != defaults.network
-                    || requested.environment != defaults.environment)
-            {
-                return error_view(PatchStatus::UnprocessableEntity, "That preset requests different execution access. Use the conversation settings.").await;
-            }
-            let mut snapshot = defaults.clone();
-            snapshot.model = phase.selection.clone();
-            if phase.settings.is_some() {
-                snapshot.instructions = phase.instructions.clone();
-            } else {
-                phase.instructions = snapshot.instructions.clone();
-            }
-            phase.settings = Some(snapshot);
+        if let Err(error) =
+            resolve_directory_phase_settings(&pinned.definition, defaults, &mut phase_models)
+        {
+            return error_view(PatchStatus::UnprocessableEntity, error).await;
         }
+        let phases: Vec<_> = phase_models
+            .iter()
+            .filter_map(|phase| {
+                phase
+                    .settings
+                    .as_ref()
+                    .map(|settings| (phase.step.clone(), settings.clone()))
+            })
+            .collect();
+        let definition = match pinned.definition.with_phase_settings(defaults, &phases) {
+            Ok(definition) => definition,
+            Err(error) => {
+                return error_view(PatchStatus::UnprocessableEntity, error.message()).await;
+            }
+        };
+        pinned =
+            workflows::definition::PinnedWorkflowDefinition::pin(pinned.workflow_id, definition);
     }
+    let project_free = if directory_launch {
+        let defaults = settings.as_ref().expect("directory settings");
+        let merged = merged_phase_settings(defaults, &phase_models);
+        match crate::execution::ProjectFreeAuthority::from_settings(record.revision, &merged) {
+            Ok(authority) => Some(authority),
+            Err(_) => {
+                return error_view(
+                    PatchStatus::UnprocessableEntity,
+                    "A directory is no longer available at its authorised identity.",
+                )
+                .await;
+            }
+        }
+    } else {
+        None
+    };
     let selection = phase_models
         .first()
         .map(|phase| phase.selection.clone())
@@ -665,13 +694,8 @@ pub(super) async fn launch(
         record.clone()
     };
     let authority = if directory_launch {
-        if let Err(error) = conversation_directory_authority(
-            &state,
-            session.0,
-            &current,
-            settings.as_ref().expect("directory settings"),
-        ) {
-            return error_view(PatchStatus::Conflict, error).await;
+        if !state.sessions.contains_live(&session.0) {
+            return error_view(PatchStatus::Conflict, "The browser session expired.").await;
         }
         None
     } else {
@@ -780,6 +804,27 @@ pub(super) async fn launch(
     }
     let run_id = workflows::RunId::generate()
         .map_err(|error| AppError::new("create workflow run identifier", error))?;
+    if directory_launch
+        && state
+            .access_consent
+            .approve_launch(
+                &form.confirm_additional_access,
+                run_id,
+                session.0,
+                current.id,
+                phase_models
+                    .iter()
+                    .filter_map(|phase| phase.settings.clone())
+                    .collect(),
+            )
+            .is_err()
+    {
+        return error_view(
+            PatchStatus::Conflict,
+            "Review and approve the exact phase settings before start.",
+        )
+        .await;
+    }
     let mut run = if let Some(authority) = authority.as_ref() {
         WorkflowRun::create_configured_for_conversation(
             run_id,
@@ -1319,6 +1364,8 @@ async fn launch_view(
         phase_models,
         model_summary,
         access_summary,
+        access_preview: String::new(),
+        phase_summaries: Vec::new(),
         environment_summary,
         input_summary,
         launch_blocked,
@@ -1680,9 +1727,34 @@ fn selected_phase_model_options(
         .into_iter()
         .map(|step| {
             let mut choices = Vec::new();
-            for selection in &direct_models {
+            if let Some(defaults) = super::effective_model(state, record) {
+                let workflows::definition::StepAction::Agent(action) = &step.action else {
+                    unreachable!()
+                };
+                let effective = action.settings.resolve(&defaults.settings);
                 choices.push(PhaseChoice {
-                    value: phase_choice_token(step.key.as_str(), selection, None),
+                    value: phase_choice_token(step.key.as_str(), &effective.model, None),
+                    label: if action.settings.is_same_as_defaults() {
+                        "Same as run defaults"
+                    } else {
+                        "Saved phase settings"
+                    }
+                    .to_owned(),
+                    detail: format!(
+                        "{} · {}",
+                        effective.model.provider.label(),
+                        effective.model.model
+                    ),
+                    selected: true,
+                });
+            }
+            for selection in &direct_models {
+                let value = phase_choice_token(step.key.as_str(), selection, None);
+                if choices.iter().any(|choice| choice.value == value) {
+                    continue;
+                }
+                choices.push(PhaseChoice {
+                    value,
                     label: format!(
                         "Direct model · {} · {}",
                         selection.provider.label(),
@@ -1692,8 +1764,10 @@ fn selected_phase_model_options(
                         .thinking
                         .as_ref()
                         .map(|effort| format!("Thinking: {}", effort.label()))
-                        .unwrap_or_else(|| "Conversation instructions and access".to_owned()),
-                    selected: selected.as_ref() == Some(selection),
+                        .unwrap_or_else(|| {
+                            "Phase instructions and access stay unchanged".to_owned()
+                        }),
+                    selected: false,
                 });
             }
             for preset in &presets {
@@ -1744,6 +1818,178 @@ fn selected_phase_model_options(
         .collect()
 }
 
+fn resolve_directory_phase_settings(
+    definition: &workflows::definition::WorkflowDefinition,
+    defaults: &crate::execution::ExecutionSettings,
+    phases: &mut [PhaseModelSelection],
+) -> Result<(), &'static str> {
+    let mut identities: Vec<crate::execution::DirectoryGrant> = Vec::new();
+    for phase in phases.iter_mut() {
+        let step = definition
+            .step(&phase.step)
+            .ok_or("Choose a valid workflow phase.")?;
+        let workflows::definition::StepAction::Agent(action) = &step.action else {
+            return Err("Choose a model only for model phases.");
+        };
+        let mut resolved = action.settings.resolve(defaults);
+        if let Some(launch) = phase.settings.take() {
+            resolved = launch;
+        }
+        resolved.model = phase.selection.clone();
+        if phase.instructions.is_empty() {
+            phase.instructions = resolved.instructions.clone();
+        } else {
+            resolved.instructions = phase.instructions.clone();
+        }
+        if resolved
+            .directories
+            .iter()
+            .any(|grant| grant.revalidate().is_err())
+        {
+            return Err("A phase directory is unavailable at its saved identity.");
+        }
+        if crate::execution::validate_directories(&resolved.directories).is_err() {
+            return Err("Choose existing, distinct directories without overlapping roots.");
+        }
+        for grant in &mut resolved.directories {
+            if let Some(existing) = identities
+                .iter()
+                .find(|existing| existing.identity == grant.identity)
+            {
+                grant.id = existing.id;
+                grant.alias.clone_from(&existing.alias);
+            } else {
+                let alias = grant.alias.clone();
+                let mut suffix = 2;
+                while identities
+                    .iter()
+                    .any(|existing| existing.alias == grant.alias)
+                {
+                    grant.alias = format!("{}-{suffix}", &alias[..alias.len().min(28)]);
+                    suffix += 1;
+                }
+                identities.push(grant.clone());
+            }
+        }
+        crate::execution::validate_directories(&identities)
+            .map_err(|_| "Choose distinct directories without overlapping roots across phases.")?;
+        phase.settings = Some(resolved);
+    }
+    Ok(())
+}
+
+fn merged_phase_settings(
+    defaults: &crate::execution::ExecutionSettings,
+    phases: &[PhaseModelSelection],
+) -> crate::execution::ExecutionSettings {
+    crate::execution::ExecutionSettings::combined(
+        phases.iter().filter_map(|phase| phase.settings.as_ref()),
+    )
+    .unwrap_or_else(|| defaults.clone())
+}
+
+async fn preview_phase_access(
+    state: &AppState,
+    session: crate::sessions::SessionId,
+    record: &ConversationRecord,
+    definition: &workflows::definition::WorkflowDefinition,
+    phases: &mut [PhaseModelSelection],
+    view: &mut WorkflowLaunchView,
+) -> Result<(), &'static str> {
+    let defaults = super::effective_model(state, record)
+        .ok_or("Choose a conversation model before review.")?
+        .settings;
+    resolve_directory_phase_settings(definition, &defaults, phases)?;
+    let snapshots: Vec<_> = phases
+        .iter()
+        .filter_map(|phase| phase.settings.clone())
+        .collect();
+    let keyed: Vec<_> = phases
+        .iter()
+        .zip(&snapshots)
+        .map(|(phase, settings)| (phase.step.clone(), settings.clone()))
+        .collect();
+    let pinned = definition
+        .with_phase_settings(&defaults, &keyed)
+        .map_err(|error| error.message())?;
+    let environments =
+        workflows::preview_environments(&pinned, &state.environments, &state.environment_snapshots)
+            .await;
+    for (phase, settings) in phases.iter().zip(&snapshots) {
+        let name = definition
+            .step(&phase.step)
+            .map(|step| step.name.as_str())
+            .unwrap_or(phase.step.as_str());
+        view.phase_summaries.push(format!(
+            "{name}: {} · {} · Tools: {} · Network: {} · Environment: {}{}",
+            settings.model.provider.label(),
+            settings.model.model,
+            settings
+                .tools
+                .iter()
+                .map(|tool| tool.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            network_label(&settings.network),
+            settings.environment.as_hex(),
+            if workflows::definition::additional_access(&defaults, settings) {
+                " · Additional access"
+            } else {
+                ""
+            }
+        ));
+        let writes = definition
+            .step(&phase.step)
+            .is_some_and(|step| step.writes_primary_source());
+        for grant in &settings.directories {
+            view.phase_summaries.push(format!(
+                "{} → {} · {}",
+                grant.host_path.display(),
+                grant.guest_path(),
+                match grant.access {
+                    crate::execution::DirectoryAccess::ReadOnly => "Read only",
+                    crate::execution::DirectoryAccess::ReviewBeforeApply if writes =>
+                        "Review before apply",
+                    crate::execution::DirectoryAccess::ReviewBeforeApply =>
+                        "Read only · isolated reviewed copy",
+                }
+            ));
+            if grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply {
+                for excluded in crate::workflows::workspace::reviewed_capture_exclusions(
+                    &grant.host_path,
+                    state.local_data.root(),
+                ) {
+                    view.phase_summaries.push(format!(
+                        "Excluded from capture and application: {}",
+                        grant.host_path.join(excluded).display()
+                    ));
+                }
+            }
+            if crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            ) {
+                view.phase_summaries.push(format!("Sensitive access: this root can expose provider credentials and private conversations, even with Network off. Power Plant data: {}.", state.local_data.root().display()));
+                if grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply {
+                    view.phase_summaries.push(
+                        "Reviewed access can propose changes to Power Plant configuration."
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
+    view.environment_summary = match environments {
+        Ok(_) => "Selected phase environments are ready.".to_owned(),
+        Err(error) => error.message().to_owned(),
+    };
+    view.access_preview = state
+        .access_consent
+        .request_launch(session, record.id, snapshots)
+        .map_err(|_| "The access preview is unavailable. Reload workflow setup.")?;
+    Ok(())
+}
+
 fn uses_conversation_directories(definition: &workflows::definition::WorkflowDefinition) -> bool {
     definition.execution_mode() == ExecutionMode::Once
         && !definition.steps().iter().any(|step| {
@@ -1751,30 +1997,6 @@ fn uses_conversation_directories(definition: &workflows::definition::WorkflowDef
             workflows::definition::StepAction::SystemCommand(action)
                 if action.command != workflows::commands::SystemCommandId::ApplyChanges)
         })
-}
-
-fn conversation_directory_authority(
-    state: &AppState,
-    session: crate::sessions::SessionId,
-    record: &ConversationRecord,
-    settings: &crate::execution::ExecutionSettings,
-) -> Result<crate::execution::ProjectFreeAuthority, &'static str> {
-    for grant in &settings.directories {
-        if (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-            || crate::execution::authority::sensitive_directory(
-                &grant.host_path,
-                state.local_data.root(),
-            ))
-            && (!state.sessions.contains_live(&session)
-                || !state
-                    .access_consent
-                    .authorised_conversation(session, record.id, settings, grant))
-        {
-            return Err("Directory access needs explicit approval in conversation Settings.");
-        }
-    }
-    crate::execution::ProjectFreeAuthority::from_settings(record.revision, settings)
-        .map_err(|_| "A directory is no longer available at its authorised identity.")
 }
 
 fn resolve_phase_models(

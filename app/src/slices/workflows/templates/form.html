@@ -460,6 +460,203 @@
                     </p>
                   {% endif %}
                 </label>
+                <fieldset
+                  class="border-base-300 space-y-3 rounded-sm border p-3"
+                >
+                  <legend class="text-sm font-semibold">
+                    Execution settings
+                  </legend>
+                  <p class="text-quiet text-sm">
+                    Same as run defaults copies conversation settings at start.
+                    Custom settings replace the corresponding lists for this
+                    phase only.
+                  </p>
+                  <label class="flex items-start gap-3">
+                    <input
+                      class="radio radio-sm mt-1"
+                      type="radio"
+                      name="step_{{ step.index }}_settings-source"
+                      value="defaults"
+                      {% if step.settings_source != "override" %}checked{% endif %}
+                    />
+                    <span>Same as run defaults</span>
+                  </label>
+                  <label class="flex items-start gap-3">
+                    <input
+                      class="radio radio-sm mt-1"
+                      type="radio"
+                      name="step_{{ step.index }}_settings-source"
+                      value="override"
+                      {% if step.settings_source == "override" %}checked{% endif %}
+                    />
+                    <span>Custom settings</span>
+                  </label>
+                  <input
+                    type="hidden"
+                    name="step_{{ step.index }}_settings-grants"
+                    value="{{ step.settings_grants }}"
+                  />
+                  {% if step.settings_error != "" %}
+                    <p class="text-error text-sm">{{ step.settings_error }}</p>
+                  {% endif %}
+                  <details
+                    class="workflow-advanced"
+                    {% if step.settings_source == "override" || step.settings_error != "" %}open{% endif %}
+                  >
+                    <summary>
+                      Custom model, tools, network and directories
+                    </summary>
+                    <div class="workflow-advanced-body space-y-3">
+                      <fieldset class="fieldset">
+                        <legend class="fieldset-legend">
+                          Same as run defaults
+                        </legend>
+                        <p class="text-sm">
+                          Selected fields use the run defaults. Other fields use
+                          the values below.
+                        </p>
+                        <div class="grid gap-2 sm:grid-cols-2">
+                          {% for field in step.inherited_fields %}
+                            <label class="flex items-center gap-2">
+                              <input
+                                class="checkbox checkbox-sm"
+                                type="checkbox"
+                                name="step_{{ step.index }}_inherit-{{ field.name }}"
+                                value="1"
+                                {% if field.selected %}checked{% endif %}
+                              />
+                              <span>{{ field.label }}</span>
+                            </label>
+                          {% endfor %}
+                        </div>
+                      </fieldset>
+                      {% if !presets.is_empty() %}
+                        <label class="flex flex-col gap-1">
+                          <span class="text-sm">Preset</span>
+                          <select
+                            class="select select-bordered"
+                            name="step_{{ step.index }}_settings-preset"
+                          >
+                            <option value="">Choose a preset</option>
+                            {% for preset in presets %}
+                              <option
+                                value="{{ preset.id }}"
+                                {% if preset.id == step.settings_preset %}selected{% endif %}
+                              >
+                                {{ preset.name }}
+                              </option>
+                            {% endfor %}
+                          </select>
+                        </label>
+                        <button
+                          class="btn btn-outline btn-sm"
+                          type="submit"
+                          formnovalidate
+                          name="intent"
+                          value="apply-preset:{{ step.index }}"
+                        >
+                          Apply preset
+                        </button>
+                      {% endif %}
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Provider</span>
+                        <select
+                          class="select select-bordered"
+                          name="step_{{ step.index }}_provider"
+                        >
+                          <option value="">Choose provider</option>
+                          {% for option in providers %}
+                            <option
+                              value="{{ option.value }}"
+                              {% if option.value == step.provider %}selected{% endif %}
+                            >
+                              {{ option.label }}
+                            </option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Model</span>
+                        <input
+                          class="input input-bordered"
+                          name="step_{{ step.index }}_model"
+                          value="{{ step.model }}"
+                          maxlength="200"
+                        />
+                      </label>
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Reasoning effort</span>
+                        <input
+                          class="input input-bordered"
+                          name="step_{{ step.index }}_thinking"
+                          value="{{ step.thinking }}"
+                          maxlength="64"
+                        />
+                      </label>
+                      {% let settings_form = "" %}
+                      {% let field_prefix = step.field_prefix %}
+                      {% let instructions = step.settings_instructions %}
+                      {% let tool_options = step.settings_tool_options %}
+                      {% let job_active = false %}
+                      {% include "execution_settings/templates/fields.html" %}
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Sandbox network</span>
+                        <select
+                          class="select select-bordered"
+                          name="step_{{ step.index }}_network"
+                        >
+                          <option
+                            value="none"
+                            {% if step.network == "none" %}selected{% endif %}
+                          >
+                            Off
+                          </option>
+                          <option
+                            value="restricted"
+                            {% if step.network == "restricted" %}selected{% endif %}
+                          >
+                            Restricted domains
+                          </option>
+                          <option
+                            value="public"
+                            {% if step.network == "public" %}selected{% endif %}
+                          >
+                            Public internet
+                          </option>
+                        </select>
+                      </label>
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Restricted domains</span>
+                        <textarea
+                          class="textarea textarea-bordered"
+                          name="step_{{ step.index }}_network-domains"
+                          maxlength="8192"
+                        >
+{{ step.network_domains }}</textarea>
+                      </label>
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Read only directories</span>
+                        <textarea
+                          class="textarea textarea-bordered"
+                          name="step_{{ step.index }}_read-only"
+                          maxlength="32768"
+                        >
+{{ step.settings_read_only }}</textarea>
+                      </label>
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm"
+                          >Review before apply directories</span
+                        >
+                        <textarea
+                          class="textarea textarea-bordered"
+                          name="step_{{ step.index }}_reviewed"
+                          maxlength="32768"
+                        >
+{{ step.settings_reviewed }}</textarea>
+                      </label>
+                    </div>
+                  </details>
+                </fieldset>
               {% endif %}
               <details class="workflow-advanced">
                 <summary>Advanced settings: executable action</summary>
@@ -696,8 +893,8 @@
                     </option>
                   </select>
                   <p class="text-quiet text-xs">
-                    Proposed changes stay in the run until a commit step applies
-                    them.
+                    Proposed changes stay in the run until an application step
+                    applies them.
                   </p>
                   {% if step.candidate_access_error != "" %}
                     <p class="text-error text-sm">
@@ -705,20 +902,6 @@
                     </p>
                   {% endif %}
                 </label>
-                <fieldset class="space-y-2">
-                  <legend class="text-sm">Tools</legend>
-                  {% for tool in step.tools %}
-                    <label class="flex items-center gap-2">
-                      <input
-                        class="checkbox checkbox-sm"
-                        type="checkbox"
-                        name="step_{{ step.index }}_tool_{{ tool.name }}"
-                        {% if tool.checked %}checked{% endif %}
-                      />
-                      <span>{{ tool.label }}</span>
-                    </label>
-                  {% endfor %}
-                </fieldset>
                 <details class="workflow-advanced">
                   <summary>
                     Advanced settings: folders and output mappings
@@ -1306,6 +1489,8 @@
         </section>
 
         <button
+          id="workflow-save"
+          aria-disabled="{% if no_ready_environment %}true{% else %}false{% endif %}"
           class="btn btn-primary self-start"
           type="submit"
           name="intent"

@@ -145,7 +145,7 @@ fn directory_launch_pins_non_git_roots_and_read_only_review_authority() {
     assert!(
         crate::execution::ProjectFreeAuthority::from_settings(
             1,
-            loaded.directory_settings().unwrap()
+            &loaded.directory_settings().unwrap()
         )
         .is_err()
     );
@@ -215,6 +215,89 @@ fn source_free_plans_have_no_candidate_and_missing_review_sources_fail_before_ex
 }
 
 #[test]
+fn phase_authority_replaces_defaults_and_allows_read_only_narrowing() {
+    let root = tempfile::tempdir().unwrap();
+    let mut grants = Vec::new();
+    for name in ["first/shared", "second/shared", "unused"] {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        grants.push(crate::execution::DirectoryGrant::from_selected(&path, &[]).unwrap());
+    }
+    let mut defaults = directory_settings();
+    defaults.directories = vec![grants[2].clone()];
+    let definition = workflows::seeds::implement_and_review_definition(defaults.environment);
+    let mut worker = defaults.clone();
+    worker.directories = vec![grants[0].clone()];
+    worker.directories[0].access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    worker.environment = crate::environments::EnvironmentId::generate().unwrap();
+    worker.network = crate::agents::NetworkAccess::Public;
+    let mut reviewer = defaults.clone();
+    reviewer.directories = vec![grants[0].clone(), grants[1].clone()];
+    reviewer.directories[1].alias = "reference".to_owned();
+    reviewer.tools = vec![crate::agents::ToolId::Read];
+    let mut phases: Vec<_> = phase_steps(&definition)
+        .into_iter()
+        .zip([worker, reviewer])
+        .map(|(step, settings)| PhaseModelSelection {
+            step: step.key.clone(),
+            selection: settings.model.clone(),
+            instructions: settings.instructions.clone(),
+            preset: None,
+            settings: Some(settings),
+        })
+        .collect();
+    resolve_directory_phase_settings(&definition, &defaults, &mut phases).unwrap();
+    let merged = merged_phase_settings(&defaults, &phases);
+    assert_eq!(merged.directories.len(), 2);
+    assert!(
+        !merged
+            .directories
+            .iter()
+            .any(|grant| grant.identity == grants[2].identity)
+    );
+    assert_eq!(
+        merged.directories[0].access,
+        crate::execution::DirectoryAccess::ReviewBeforeApply
+    );
+    let snapshots: Vec<_> = phases
+        .iter()
+        .map(|phase| (phase.step.clone(), phase.settings.clone().unwrap()))
+        .collect();
+    let pinned = definition
+        .with_phase_settings(&defaults, &snapshots)
+        .unwrap();
+    assert_ne!(
+        pinned.effective_environment(&pinned.steps()[0]),
+        defaults.environment
+    );
+    assert_eq!(
+        pinned.effective_environment(&pinned.steps()[1]),
+        defaults.environment
+    );
+    let reviewer_authority = crate::execution::ProjectFreeAuthority::from_settings(
+        1,
+        phases[1].settings.as_ref().unwrap(),
+    )
+    .unwrap();
+    let capabilities = workflows::capabilities::AttemptCapabilities::derive_project_free(
+        &pinned.steps()[1],
+        &reviewer_authority,
+    )
+    .unwrap();
+    assert_eq!(capabilities.tools, vec![crate::agents::ToolId::Read]);
+    assert!(
+        capabilities
+            .directories
+            .iter()
+            .all(|directory| directory.access == AccessMode::ReadOnly)
+    );
+    assert_eq!(
+        capabilities.network,
+        workflows::capabilities::NetworkCapability::None
+    );
+}
+
+#[test]
 fn sensitive_workflow_launch_needs_live_destination_consent() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
@@ -241,21 +324,39 @@ fn sensitive_workflow_launch_needs_live_destination_consent() {
         .unwrap();
     let session = crate::sessions::generate_session_token().unwrap().id();
     state.sessions.insert(session);
-    assert!(conversation_directory_authority(&state, session, &record, &settings).is_err());
-    let request = state
-        .access_consent
-        .request_conversation(session, record.id, &settings, &grant)
+    let run = workflows::RunId::generate().unwrap();
+    let other_run = workflows::RunId::generate().unwrap();
+    let consent = &state.access_consent;
+    assert!(!consent.authorised_launch(run, session, record.id, &settings));
+    let request = consent
+        .request_launch(session, record.id, vec![settings.clone()])
         .unwrap();
-    state
-        .access_consent
-        .approve_conversation(&request, session, record.id, &settings, &grant)
+    let mut changed = settings.clone();
+    changed.network = crate::agents::NetworkAccess::Public;
+    assert!(
+        consent
+            .approve_launch(&request, run, session, record.id, vec![changed])
+            .is_err()
+    );
+    consent
+        .approve_launch(&request, run, session, record.id, vec![settings.clone()])
         .unwrap();
-    assert!(conversation_directory_authority(&state, session, &record, &settings).is_ok());
-    let mut copy = record.clone();
-    copy.id = crate::conversations::ConversationId::generate().unwrap();
-    assert!(conversation_directory_authority(&state, session, &copy, &settings).is_err());
+    assert!(consent.authorised_launch(run, session, record.id, &settings));
+    assert!(!consent.authorised_launch(other_run, session, record.id, &settings));
+    assert!(
+        consent
+            .approve_launch(
+                &request,
+                other_run,
+                session,
+                record.id,
+                vec![settings.clone()]
+            )
+            .is_err()
+    );
+    assert!(!consent.authorised_conversation(session, record.id, &settings, &grant));
     state.access_consent.retain_sessions(|_| false);
-    assert!(conversation_directory_authority(&state, session, &record, &settings).is_err());
+    assert!(!consent.authorised_launch(run, session, record.id, &settings));
 }
 
 fn connected_state() -> AppState {
@@ -622,9 +723,23 @@ async fn launch_rejects_stale_definitions_without_reserving_the_conversation() {
 #[tokio::test]
 async fn launch_sheet_supports_document_navigation_and_selection_preview() {
     let state = connected_state();
+    let mut settings = directory_settings();
+    settings.model.thinking =
+        state
+            .models_dev
+            .effective_effort(settings.model.provider, &settings.model.model, None);
     let conversation = state
         .conversations
-        .create("Workflow".to_owned())
+        .create_saved(
+            crate::conversations::ConversationId::generate().unwrap(),
+            None,
+            None,
+            Some(crate::conversations::ConversationModelConfiguration {
+                settings,
+                preset: None,
+            }),
+            None,
+        )
         .expect("conversation");
     let token = crate::sessions::generate_session_token().expect("session");
     state.sessions.insert(token.id());
@@ -648,13 +763,9 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
     .as_token();
     let once = state
         .workflows
-        .create(
-            workflows::seeds::production_seeds(crate::tests::test_environment_id())
-                .into_iter()
-                .next()
-                .expect("seed")
-                .definition,
-        )
+        .create(workflows::seeds::plan_a_change_definition(
+            crate::tests::test_environment_id(),
+        ))
         .expect("workflow");
     let once_selection = WorkflowSelection {
         workflow_id: once.id,
@@ -739,8 +850,7 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
                 assert!(body.contains(target), "missing {target}");
                 assert!(body.contains("Preserve this brief"));
                 if stage == "review" {
-                    assert!(body.contains("Workers receive selected inputs,"));
-                    assert!(body.contains("workflow-start"));
+                    assert!(body.contains("workflow-start"), "{body}");
                     if selection != &once_selection {
                         assert!(body.contains("Review input"));
                         assert!(body.contains(&task_token));

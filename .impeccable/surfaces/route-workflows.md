@@ -42,7 +42,9 @@ The canonical conversation workflow GET uses explicit choose, inputs and review 
 
 Only the selected process shows detailed phases through the shared process template. Its input state shows the required brief, plan or task list.
 
-Model and preset overrides stay collapsed until requested. Review validates phase selections and reveals invalid controls. Error responses retain usable navigation controls.
+Model and preset overrides stay collapsed until requested. Each model phase can use Same as run defaults or custom settings. Individual fields can inherit run defaults. An overridden list replaces the corresponding list.
+
+Review shows the exact phase settings and sensitive directory warnings. Approval applies to one run. Error responses retain field values and reveal the first invalid phase.
 
 The final review identifies selected context, effects, effective access, environment readiness and approval stops. Workers receive selected inputs, not the entire conversation history.
 
@@ -52,7 +54,7 @@ Stale workflow selections return to the chooser without a substitute. Unavailabl
 
 Storage integrity explanations stay outside the chooser.
 
-Authoring retains ordinary phase controls. Advanced settings group environment overrides and technical mappings.
+Authoring retains ordinary phase controls. Model steps offer Same as run defaults or the implemented conversation settings. Advanced settings group environment overrides and technical mappings. Human gates and registered system commands expose only settings relevant to their function.
 
 ## Interaction
 

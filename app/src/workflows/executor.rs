@@ -676,9 +676,20 @@ pub(crate) async fn execute_run(
                 );
                 return;
             }
-            crate::workflows::capabilities::AttemptCapabilities::derive_project_free(
-                &step, authority,
-            )
+            let step_authority = match run.phase_settings(&step.key) {
+                Some(settings) => crate::execution::ProjectFreeAuthority::from_settings(
+                    authority.revision,
+                    settings,
+                )
+                .map_err(|_| crate::workflows::capabilities::CapabilityError::Authority),
+                None => Ok(authority.clone()),
+            };
+            step_authority.and_then(|step_authority| {
+                crate::workflows::capabilities::AttemptCapabilities::derive_project_free(
+                    &step,
+                    &step_authority,
+                )
+            })
         } else if let Some(authority) = phase_authority.as_ref() {
             if run.conversation_id != job.conversation_id
                 || Some(authority.project_id) != run.project_id
@@ -1526,9 +1537,14 @@ fn capture_isolated_candidate(
                     .as_ref()?
                     .model
                     .as_ref()
-                    .map(|model| &model.settings)
+                    .map(|model| model.settings.clone())
             })?;
-            let grants = &settings.directories;
+            let reviewed = run.reviewed_directories();
+            let grants = if reviewed.is_empty() {
+                &settings.directories
+            } else {
+                &reviewed
+            };
             crate::workflows::artefacts::CandidateCapture::capture_isolated_set(
                 workspace,
                 set,
@@ -1694,7 +1710,7 @@ fn execute_apply_transaction(
     else {
         return Err(ApplyExecutionError::Integrity);
     };
-    let settings = run.directory_settings().unwrap_or(&conversation.settings);
+    let settings = run.directory_settings().unwrap_or(conversation.settings);
     let mut roots = Vec::new();
     for (before, after) in baseline.roots.iter().zip(&candidate.roots) {
         let grant = settings
@@ -2320,11 +2336,37 @@ async fn run_agent_step(
             };
         }
     }
-    let phase_policy = resolved_authority
+    let phase_directory_authority = if let Some(authority) = job.project_free_authority.as_ref() {
+        match run.phase_settings(&step_key) {
+            Some(settings) => match crate::execution::ProjectFreeAuthority::from_settings(
+                authority.revision,
+                settings,
+            ) {
+                Ok(authority) => Some(authority),
+                Err(_) => {
+                    return StepOutcome::Failed {
+                        category: FailureCategory::Authority,
+                        error: Some(
+                            "A phase directory changed identity before dispatch.".to_owned(),
+                        ),
+                    };
+                }
+            },
+            None => Some(authority.clone()),
+        }
+    } else {
+        None
+    };
+    let phase_policy = phase_directory_authority
         .as_ref()
         .map(|authority| &authority.policy)
+        .or_else(|| {
+            resolved_authority
+                .as_ref()
+                .map(|authority| &authority.policy)
+        })
         .unwrap_or(&job.host_policy);
-    let policy = if let Some(authority) = job.project_free_authority.as_ref() {
+    let policy = if let Some(authority) = phase_directory_authority.as_ref() {
         let grants = phase_policy
             .grants()
             .iter()
@@ -2411,7 +2453,7 @@ async fn run_agent_step(
         crate::providers::AuthMethod::ApiKey => Some(connection.api_key.expose()),
         crate::providers::AuthMethod::Plan => None,
     };
-    let directory_instructions = if let Some(authority) = job.project_free_authority.as_ref() {
+    let directory_instructions = if let Some(authority) = phase_directory_authority.as_ref() {
         crate::workflows::input_context::read_directory_instructions(sandbox, authority, secret)
             .await
     } else {
@@ -3089,37 +3131,53 @@ fn confirm_run_authority(
             .ok_or_else(|| "The workflow run is unavailable.".to_owned())?;
         let settings = run
             .directory_settings()
-            .or_else(|| record.model.as_ref().map(|model| &model.settings))
+            .or_else(|| record.model.as_ref().map(|model| model.settings.clone()))
             .ok_or_else(|| "The conversation settings are unavailable.".to_owned())?;
         let pinned_authority =
-            crate::execution::ProjectFreeAuthority::from_settings(authority.revision, settings)
+            crate::execution::ProjectFreeAuthority::from_settings(authority.revision, &settings)
                 .map_err(|_| "A pinned directory changed identity before dispatch.".to_owned())?;
         if pinned_authority != *authority {
             return Err("The pinned directory authority changed before dispatch.".to_owned());
         }
-        if settings.directories.iter().any(|grant| {
-            (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-                || crate::execution::authority::sensitive_directory(
-                    &grant.host_path,
-                    state.local_data.root(),
-                ))
-                && (!state.sessions.contains_live(&job.session_id)
-                    || !state.access_consent.authorised_conversation(
-                        job.session_id,
-                        conversation_id,
-                        settings,
-                        grant,
-                    ))
-        }) {
+        let mut phase_settings: Vec<_> = run
+            .model_phases()
+            .filter_map(|phase| phase.settings.as_ref())
+            .collect();
+        if phase_settings.is_empty() {
+            phase_settings.push(&settings);
+        }
+        if !state.sessions.contains_live(&job.session_id)
+            || phase_settings.into_iter().any(|settings| {
+                if state.access_consent.authorised_launch(
+                    job.run_id,
+                    job.session_id,
+                    conversation_id,
+                    settings,
+                ) {
+                    return false;
+                }
+                // Configured overrides need run-bound consent, including tool-only and network-only expansions.
+                if run.kind == crate::workflows::run::RunKind::Configured {
+                    return true;
+                }
+                settings.directories.iter().any(|grant| {
+                    (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                        || crate::execution::authority::sensitive_directory(
+                            &grant.host_path,
+                            state.local_data.root(),
+                        ))
+                        && !state.access_consent.authorised_conversation(
+                            job.session_id,
+                            conversation_id,
+                            settings,
+                            grant,
+                        )
+                })
+            })
+        {
             return Err("Sensitive directory access needs explicit approval.".to_owned());
         }
-        let current = crate::conversations::resolve_project_free_authority(&record, &state.agents)
-            .map_err(|error| error.message().to_owned())?;
-        if current.tools != authority.tools
-            || current.network != authority.network
-            || current.policy != authority.policy
-            || current.reviewed_aliases != authority.reviewed_aliases
-            || !authority.policy.is_private_workspace()
+        if !authority.policy.is_private_workspace()
             || job.project_id.is_some()
             || job.agent_id.is_some()
         {
@@ -3206,11 +3264,19 @@ async fn capture_initial_source(state: &AppState, job: &WorkflowJob) -> Result<(
                     .as_ref()?
                     .model
                     .as_ref()
-                    .map(|model| &model.settings)
+                    .map(|model| model.settings.clone())
             })
             .ok_or_else(|| "The reviewed directories are unavailable.".to_owned())?;
+        let capture_dirs = {
+            let reviewed = run.reviewed_directories();
+            if reviewed.is_empty() {
+                settings.directories.clone()
+            } else {
+                reviewed
+            }
+        };
         crate::workflows::artefacts::CandidateCapture::capture_set(
-            &settings.directories,
+            &capture_dirs,
             state.local_data.root(),
             &state.workflow_artefacts,
         )

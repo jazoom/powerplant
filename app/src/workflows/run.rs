@@ -724,11 +724,49 @@ impl WorkflowRun {
         }
     }
 
-    pub(crate) fn directory_settings(&self) -> Option<&crate::execution::ExecutionSettings> {
+    pub(crate) fn directory_settings(&self) -> Option<crate::execution::ExecutionSettings> {
         self.project_id
             .is_none()
-            .then(|| self.phase_models.first()?.settings.as_ref())
+            .then(|| {
+                crate::execution::ExecutionSettings::combined(
+                    self.phase_models
+                        .iter()
+                        .filter_map(|phase| phase.settings.as_ref()),
+                )
+            })
             .flatten()
+    }
+
+    pub(crate) fn phase_settings(
+        &self,
+        step: &crate::workflows::definition::StepKey,
+    ) -> Option<&crate::execution::ExecutionSettings> {
+        self.phase_models
+            .iter()
+            .find(|phase| phase.step == *step)
+            .and_then(|phase| phase.settings.as_ref())
+    }
+
+    pub(crate) fn reviewed_directories(&self) -> Vec<crate::execution::DirectoryGrant> {
+        let mut grants = Vec::new();
+        for phase in &self.phase_models {
+            let Some(settings) = phase.settings.as_ref() else {
+                continue;
+            };
+            for grant in &settings.directories {
+                if grant.access != crate::execution::DirectoryAccess::ReviewBeforeApply {
+                    continue;
+                }
+                if grants
+                    .iter()
+                    .any(|item: &crate::execution::DirectoryGrant| item.identity == grant.identity)
+                {
+                    continue;
+                }
+                grants.push(grant.clone());
+            }
+        }
+        grants
     }
 
     pub(crate) fn create_source_free_for_conversation(
@@ -2550,12 +2588,7 @@ fn validate_phase_models(run: &WorkflowRun) -> Result<(), RunRecordError> {
             || selection.settings.as_ref().is_some_and(|settings| {
                 settings.model != selection.selection
                     || settings.instructions != selection.instructions
-                    || run.directory_settings().is_some_and(|defaults| {
-                        settings.directories != defaults.directories
-                            || settings.tools != defaults.tools
-                            || settings.network != defaults.network
-                            || settings.environment != defaults.environment
-                    })
+                    || crate::execution::validate_directories(&settings.directories).is_err()
                     || run
                         .pinned
                         .definition
@@ -4149,7 +4182,7 @@ fn capabilities_match_step(
     if let Some(settings) = run.directory_settings() {
         return crate::execution::ProjectFreeAuthority::from_snapshot(
             capabilities.agent_revision,
-            settings,
+            run.phase_settings(&step.key).unwrap_or(&settings),
         )
         .ok()
         .and_then(|authority| AttemptCapabilities::derive_project_free(step, &authority).ok())

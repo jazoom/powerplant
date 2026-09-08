@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::{AccessMode, ToolId};
 use crate::environments::EnvironmentId;
+use crate::execution::ExecutionSettings;
 use crate::hex;
 
 use super::commands::CommandSourceEffect;
@@ -151,6 +152,51 @@ pub(crate) struct AgentStep {
     pub(crate) candidate_authority: CandidateAuthority,
     pub(crate) authority: AgentAuthority,
     pub(crate) required_outputs: Vec<RequiredOutput>,
+    pub(crate) settings: ModelStepSettings,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ModelStepSettings {
+    #[default]
+    SameAsRunDefaults,
+    Override(Box<crate::execution::SettingsOverrides>),
+}
+
+impl ModelStepSettings {
+    pub(crate) fn resolve(&self, defaults: &ExecutionSettings) -> ExecutionSettings {
+        match self {
+            Self::SameAsRunDefaults => defaults.clone(),
+            Self::Override(settings) => settings.resolve(defaults),
+        }
+    }
+
+    pub(crate) fn is_same_as_defaults(&self) -> bool {
+        matches!(self, Self::SameAsRunDefaults)
+    }
+}
+
+pub(crate) fn additional_access(
+    defaults: &ExecutionSettings,
+    resolved: &ExecutionSettings,
+) -> bool {
+    resolved
+        .tools
+        .iter()
+        .any(|tool| !defaults.tools.contains(tool))
+        || resolved.network != defaults.network
+        || resolved.directories.iter().any(|grant| {
+            defaults.directories.iter().all(|existing| {
+                existing.identity != grant.identity
+                    || directory_access_rank(existing.access) < directory_access_rank(grant.access)
+            })
+        })
+}
+
+fn directory_access_rank(access: crate::execution::DirectoryAccess) -> u8 {
+    match access {
+        crate::execution::DirectoryAccess::ReadOnly => 0,
+        crate::execution::DirectoryAccess::ReviewBeforeApply => 1,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -473,6 +519,8 @@ enum ActionFile {
         authority: AuthorityFile,
         #[serde(rename = "required-outputs")]
         required_outputs: Vec<OutputFile>,
+        #[serde(default)]
+        settings: ModelStepSettingsFile,
     },
     SystemCommand {
         command: String,
@@ -495,6 +543,16 @@ enum ActionFile {
 enum StepEnvironmentFile {
     WorkflowDefault,
     Override { environment_id: String },
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+enum ModelStepSettingsFile {
+    #[default]
+    SameAsRunDefaults,
+    Override {
+        settings: Box<crate::execution::SettingsOverridesFile>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -658,13 +716,28 @@ impl WorkflowDefinition {
 
     pub(crate) fn with_conversation_settings(
         &self,
-        settings: &crate::execution::ExecutionSettings,
+        settings: &ExecutionSettings,
     ) -> Result<Self, DefinitionError> {
-        let reviewed = settings
-            .directories
+        let phases: Vec<_> = self
+            .steps
             .iter()
-            .any(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply);
+            .filter_map(|step| match &step.action {
+                StepAction::Agent(action) => {
+                    Some((step.key.clone(), action.settings.resolve(settings)))
+                }
+                StepAction::SystemCommand(_) | StepAction::HumanGate(_) => None,
+            })
+            .collect();
+        self.with_phase_settings(settings, &phases)
+    }
+
+    pub(crate) fn with_phase_settings(
+        &self,
+        defaults: &ExecutionSettings,
+        phases: &[(StepKey, ExecutionSettings)],
+    ) -> Result<Self, DefinitionError> {
         let mut steps = self.steps.clone();
+        let combined = ExecutionSettings::combined(phases.iter().map(|(_, settings)| settings));
         for step in &mut steps {
             if matches!(&step.action, StepAction::SystemCommand(action)
                 if action.command == SystemCommandId::CommitCandidate)
@@ -672,10 +745,22 @@ impl WorkflowDefinition {
                 // Git commands retain their explicit project binding. Directory order is not a binding.
                 return Err(DefinitionError::Authority);
             }
+            let resolved = match &step.action {
+                StepAction::Agent(_) => phases
+                    .iter()
+                    .find(|(key, _)| key == &step.key)
+                    .map(|(_, settings)| settings),
+                StepAction::SystemCommand(_) | StepAction::HumanGate(_) => None,
+            };
+            let effective = resolved.unwrap_or(combined.as_ref().unwrap_or(defaults));
+            let reviewed = effective
+                .directories
+                .iter()
+                .any(|grant| grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply);
             if step.writes_primary_source() && !reviewed {
                 return Err(DefinitionError::Authority);
             }
-            if settings.directories.is_empty()
+            if effective.directories.is_empty()
                 && step.inputs.iter().any(|input| {
                     matches!(
                         input.source,
@@ -696,17 +781,9 @@ impl WorkflowDefinition {
                     input.source = ArtefactSource::RunCurrentCandidate;
                     step.inputs.push(input);
                 }
-                if !action
-                    .authority
-                    .tools
-                    .iter()
-                    .all(|tool| settings.tools.contains(tool))
-                {
-                    return Err(DefinitionError::Authority);
-                }
                 action.authority = AgentAuthority::new(
-                    action.authority.tools.clone(),
-                    settings
+                    effective.tools.clone(),
+                    effective
                         .directories
                         .iter()
                         .map(|grant| GuestDirectoryAccess {
@@ -715,21 +792,52 @@ impl WorkflowDefinition {
                         })
                         .collect(),
                 )?;
-                action.environment = StepEnvironment::WorkflowDefault;
+                action.settings = ModelStepSettings::Override(Box::new(
+                    crate::execution::SettingsOverrides::all(effective.clone()),
+                ));
+                action.environment = if effective.environment == defaults.environment {
+                    StepEnvironment::WorkflowDefault
+                } else {
+                    StepEnvironment::Override {
+                        environment_id: effective.environment,
+                    }
+                };
             }
         }
         Self::from_parts_with_mode(
             self.name.clone(),
-            settings.environment,
+            defaults.environment,
             self.roles.clone(),
             steps,
             self.execution_mode,
         )
     }
 
+    pub(crate) fn directory_grants(
+        &self,
+    ) -> impl Iterator<Item = &crate::execution::DirectoryGrant> {
+        self.steps
+            .iter()
+            .filter_map(|step| match &step.action {
+                StepAction::Agent(action) => match &action.settings {
+                    ModelStepSettings::Override(settings) => settings.directories.as_deref(),
+                    ModelStepSettings::SameAsRunDefaults => None,
+                },
+                StepAction::SystemCommand(_) | StepAction::HumanGate(_) => None,
+            })
+            .flatten()
+    }
+
     pub(crate) fn referenced_environments(&self) -> Vec<EnvironmentId> {
         let mut ids = vec![self.default_environment];
         for step in &self.steps {
+            if let StepAction::Agent(action) = &step.action
+                && let ModelStepSettings::Override(settings) = &action.settings
+                && let Some(environment) = settings.environment
+                && !ids.contains(&environment)
+            {
+                ids.push(environment);
+            }
             if let Some(StepEnvironment::Override { environment_id }) = step.environment()
                 && !ids.contains(&environment_id)
             {
@@ -740,6 +848,12 @@ impl WorkflowDefinition {
     }
 
     pub(crate) fn effective_environment(&self, step: &StepDefinition) -> EnvironmentId {
+        if let StepAction::Agent(action) = &step.action
+            && let ModelStepSettings::Override(settings) = &action.settings
+            && let Some(environment) = settings.environment
+        {
+            return environment;
+        }
         match step.environment().expect("sandbox-backed step") {
             StepEnvironment::WorkflowDefault => self.default_environment,
             StepEnvironment::Override { environment_id } => environment_id,
@@ -977,6 +1091,7 @@ impl StepAction {
                 candidate_authority,
                 authority,
                 required_outputs,
+                settings,
             } => Ok(Self::Agent(AgentStep {
                 role: RoleKey::parse(&role)?,
                 environment: StepEnvironment::from_file(environment)?,
@@ -984,6 +1099,7 @@ impl StepAction {
                     .ok_or(DefinitionError::Format)?,
                 authority: AgentAuthority::from_file(authority)?,
                 required_outputs: parse_outputs(required_outputs)?,
+                settings: ModelStepSettings::from_file(settings)?,
             })),
             ActionFile::SystemCommand {
                 command,
@@ -1024,6 +1140,7 @@ impl StepAction {
                 candidate_authority: step.candidate_authority.as_str().to_owned(),
                 authority: step.authority.to_file(),
                 required_outputs: outputs_to_file(&step.required_outputs),
+                settings: step.settings.to_file(),
             },
             Self::SystemCommand(step) => ActionFile::SystemCommand {
                 command: step.command.as_str().to_owned(),
@@ -1152,6 +1269,28 @@ impl AgentAuthority {
                     access: directory.access.as_str().to_owned(),
                 })
                 .collect(),
+        }
+    }
+}
+
+impl ModelStepSettings {
+    fn from_file(file: ModelStepSettingsFile) -> Result<Self, DefinitionError> {
+        match file {
+            ModelStepSettingsFile::SameAsRunDefaults => Ok(Self::SameAsRunDefaults),
+            ModelStepSettingsFile::Override { settings } => {
+                let settings = crate::execution::SettingsOverrides::from_file(*settings)
+                    .ok_or(DefinitionError::Format)?;
+                Ok(Self::Override(Box::new(settings)))
+            }
+        }
+    }
+
+    fn to_file(&self) -> ModelStepSettingsFile {
+        match self {
+            Self::SameAsRunDefaults => ModelStepSettingsFile::SameAsRunDefaults,
+            Self::Override(settings) => ModelStepSettingsFile::Override {
+                settings: Box::new(settings.to_file()),
+            },
         }
     }
 }
