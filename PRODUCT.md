@@ -94,7 +94,11 @@ They open that origin in a browser. They add a key or a plan login for a provide
 
 They choose a provider, model and model-specific thinking effort in each conversation.
 
-Conversations are the main work destination. Each project has a name and one immutable host path. The path must be a supported Git worktree. Users can create projects and rename them. They cannot edit paths or delete project records.
+Conversations and Workflows are the primary navigation destinations. Runs provides history. Settings links to Presets and Environments.
+
+Directory filters in conversation history provide work discovery without additional access grants.
+
+Each legacy project has a name and one immutable host path. The path must be a supported Git worktree. Users can create projects and rename them. They cannot edit paths or delete project records.
 
 The product marks a project unavailable when its stored path no longer resolves. Unavailable records stay visible.
 

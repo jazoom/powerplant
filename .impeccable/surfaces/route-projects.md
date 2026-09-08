@@ -30,9 +30,11 @@ A local developer opens a project and starts work in an independent conversation
 
 ## Operate-mode hierarchy
 
-The desktop product index groups routes into Work, Configure and System.
+The desktop product index groups routes into Work, History and System.
 
-Work contains Conversations, Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
+Work contains Conversations and Workflows. History contains Runs. System contains Providers and Settings.
+
+Settings links to Presets and Environments. Projects and Agents no longer appear in primary navigation.
 
 Conversations is the main work destination. The brand mark and the first index link go to `/conversations`. Providers uses `/connect` with full-page native navigation.
 
@@ -82,13 +84,13 @@ No project access: the conversation page labels each attachment as context only.
 
 ## Mobile topology
 
-The mobile shell uses a compact masthead and a primary row of Conversations, Projects, Runs and More.
+The mobile shell uses a compact masthead and a primary row of Conversations, Workflows, Runs and More.
 
-More contains Agents, Workflows, Environments, Providers and Settings.
+More contains Providers and Settings.
 
 The More control is a native details disclosure with a DaisyUI menu. Every destination is a real link.
 
-The Conversations page is the main work switcher. The Projects page is the project switcher.
+The Conversations page and its directory filters provide work discovery.
 
 Do not put project names in the permanent mobile row.
 

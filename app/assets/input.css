@@ -571,18 +571,12 @@
     body:has(#chat-main [data-section="conversations"])
         .app-index-nav-desktop
         [data-nav="conversations"],
-    body:has(#chat-main [data-section="projects"])
-        .app-index-nav-desktop
-        [data-nav="projects"],
-    body:has(#chat-main [data-section="agents"])
-        .app-index-nav-desktop
-        [data-nav="agents"],
     body:has(#chat-main [data-section="workflows"])
         .app-index-nav-desktop
         [data-nav="workflows"],
     body:has(#chat-main [data-section="environments"])
         .app-index-nav-desktop
-        [data-nav="environments"],
+        [data-nav="settings"],
     body:has(#chat-main [data-section="runs"])
         .app-index-nav-desktop
         [data-nav="runs"],
@@ -600,18 +594,12 @@
     body:has(#chat-main [data-section="conversations"])
         .app-index-nav-desktop
         [data-nav="conversations"]::before,
-    body:has(#chat-main [data-section="projects"])
-        .app-index-nav-desktop
-        [data-nav="projects"]::before,
-    body:has(#chat-main [data-section="agents"])
-        .app-index-nav-desktop
-        [data-nav="agents"]::before,
     body:has(#chat-main [data-section="workflows"])
         .app-index-nav-desktop
         [data-nav="workflows"]::before,
     body:has(#chat-main [data-section="environments"])
         .app-index-nav-desktop
-        [data-nav="environments"]::before,
+        [data-nav="settings"]::before,
     body:has(#chat-main [data-section="runs"])
         .app-index-nav-desktop
         [data-nav="runs"]::before,
@@ -2306,14 +2294,12 @@
     body:has(#chat-main [data-section="conversations"])
         .app-index-nav-mobile
         > [data-nav="conversations"],
-    body:has(#chat-main [data-section="projects"])
+    body:has(#chat-main [data-section="workflows"])
         .app-index-nav-mobile
-        > [data-nav="projects"],
+        > [data-nav="workflows"],
     body:has(#chat-main [data-section="runs"])
         .app-index-nav-mobile
         > [data-nav="runs"],
-    body:has(#chat-main [data-section="agents"]) .app-index-more > summary,
-    body:has(#chat-main [data-section="workflows"]) .app-index-more > summary,
     body:has(#chat-main [data-section="environments"])
         .app-index-more
         > summary,
@@ -2326,18 +2312,12 @@
     body:has(#chat-main [data-section="conversations"])
         .app-index-nav-mobile
         > [data-nav="conversations"]::before,
-    body:has(#chat-main [data-section="projects"])
+    body:has(#chat-main [data-section="workflows"])
         .app-index-nav-mobile
-        > [data-nav="projects"]::before,
+        > [data-nav="workflows"]::before,
     body:has(#chat-main [data-section="runs"])
         .app-index-nav-mobile
         > [data-nav="runs"]::before,
-    body:has(#chat-main [data-section="agents"])
-        .app-index-more
-        > summary::before,
-    body:has(#chat-main [data-section="workflows"])
-        .app-index-more
-        > summary::before,
     body:has(#chat-main [data-section="environments"])
         .app-index-more
         > summary::before,
@@ -2355,15 +2335,9 @@
         background: var(--powerplant-action);
     }
 
-    body:has(#chat-main [data-section="agents"])
-        .app-index-more
-        [data-nav="agents"],
-    body:has(#chat-main [data-section="workflows"])
-        .app-index-more
-        [data-nav="workflows"],
     body:has(#chat-main [data-section="environments"])
         .app-index-more
-        [data-nav="environments"],
+        [data-nav="settings"],
     body:has(#chat-main [data-section="settings"])
         .app-index-more
         [data-nav="settings"],

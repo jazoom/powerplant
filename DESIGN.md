@@ -136,21 +136,21 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - The product offers five colour themes. Springfield is the default.
 - The theme changes immediately and persists in local filesystem storage.
 - Settings puts Theme first and the model catalogue refresh second.
-- Settings links to Presets before the separate local data reset.
+- Settings links to Presets and Environments before the separate local data reset.
 - Presets uses a ruled list and an inline editor with shared instruction, tool and environment presentation.
 - Preset deletion has an inline confirmation. It leaves existing copies unchanged.
 - Unavailable preset resources retain their values and explicit status labels.
 - Conversation Settings shows preset provenance and local customisation. Manage presets opens the explicit source editor.
 - Reset requires an explicit confirmation and records a restart-applied deletion.
 - Project source directories outside the Power Plant data directory remain unchanged.
-- The desktop shell uses a persistent index grouped into Work, Configure and System.
-- Work contains Conversations, Projects and Runs. Configure contains Agents, Workflows and Environments. System contains Providers and Settings.
+- The desktop shell uses a persistent index grouped into Work, History and System.
+- Work contains Conversations and Workflows. History contains Runs. System contains Providers and Settings.
 - The brand mark and the first index link go to `/conversations`.
 - Providers uses `/connect` in the app shell after the first provider connects.
 - Before the first provider connects, `/connect` uses the standalone setup introduction.
-- The mobile shell changes the index to a compact masthead and a primary row of Conversations, Projects, Runs and More.
-- More contains Agents, Workflows, Environments, Providers and Settings.
-- The mobile row stays a generic product index. The Conversations page is the main work switcher. The Projects page is the project switcher.
+- The mobile shell uses a compact masthead with Conversations, Workflows, Runs and More.
+- More contains Providers and Settings.
+- Conversation history provides directory filters for work discovery. A filter grants no access.
 - Catalogue pages use ruled records with direct labels, metadata and status marks.
 - Workflow catalogue entries and configuration pages show the ordered process before edit fields.
 - Workflow authoring offers Run once and For each task. A repeated group shows the per-task phases once. It does not duplicate them for every task.
@@ -186,7 +186,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - First-time connect uses a dark setup introduction beside a pale provider file.
 - Established provider management uses the standard app shell and marks Providers as active.
 - Provider setup presents plan login and API key as separate connection methods.
-- Connect setup labels are Connect a model, Add a project and Send a task.
+- Connect setup labels are Connect a model, Start a conversation and Send a message.
 - Forms use bordered field groups and dense controls without decorative cards.
 - Agent configuration puts network access between tools and project access.
 - Agent network access uses three direct choices: No network, Restricted domains and Public internet.
@@ -221,7 +221,7 @@ Sector 7-G uses deep violet surfaces, safety lime and reactor cyan.
 - Put the local data reset in a separate danger section on Settings.
 - Do not take a deletion path from the browser.
 - Do not stop the server from the reset command.
-- Keep mobile navigation labels generic. Use the Conversations page as the main work switcher and the Projects page as the project switcher.
+- Keep mobile navigation labels generic. Use conversation history and its directory filters for work discovery.
 - Do not put project names in the permanent mobile row.
 - Keep the Settings shortcut visible in the conversation detail. Keep project access and workflow launch explicit.
 - Plain chat needs no sandbox when no tools are selected.

@@ -22,6 +22,8 @@ The same page offers a confirmed local data reset. Reset records a request. The 
 
 Theme is the first setting. The selector offers five colour themes. Springfield is the default.
 
+Presets and Environments have native links from Settings. Their management pages remain separate from the primary work navigation.
+
 Springfield, Evergreen Terrace, Leftorium, Stonecutters and Sector 7-G form one Springfield-inspired collection.
 
 Local data is a separate danger section. Reset removes providers, projects, agents, environments, workflows, runs, artefacts and preferences.

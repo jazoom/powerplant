@@ -21,15 +21,15 @@ const SECTIONS: Record<string, SectionContext> = {
         href: "/conversations",
     },
     projects: { group: "Work", label: "Projects", href: "/projects" },
-    runs: { group: "Work", label: "Runs", href: "/runs" },
+    runs: { group: "History", label: "Runs", href: "/runs" },
     agents: { group: "Configure", label: "Agents", href: "/agents" },
     workflows: {
-        group: "Configure",
+        group: "Work",
         label: "Workflows",
         href: "/workflows",
     },
     environments: {
-        group: "Configure",
+        group: "System",
         label: "Environments",
         href: "/environments",
     },
