@@ -84,6 +84,15 @@ impl AttemptCapabilities {
         let writes =
             action.candidate_authority == crate::workflows::definition::CandidateAuthority::Edit;
         if (writes && reviewed.is_empty())
+            || (!writes
+                && action.required_outputs.iter().any(|output| {
+                    output.kind == crate::workflows::definition::OutputKind::ReviewReport
+                })
+                && authority
+                    .policy
+                    .grants()
+                    .iter()
+                    .any(|grant| grant.access.is_writable()))
             || !action
                 .authority
                 .tools

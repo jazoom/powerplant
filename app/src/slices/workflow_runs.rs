@@ -1075,6 +1075,7 @@ fn loop_checkpoint_source(
                     crate::workflows::TaskOutcome::CompletedCommit
                         | crate::workflows::TaskOutcome::CompletedApplication
                         | crate::workflows::TaskOutcome::CompletedUnchanged
+                        | crate::workflows::TaskOutcome::CompletedDirect
                 ) {
                     return None;
                 }

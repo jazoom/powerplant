@@ -115,6 +115,17 @@ impl ProcessPhase {
         }
     }
 
+    pub(crate) fn annotate_direct(&mut self, paths: &str) {
+        if paths.is_empty() {
+            return;
+        }
+        self.purpose =
+            "A model works in authorised directories and produces the declared outputs.".to_owned();
+        self.effects = format!(
+            "Immediate host writes: {paths}. Candidate approval covers reviewed roots only. Direct changes remain after failure, discard or cancellation."
+        );
+    }
+
     pub(crate) fn annotate_review(&mut self, independent_review: bool, review_and_fix: bool) {
         if independent_review {
             self.kind = "Independent review".to_owned();
@@ -200,6 +211,17 @@ pub(crate) fn process_overview(definition: &WorkflowDefinition) -> Vec<ProcessPh
                     None => "No approval stop.".to_owned(),
                 },
             };
+            if let StepAction::Agent(action) = &step.action
+                && let super::definition::ModelStepSettings::Override(settings) = &action.settings
+                && let Some(directories) = &settings.directories
+            {
+                let direct: Vec<_> = directories
+                    .iter()
+                    .filter(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
+                    .map(|grant| grant.host_path.display().to_string())
+                    .collect();
+                phase.annotate_direct(&direct.join(", "));
+            }
             phase
         })
         .collect();
@@ -286,6 +308,12 @@ pub(crate) fn process_summary(definition: &WorkflowDefinition) -> String {
 }
 
 pub(crate) fn code_effects(definition: &WorkflowDefinition) -> String {
+    if definition
+        .directory_grants()
+        .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
+    {
+        return "Direct write roots change immediately. Candidate approval covers reviewed roots only. Direct changes remain after failure, discard or cancellation.".to_owned();
+    }
     if definition.steps().iter().any(|step| {
         matches!(&step.action,
         StepAction::SystemCommand(action) if action.command == SystemCommandId::ApplyChanges)

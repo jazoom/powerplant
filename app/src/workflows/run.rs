@@ -759,6 +759,25 @@ impl WorkflowRun {
             })
     }
 
+    pub(crate) fn completed_direct(&self) -> bool {
+        self.state == RunState::Completed
+            && self.has_direct_writes()
+            && (self.reviewed_directories().is_empty() || self.completed_without_changes())
+            && self.attempts.iter().any(|attempt| {
+                attempt.action_kind == ActionKind::Agent
+                    && self.phase_settings(&attempt.step).is_some_and(|settings| {
+                        settings.directories.iter().any(|grant| {
+                            grant.access == crate::execution::DirectoryAccess::DirectWrite
+                        })
+                    })
+            })
+            && self.attempts.iter().all(|attempt| {
+                attempt.cleanup == AttemptCleanupRecord::Complete
+                    && attempt.state == AttemptState::Completed
+                    && matches!(attempt.result, Some(AttemptResult::Completed { .. }))
+            })
+    }
+
     pub(crate) fn reviewed_directories(&self) -> Vec<crate::execution::DirectoryGrant> {
         let mut grants = Vec::new();
         for phase in &self.phase_models {

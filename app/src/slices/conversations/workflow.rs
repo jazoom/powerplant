@@ -1956,6 +1956,9 @@ async fn preview_phase_access(
                         "Read only · isolated reviewed copy",
                 }
             ));
+            if grant.access == crate::execution::DirectoryAccess::DirectWrite {
+                view.phase_summaries.push("Direct write changes host files immediately. Candidate approval does not cover these changes. Failure, discard and cancellation leave them intact.".to_owned());
+            }
             if grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply {
                 for excluded in crate::workflows::workspace::reviewed_capture_exclusions(
                     &grant.host_path,
@@ -1972,6 +1975,9 @@ async fn preview_phase_access(
                 state.local_data.root(),
             ) {
                 view.phase_summaries.push(format!("Sensitive access: this root can expose provider credentials and private conversations, even with Network off. Power Plant data: {}.", state.local_data.root().display()));
+                if grant.access == crate::execution::DirectoryAccess::DirectWrite {
+                    view.phase_summaries.push("Direct write can alter or corrupt live configuration, permissions and execution evidence.".to_owned());
+                }
                 if grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply {
                     view.phase_summaries.push(
                         "Reviewed access can propose changes to Power Plant configuration."

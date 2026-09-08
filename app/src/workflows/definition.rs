@@ -388,6 +388,7 @@ pub(crate) enum DefinitionError {
     Command,
     Tools,
     Authority,
+    WriteStrategy,
     Alias,
     DuplicateAlias,
     HumanGate,
@@ -405,6 +406,9 @@ impl DefinitionError {
             Self::Environment => "Enter a valid environment identifier.",
             Self::Authority => {
                 "The workflow needs tools, directories or an explicit Git destination outside these settings."
+            }
+            Self::WriteStrategy => {
+                "A root cannot bypass candidate approval through Direct write. Read-only review phases cannot request direct writes."
             }
             Self::Name => "Enter a name of at most 80 bytes.",
             Self::Expertise => "Those expertise notes are too long.",
@@ -732,6 +736,54 @@ impl WorkflowDefinition {
     ) -> Result<Self, DefinitionError> {
         let mut steps = self.steps.clone();
         let combined = ExecutionSettings::combined(phases.iter().map(|(_, settings)| settings));
+        if !phases.is_empty() && combined.is_none() {
+            return Err(DefinitionError::WriteStrategy);
+        }
+        // An override cannot move an approved candidate's destination outside its review boundary.
+        let requires_candidate_approval = self.steps.iter().any(|step| {
+            step.writes_primary_source()
+                || matches!(&step.action, StepAction::HumanGate(gate) if !gate.is_plan_checkpoint())
+        });
+        let requested_roots: Vec<_> = self
+            .steps
+            .iter()
+            .filter_map(|step| {
+                if let StepAction::Agent(action) = &step.action {
+                    Some(action.settings.resolve(defaults).directories)
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        for (key, effective) in phases {
+            if !matches!(
+                self.step(key),
+                Some(StepDefinition {
+                    action: StepAction::Agent(_),
+                    ..
+                })
+            ) {
+                return Err(DefinitionError::Authority);
+            }
+            if effective.directories.iter().any(|grant| {
+                requires_candidate_approval
+                    && grant.access == crate::execution::DirectoryAccess::DirectWrite
+                    && defaults
+                        .directories
+                        .iter()
+                        .chain(&requested_roots)
+                        .any(|root| {
+                            (root.identity == grant.identity
+                                || root.host_path.starts_with(&grant.host_path)
+                                || grant.host_path.starts_with(&root.host_path))
+                                && root.access
+                                    == crate::execution::DirectoryAccess::ReviewBeforeApply
+                        })
+            }) {
+                return Err(DefinitionError::WriteStrategy);
+            }
+        }
         for step in &mut steps {
             if matches!(&step.action, StepAction::SystemCommand(action)
                 if action.command == SystemCommandId::CommitCandidate)
@@ -747,13 +799,6 @@ impl WorkflowDefinition {
                 StepAction::SystemCommand(_) | StepAction::HumanGate(_) => None,
             };
             let effective = resolved.unwrap_or(combined.as_ref().unwrap_or(defaults));
-            if effective
-                .directories
-                .iter()
-                .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
-            {
-                return Err(DefinitionError::Authority);
-            }
             let reviewed = effective
                 .directories
                 .iter()
@@ -772,6 +817,18 @@ impl WorkflowDefinition {
                 return Err(DefinitionError::Authority);
             }
             if let StepAction::Agent(action) = &mut step.action {
+                if action.candidate_authority == CandidateAuthority::ReadOnly
+                    && action
+                        .required_outputs
+                        .iter()
+                        .any(|output| output.kind == OutputKind::ReviewReport)
+                    && effective
+                        .directories
+                        .iter()
+                        .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
+                {
+                    return Err(DefinitionError::WriteStrategy);
+                }
                 if reviewed
                     && !step
                         .inputs
@@ -1509,6 +1566,25 @@ fn assemble(
                 action.environment = action.environment.normalised(default_environment);
             }
             StepAction::HumanGate(_) => {}
+        }
+    }
+    let mut roots: Vec<&crate::execution::DirectoryGrant> = Vec::new();
+    for step in &steps {
+        if let StepAction::Agent(action) = &step.action
+            && let ModelStepSettings::Override(settings) = &action.settings
+            && let Some(directories) = &settings.directories
+        {
+            for grant in directories {
+                if roots.iter().any(|root| {
+                    root.identity == grant.identity
+                        && root.access != grant.access
+                        && root.access != crate::execution::DirectoryAccess::ReadOnly
+                        && grant.access != crate::execution::DirectoryAccess::ReadOnly
+                }) {
+                    return Err(DefinitionError::WriteStrategy);
+                }
+                roots.push(grant);
+            }
         }
     }
     reject_duplicate_roles(&roles)?;

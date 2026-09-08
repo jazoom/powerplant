@@ -359,6 +359,74 @@ fn sensitive_workflow_launch_needs_live_destination_consent() {
     assert!(!consent.authorised_launch(run, session, record.id, &settings));
 }
 
+#[test]
+fn direct_workflow_consent_binds_run_and_exact_phase_strategy() {
+    use crate::execution::{DirectoryAccess, DirectoryGrant};
+    let root = tempfile::tempdir().unwrap();
+    let mut grant = DirectoryGrant::from_selected(root.path(), &[]).unwrap();
+    grant.access = DirectoryAccess::DirectWrite;
+    let settings = directory_settings()
+        .with_directories(vec![grant.clone()])
+        .unwrap();
+    let definition = workflows::seeds::plan_a_change_definition(settings.environment)
+        .with_conversation_settings(&settings)
+        .unwrap();
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let capabilities = workflows::capabilities::AttemptCapabilities::derive_project_free(
+        &definition.steps()[0],
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(capabilities.directories[0].access, AccessMode::ReadWrite);
+    assert!(definition.steps()[0].inputs.is_empty());
+    let consent = crate::execution::AccessConsentStore::default();
+    let session = crate::sessions::generate_session_token().unwrap().id();
+    let conversation = crate::conversations::ConversationId::generate().unwrap();
+    let run = workflows::RunId::generate().unwrap();
+    let preview = consent
+        .request_launch(session, conversation, vec![settings.clone()])
+        .unwrap();
+    let mut changed = settings.clone();
+    changed.directories[0].access = DirectoryAccess::ReviewBeforeApply;
+    assert!(
+        consent
+            .approve_launch(&preview, run, session, conversation, vec![changed.clone()])
+            .is_err()
+    );
+    consent
+        .approve_launch(&preview, run, session, conversation, vec![settings.clone()])
+        .unwrap();
+    assert!(consent.authorised_launch(run, session, conversation, &settings));
+    assert!(!consent.authorised_launch(run, session, conversation, &changed));
+    assert!(!consent.authorised_launch(
+        workflows::RunId::generate().unwrap(),
+        session,
+        conversation,
+        &settings
+    ));
+    assert!(!consent.authorised_conversation(session, conversation, &settings, &grant));
+    assert!(
+        consent
+            .approve_launch(&preview, run, session, conversation, vec![settings.clone()])
+            .is_err()
+    );
+    let parent_preview = consent
+        .request_conversation(session, conversation, &settings, &grant)
+        .unwrap();
+    consent
+        .approve_conversation(&parent_preview, session, conversation, &settings, &grant)
+        .unwrap();
+    assert!(consent.authorised_conversation(session, conversation, &settings, &grant));
+    assert!(!consent.authorised_launch(
+        workflows::RunId::generate().unwrap(),
+        session,
+        conversation,
+        &settings
+    ));
+    consent.retain_sessions(|_| false);
+    assert!(!consent.authorised_launch(run, session, conversation, &settings));
+}
+
 fn connected_state() -> AppState {
     let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
     state

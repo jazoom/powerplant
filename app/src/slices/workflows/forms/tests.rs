@@ -134,6 +134,34 @@ fn custom_settings_reject_invalid_model_and_unknown_tools() {
 }
 
 #[test]
+fn direct_directory_fields_retain_strategy_and_reject_overlap() {
+    use crate::execution::DirectoryAccess;
+    use crate::workflows::definition::{ModelStepSettings, StepAction};
+    let root = tempfile::tempdir().unwrap();
+    let mut pairs = valid_pairs();
+    pairs.extend([
+        pair("step_0_settings-source", "override"),
+        pair("step_0_inherit-model", "1"),
+        pair("step_0_inherit-environment", "1"),
+        pair("step_0_inherit-network", "1"),
+        pair("step_0_direct", root.path().to_str().unwrap()),
+    ]);
+    let (mut form, _) = WorkflowFormState::parse(pairs).unwrap();
+    let definition = form.to_definition().unwrap();
+    let StepAction::Agent(action) = &definition.steps()[0].action else {
+        panic!("model");
+    };
+    let ModelStepSettings::Override(settings) = &action.settings else {
+        panic!("override");
+    };
+    let grants = settings.directories.as_ref().unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].access, DirectoryAccess::DirectWrite);
+    form.steps[0].settings_read_only = root.path().display().to_string();
+    assert!(form.to_definition().is_err());
+}
+
+#[test]
 fn inherited_fields_allow_an_instruction_only_override_and_retain_tool_values() {
     let mut pairs = valid_pairs();
     pairs.retain(|(name, _)| !name.starts_with("step_0_tool_"));

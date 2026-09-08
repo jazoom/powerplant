@@ -958,6 +958,121 @@ fn phase_settings_replace_tool_lists_in_pinned_authority() {
 }
 
 #[test]
+fn direct_steps_reject_same_root_approval_bypass_but_allow_distinct_roots() {
+    use crate::execution::{DirectoryAccess, DirectoryGrant, ExecutionSettings};
+    let root = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut reviewed = DirectoryGrant::from_selected(root.path(), &[]).unwrap();
+    reviewed.access = DirectoryAccess::ReviewBeforeApply;
+    let mut direct =
+        DirectoryGrant::from_selected(other.path(), std::slice::from_ref(&reviewed)).unwrap();
+    direct.access = DirectoryAccess::DirectWrite;
+    let defaults = ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        ToolId::ALL.to_vec(),
+        test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![reviewed.clone()])
+    .unwrap();
+    let definition =
+        crate::workflows::seeds::implement_and_review_definition(test_environment_id());
+    let mut worker = defaults.clone();
+    worker.directories.push(direct.clone());
+    let mut reviewer = defaults.clone();
+    reviewer.directories[0].access = DirectoryAccess::ReadOnly;
+    let phases = vec![
+        (definition.steps()[0].key.clone(), worker.clone()),
+        (definition.steps()[1].key.clone(), reviewer),
+    ];
+    assert!(definition.with_phase_settings(&defaults, &phases).is_ok());
+    let mut writable_review = phases.clone();
+    writable_review[1].1.directories.push(direct.clone());
+    assert_eq!(
+        definition.with_phase_settings(&defaults, &writable_review),
+        Err(DefinitionError::WriteStrategy)
+    );
+    let mut bypass = phases.clone();
+    bypass[1].1.directories[0].access = DirectoryAccess::DirectWrite;
+    assert_eq!(
+        definition.with_phase_settings(&defaults, &bypass),
+        Err(DefinitionError::WriteStrategy)
+    );
+    let mut bypass = phases;
+    bypass[0].1.directories[0].access = DirectoryAccess::DirectWrite;
+    assert_eq!(
+        definition.with_phase_settings(&defaults, &bypass),
+        Err(DefinitionError::WriteStrategy)
+    );
+    let direct_settings = defaults.with_directories(vec![direct]).unwrap();
+    assert!(
+        crate::workflows::seeds::plan_a_change_definition(test_environment_id())
+            .with_conversation_settings(&direct_settings)
+            .is_ok()
+    );
+    assert_eq!(
+        definition.with_conversation_settings(&direct_settings),
+        Err(DefinitionError::Authority)
+    );
+}
+
+#[test]
+fn direct_override_cannot_reach_a_reviewed_root_through_an_overlapping_path() {
+    use crate::execution::{DirectoryAccess, DirectoryGrant};
+    let parent = tempfile::tempdir().unwrap();
+    let reviewed_path = parent.path().join("reviewed");
+    let descendant = reviewed_path.join("nested");
+    std::fs::create_dir_all(&descendant).unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut reviewed = DirectoryGrant::from_selected(&reviewed_path, &[]).unwrap();
+    reviewed.access = DirectoryAccess::ReviewBeforeApply;
+    let mut retained = DirectoryGrant::from_selected(other.path(), &[]).unwrap();
+    retained.access = DirectoryAccess::ReviewBeforeApply;
+    let defaults = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        ToolId::ALL.to_vec(),
+        test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![reviewed])
+    .unwrap();
+    let definition =
+        crate::workflows::seeds::implement_and_review_definition(test_environment_id());
+    for path in [parent.path(), descendant.as_path()] {
+        let mut direct = DirectoryGrant::from_selected(path, &[]).unwrap();
+        direct.access = DirectoryAccess::DirectWrite;
+        let worker = defaults
+            .clone()
+            .with_directories(vec![direct, retained.clone()])
+            .unwrap();
+        let reviewer = defaults
+            .clone()
+            .with_directories(vec![retained.clone()])
+            .unwrap();
+        let phases = vec![
+            (definition.steps()[0].key.clone(), worker),
+            (definition.steps()[1].key.clone(), reviewer),
+        ];
+        assert_eq!(
+            definition.with_phase_settings(&defaults, &phases),
+            Err(DefinitionError::WriteStrategy)
+        );
+    }
+}
+
+#[test]
 fn persisted_field_overrides_distinguish_empty_lists_from_inheritance() {
     let mut definition = one_agent();
     let StepAction::Agent(action) = &mut definition.steps[0].action else {

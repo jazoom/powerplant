@@ -680,6 +680,51 @@ fn generic_application_requires_all_roots_and_cleanup_to_settle() {
 }
 
 #[test]
+fn direct_completion_requires_successful_outputs_and_managed_cleanup() {
+    let (_, _, mut child) = applied_child();
+    let root = tempfile::tempdir().unwrap();
+    let mut grant = crate::execution::DirectoryGrant::from_selected(root.path(), &[]).unwrap();
+    grant.access = crate::execution::DirectoryAccess::DirectWrite;
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        crate::agents::ToolId::ALL.to_vec(),
+        test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![grant])
+    .unwrap();
+    let step = child.pinned.definition.first_step().clone();
+    child.phase_models = vec![crate::workflows::run::PhaseModelSelection {
+        step: step.clone(),
+        selection: settings.model.clone(),
+        instructions: String::new(),
+        preset: None,
+        settings: Some(settings),
+    }];
+    child.attempts[0].step = step;
+    child.attempts[0].action_kind = crate::workflows::run::ActionKind::Agent;
+    child.attempts[0].apply_transaction = None;
+    assert_eq!(child_outcome(&child), Some(TaskOutcome::CompletedDirect));
+    child.attempts[0].result = None;
+    assert_ne!(child_outcome(&child), Some(TaskOutcome::CompletedDirect));
+    child.attempts[0].result = Some(crate::workflows::run::AttemptResult::Completed {
+        outputs: Vec::new(),
+    });
+    child.attempts[0].cleanup = crate::workflows::run::AttemptCleanupRecord::Orphaned {
+        sandbox: true,
+        workspace: false,
+        journal: false,
+    };
+    assert_eq!(child_outcome(&child), None);
+}
+
+#[test]
 fn uncertain_application_never_counts_as_completion() {
     use crate::workflows::apply::ApplyTransactionState;
     let (store, parent, mut child) = applied_child();

@@ -69,6 +69,7 @@ pub(crate) enum TaskOutcome {
     CompletedCommit,
     CompletedApplication,
     CompletedUnchanged,
+    CompletedDirect,
     Failed,
     Cancelled,
 }
@@ -442,6 +443,7 @@ impl TaskLoop {
                 | TaskOutcome::CompletedApplication
                 | TaskOutcome::CompletedCommit
                 | TaskOutcome::CompletedUnchanged
+                | TaskOutcome::CompletedDirect
                 | TaskOutcome::Failed
                 | TaskOutcome::Cancelled
                     if task.child_id.is_none() =>
@@ -1156,6 +1158,7 @@ fn reconcile_record(
                     | TaskOutcome::CompletedApplication
                     | TaskOutcome::CompletedCommit
                     | TaskOutcome::CompletedUnchanged
+                    | TaskOutcome::CompletedDirect
             )
         })
     {
@@ -1174,6 +1177,7 @@ fn completed_outcome(outcome: TaskOutcome) -> bool {
         TaskOutcome::CompletedCommit
             | TaskOutcome::CompletedApplication
             | TaskOutcome::CompletedUnchanged
+            | TaskOutcome::CompletedDirect
     )
 }
 
@@ -1219,6 +1223,7 @@ fn child_outcome(run: &WorkflowRun) -> Option<TaskOutcome> {
         {
             Some(TaskOutcome::CompletedApplication)
         }
+        RunState::Completed if run.completed_direct() => Some(TaskOutcome::CompletedDirect),
         RunState::Completed if run.completed_without_changes() => {
             Some(TaskOutcome::CompletedUnchanged)
         }
@@ -1428,6 +1433,7 @@ fn outcome_as_str(outcome: TaskOutcome) -> &'static str {
         TaskOutcome::CompletedCommit => "completed-commit",
         TaskOutcome::CompletedApplication => "completed-application",
         TaskOutcome::CompletedUnchanged => "completed-unchanged",
+        TaskOutcome::CompletedDirect => "completed-direct",
         TaskOutcome::Failed => "failed",
         TaskOutcome::Cancelled => "cancelled",
     }
@@ -1441,6 +1447,7 @@ fn outcome_from_str(value: &str) -> Option<TaskOutcome> {
         "completed-commit" => Some(TaskOutcome::CompletedCommit),
         "completed-application" => Some(TaskOutcome::CompletedApplication),
         "completed-unchanged" => Some(TaskOutcome::CompletedUnchanged),
+        "completed-direct" => Some(TaskOutcome::CompletedDirect),
         "failed" => Some(TaskOutcome::Failed),
         "cancelled" => Some(TaskOutcome::Cancelled),
         _ => None,

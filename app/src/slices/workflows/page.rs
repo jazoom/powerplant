@@ -203,6 +203,7 @@ pub(super) struct StepRow {
     pub(super) network_domains: String,
     pub(super) settings_read_only: String,
     pub(super) settings_reviewed: String,
+    pub(super) settings_direct: String,
     pub(super) settings_preset: String,
     pub(super) settings_grants: String,
     pub(super) inherited_fields: Vec<InheritedField>,
@@ -593,6 +594,7 @@ fn step_row(
         network_domains: step.network_domains.clone(),
         settings_read_only: step.settings_read_only.clone(),
         settings_reviewed: step.settings_reviewed.clone(),
+        settings_direct: step.settings_direct.clone(),
         settings_preset: step.settings_preset.clone(),
         inherited_fields: [
             ("model", "Model and reasoning effort"),
@@ -815,6 +817,13 @@ fn draft_process_overview(steps: &[StepDraft], mode: ExecutionMode) -> Vec<Proce
                 } else {
                     summary::revision_summary(human, &destination, limit)
                 };
+            }
+            if step.action == "agent"
+                && step.settings_source == "override"
+                && !step.settings_inherit.iter().any(|field| field == "directories")
+                && !step.settings_direct.trim().is_empty()
+            {
+                phase.annotate_direct(&step.settings_direct.lines().collect::<Vec<_>>().join(", "));
             }
             phase
         })

@@ -46,6 +46,14 @@ Model and preset overrides stay collapsed until requested. Each model phase can 
 
 Review shows the exact phase settings and sensitive directory warnings. Approval applies to one run. Error responses retain field values and reveal the first invalid phase.
 
+Model phase fields include Direct write directories. The process preview names immediate host effects separately from reviewed candidates.
+
+Direct changes remain after failure, discard or cancellation. Candidate approval covers reviewed roots only, not direct effects on separate roots.
+
+Each run needs destination consent for its resolved phase settings. Copied settings and parent conversation consent supply no run approval.
+
+A launch override cannot change a reviewed root to Direct write when the process requires candidate approval. Read-only narrowing remains valid.
+
 The final review identifies selected context, effects, effective access, environment readiness and approval stops. Workers receive selected inputs, not the entire conversation history.
 
 Workflows… opens setup from the conversation. Start workflow starts execution only after review. Back controls retain entered values.

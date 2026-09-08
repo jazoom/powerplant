@@ -76,7 +76,19 @@ Direct-only messages need no candidate capture or application gate. Mixed messag
 
 Direct host changes remain after discard, cancellation and environment changes. A cleanup failure retains execution reservations until recovery settles the guest.
 
-Configured workflows do not yet accept Direct write settings.
+Configured model phases accept Direct write directories through inherited settings, presets or explicit per-phase paths.
+
+The run preview names each direct destination and its immediate effects. Sensitive destinations include the stronger configuration warning.
+
+Each run needs its own single-use consent for the exact resolved phase settings. Conversation consent never authorises a configured run.
+
+A root cannot use both reviewed and direct write strategies within one run. Read-only narrowing remains valid.
+
+A launch override cannot replace a reviewed root with Direct write when the process requires candidate approval. Required candidate outputs still need a reviewed root.
+
+Distinct roots can combine reviewed and direct strategies. Candidate evidence and approval cover reviewed roots only.
+
+Completed-direct task outcomes require successful outputs and managed cleanup. Earlier direct changes remain after a later failure.
 
 Each grant stores the canonical directory identity and a stable `/access/<alias>` guest path. Duplicate and overlapping roots are invalid.
 

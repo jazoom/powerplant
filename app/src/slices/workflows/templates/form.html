@@ -654,6 +654,20 @@
                         >
 {{ step.settings_reviewed }}</textarea>
                       </label>
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm">Direct write directories</span>
+                        <textarea
+                          class="textarea textarea-bordered"
+                          name="step_{{ step.index }}_direct"
+                          maxlength="32768"
+                        >
+{{ step.settings_direct }}</textarea>
+                        <span class="text-quiet text-xs"
+                          >One path per line. Host changes occur immediately and
+                          remain after failure or cancellation. Each run needs
+                          destination consent.</span
+                        >
+                      </label>
                     </div>
                   </details>
                 </fieldset>
@@ -874,7 +888,7 @@
                   </label>
                 </details>
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm">Project access</span>
+                  <span class="text-sm">Candidate access</span>
                   <select
                     class="select select-bordered"
                     name="step_{{ step.index }}_candidate-access"
@@ -883,7 +897,7 @@
                       value="read-only"
                       {% if step.candidate_access == "read-only" %}selected{% endif %}
                     >
-                      Inspect only
+                      No candidate edits
                     </option>
                     <option
                       value="edit-candidate"
@@ -893,8 +907,8 @@
                     </option>
                   </select>
                   <p class="text-quiet text-xs">
-                    Proposed changes stay in the run until an application step
-                    applies them.
+                    Candidate changes need an application step. Direct write
+                    directories change immediately, outside candidate approval.
                   </p>
                   {% if step.candidate_access_error != "" %}
                     <p class="text-error text-sm">

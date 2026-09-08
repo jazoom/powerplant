@@ -247,6 +247,7 @@ pub(super) struct StepDraft {
     pub(super) network_domains: String,
     pub(super) settings_read_only: String,
     pub(super) settings_reviewed: String,
+    pub(super) settings_direct: String,
     pub(super) settings_preset: String,
     pub(super) settings_grants: Vec<DirectoryGrant>,
     pub(super) settings_inherit: Vec<String>,
@@ -975,6 +976,7 @@ enum StepPart {
     NetworkDomains,
     SettingsReadOnly,
     SettingsReviewed,
+    SettingsDirect,
     SettingsPreset,
     SettingsGrants,
     SettingsInherit(&'static str),
@@ -1071,6 +1073,7 @@ fn parse_row_field(name: &str) -> Result<Field, FormError> {
                 Some("network-domains") => StepPart::NetworkDomains,
                 Some("read-only") => StepPart::SettingsReadOnly,
                 Some("reviewed") => StepPart::SettingsReviewed,
+                Some("direct") => StepPart::SettingsDirect,
                 Some("settings-preset") => StepPart::SettingsPreset,
                 Some("settings-grants") => StepPart::SettingsGrants,
                 Some("inherit-model") => StepPart::SettingsInherit("model"),
@@ -1374,6 +1377,7 @@ fn collect_steps(fields: Vec<(usize, StepPart, String)>) -> Result<Vec<StepDraft
             StepPart::NetworkDomains => step.network_domains = value,
             StepPart::SettingsReadOnly => step.settings_read_only = value,
             StepPart::SettingsReviewed => step.settings_reviewed = value,
+            StepPart::SettingsDirect => step.settings_direct = value,
             StepPart::SettingsPreset => step.settings_preset = value,
             StepPart::SettingsInherit(field) => {
                 if value != "1" {
@@ -2253,6 +2257,7 @@ fn empty_step() -> StepDraft {
         candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: Vec::new(),
+        settings_direct: String::new(),
         settings_source: String::new(),
         provider: String::new(),
         model: String::new(),
@@ -2288,6 +2293,7 @@ fn blank_agent_step(key: &str, role: &str) -> StepDraft {
         candidate_access: CandidateAuthority::Edit.as_str().to_owned(),
         command: SystemCommandId::RepositoryStatus.as_str().to_owned(),
         tools: ToolId::ALL.to_vec(),
+        settings_direct: String::new(),
         settings_source: String::new(),
         provider: String::new(),
         model: String::new(),
@@ -2454,6 +2460,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                     &action.settings,
                     DirectoryAccess::ReviewBeforeApply,
                 ),
+                settings_direct: settings_paths(&action.settings, DirectoryAccess::DirectWrite),
                 settings_preset: String::new(),
                 settings_grants: settings_grants(&action.settings),
                 settings_inherit: inherited_fields(&action.settings),
@@ -2479,6 +2486,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
             role: String::new(),
             candidate_access: String::new(),
             command: action.command.as_str().to_owned(),
+            settings_direct: String::new(),
             tools: Vec::new(),
             settings_source: "defaults".to_owned(),
             provider: String::new(),
@@ -2511,6 +2519,7 @@ fn step_from_definition(step: &StepDefinition) -> StepDraft {
                 expertise: purpose.default_expertise().to_owned(),
                 instructions: purpose.default_instructions().to_owned(),
                 action: "human-gate".to_owned(),
+                settings_direct: String::new(),
                 environment: String::new(),
                 role: String::new(),
                 candidate_access: String::new(),
@@ -2736,6 +2745,13 @@ pub(super) fn fill_step_from_preset(step: &mut StepDraft, preset: &crate::preset
         .map(|grant| grant.host_path.display().to_string())
         .collect::<Vec<_>>()
         .join("\n");
+    step.settings_direct = settings
+        .directories
+        .iter()
+        .filter(|grant| grant.access == DirectoryAccess::DirectWrite)
+        .map(|grant| grant.host_path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     step.settings_grants = settings.directories.clone();
     step.environment = settings.environment.as_hex();
 }
@@ -2813,6 +2829,7 @@ fn parse_override_settings(step: &StepDraft, errors: &mut StepErrors) -> Option<
     for (text, access) in [
         (&step.settings_read_only, DirectoryAccess::ReadOnly),
         (&step.settings_reviewed, DirectoryAccess::ReviewBeforeApply),
+        (&step.settings_direct, DirectoryAccess::DirectWrite),
     ]
     .into_iter()
     .filter(|_| !inherits("directories"))
