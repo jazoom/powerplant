@@ -90,7 +90,16 @@ async fn picker_commands_are_patch_only_and_revision_bound() {
 }
 
 #[tokio::test]
-async fn each_reviewed_root_needs_its_own_consent() {
+async fn each_write_strategy_needs_destination_consent() {
+    for access in [
+        crate::execution::DirectoryAccess::ReviewBeforeApply,
+        crate::execution::DirectoryAccess::DirectWrite,
+    ] {
+        directory_consent_case(access).await;
+    }
+}
+
+async fn directory_consent_case(access: crate::execution::DirectoryAccess) {
     let state = test_state();
     let token = connected(&state);
     let record = conversation(&state);
@@ -122,13 +131,13 @@ async fn each_reviewed_root_needs_its_own_consent() {
         .oneshot(command(
             &access_path,
             &token,
-            &format!("revision={}&access=review-before-apply", current.revision),
+            &format!("revision={}&access={}", current.revision, access.as_str()),
         ))
         .await
         .unwrap();
     assert_eq!(preview.status(), StatusCode::OK);
     let body = text(preview).await;
-    assert!(body.contains("Approve directory review access"));
+    assert!(!hidden_value(&body, "consent_request").is_empty());
     assert_eq!(
         state
             .conversations
@@ -161,7 +170,7 @@ async fn each_reviewed_root_needs_its_own_consent() {
     let updated = state.conversations.get(&record.id).unwrap();
     assert_eq!(
         updated.model.as_ref().unwrap().settings.directories[0].access,
-        crate::execution::DirectoryAccess::ReviewBeforeApply
+        access
     );
 
     let second_response = app(&state)
@@ -172,13 +181,13 @@ async fn each_reviewed_root_needs_its_own_consent() {
                 second_id.as_hex()
             ),
             &token,
-            &format!("revision={}&access=review-before-apply", updated.revision),
+            &format!("revision={}&access={}", updated.revision, access.as_str()),
         ))
         .await
         .unwrap();
     assert_eq!(second_response.status(), StatusCode::OK);
     let second_body = text(second_response).await;
-    assert!(second_body.contains("Approve directory review access"));
+    assert!(!hidden_value(&second_body, "consent_request").is_empty());
     assert_eq!(
         state
             .conversations

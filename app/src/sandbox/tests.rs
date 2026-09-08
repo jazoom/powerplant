@@ -265,7 +265,11 @@ fn writable_user_project_mounts_are_rejected() {
     let project = tempfile::tempdir().expect("project");
     let spec = spec(project.path());
     assert!(matches!(
-        super::reject_user_project_write(&spec, &spec.mounts[0].host),
+        super::confirm_host_write_access(
+            &spec,
+            &spec.mounts[0].host,
+            crate::agents::AccessMode::ReadOnly
+        ),
         Err(SandboxError::UserProjectWrite)
     ));
     let commit = SandboxSpec {
@@ -285,7 +289,11 @@ fn writable_user_project_mounts_are_rejected() {
         network: NetworkAccess::None,
     };
     assert!(matches!(
-        super::reject_user_project_write(&commit, &spec.mounts[0].host),
+        super::confirm_host_write_access(
+            &commit,
+            &spec.mounts[0].host,
+            crate::agents::AccessMode::ReadOnly
+        ),
         Err(SandboxError::UserProjectWrite)
     ));
 }

@@ -119,7 +119,7 @@ impl AttemptCapabilities {
                     CapabilityDirectory {
                         alias: grant.alias.clone(),
                         guest_path: grant.guest_path.clone(),
-                        access: if reviewed_root && writes {
+                        access: if (reviewed_root && writes) || grant.access.is_writable() {
                             AccessMode::ReadWrite
                         } else {
                             AccessMode::ReadOnly

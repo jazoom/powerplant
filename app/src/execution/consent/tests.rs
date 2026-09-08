@@ -89,6 +89,40 @@ fn draft_consent_is_single_use_and_becomes_conversation_consent() {
 }
 
 #[test]
+fn direct_write_consent_is_destination_bound_and_single_use() {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("powerplant");
+    std::fs::create_dir(&data).unwrap();
+    let mut grant = crate::execution::DirectoryGrant::from_selected(home.path(), &[]).unwrap();
+    grant.access = crate::execution::DirectoryAccess::DirectWrite;
+    assert!(crate::execution::authority::sensitive_directory(
+        &grant.host_path,
+        &data
+    ));
+    let grants = vec![grant.clone()];
+    let store = AccessConsentStore::new();
+    let owner = session();
+    let request = store
+        .request_draft(owner, "original", &grants, &grant)
+        .unwrap();
+    let approval = store
+        .approve_draft(&request, owner, "original", &grants, &grant)
+        .unwrap();
+    assert!(
+        store
+            .approve_draft(&request, owner, "original", &grants, &grant)
+            .is_err()
+    );
+    assert!(store.authorised_draft(&approval, owner, "original", &grants, &grant));
+    assert!(!store.authorised_draft(&approval, owner, "copy", &grants, &grant));
+    let mut reviewed = grant.clone();
+    reviewed.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    assert!(!store.authorised_draft(&approval, owner, "original", &[reviewed.clone()], &reviewed));
+    store.retain_sessions(|_| false);
+    assert!(!store.authorised_draft(&approval, owner, "original", &grants, &grant));
+}
+
+#[test]
 fn consent_rejects_another_session_strategy_or_root_identity() {
     let parent = tempfile::tempdir().unwrap();
     let first = parent.path().join("first");

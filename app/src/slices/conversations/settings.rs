@@ -834,11 +834,7 @@ fn preset_preview_view(
                 format!(
                     "{} · {} · {}",
                     grant.host_path.display(),
-                    if grant.access == crate::execution::DirectoryAccess::ReadOnly {
-                        "Read only"
-                    } else {
-                        "Review before apply"
-                    },
+                    crate::slices::execution_settings::page::directory_access_label(grant.access),
                     if grant.is_available() {
                         "Available"
                     } else {

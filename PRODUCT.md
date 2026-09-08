@@ -58,7 +58,25 @@ The final review shows each phase's directories, network policy and environment.
 
 Project-backed phases still reject presets that omit their required source directory.
 
-A conversation can grant ad hoc Read only access to as many as eight host directories. A directory needs no project or Git registration.
+A conversation can grant access to as many as eight host directories. A directory needs no project or Git registration.
+
+Each directory uses one strategy:
+
+- Read only exposes the host directory without write access through that mount.
+- Review before apply exposes an isolated copy and requires approval before file application.
+- Direct write exposes the actual directory with immediate host write access.
+
+Direct write remains inside the sandbox. Directory boundaries and sandbox network policy still apply.
+
+Each Direct write destination needs explicit session-bound consent for its exact directory identity and effective settings. Presets and copied settings retain requests, not consent.
+
+Sensitive Direct write grants can alter or corrupt live configuration, permissions and execution evidence. The warning names the actual directory before approval.
+
+Direct-only messages need no candidate capture or application gate. Mixed messages capture and review only reviewed roots.
+
+Direct host changes remain after discard, cancellation and environment changes. A cleanup failure retains execution reservations until recovery settles the guest.
+
+Configured workflows do not yet accept Direct write settings.
 
 Each grant stores the canonical directory identity and a stable `/access/<alias>` guest path. Duplicate and overlapping roots are invalid.
 
@@ -68,7 +86,7 @@ Power Plant revalidates the device and inode before execution. A missing or repl
 
 Sandbox network access defaults to Off. Conversation settings permit restricted domains or public internet access. Private and host networks remain excluded. Provider traffic remains separate and leaves the host for model inference.
 
-A tool-enabled conversation message starts the system-owned Quick task. Without directory grants, tools use private scratch storage at `/workspace`. Power Plant mounts granted directories read only beside that scratch storage.
+A tool-enabled conversation message starts the system-owned Quick task. Without directory grants, tools use private scratch storage at `/workspace`. Power Plant mounts each directory according to its approved access strategy beside that scratch storage.
 
 Scratch storage belongs to one attempt, not the conversation. Source-free tools create no Git candidate, code approval gate or commit.
 
@@ -275,7 +293,7 @@ Current capabilities:
 - Send a Quick task from an independent conversation with no workflow selection.
 - Use sandbox tools with private scratch storage and no project.
 - Set sandbox network access to Off, restricted domains or public internet.
-- Grant ad hoc Read only or Review before apply access to multiple directories without project registration.
+- Grant Read only, Review before apply or Direct write access to multiple directories without project registration.
 - Preserve stable guest aliases and canonical host identity for conversation directories.
 - Grant read-only or writable project authority from a conversation through the legacy project flow.
 - Review a candidate diff and Apply or Discard it from the owning conversation.
@@ -312,7 +330,7 @@ Current constraints:
 - One unfinished operation can reserve a conversation.
 - One workflow execution can be active process-wide.
 - The project catalogue grants no file access. Conversation directory grants and saved-agent grants supply execution authority.
-- Directory grants support Read only and multiple Review before apply roots. Sensitive access requires explicit consent.
+- Directory grants support Read only, Review before apply and Direct write. Writable strategies and sensitive access require explicit destination consent.
 - Tools cannot combine legacy project access with conversation directory grants.
 - Project paths cannot change. Project records cannot be deleted in this release.
 - Sandbox-backed Quick task needs the selected ready snapshot. The product does not fall back to another environment.

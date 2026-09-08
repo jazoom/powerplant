@@ -747,6 +747,18 @@ impl WorkflowRun {
             .and_then(|phase| phase.settings.as_ref())
     }
 
+    pub(crate) fn has_direct_writes(&self) -> bool {
+        self.phase_models
+            .iter()
+            .filter_map(|phase| phase.settings.as_ref())
+            .any(|settings| {
+                settings
+                    .directories
+                    .iter()
+                    .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
+            })
+    }
+
     pub(crate) fn reviewed_directories(&self) -> Vec<crate::execution::DirectoryGrant> {
         let mut grants = Vec::new();
         for phase in &self.phase_models {

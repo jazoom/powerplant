@@ -388,7 +388,7 @@ pub(super) async fn save(
         .directories
         .iter()
         .filter(|grant| {
-            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+            grant.access != crate::execution::DirectoryAccess::ReadOnly
                 || crate::execution::authority::sensitive_directory(
                     &grant.host_path,
                     state.local_data.root(),
@@ -408,7 +408,7 @@ pub(super) async fn save(
     }) {
         return reject(
             PatchStatus::UnprocessableEntity,
-            "Directory review or sensitive access needs explicit approval.",
+            "Directory access needs explicit approval.",
             form,
         );
     }
@@ -456,7 +456,7 @@ pub(super) async fn save(
         let _ = state.conversations.delete(&id, 1);
         return reject(
             PatchStatus::UnprocessableEntity,
-            "Directory review or sensitive access needs explicit approval.",
+            "Directory access needs explicit approval.",
             form,
         );
     }

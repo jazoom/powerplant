@@ -124,7 +124,7 @@ impl SandboxError {
             Self::Exec => "Power Plant could not run the command. Try again.",
             Self::Stop => "Power Plant could not stop the sandbox. Try again.",
             Self::Remove => "Power Plant could not remove the sandbox. Try again.",
-            Self::UserProjectWrite => "The user project cannot be a writable attempt mount.",
+            Self::UserProjectWrite => "The host directory lacks Direct write authority.",
         }
     }
 }
@@ -614,12 +614,13 @@ impl MicrosandboxGuest {
     }
 }
 
-pub(crate) fn reject_user_project_write(
+pub(crate) fn confirm_host_write_access(
     spec: &SandboxSpec,
-    user_project: &Path,
+    host_root: &Path,
+    access: crate::agents::AccessMode,
 ) -> Result<(), SandboxError> {
     for mount in &spec.mounts {
-        if !mount.read_only && mount.host == user_project {
+        if !mount.read_only && mount.host == host_root && !access.is_writable() {
             return Err(SandboxError::UserProjectWrite);
         }
     }

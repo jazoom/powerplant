@@ -511,15 +511,13 @@ pub(crate) fn build_attempt_packet_for_request(
             .directories
             .iter()
             .map(|grant| {
-                let access = if step.writes_primary_source() {
-                    match grant.access {
-                        crate::execution::DirectoryAccess::ReadOnly => "Read only",
-                        crate::execution::DirectoryAccess::ReviewBeforeApply => {
-                            "Review before apply"
-                        }
+                let access = match grant.access {
+                    crate::execution::DirectoryAccess::DirectWrite => {
+                        "Direct write: immediate host changes. Discard and cancellation do not undo them."
                     }
-                } else {
-                    "Read only"
+                    crate::execution::DirectoryAccess::ReviewBeforeApply
+                        if step.writes_primary_source() => "Review before apply",
+                    _ => "Read only",
                 };
                 format!("- {}: {}", grant.guest_path(), access)
             })

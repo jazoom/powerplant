@@ -61,7 +61,12 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
     )?;
     let work = StepDefinition {
         key: StepKey::parse(AGENT_STEP_KEY).expect("quick task step"),
-        name: "Prepare changes".to_owned(),
+        name: if reviewed {
+            "Prepare changes"
+        } else {
+            "Use tools"
+        }
+        .to_owned(),
         inputs: reviewed.then(initial_candidate_input).into_iter().collect(),
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse(ROLE_KEY).expect("quick task role"),

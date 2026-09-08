@@ -240,7 +240,8 @@ pub(crate) fn apply_settings_ceiling(
             crate::execution::DirectoryAccess::ReviewBeforeApply if grant.access.is_writable() => {
                 AccessMode::ReadWrite
             }
-            crate::execution::DirectoryAccess::ReviewBeforeApply => {
+            crate::execution::DirectoryAccess::ReviewBeforeApply
+            | crate::execution::DirectoryAccess::DirectWrite => {
                 return Err(ConversationAccessError::Preset);
             }
         };

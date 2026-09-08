@@ -6,6 +6,14 @@ use crate::{
     },
 };
 
+pub(crate) fn directory_access_label(access: crate::execution::DirectoryAccess) -> &'static str {
+    match access {
+        crate::execution::DirectoryAccess::ReadOnly => "Read only",
+        crate::execution::DirectoryAccess::ReviewBeforeApply => "Review before apply",
+        crate::execution::DirectoryAccess::DirectWrite => "Direct write",
+    }
+}
+
 pub(crate) struct EnvironmentOption {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -99,7 +107,9 @@ pub(crate) fn tool_options(selected: &[String]) -> Vec<ToolOption> {
             detail: match tool {
                 ToolId::List => "List files in private scratch storage or authorised directories.",
                 ToolId::Read => "Read files in private scratch storage or authorised directories.",
-                ToolId::Write => "Write files in private scratch storage or a candidate workspace.",
+                ToolId::Write => {
+                    "Write files in private scratch storage or authorised writable directories."
+                }
                 ToolId::Run => "Run commands in the sandbox.",
             },
             selected: selected.iter().any(|value| value == tool.as_str()),

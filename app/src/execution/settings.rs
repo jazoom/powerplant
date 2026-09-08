@@ -49,6 +49,7 @@ pub(crate) struct CanonicalDirectoryIdentity {
 pub(crate) enum DirectoryAccess {
     ReadOnly,
     ReviewBeforeApply,
+    DirectWrite,
 }
 
 impl DirectoryAccess {
@@ -56,6 +57,7 @@ impl DirectoryAccess {
         match self {
             Self::ReadOnly => "read-only",
             Self::ReviewBeforeApply => "review-before-apply",
+            Self::DirectWrite => "direct-write",
         }
     }
 
@@ -63,6 +65,7 @@ impl DirectoryAccess {
         match value {
             "read-only" => Some(Self::ReadOnly),
             "review-before-apply" => Some(Self::ReviewBeforeApply),
+            "direct-write" => Some(Self::DirectWrite),
             _ => None,
         }
     }
@@ -128,8 +131,12 @@ impl ExecutionSettings {
                     .iter_mut()
                     .find(|existing| existing.identity == grant.identity)
                 {
-                    if grant.access == DirectoryAccess::ReviewBeforeApply {
-                        existing.access = grant.access;
+                    if existing.access != grant.access {
+                        if existing.access == DirectoryAccess::ReadOnly {
+                            existing.access = grant.access;
+                        } else if grant.access != DirectoryAccess::ReadOnly {
+                            return None;
+                        }
                     }
                 } else {
                     combined.directories.push(grant.clone());

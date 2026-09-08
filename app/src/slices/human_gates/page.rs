@@ -246,7 +246,11 @@ impl GatePage {
                 .map(|policy| policy.revision_target.as_str().to_owned())
                 .unwrap_or_default(),
             revision_attempt_limit: revision_policy.map_or(0, |policy| policy.attempt_limit),
-            host_unchanged: crate::workflows::HOST_UNCHANGED,
+            host_unchanged: if run.has_direct_writes() {
+                "This review covers only isolated changes. Direct host changes remain after discard, cancellation and environment changes."
+            } else {
+                crate::workflows::HOST_UNCHANGED
+            },
             ordinary,
             exclusions,
             application_destination,

@@ -217,6 +217,18 @@
           >
 {{ form.reviewed }}</textarea>
         </label>
+        <label class="flex flex-col gap-1"
+          >Direct write<textarea
+            class="textarea textarea-bordered w-full"
+            name="direct_write"
+            maxlength="32768"
+          >
+{{ form.direct_write }}</textarea>
+        </label>
+        <p class="text-quiet text-sm">
+          Direct write requests immediate host changes. Each conversation needs
+          separate consent.
+        </p>
       </fieldset>
       <div class="flex flex-wrap gap-3">
         <button

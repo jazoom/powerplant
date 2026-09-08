@@ -87,6 +87,31 @@ fn duplicate_directory_identity_is_invalid_at_distinct_paths() {
 }
 
 #[test]
+fn direct_write_does_not_replace_reviewed_authority_for_the_same_root() {
+    let root = tempfile::tempdir().unwrap();
+    let mut grant = super::DirectoryGrant::from_selected(root.path(), &[]).unwrap();
+    grant.access = super::DirectoryAccess::DirectWrite;
+    let direct = ExecutionSettings::new(
+        model(),
+        String::new(),
+        vec![ToolId::Write],
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![grant])
+    .unwrap();
+    let mut reviewed = direct.clone();
+    reviewed.directories[0].access = super::DirectoryAccess::ReviewBeforeApply;
+    assert!(ExecutionSettings::combined([&direct, &reviewed]).is_none());
+    assert!(ExecutionSettings::combined([&reviewed, &direct]).is_none());
+    reviewed.directories[0].access = super::DirectoryAccess::ReadOnly;
+    assert_eq!(
+        ExecutionSettings::combined([&reviewed, &direct]).unwrap(),
+        direct
+    );
+}
+
+#[test]
 fn settings_reject_overlapping_directory_roots() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("root");

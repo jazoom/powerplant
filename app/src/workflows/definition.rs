@@ -187,16 +187,10 @@ pub(crate) fn additional_access(
         || resolved.directories.iter().any(|grant| {
             defaults.directories.iter().all(|existing| {
                 existing.identity != grant.identity
-                    || directory_access_rank(existing.access) < directory_access_rank(grant.access)
+                    || (grant.access != crate::execution::DirectoryAccess::ReadOnly
+                        && existing.access != grant.access)
             })
         })
-}
-
-fn directory_access_rank(access: crate::execution::DirectoryAccess) -> u8 {
-    match access {
-        crate::execution::DirectoryAccess::ReadOnly => 0,
-        crate::execution::DirectoryAccess::ReviewBeforeApply => 1,
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -753,6 +747,13 @@ impl WorkflowDefinition {
                 StepAction::SystemCommand(_) | StepAction::HumanGate(_) => None,
             };
             let effective = resolved.unwrap_or(combined.as_ref().unwrap_or(defaults));
+            if effective
+                .directories
+                .iter()
+                .any(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite)
+            {
+                return Err(DefinitionError::Authority);
+            }
             let reviewed = effective
                 .directories
                 .iter()

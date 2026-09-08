@@ -270,13 +270,13 @@ pub(super) async fn update_new(
         );
     };
     directories[index].access = access;
-    if crate::execution::validate_directories(&directories).is_err() {
+    if let Err(error) = crate::execution::validate_directories(&directories) {
         return render_new(
             &state,
             session.0,
             form,
             PatchStatus::UnprocessableEntity,
-            "Only one directory can use Review before apply.",
+            error.message(),
         );
     }
     let grant = directories[index].clone();
@@ -806,14 +806,14 @@ pub(super) async fn update_saved(
         .position(|stored| stored.id == grant.id)
         .expect("checked grant");
     settings.directories[index] = grant.clone();
-    if crate::execution::validate_directories(&settings.directories).is_err() {
+    if let Err(error) = crate::execution::validate_directories(&settings.directories) {
         return render_saved(
             &state,
             session.0,
             graft,
             &record,
             PatchStatus::UnprocessableEntity,
-            "Only one directory can use Review before apply.",
+            error.message(),
         );
     }
     if needs_consent(&state, &grant) {
@@ -925,7 +925,7 @@ pub(super) async fn remove_saved(
 }
 
 fn needs_consent(state: &AppState, grant: &DirectoryGrant) -> bool {
-    grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply || sensitive(state, grant)
+    grant.access != crate::execution::DirectoryAccess::ReadOnly || sensitive(state, grant)
 }
 
 fn sensitive(state: &AppState, grant: &DirectoryGrant) -> bool {

@@ -47,7 +47,11 @@ impl ProjectFreeAuthority {
                 alias: grant.alias.clone(),
                 guest_path: grant.guest_path(),
                 host_path: grant.host_path.clone(),
-                access: AccessMode::ReadOnly,
+                access: if grant.access == super::DirectoryAccess::DirectWrite {
+                    AccessMode::ReadWrite
+                } else {
+                    AccessMode::ReadOnly
+                },
             })
             .collect();
         Ok(Self {

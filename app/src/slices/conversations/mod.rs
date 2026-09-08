@@ -1933,7 +1933,7 @@ pub(super) async fn preflight_execution(
 ) -> Result<(), StartMessageError> {
     if let Some(conversation) = conversation
         && model.settings.directories.iter().any(|grant| {
-            (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+            (grant.access != crate::execution::DirectoryAccess::ReadOnly
                 || crate::execution::authority::sensitive_directory(
                     &grant.host_path,
                     state.local_data.root(),
@@ -1949,7 +1949,7 @@ pub(super) async fn preflight_execution(
     {
         return Err(StartMessageError::User(
             PatchStatus::UnprocessableEntity,
-            "Directory review access needs explicit approval. Open Directories to approve it.",
+            "Directory access needs explicit approval. Open Directories to approve it.",
         ));
     }
     if model.settings.tools.is_empty() {

@@ -52,6 +52,8 @@ pub(super) struct DirectoryView {
     pub(super) pending_approval: bool,
     pub(super) transient: bool,
     pub(super) review_before_apply: bool,
+    pub(super) direct_write: bool,
+    pub(super) access_label: &'static str,
     pub(super) exclusions: Vec<String>,
 }
 
@@ -468,6 +470,8 @@ pub(super) struct ConversationDetailView {
     pub(super) pending_directory: String,
     pub(super) consent_existing: bool,
     pub(super) consent_reviewed: bool,
+    pub(super) consent_direct: bool,
+    pub(super) consent_sensitive: bool,
     pub(super) draft_nonce: String,
     pub(super) draft_preset_reference: String,
     pub(super) consent_reference: String,
@@ -527,7 +531,7 @@ impl ConversationDetailView {
                 state.local_data.root(),
             );
             view.pending_approval = (view.sensitive
-                || grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
+                || grant.access != crate::execution::DirectoryAccess::ReadOnly)
                 && !state.access_consent.authorised_draft(
                     &form.consent_reference,
                     session,
@@ -541,6 +545,15 @@ impl ConversationDetailView {
             .map(|grant| grant.host_path.to_string_lossy().into_owned())
             .unwrap_or_default();
         let consent_existing = form.consent_existing == "true";
+        let consent_sensitive = form.pending_directory().is_some_and(|grant| {
+            crate::execution::authority::sensitive_directory(
+                &grant.host_path,
+                state.local_data.root(),
+            )
+        });
+        let consent_direct = form
+            .pending_directory()
+            .is_some_and(|grant| grant.access == crate::execution::DirectoryAccess::DirectWrite);
         let consent_reviewed = form.pending_directory().is_some_and(|grant| {
             grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
         });
@@ -609,6 +622,8 @@ impl ConversationDetailView {
             consent_request: form.consent_request,
             pending_directory: form.pending_directory,
             consent_existing,
+            consent_direct,
+            consent_sensitive,
             consent_reviewed,
             draft_nonce: form.draft_nonce,
             draft_preset_reference: form.preset_preview,
@@ -959,6 +974,8 @@ impl ConversationDetailView {
             pending_directory: String::new(),
             consent_existing: false,
             consent_reviewed: false,
+            consent_direct: false,
+            consent_sensitive: false,
             draft_nonce: String::new(),
             draft_preset_reference: String::new(),
             consent_reference: String::new(),
@@ -1047,7 +1064,7 @@ impl ConversationDetailView {
                     state.local_data.root(),
                 );
                 view.pending_approval = (view.sensitive
-                    || grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply)
+                    || grant.access != crate::execution::DirectoryAccess::ReadOnly)
                     && !state.access_consent.authorised_conversation(
                         session,
                         record.id,
@@ -1079,6 +1096,9 @@ impl ConversationDetailView {
                 view.pending_approval = true;
                 view.review_before_apply =
                     grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply;
+                view.direct_write = grant.access == crate::execution::DirectoryAccess::DirectWrite;
+                view.access_label =
+                    crate::slices::execution_settings::page::directory_access_label(grant.access);
                 view.form_value = grant.form_value();
                 view.exclusions = crate::workflows::workspace::reviewed_capture_exclusions(
                     &grant.host_path,
@@ -1102,6 +1122,11 @@ impl ConversationDetailView {
         self.consent_existing = existing;
         self.consent_reviewed =
             grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply;
+        self.consent_direct = grant.access == crate::execution::DirectoryAccess::DirectWrite;
+        self.consent_sensitive = crate::execution::authority::sensitive_directory(
+            &grant.host_path,
+            state.local_data.root(),
+        );
         self
     }
 
@@ -1255,6 +1280,8 @@ fn directory_view(grant: &crate::execution::DirectoryGrant) -> DirectoryView {
         pending_approval: false,
         transient: false,
         review_before_apply: grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply,
+        direct_write: grant.access == crate::execution::DirectoryAccess::DirectWrite,
+        access_label: crate::slices::execution_settings::page::directory_access_label(grant.access),
         exclusions: Vec::new(),
     }
 }

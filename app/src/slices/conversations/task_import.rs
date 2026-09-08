@@ -213,7 +213,7 @@ fn import_grant<'a>(
     if !state.sessions.contains_live(&session) {
         return Err("The session expired. Reload before import.");
     }
-    if (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+    if (grant.access != crate::execution::DirectoryAccess::ReadOnly
         || crate::execution::authority::sensitive_directory(
             &grant.host_path,
             state.local_data.root(),

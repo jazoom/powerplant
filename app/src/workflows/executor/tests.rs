@@ -13,7 +13,7 @@ use crate::sessions::JobStatus;
 use crate::workflows::capabilities::{CapabilityDirectory, DirectoryRole};
 
 #[test]
-fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
+fn project_free_mounts_require_direct_write_authority_for_live_host_writes() {
     let root = tempfile::tempdir().unwrap();
     let host = root.path().join("project");
     std::fs::create_dir(&host).unwrap();
@@ -34,7 +34,9 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
         root: root.path().join("attempt"),
         project: root.path().join("attempt/workspace"),
     };
-    for grants in [Vec::new(), vec![grant.clone()]] {
+    let mut direct = grant.clone();
+    direct.access = crate::execution::DirectoryAccess::DirectWrite;
+    for grants in [Vec::new(), vec![grant.clone()], vec![direct]] {
         let settings = settings.clone().with_directories(grants.clone()).unwrap();
         let authority =
             crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
@@ -70,16 +72,91 @@ fn project_free_mounts_keep_host_roots_read_only_and_scratch_writable() {
         if !grants.is_empty() {
             assert_eq!(spec.mounts[1].host, host);
             assert_eq!(spec.mounts[1].guest, grant.guest_path());
-            assert!(spec.mounts[1].read_only);
+            let direct = grants[0].access == crate::execution::DirectoryAccess::DirectWrite;
+            assert_eq!(spec.mounts[1].read_only, !direct);
             assert_eq!(spec.workdir, grant.guest_path());
+            let access = authority.policy.resolve("file").unwrap().1;
+            assert_eq!(access.is_writable(), direct);
+            crate::sandbox::confirm_host_write_access(&spec, &host, access).unwrap();
+            let mut forged = capabilities.clone();
+            forged.directories[0].access = AccessMode::ReadWrite;
             assert_eq!(
-                authority.policy.resolve("file").unwrap().1,
-                AccessMode::ReadOnly
+                super::project_free_attempt_spec(&forged, &workspace, &authority).is_ok(),
+                direct
             );
         } else {
             assert_eq!(spec.workdir, "/workspace");
         }
     }
+}
+
+#[test]
+fn mixed_quick_task_mounts_only_reviewed_roots_as_copies() {
+    let root = tempfile::tempdir().unwrap();
+    let mut grants = Vec::new();
+    for (name, access) in [
+        ("direct", crate::execution::DirectoryAccess::DirectWrite),
+        (
+            "reviewed",
+            crate::execution::DirectoryAccess::ReviewBeforeApply,
+        ),
+        ("reference", crate::execution::DirectoryAccess::ReadOnly),
+    ] {
+        let path = root.path().join(name);
+        std::fs::create_dir(&path).unwrap();
+        let mut grant = crate::execution::DirectoryGrant::from_selected(&path, &grants).unwrap();
+        grant.access = access;
+        grants.push(grant);
+    }
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "test".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        crate::agents::ToolId::ALL.to_vec(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(grants.clone())
+    .unwrap();
+    let authority = crate::execution::ProjectFreeAuthority::from_settings(1, &settings).unwrap();
+    let pinned = crate::workflows::pin_project_free_quick_task_with_directories(
+        &settings.tools,
+        "",
+        settings.environment,
+        grants
+            .iter()
+            .map(|grant| GuestDirectoryAccess {
+                alias: grant.alias.clone(),
+                access: AccessMode::ReadOnly,
+            })
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let capabilities = crate::workflows::capabilities::AttemptCapabilities::derive_project_free(
+        &pinned.definition.steps()[0],
+        &authority,
+    )
+    .unwrap();
+    let workspace = crate::workflows::workspace::AttemptWorkspace {
+        root: root.path().join("attempt"),
+        project: root.path().join("attempt/workspace"),
+    };
+    let spec = super::project_free_attempt_spec(&capabilities, &workspace, &authority).unwrap();
+    assert_eq!(spec.mounts[1].host, grants[0].host_path);
+    assert!(!spec.mounts[1].read_only);
+    assert_eq!(
+        spec.mounts[2].host,
+        workspace.reviewed_root(&grants[1].alias).unwrap()
+    );
+    assert!(!spec.mounts[2].read_only);
+    assert_eq!(spec.mounts[3].host, grants[2].host_path);
+    assert!(spec.mounts[3].read_only);
+    assert_eq!(authority.reviewed_aliases, vec![grants[1].alias.clone()]);
 }
 
 #[test]

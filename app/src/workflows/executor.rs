@@ -2896,7 +2896,12 @@ async fn start_attempt_sandbox(
         .iter()
         .find(|grant| grant.alias == job.host_policy.primary_alias());
     let spec = if let Some(authority) = job.project_free_authority.as_ref() {
-        project_free_attempt_spec(capabilities, workspace, authority)?
+        let spec = project_free_attempt_spec(capabilities, workspace, authority)?;
+        for grant in authority.policy.grants() {
+            crate::sandbox::confirm_host_write_access(&spec, &grant.host_path, grant.access)
+                .map_err(|error| error.message())?;
+        }
+        spec
     } else if capabilities.source_location
         == crate::workflows::capabilities::PrimarySourceLocation::UserProject
     {
@@ -2910,8 +2915,12 @@ async fn start_attempt_sandbox(
             &user_project.host_path,
             &job.host_policy,
         )?;
-        crate::sandbox::reject_user_project_write(&spec, &user_project.host_path)
-            .map_err(|error| error.message())?;
+        crate::sandbox::confirm_host_write_access(
+            &spec,
+            &user_project.host_path,
+            AccessMode::ReadOnly,
+        )
+        .map_err(|error| error.message())?;
         spec
     };
     if job.job.cancel_requested() {
@@ -3009,9 +3018,9 @@ fn project_free_attempt_spec(
         let reviewed = authority.reviewed_aliases.contains(&directory.alias);
         let captured = capabilities.source_location
             == crate::workflows::capabilities::PrimarySourceLocation::AttemptWorkspace
-            && (reviewed || authority.reviewed_aliases.is_empty());
-        if directory.access.is_writable() && !reviewed {
-            return Err("Only an isolated reviewed directory can receive write access.");
+            && (reviewed || (authority.reviewed_aliases.is_empty() && !grant.access.is_writable()));
+        if directory.access.is_writable() && !(captured || grant.access.is_writable()) {
+            return Err("Host write access requires an authorised Direct write grant.");
         }
         mounts.push(crate::sandbox::MountSpec {
             guest: grant.guest_path.clone(),
@@ -3161,7 +3170,7 @@ fn confirm_run_authority(
                     return true;
                 }
                 settings.directories.iter().any(|grant| {
-                    (grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
+                    (grant.access != crate::execution::DirectoryAccess::ReadOnly
                         || crate::execution::authority::sensitive_directory(
                             &grant.host_path,
                             state.local_data.root(),
@@ -3175,7 +3184,7 @@ fn confirm_run_authority(
                 })
             })
         {
-            return Err("Sensitive directory access needs explicit approval.".to_owned());
+            return Err("Directory access needs explicit approval.".to_owned());
         }
         if !authority.policy.is_private_workspace()
             || job.project_id.is_some()

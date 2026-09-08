@@ -163,7 +163,7 @@ async fn copied_sensitive_access_requires_new_consent() {
     assert!(
         text(response)
             .await
-            .contains("Directory review or sensitive access needs explicit approval.")
+            .contains("Directory access needs explicit approval.")
     );
     assert_eq!(state.conversations.list().len(), 1);
     assert!(
@@ -467,6 +467,15 @@ async fn first_send_persists_message_and_model_then_replaces_location() {
 
 #[tokio::test]
 async fn sensitive_draft_consent_is_consumed_by_one_valid_first_message() {
+    for access in [
+        crate::execution::DirectoryAccess::ReadOnly,
+        crate::execution::DirectoryAccess::DirectWrite,
+    ] {
+        sensitive_first_message_case(access).await;
+    }
+}
+
+async fn sensitive_first_message_case(access: crate::execution::DirectoryAccess) {
     let mut state = test_state();
     let home = tempfile::tempdir().unwrap();
     let data = home.path().join("power-plant-data");
@@ -474,7 +483,8 @@ async fn sensitive_draft_consent_is_consumed_by_one_valid_first_message() {
     state.local_data = crate::local_data::LocalDataReset::for_test(data);
     let token = connected(&state);
     let session = session_id(&token);
-    let grant = crate::execution::DirectoryGrant::from_selected(home.path(), &[]).unwrap();
+    let mut grant = crate::execution::DirectoryGrant::from_selected(home.path(), &[]).unwrap();
+    grant.access = access;
     let directories = vec![grant.clone()];
     let nonce = crate::execution::draft_nonce().unwrap();
     let effort = state

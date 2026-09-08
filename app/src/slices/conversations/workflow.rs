@@ -1421,6 +1421,7 @@ async fn launch_readiness(
                         crate::execution::DirectoryAccess::ReadOnly => "Read only",
                         crate::execution::DirectoryAccess::ReviewBeforeApply =>
                             "Review before apply",
+                        crate::execution::DirectoryAccess::DirectWrite => "Direct write",
                     }
                 )
             })
@@ -1948,6 +1949,7 @@ async fn preview_phase_access(
                 grant.guest_path(),
                 match grant.access {
                     crate::execution::DirectoryAccess::ReadOnly => "Read only",
+                    crate::execution::DirectoryAccess::DirectWrite => "Direct write",
                     crate::execution::DirectoryAccess::ReviewBeforeApply if writes =>
                         "Review before apply",
                     crate::execution::DirectoryAccess::ReviewBeforeApply =>
