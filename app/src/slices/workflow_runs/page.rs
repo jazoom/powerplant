@@ -371,6 +371,7 @@ impl LoopDetailView {
                         crate::workflows::TaskOutcome::Reserved
                         | crate::workflows::TaskOutcome::Dispatched => "Active",
                         crate::workflows::TaskOutcome::CompletedCommit => "Committed",
+                        crate::workflows::TaskOutcome::CompletedApplication => "Applied",
                         crate::workflows::TaskOutcome::CompletedUnchanged => "Unchanged",
                         crate::workflows::TaskOutcome::Failed => "Failed",
                         crate::workflows::TaskOutcome::Cancelled => "Cancelled",

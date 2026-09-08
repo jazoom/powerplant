@@ -67,6 +67,7 @@ pub(crate) enum TaskOutcome {
     Reserved,
     Dispatched,
     CompletedCommit,
+    CompletedApplication,
     CompletedUnchanged,
     Failed,
     Cancelled,
@@ -126,7 +127,7 @@ impl TaskLoopError {
             Self::Stale => "That task loop command is stale. Reload it.",
             Self::Busy => "Another command is active. The paused checkpoint is unchanged.",
             Self::Uncertain => {
-                "A commit is still uncertain. Continuation and retry stay unavailable until reconciliation finishes."
+                "Execution remains unsettled. Continuation and retry stay unavailable until recovery and cleanup finish."
             }
         }
     }
@@ -318,12 +319,7 @@ impl TaskLoop {
     pub(crate) fn completed_count(&self) -> usize {
         self.tasks
             .iter()
-            .filter(|task| {
-                matches!(
-                    task.outcome,
-                    TaskOutcome::CompletedCommit | TaskOutcome::CompletedUnchanged
-                )
-            })
+            .filter(|task| completed_outcome(task.outcome))
             .count()
     }
 
@@ -443,6 +439,7 @@ impl TaskLoop {
                 }
                 TaskOutcome::Reserved
                 | TaskOutcome::Dispatched
+                | TaskOutcome::CompletedApplication
                 | TaskOutcome::CompletedCommit
                 | TaskOutcome::CompletedUnchanged
                 | TaskOutcome::Failed
@@ -865,6 +862,8 @@ impl TaskLoopStore {
                 || child.project_id != Some(record.project_id)
                 || child.pinned != record.pinned
                 || child.phase_models != record.phase_models
+                || child.environments != record.environments
+                || child.agent_id != Some(record.agent_id)
             {
                 return Err(TaskLoopError::Conflict);
             }
@@ -888,17 +887,8 @@ impl TaskLoopStore {
             {
                 return Err(TaskLoopError::Conflict);
             }
-            if matches!(
-                task.outcome,
-                TaskOutcome::CompletedCommit | TaskOutcome::CompletedUnchanged
-            ) {
-                return Err(TaskLoopError::DuplicateDispatch);
-            }
             task.outcome = outcome;
-            if matches!(
-                outcome,
-                TaskOutcome::CompletedCommit | TaskOutcome::CompletedUnchanged
-            ) {
+            if completed_outcome(outcome) {
                 if record.pending_index().is_some() {
                     if pause_requested {
                         record.state = TaskLoopState::Paused;
@@ -1074,7 +1064,7 @@ fn reconcile_record(
             {
                 return Err(TaskLoopError::Corrupt);
             }
-            uncertain |= child_commit_uncertain(&child);
+            uncertain |= child_settlement_uncertain(&child);
         }
         let Some(child_id) = task.child_id else {
             continue;
@@ -1086,6 +1076,8 @@ fn reconcile_record(
                 || child.project_id != Some(record.project_id)
                 || child.pinned != record.pinned
                 || child.phase_models != record.phase_models
+                || child.environments != record.environments
+                || child.agent_id != Some(record.agent_id)
                 || child.task_selection.as_ref().is_none_or(|selection| {
                     selection.document_id != record.task_list.document_id
                         || selection.revision != record.task_list.revision
@@ -1097,7 +1089,7 @@ fn reconcile_record(
         }) {
             return Err(TaskLoopError::Corrupt);
         }
-        if created.as_ref().is_some_and(child_commit_uncertain) {
+        if created.as_ref().is_some_and(child_settlement_uncertain) {
             uncertain = true;
             continue;
         }
@@ -1161,6 +1153,7 @@ fn reconcile_record(
             matches!(
                 task.outcome,
                 TaskOutcome::Pending
+                    | TaskOutcome::CompletedApplication
                     | TaskOutcome::CompletedCommit
                     | TaskOutcome::CompletedUnchanged
             )
@@ -1178,18 +1171,54 @@ fn reconcile_record(
 fn completed_outcome(outcome: TaskOutcome) -> bool {
     matches!(
         outcome,
-        TaskOutcome::CompletedCommit | TaskOutcome::CompletedUnchanged
+        TaskOutcome::CompletedCommit
+            | TaskOutcome::CompletedApplication
+            | TaskOutcome::CompletedUnchanged
     )
 }
 
-pub(crate) fn child_commit_uncertain(run: &WorkflowRun) -> bool {
-    run.attempts
-        .iter()
-        .any(|attempt| attempt.commit_transaction.is_some() && attempt.commit_result.is_none())
+pub(crate) fn child_settlement_uncertain(run: &WorkflowRun) -> bool {
+    run.attempts.iter().any(|attempt| {
+        attempt.cleanup != super::run::AttemptCleanupRecord::Complete
+            || (attempt.commit_transaction.is_some() && attempt.commit_result.is_none())
+            || attempt
+                .apply_transaction
+                .as_ref()
+                .is_some_and(|transaction| !transaction.is_settled())
+    })
 }
 
 fn child_outcome(run: &WorkflowRun) -> Option<TaskOutcome> {
+    if child_settlement_uncertain(run) {
+        return None;
+    }
     match &run.state {
+        RunState::Completed
+            if run.attempts.iter().any(|attempt| {
+                attempt
+                    .apply_transaction
+                    .as_ref()
+                    .is_some_and(|transaction| {
+                        transaction.is_verified()
+                            && !transaction.roots.is_empty()
+                            && transaction.roots.iter().all(|root| {
+                                matches!(
+                                    root.outcome,
+                                    super::apply::ApplyRootOutcome::Applied
+                                        | super::apply::ApplyRootOutcome::Unchanged
+                                )
+                            })
+                    })
+                    && attempt.state == super::run::AttemptState::Completed
+                    && attempt.cleanup == super::run::AttemptCleanupRecord::Complete
+                    && run.pinned.definition.step(&attempt.step).is_some_and(|step| {
+                        matches!(&step.action, super::definition::StepAction::SystemCommand(action)
+                            if action.command == super::definition::SystemCommandId::ApplyChanges)
+                    })
+            }) =>
+        {
+            Some(TaskOutcome::CompletedApplication)
+        }
         RunState::Completed if run.completed_without_changes() => {
             Some(TaskOutcome::CompletedUnchanged)
         }
@@ -1397,6 +1426,7 @@ fn outcome_as_str(outcome: TaskOutcome) -> &'static str {
         TaskOutcome::Reserved => "reserved",
         TaskOutcome::Dispatched => "dispatched",
         TaskOutcome::CompletedCommit => "completed-commit",
+        TaskOutcome::CompletedApplication => "completed-application",
         TaskOutcome::CompletedUnchanged => "completed-unchanged",
         TaskOutcome::Failed => "failed",
         TaskOutcome::Cancelled => "cancelled",
@@ -1409,6 +1439,7 @@ fn outcome_from_str(value: &str) -> Option<TaskOutcome> {
         "reserved" => Some(TaskOutcome::Reserved),
         "dispatched" => Some(TaskOutcome::Dispatched),
         "completed-commit" => Some(TaskOutcome::CompletedCommit),
+        "completed-application" => Some(TaskOutcome::CompletedApplication),
         "completed-unchanged" => Some(TaskOutcome::CompletedUnchanged),
         "failed" => Some(TaskOutcome::Failed),
         "cancelled" => Some(TaskOutcome::Cancelled),

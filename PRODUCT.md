@@ -185,6 +185,8 @@ Model context identifies actual guest paths and effective access. Root instructi
 
 Explicit Git commands retain an explicit supported project binding. Directory order never selects a Git destination. Task-loop conversion remains separate from ordinary one-shot workflows.
 
+Task-loop completion recognises verified generic file application separately from commits. Every application root must report Applied or Unchanged, and managed cleanup must finish. Unsettled application transactions block completion, continuation and retry. Project-free task-loop launch remains unavailable.
+
 Saved documents sits in a stable inline section above the transcript. Its summary shows the document count when documents exist.
 
 Completed responses offer Save as plan and Save as tasks. The user can also paste plan or task-list text. These actions execute nothing.

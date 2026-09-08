@@ -271,6 +271,20 @@ fn a_substituted_child_cannot_advance_the_parent() {
         store.complete_child(&parent.id, &child).err(),
         Some(TaskLoopError::Conflict)
     );
+    child = completed_child(&parent, id, source(1));
+    child.environments.steps[0].snapshot_digest =
+        crate::environments::SnapshotDigest::parse(&format!("sha256:{}", "e".repeat(64)))
+            .expect("replacement snapshot");
+    assert_eq!(
+        store.complete_child(&parent.id, &child).err(),
+        Some(TaskLoopError::Conflict)
+    );
+    child = completed_child(&parent, id, source(1));
+    child.agent_id = Some(AgentId::generate().expect("other agent"));
+    assert_eq!(
+        store.complete_child(&parent.id, &child).err(),
+        Some(TaskLoopError::Conflict)
+    );
     assert_eq!(store.get(&parent.id).expect("parent").completed_count(), 0);
 }
 
@@ -551,6 +565,145 @@ fn recovery_rejects_a_child_from_another_parent() {
     runs.create(child).expect("child");
     assert_eq!(store.reconcile(&runs), Err(TaskLoopError::Corrupt));
     assert_eq!(store.get(&parent.id).expect("unchanged"), parent);
+}
+
+fn applied_child() -> (TaskLoopStore, TaskLoop, WorkflowRun) {
+    use crate::workflows::apply::{
+        ApplyRoot, ApplyRootOutcome, ApplyTransaction, ApplyTransactionState,
+    };
+    let definition =
+        crate::workflows::seeds::implement_and_review_definition(test_environment_id());
+    let definition = crate::workflows::definition::WorkflowDefinition::from_parts_with_mode(
+        definition.name().to_owned(),
+        definition.default_environment(),
+        definition.roles().to_vec(),
+        definition.steps().to_vec(),
+        crate::workflows::definition::ExecutionMode::TaskList,
+    )
+    .expect("task loop definition");
+    let mut parent = loop_record();
+    parent.environments = crate::tests::test_environment_set(&definition);
+    parent.pinned = PinnedWorkflowDefinition::pin(None, definition);
+    let store = TaskLoopStore::in_memory();
+    let parent = store.create(parent).expect("parent");
+    let (parent, child_id, _) = store.reserve_next_child(&parent.id, 0).expect("reserve");
+    let parent = store
+        .mark_dispatched(&parent.id, child_id)
+        .expect("dispatch");
+    let mut child = completed_child(&parent, child_id, source(1));
+    let attempt = &mut child.attempts[0];
+    attempt.step = crate::workflows::definition::StepKey::parse("apply").expect("step");
+    attempt.commit_result = None;
+    attempt.apply_transaction = Some(ApplyTransaction {
+        state: ApplyTransactionState::Verified,
+        roots: vec![ApplyRoot {
+            grant_id: crate::execution::DirectoryGrantId::generate().expect("grant"),
+            alias: "files".to_owned(),
+            host_path: PathBuf::from("/files"),
+            identity: crate::execution::CanonicalDirectoryIdentity {
+                device: 1,
+                inode: 2,
+            },
+            baseline_candidate: crate::workflows::artefacts::CandidateHash::parse(&format!(
+                "sha256:{}",
+                "a".repeat(64)
+            ))
+            .expect("hash"),
+            candidate_hash: crate::workflows::artefacts::CandidateHash::parse(&format!(
+                "sha256:{}",
+                "b".repeat(64)
+            ))
+            .expect("hash"),
+            exclusions: Vec::new(),
+            outcome: ApplyRootOutcome::Applied,
+        }],
+        baseline: source(1),
+        candidate: source(2),
+        approval: source(3),
+    });
+    (store, parent, child)
+}
+
+#[test]
+fn generic_application_requires_all_roots_and_cleanup_to_settle() {
+    use crate::workflows::apply::ApplyRootOutcome;
+    let (store, parent, mut child) = applied_child();
+    for outcome in [
+        ApplyRootOutcome::Pending,
+        ApplyRootOutcome::Conflicted,
+        ApplyRootOutcome::Uncertain,
+    ] {
+        child.attempts[0]
+            .apply_transaction
+            .as_mut()
+            .expect("transaction")
+            .roots[0]
+            .outcome = outcome;
+        assert_eq!(
+            store.complete_child(&parent.id, &child).err(),
+            Some(TaskLoopError::Conflict)
+        );
+        assert_eq!(store.get(&parent.id).expect("parent"), parent);
+    }
+    child.attempts[0]
+        .apply_transaction
+        .as_mut()
+        .expect("transaction")
+        .roots[0]
+        .outcome = ApplyRootOutcome::Applied;
+    let mut earlier = child.attempts[0].clone();
+    earlier.apply_transaction = None;
+    earlier.cleanup = crate::workflows::run::AttemptCleanupRecord::Orphaned {
+        sandbox: true,
+        workspace: false,
+        journal: false,
+    };
+    child.attempts.insert(0, earlier);
+    assert_eq!(
+        store.complete_child(&parent.id, &child).err(),
+        Some(TaskLoopError::Conflict)
+    );
+    child.attempts.remove(0);
+    let (completed, advance) = store
+        .complete_child(&parent.id, &child)
+        .expect("settled application");
+    assert_eq!(advance, LoopAdvance::Next);
+    assert_eq!(
+        completed.tasks[0].outcome,
+        TaskOutcome::CompletedApplication
+    );
+    assert_eq!(
+        store.complete_child(&parent.id, &child).err(),
+        Some(TaskLoopError::DuplicateDispatch)
+    );
+    assert!(completed.tasks[1].child_id.is_none());
+}
+
+#[test]
+fn uncertain_application_never_counts_as_completion() {
+    use crate::workflows::apply::ApplyTransactionState;
+    let (store, parent, mut child) = applied_child();
+    for state in [
+        ApplyTransactionState::Prepared,
+        ApplyTransactionState::Applying {
+            completed: 0,
+            path: "file".to_owned(),
+        },
+        ApplyTransactionState::Applied { completed: 1 },
+        ApplyTransactionState::RecoveryUncertain,
+    ] {
+        child.attempts[0]
+            .apply_transaction
+            .as_mut()
+            .expect("transaction")
+            .state = state;
+        assert!(child_settlement_uncertain(&child));
+        assert_eq!(
+            store.complete_child(&parent.id, &child).err(),
+            Some(TaskLoopError::Conflict)
+        );
+        assert_eq!(store.get(&parent.id).expect("parent"), parent);
+    }
 }
 
 #[test]

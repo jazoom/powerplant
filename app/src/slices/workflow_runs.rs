@@ -573,7 +573,7 @@ async fn retry_loop(
     if state
         .workflow_runs
         .get(&child_id)
-        .is_some_and(|run| crate::workflows::task_loop::child_commit_uncertain(&run))
+        .is_some_and(|run| crate::workflows::task_loop::child_settlement_uncertain(&run))
     {
         return command_error(
             &record,
@@ -800,10 +800,9 @@ fn loop_has_uncertain_commit(state: &AppState, record: &TaskLoop) -> bool {
             .into_iter()
             .chain(task.previous_child_ids.iter().copied())
             .any(|id| {
-                state
-                    .workflow_runs
-                    .get(&id)
-                    .is_some_and(|run| crate::workflows::task_loop::child_commit_uncertain(&run))
+                state.workflow_runs.get(&id).is_some_and(|run| {
+                    crate::workflows::task_loop::child_settlement_uncertain(&run)
+                })
             })
     })
 }
@@ -1074,6 +1073,7 @@ fn loop_checkpoint_source(
                 if !matches!(
                     task.outcome,
                     crate::workflows::TaskOutcome::CompletedCommit
+                        | crate::workflows::TaskOutcome::CompletedApplication
                         | crate::workflows::TaskOutcome::CompletedUnchanged
                 ) {
                     return None;
