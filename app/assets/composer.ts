@@ -33,6 +33,12 @@ export function initComposer(
         return;
     }
 
+    const conversationIdentity = () =>
+        root
+            .closest("#conversation-detail")
+            ?.querySelector<HTMLElement>("[data-conversation-url]")?.dataset
+            .conversationUrl;
+    let owner = conversationIdentity();
     let draft = messageField(root)?.value ?? "";
     let selectionStart = 0;
     let selectionEnd = 0;
@@ -91,8 +97,14 @@ export function initComposer(
     return {
         reconcile(context) {
             if (context.cause === "location") {
-                // A retained composer must not carry a draft into another conversation.
-                captureDraft();
+                const nextOwner = conversationIdentity();
+                if (owner && nextOwner === owner) restoreDraft();
+                else captureDraft();
+                owner = nextOwner;
+                return;
+            }
+            if (context.cause === "live-patch") {
+                restoreDraft();
                 return;
             }
             if (

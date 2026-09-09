@@ -60,6 +60,43 @@ test("navigation replaces the draft before a later conversation command patch", 
     controller.abort();
 });
 
+test.each([
+    "/plans/one?revision=1",
+    "/conversations/one/workflow",
+    "/conversations/one",
+])("same-conversation navigation to %s retains the draft", (url) => {
+    const detail = document.createElement("section");
+    detail.id = "conversation-detail";
+    const identity = document.createElement("template");
+    identity.dataset.conversationUrl = "/conversations/one";
+    detail.append(identity);
+    const form = composerForm();
+    detail.append(form);
+    const controller = new AbortController();
+    const island = initComposer(form, { signal: controller.signal });
+    const textarea = form.querySelector("textarea")!;
+    textarea.value = "Unsent private draft";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    textarea.value = "";
+    island?.reconcile?.({
+        cause: "location",
+        detail: { url, cause: "link-navigation" },
+    });
+    expect(textarea.value).toBe("Unsent private draft");
+    identity.dataset.conversationUrl = "/conversations/two";
+    textarea.value = "";
+    island?.reconcile?.({
+        cause: "location",
+        detail: { url: "/conversations/two", cause: "link-navigation" },
+    });
+    island?.reconcile?.({
+        cause: "live-patch",
+        detail: { form, url: "/live", targetIds: ["conversation-detail"] },
+    });
+    expect(textarea.value).toBe("");
+    controller.abort();
+});
+
 test("a sandbox projection preserves the unsent message", () => {
     const form = composerForm();
     document.body.append(form);

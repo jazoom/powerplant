@@ -1843,8 +1843,8 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
             &record.id,
             job.id(),
             "# First plan\n".to_owned(),
-            crate::conversations::MessageStatus::Complete,
-            None,
+            crate::conversations::MessageStatus::Failed,
+            Some("Provider unavailable".to_owned()),
         )
         .expect("reply");
     state
@@ -1864,8 +1864,26 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
         .await
         .expect("save");
     assert_eq!(save.status(), StatusCode::OK);
+    let patch = text(save).await;
+    assert!(patch.contains("target=\"conversation-detail\""));
+    assert!(patch.contains(&format!("location=\"/conversations/{}\"", record.id)));
+    assert!(!patch.contains(" navigate="));
     let plans = state.documents.list_for_conversation(record.id);
     let plan = plans.first().expect("saved plan").clone();
+    let source = plan.revisions[0].source.clone();
+    let view = super::detail_view(&state, owner, &record, &record.title, "");
+    assert_eq!(view.messages.len(), 3);
+    assert!(!view.messages[1].user);
+    assert_eq!(view.messages[1].error, "Provider unavailable");
+    assert!(!view.messages[1].html.contains("Added your own plan"));
+    assert!(view.messages[2].user);
+    assert!(view.messages[2].html.contains("Added your own plan"));
+    assert!(
+        view.messages[2]
+            .html
+            .contains(&format!("/plans/{}?revision=1", plan.id))
+    );
+    assert_eq!(state.conversations.get(&record.id).unwrap(), record);
 
     let open = app(&state)
         .oneshot(document(&format!("/plans/{}", plan.id), &token))
@@ -1888,6 +1906,12 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
     assert_eq!(revise.status(), StatusCode::OK);
     let plan = state.documents.get(&plan.id).expect("corrected plan");
     assert_eq!(plan.current_revision(), 2);
+    assert_eq!(plan.revisions[0].source, source);
+    let view = super::detail_view(&state, owner, &record, &record.title, "");
+    assert!(view.messages[2].user);
+    assert!(view.messages[2].html.contains("First plan"));
+    assert!(!view.messages[2].html.contains("Corrected plan"));
+    assert_eq!(state.conversations.get(&record.id).unwrap(), record);
 
     let old = app(&state)
         .oneshot(document(&format!("/plans/{}?revision=1", plan.id), &token))

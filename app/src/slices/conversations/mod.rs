@@ -1435,7 +1435,14 @@ async fn save_plan_text(
         },
         secret.as_deref(),
     ) {
-        Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
+        Ok(_) => {
+            let view = detail_view(&state, _session.0, &record, &record.title, "");
+            let mut patches = hypergraft::PatchSet::new()
+                .title(&view.document_title)
+                .with_children("conversation-detail", &view.contents())?;
+            patches.replace_location(conversation_path(&record))?;
+            Ok(patches.respond(PatchStatus::Ok)?)
+        }
         Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
             Err(AppError::new("store plan document", error))
         }

@@ -279,7 +279,23 @@ export function initWorkspace(
     mobile.addEventListener("change", sync, { signal });
     sync();
     return {
-        reconcile: sync,
+        reconcile(context) {
+            if (
+                context.cause === "location" &&
+                context.detail.cause !== "command-patch-replacement" &&
+                /^\/(?:plans\/[^/]+|conversations\/[^/]+\/workflow)$/.test(
+                    new URL(context.detail.url, location.href).pathname,
+                ) &&
+                root.querySelector("#plan-detail, #workflow-detail")
+            ) {
+                workOpen = true;
+                expanded = false;
+                root.querySelector<HTMLElement>(
+                    "#conversation-settings:popover-open, #conversation-documents:popover-open",
+                )?.hidePopover();
+            }
+            sync();
+        },
         destroy() {
             headerResize.disconnect();
             root.style.removeProperty("--workspace-panel-top");

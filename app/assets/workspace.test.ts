@@ -45,6 +45,68 @@ test.each(["plan", "workflow"])(
     },
 );
 
+test.each(["plan", "workflow"])(
+    "explicit %s navigation reopens a closed retained companion, unlike patches",
+    (kind) => {
+        vi.stubGlobal("matchMedia", () => ({
+            matches: true,
+            addEventListener() {},
+        }));
+        const root = document.createElement("div");
+        root.innerHTML = `<section id="conversation-detail"><section id="transcript"></section><aside id="conversation-work" data-work-active="true"><section id="plan-detail"></section><button data-work-close>Close</button></aside></section>`;
+        document.body.append(root);
+        const controller = new AbortController();
+        const island = initWorkspace(root, { signal: controller.signal });
+        const work = root.querySelector<HTMLElement>("#conversation-work")!;
+        root.querySelector<HTMLButtonElement>("[data-work-close]")!.click();
+        const form = document.createElement("form");
+        island.reconcile?.({
+            cause: "live-patch",
+            detail: { form, url: "/live", targetIds: ["conversation-detail"] },
+        });
+        island.reconcile?.({
+            cause: "patch",
+            detail: {
+                form,
+                url: "/command",
+                requestKind: "patch",
+                outcome: "applied-patch",
+                status: 200,
+                targetIds: ["conversation-detail"],
+            },
+        });
+        island.reconcile?.({
+            cause: "location",
+            detail: { url: "/plans/one", cause: "command-patch-replacement" },
+        });
+        island.reconcile?.({
+            cause: "location",
+            detail: {
+                url: "/conversations/one?title=true",
+                cause: "get-form-replacement",
+            },
+        });
+        expect(work.hidden).toBe(true);
+        work.querySelector("section")!.id = `${kind}-detail`;
+        island.reconcile?.({
+            cause: "location",
+            detail: {
+                url:
+                    kind === "plan"
+                        ? "/plans/two"
+                        : "/conversations/one/workflow",
+                cause: "link-navigation",
+            },
+        });
+        expect(work.hidden).toBe(false);
+        expect(root.querySelector<HTMLElement>("#transcript")!.inert).toBe(
+            true,
+        );
+        island.destroy();
+        controller.abort();
+    },
+);
+
 test("Escape closes navigation before the companion and restores the menu trigger", () => {
     vi.stubGlobal("matchMedia", () => ({
         matches: true,

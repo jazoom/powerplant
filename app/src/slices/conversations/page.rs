@@ -1894,22 +1894,53 @@ impl ConversationDetailView {
                     hash: revision.content_hash.as_str(),
                 };
                 if let Ok(html) = view.render() {
-                    actions.push((revision.created_at_ms, *message_index as usize, html));
+                    actions.push((
+                        revision.created_at_ms,
+                        *message_index as usize,
+                        *assistant,
+                        html,
+                    ));
                 }
             }
         }
-        actions.sort_by_key(|(time, _, _)| *time);
+        actions.sort_by_key(|(time, _, _, _)| *time);
         let mut budget = 128 * 1024usize;
         let mut selected = Vec::new();
-        for (_, index, html) in actions.into_iter().rev() {
+        for (_, index, assistant, html) in actions.into_iter().rev() {
             if html.len() <= budget {
                 budget -= html.len();
-                selected.push((index, html));
+                selected.push((index, assistant, html));
             } else {
                 self.plan_actions_omitted = true;
             }
         }
-        for (index, html) in selected.into_iter().rev() {
+        for (action_index, (index, assistant, html)) in selected.into_iter().rev().enumerate() {
+            if !assistant {
+                // The source index anchors chronology. It does not transfer authorship to that message.
+                let position = self
+                    .messages
+                    .iter()
+                    .position(|message| {
+                        message.index > index && message.index < record.messages.len()
+                    })
+                    .unwrap_or(self.messages.len());
+                self.messages.insert(
+                    position,
+                    MessageView {
+                        index: record.messages.len() + action_index,
+                        user: true,
+                        html,
+                        status: "",
+                        error: String::new(),
+                        streaming: false,
+                        saveable_plan: false,
+                        task_action: String::new(),
+                        plan_action: String::new(),
+                        conversation_revision: String::new(),
+                    },
+                );
+                continue;
+            }
             if let Some(message) = self
                 .messages
                 .iter_mut()
