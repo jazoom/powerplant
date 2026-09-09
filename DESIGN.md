@@ -137,6 +137,10 @@ The model control sits inside the composer. Effective directory access appears b
 
 Jump to latest appears when the reader leaves the transcript end. New output does not move the reader away from earlier messages.
 
+### Conversation header
+
+The header shows the directory name followed by Conversation, or Nothing is saved until your first message on a draft. Saved records without directory context read No directory / Conversation. Actions run Plans, Setup, then Conversation actions. Conversation actions holds the independent draft copy with its settings note, rename and deletion behind an explicit confirmation. Plans carries its count only when plans or task lists exist. Current work appears only while work is non-idle and its companion is closed. A Needs your review strip opens Current work without approval when a decision waits. Narrow screens wrap the actions below a long title because production keeps readable text labels where the mock uses compact icon buttons.
+
 ### Current work
 
 Current work contains execution progress and required decisions. Candidate review shows real changed files and bounded diff previews. Diffs and Markdown code blocks receive keyboard focus.

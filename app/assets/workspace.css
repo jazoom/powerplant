@@ -466,7 +466,8 @@ body {
 #conversation-detail:has(
     :is(
         [id="conversation-settings"],
-        [id="conversation-documents"]
+        [id="conversation-documents"],
+        [id="conversation-actions"]
     ):popover-open
 ) {
     grid-template-columns: minmax(0, 1fr) 400px;

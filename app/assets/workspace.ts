@@ -75,8 +75,14 @@ export function initWorkspace(
         if (active && !previousActivity) workOpen = true;
         previousActivity = active;
         if (work) work.hidden = !workOpen;
+        // The review strip only applies while Current work stays closed.
+        root.querySelectorAll<HTMLElement>("[data-attention-strip]").forEach(
+            (strip) => {
+                strip.hidden = workOpen;
+            },
+        );
         const setup = root.querySelector(
-            "#conversation-settings:popover-open, #conversation-documents:popover-open",
+            "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
         );
         if (work) work.inert = !!setup;
         detail?.toggleAttribute(
@@ -94,10 +100,9 @@ export function initWorkspace(
             const element = detail?.querySelector<HTMLElement>(selector);
             if (element) element.inert = excludeConversation;
         }
-        root.querySelector("[data-work-toggle]")?.setAttribute(
-            "aria-expanded",
-            String(workOpen),
-        );
+        root.querySelectorAll("[data-work-toggle]").forEach((toggle) => {
+            toggle.setAttribute("aria-expanded", String(workOpen));
+        });
         root.querySelectorAll<HTMLAnchorElement>(
             "[data-recent-conversation]",
         ).forEach((link) => {
@@ -231,10 +236,10 @@ export function initWorkspace(
                 )?.showPopover();
                 sync();
             } else if (target?.closest("[data-work-toggle]")) {
-                returnFocus = target.closest<HTMLElement>("button");
+                returnFocus = target.closest<HTMLElement>("[data-work-toggle]");
                 workOpen = !workOpen;
                 root.querySelector<HTMLElement>(
-                    "#conversation-settings:popover-open, #conversation-documents:popover-open",
+                    "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
                 )?.hidePopover();
                 sync();
                 if (workOpen)
@@ -327,24 +332,31 @@ export function initWorkspace(
             if (
                 event.target instanceof HTMLElement &&
                 (event.target.id === "conversation-settings" ||
-                    event.target.id === "conversation-documents")
+                    event.target.id === "conversation-documents" ||
+                    event.target.id === "conversation-actions")
             ) {
                 sync();
                 if (
                     !event.target.matches(":popover-open") &&
                     !root.querySelector(
-                        "#conversation-settings:popover-open, #conversation-documents:popover-open",
+                        "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
                     )
                 ) {
                     const plans = event.target.id === "conversation-documents";
-                    const trigger = plans ? plansReturnFocus : setupReturnFocus;
+                    const actions = event.target.id === "conversation-actions";
+                    const trigger = plans
+                        ? plansReturnFocus
+                        : actions
+                          ? null
+                          : setupReturnFocus;
+                    const fallback = plans
+                        ? "[data-plans-toggle]"
+                        : actions
+                          ? '[popovertarget="conversation-actions"]'
+                          : '[popovertarget="conversation-settings"]';
                     const destination = trigger?.isConnected
                         ? trigger
-                        : root.querySelector<HTMLElement>(
-                              plans
-                                  ? "[data-plans-toggle]"
-                                  : '[popovertarget="conversation-settings"]',
-                          );
+                        : root.querySelector<HTMLElement>(fallback);
                     destination?.focus();
                 }
             }
@@ -377,7 +389,7 @@ export function initWorkspace(
                 workOpen = true;
                 expanded = false;
                 root.querySelector<HTMLElement>(
-                    "#conversation-settings:popover-open, #conversation-documents:popover-open",
+                    "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
                 )?.hidePopover();
             }
             sync();

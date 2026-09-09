@@ -656,6 +656,277 @@ async fn rename_and_delete_use_independent_conversation_identity() {
 }
 
 #[tokio::test]
+async fn rename_and_delete_reject_stale_revisions_without_state_change() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Saved conversation".to_owned())
+        .unwrap();
+    let path = format!("/conversations/{}", record.id.as_hex());
+    let stale = record.revision + 1;
+
+    let rename = app(&state)
+        .oneshot(command(
+            &format!("{path}/rename"),
+            &token,
+            &format!("title=Renamed&revision={stale}"),
+        ))
+        .await
+        .expect("stale rename");
+    assert_eq!(rename.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state.conversations.get(&record.id).expect("record").title,
+        "Saved conversation"
+    );
+
+    let delete = app(&state)
+        .oneshot(command(
+            &format!("{path}/delete"),
+            &token,
+            &format!("revision={stale}"),
+        ))
+        .await
+        .expect("stale delete");
+    assert_eq!(delete.status(), StatusCode::CONFLICT);
+    assert!(state.conversations.get(&record.id).is_some());
+}
+
+#[tokio::test]
+async fn conversation_actions_keep_rename_delete_and_draft_copy_behind_confirmation() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Saved conversation".to_owned())
+        .unwrap();
+    let path = format!("/conversations/{}", record.id.as_hex());
+    let detail = app(&state)
+        .oneshot(document(&path, &token))
+        .await
+        .expect("detail");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = text(detail).await;
+    // The destructive delete stays behind an explicit disclosure and binds the
+    // record revision, so a stray activation cannot remove the conversation.
+    let actions_start = body
+        .find("id=\"conversation-actions\"")
+        .expect("actions menu");
+    let documents_start = body
+        .find("id=\"conversation-documents\"")
+        .expect("plans panel");
+    let transcript_start = body.find("id=\"transcript\"").unwrap_or(body.len());
+    let documents = &body[documents_start..actions_start];
+    let actions = &body[actions_start..transcript_start];
+    // The draft copy carries source identity in Conversation actions, not Plans.
+    let draft = format!("/conversations/new?source={}", record.id.as_hex());
+    assert!(actions.contains(&draft));
+    assert!(!documents.contains(&draft));
+    assert!(actions.contains(&format!("{path}/rename")));
+    assert!(actions.contains(&format!("{path}/delete")));
+    assert!(
+        normalised(actions).contains(&format!("name=\"revision\" value=\"{}\"", record.revision))
+    );
+    // Delete sits inside a disclosure within the same menu.
+    let disclosure = actions
+        .split("<details")
+        .nth(1)
+        .expect("delete confirmation");
+    assert!(disclosure.contains(&format!("{path}/delete")));
+    // An idle conversation hides both the review strip and Current work.
+    assert!(!body.contains("data-attention-strip"));
+    assert!(!body.contains("data-work-toggle"));
+    // Header order runs Plans, Setup, then Conversation actions.
+    let plans = body.find("data-plans-toggle").expect("plans");
+    let setup = body
+        .find("popovertarget=\"conversation-settings\"")
+        .expect("setup");
+    let menu = body
+        .find("popovertarget=\"conversation-actions\"")
+        .expect("menu");
+    assert!(plans < setup && setup < menu);
+}
+
+fn normalised(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A live awaiting gate drives the header review strip and Current work
+/// from the same server decision source, without dispatching approval.
+#[tokio::test]
+async fn decision_waiting_header_exposes_the_review_strip_and_current_work() {
+    use crate::workflows::definition::{InputKey, OutputKey, StepKey};
+
+    let state = test_state();
+    let token = connected(&state);
+    let project_dir = tempfile::tempdir().expect("work dir");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(project_dir.path())
+            .status()
+            .expect("git")
+            .success()
+    );
+    std::fs::write(project_dir.path().join("notes.txt"), b"candidate\n").expect("source");
+    let initial_capture = crate::workflows::artefacts::CandidateCapture::capture_host(
+        project_dir.path(),
+        &state.workflow_artefacts,
+    )
+    .expect("initial capture");
+    std::fs::write(project_dir.path().join("notes.txt"), b"changed\n").expect("change");
+    let produced_capture = crate::workflows::artefacts::CandidateCapture::capture_host(
+        project_dir.path(),
+        &state.workflow_artefacts,
+    )
+    .expect("changed capture");
+    let conversation = state
+        .conversations
+        .create_saved(
+            crate::conversations::ConversationId::generate().expect("id"),
+            None,
+            Some("Fix the timeout message".to_owned()),
+            None,
+            vec![],
+        )
+        .expect("record");
+    let pinned = crate::workflows::pin_quick_task(
+        crate::agents::AccessMode::ReadWrite,
+        &[crate::agents::ToolId::List],
+        "Fix the timeout message.",
+        crate::tests::test_environment_id(),
+    )
+    .expect("quick task");
+    let mut run = crate::workflows::WorkflowRun::create(
+        crate::workflows::RunId::generate().expect("run"),
+        1,
+        crate::projects::ProjectId::generate().expect("project"),
+        None,
+        crate::workflows::RunKind::QuickTask,
+        pinned.clone(),
+        crate::tests::test_environment_set(&pinned.definition),
+    );
+    run.conversation_id = Some(conversation.id);
+    let gate_run_id = run.id;
+    let publish = |captured: &crate::workflows::artefacts::candidate::CandidateRevisionArtefact,
+                   producer: crate::workflows::artefacts::ArtefactProducer,
+                   inputs: Vec<crate::workflows::artefacts::ArtefactReference>| {
+        let bytes = captured.manifest_bytes().expect("manifest");
+        let object = state.workflow_artefacts.publish(&bytes).expect("publish");
+        crate::workflows::artefacts::ArtefactRecord {
+            id: crate::workflows::ArtefactId::generate().expect("artefact"),
+            kind: crate::workflows::definition::ArtefactKind::CandidateRevision,
+            artefact_hash: crate::workflows::artefacts::artefact_hash_for(
+                crate::workflows::definition::ArtefactKind::CandidateRevision,
+                captured.format_version,
+                &bytes,
+            ),
+            object_hash: object,
+            payload_bytes: bytes.len() as u64,
+            created_at_ms: 1,
+            provenance: crate::workflows::artefacts::ArtefactProvenance {
+                run_id: gate_run_id,
+                producer,
+                inputs,
+            },
+            summary: crate::workflows::artefacts::ArtefactSummary::Candidate {
+                candidate: captured.candidate_hash,
+                entries: captured.entries.len() as u64,
+                bytes: 0,
+                disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+            },
+        }
+    };
+    let initial = publish(
+        &initial_capture,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+    );
+    let initial_ref = crate::workflows::artefacts::ArtefactReference {
+        id: initial.id,
+        kind: initial.kind,
+        artefact_hash: initial.artefact_hash,
+    };
+    run.record_initial_candidate(initial).expect("initial");
+    let work = StepKey::parse("work").expect("work");
+    let attempt = crate::workflows::AttemptId::generate().expect("attempt");
+    run.start_attempt(
+        attempt,
+        vec![crate::workflows::run::AttemptArtefactInput {
+            key: InputKey::parse("candidate").expect("input"),
+            artefact: initial_ref.clone(),
+        }],
+        crate::tests::test_agent_capabilities(),
+        crate::workflows::run::AttemptSandboxRecord {
+            kind: crate::workflows::run::AttemptSandboxKind::IsolatedAttempt,
+            snapshot_digest: run
+                .environments
+                .steps
+                .iter()
+                .find(|binding| binding.step == work)
+                .expect("work environment")
+                .snapshot_digest
+                .clone(),
+        },
+        2,
+    )
+    .expect("start");
+    let produced = publish(
+        &produced_capture,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: attempt,
+            step: work.clone(),
+            output: Some(OutputKey::parse("candidate").expect("output")),
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+        vec![initial_ref.clone()],
+    );
+    let produced_ref = crate::workflows::artefacts::ArtefactReference {
+        id: produced.id,
+        kind: produced.kind,
+        artefact_hash: produced.artefact_hash,
+    };
+    run.record_attempt_outputs(
+        attempt,
+        vec![produced],
+        vec![crate::workflows::run::AttemptArtefactOutput {
+            key: OutputKey::parse("candidate").expect("output"),
+            artefact: produced_ref.clone(),
+        }],
+        Some(produced_ref.clone()),
+        crate::workflows::run::ObservedCandidate::Exact {
+            artefact: produced_ref.clone(),
+        },
+    )
+    .expect("outputs");
+    run.record_cleanup(
+        attempt,
+        crate::workflows::run::AttemptCleanupRecord::Complete,
+    )
+    .expect("cleanup");
+    run.complete_attempt(attempt, 3).expect("complete work");
+    run.open_gate(
+        crate::workflows::GateId::generate().expect("gate"),
+        produced_ref,
+        initial_ref,
+        4,
+    )
+    .expect("gate");
+    state.workflow_runs.create(run).expect("store run");
+    let path = format!("/conversations/{}", conversation.id.as_hex());
+    let detail = app(&state)
+        .oneshot(document(&path, &token))
+        .await
+        .expect("detail");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = text(detail).await;
+    // The strip and Current work open the companion through a local
+    // transition. Neither submits a decision command.
+    assert!(body.contains("data-attention-strip"));
+    assert!(body.contains("data-work-toggle"));
+}
+
+#[tokio::test]
 async fn directory_history_matches_identity_without_granting_access() {
     let state = test_state();
     let token = connected(&state);

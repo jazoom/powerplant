@@ -749,6 +749,27 @@ impl ConversationDetailView {
         self.saved().is_none()
     }
 
+    fn subtitle_directory(&self) -> &str {
+        self.directories
+            .first()
+            .map_or("No directory", |directory| directory.name.as_str())
+    }
+
+    fn work_non_idle(&self) -> bool {
+        self.saved().is_some_and(|saved| {
+            self.job_active
+                || self.pending_host_command.is_some()
+                || saved.pending_gate.is_some()
+                || saved.workflow_progress.is_some()
+        })
+    }
+
+    fn needs_review(&self) -> bool {
+        self.saved().is_some_and(|saved| {
+            saved.pending_gate.is_some() || self.pending_host_command.is_some()
+        })
+    }
+
     fn draft_project(&self) -> &str {
         match &self.state {
             ConversationPageState::New { project, .. } => project,
