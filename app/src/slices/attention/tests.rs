@@ -1,0 +1,126 @@
+use askama::Template;
+use axum::{
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+    middleware::from_fn_with_state,
+};
+use tower::ServiceExt;
+
+#[tokio::test]
+async fn decisions_retain_child_gate_and_conversation_identity_without_commands() {
+    let (state, token, _, parent) = crate::slices::human_gates::tests::loop_at_gate();
+    let child = state
+        .workflow_runs
+        .active_runs()
+        .into_iter()
+        .find(|run| run.parent_loop == Some(parent.id))
+        .unwrap();
+    let gate = child
+        .gates
+        .iter()
+        .find(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
+        .unwrap();
+    let gate_href = format!("/runs/{}/gates/{}", child.id.as_hex(), gate.id.as_hex());
+    let owner = format!("/conversations/{}", parent.conversation_id.as_hex());
+    let app = crate::slices::router()
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone());
+    for kind in [None, Some("navigation"), Some("patch")] {
+        let mut request = Request::builder()
+            .uri("/attention?page=18446744073709551615")
+            .header(header::COOKIE, format!("powerplant_session={token}"));
+        if let Some(kind) = kind {
+            request = request
+                .header(hypergraft::GRAFT_REQUEST, kind)
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if kind == Some("patch") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::OK
+            }
+        );
+        if kind != Some("patch") {
+            let body = String::from_utf8(
+                to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(body.contains(&owner));
+            assert!(body.contains(&gate_href));
+            assert!(!body.contains("name=\"candidate\""));
+        }
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/runs")
+                .header(header::COOKIE, format!("powerplant_session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains(&owner));
+    assert!(body.contains(&format!("/runs/loops/{}", parent.id.as_hex())));
+    assert!(!body.contains(&format!("data-run-id=\"{}\"", child.id.as_hex())));
+    state
+        .workflow_runs
+        .mutate(&child.id, |run| {
+            run.cancel(crate::workflows::run::now_ms())?;
+            Ok(())
+        })
+        .unwrap();
+    let body = super::page::AttentionPage::new(&state, 0).render().unwrap();
+    assert!(!body.contains(&gate_href));
+    let record = state.conversations.get(&parent.conversation_id).unwrap();
+    let job = record.active_job.unwrap();
+    let session = crate::sessions::generate_session_token().unwrap().id();
+    state
+        .host_approvals
+        .submit(crate::execution::HostCommandRequest {
+            token: String::new(),
+            session,
+            job,
+            conversation: record.id,
+            execution_revision: 1,
+            command: "echo test".to_owned(),
+            directory: std::path::PathBuf::from("/tmp"),
+            explanation: "Fixture".to_owned(),
+            run: Some(child.id.as_hex()),
+            step: None,
+            attempt: None,
+        })
+        .unwrap();
+    let body = super::page::AttentionPage::new(&state, 0).render().unwrap();
+    assert!(body.contains("Needs command approval"));
+    assert!(body.contains(&owner));
+    assert!(!body.contains("echo test"));
+    state.host_approvals.invalidate_job(job);
+    assert!(
+        !super::page::AttentionPage::new(&state, 0)
+            .render()
+            .unwrap()
+            .contains("Needs command approval")
+    );
+}

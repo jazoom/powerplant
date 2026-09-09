@@ -702,6 +702,7 @@ async fn directory_history_matches_identity_without_granting_access() {
         let response = app(&state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = text(response).await;
+        let body = body.split("id=\"chat-main\"").last().unwrap();
         assert!(body.contains("Original history"));
         assert!(body.contains("Copied history"));
         assert!(!body.contains("Other history"));
@@ -728,7 +729,9 @@ async fn directory_history_matches_identity_without_granting_access() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(!text(response).await.contains("Original history"));
+        let body = text(response).await;
+        let body = body.split("id=\"chat-main\"").last().unwrap();
+        assert!(!body.contains("Original history"));
     }
     for query in ["directory=a&directory=b", "project=abc"] {
         assert_eq!(
@@ -885,7 +888,17 @@ async fn observation_uses_the_page_route_and_cancel_needs_only_the_job_identity(
     for request in [document(&observe, &token), navigation(&observe, &token)] {
         let response = app(&state).oneshot(request).await.expect("page");
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(text(response).await.contains("Question"));
+        let body = text(response).await;
+        assert!(body.contains("Question"));
+        let companion = body
+            .split("id=\"conversation-work\"")
+            .nth(1)
+            .unwrap()
+            .split("</aside>")
+            .next()
+            .unwrap();
+        assert!(companion.contains(&format!("action=\"{path}/cancel\"")));
+        assert!(companion.contains(&format!("value=\"{}\"", job.id())));
     }
     let response = app(&state)
         .oneshot(command(
@@ -1043,11 +1056,16 @@ async fn applied_preset_copies_model_and_instructions_without_directory_authorit
     })
     .await
     .expect("settlement");
-    assert_eq!(
-        backend.last_preamble().as_deref(),
-        Some("Review only the supplied discussion.")
+    assert!(
+        backend
+            .last_preamble()
+            .unwrap()
+            .starts_with("Review only the supplied discussion.")
     );
-    assert!(backend.last_tools().is_empty());
+    assert_eq!(
+        backend.last_tools(),
+        ["create_plan", "revise_plan", "create_task_breakdown"]
+    );
 
     let concise_settings = crate::execution::ExecutionSettings::new(
         selection.clone(),
@@ -1268,7 +1286,10 @@ async fn project_context_references_are_distinct_and_do_not_expose_paths() {
     assert!(preamble.contains("Second project"));
     assert!(!preamble.contains(first.host_path.to_string_lossy().as_ref()));
     assert!(!preamble.contains(second.host_path.to_string_lossy().as_ref()));
-    assert!(backend.last_tools().is_empty());
+    assert_eq!(
+        backend.last_tools(),
+        ["create_plan", "revise_plan", "create_task_breakdown"]
+    );
 
     state
         .conversations
@@ -1833,10 +1854,10 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
 
     let save = app(&state)
         .oneshot(command(
-            &format!("/conversations/{}/plans", record.id.as_hex()),
+            &format!("/conversations/{}/plans/text", record.id.as_hex()),
             &token,
             &format!(
-                "revision={}&message_index=1&title=First+plan",
+                "revision={}&markdown=%23+First+plan%0A&title=First+plan",
                 record.revision
             ),
         ))
@@ -2248,7 +2269,10 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
         .create_from_text(
             record.id,
             "Selected plan".to_owned(),
-            "# Exact plan\nPreserve this requirement.".to_owned(),
+            format!(
+                "# Exact plan\nPreserve this requirement.\n{}",
+                "x".repeat(48 * 1024)
+            ),
             None,
         )
         .expect("plan");
@@ -2305,13 +2329,15 @@ async fn task_preparation_uses_the_selected_plan_without_guest_tools() {
         tokio::task::yield_now().await;
     }
     let history = backend.last_history();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].text.contains(&"x".repeat(48 * 1024)));
     assert!(history.iter().any(|turn| {
         turn.text
             .contains("# Exact plan\nPreserve this requirement.")
             && turn.text.contains(&plan.current().content_hash.as_str())
             && !turn.text.contains("Do not use this newer revision")
     }));
-    assert!(backend.last_tools().is_empty());
+    assert_eq!(backend.last_tools(), ["create_task_breakdown"]);
     assert_eq!(
         state
             .conversations

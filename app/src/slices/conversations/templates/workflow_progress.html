@@ -1,0 +1,125 @@
+<section
+  class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-3 sm:w-[calc(100%-4rem)]"
+  aria-labelledby="conversation-workflow-heading"
+>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h2 id="conversation-workflow-heading" class="text-lg font-semibold">
+        Workflow progress
+      </h2>
+      <p class="text-quiet mt-1 text-sm">
+        The worker uses the launch brief and a fresh context for each phase.
+        This conversation history stays outside worker inputs.
+      </p>
+    </div>
+    <a href="{{ run.run_href }}" data-graft class="btn btn-secondary btn-sm">
+      Inspect run
+    </a>
+  </div>
+  <dl class="grid gap-2 text-sm sm:grid-cols-[8rem_1fr]">
+    <dt class="text-quiet">Workflow</dt>
+    <dd>{{ run.name }}</dd>
+    <dt class="text-quiet">State</dt>
+    <dd>{{ run.state }}</dd>
+    <dt class="text-quiet">Current phase</dt>
+    <dd>{{ run.current_step }}</dd>
+    {% if run.task_progress != "" %}
+      <dt class="text-quiet">Tasks</dt>
+      <dd>{{ run.task_progress }}</dd>
+    {% endif %}
+    <dt class="text-quiet">Result</dt>
+    <dd>{{ run.result }}</dd>
+  </dl>
+  {% if run.loop_id != "" && (run.can_pause || run.can_continue || run.can_retry || run.can_stop || run.pause_requested) %}
+    <div id="loop-controls" class="flex flex-col gap-3">
+      {% if run.pause_requested %}
+        <p class="text-sm">
+          {% if run.awaiting_gate %}
+            A pause waits until you decide this task. Pause is not approval. The
+            required decision stays visible.
+          {% else %}
+            A pause waits until the current task settles. Pause is not approval.
+          {% endif %}
+        </p>
+      {% else if run.can_pause %}
+        <p class="text-quiet text-sm">
+          Pause after task waits until the current task settles. It starts no
+          further task and supplies no approval.
+        </p>
+      {% else if run.can_continue %}
+        <p class="text-quiet text-sm">
+          Continue starts the next pending task. It does not repeat a completed
+          task.
+        </p>
+      {% else if run.can_retry %}
+        <p class="text-quiet text-sm">
+          Retry current task starts a fresh child from the recorded task base.
+          It does not resume the earlier worker transcript. The previous
+          candidate stays available for inspection.
+        </p>
+      {% endif %}
+      {% if run.can_stop %}
+        <p class="text-quiet text-sm">
+          Stop now cancels the current task. Earlier file changes and host
+          command effects remain. Stop does not reverse them.
+        </p>
+      {% endif %}
+      <div class="flex flex-wrap gap-2">
+        {% if run.can_pause %}
+          <form
+            data-graft
+            method="post"
+            action="/runs/loops/{{ run.loop_id }}/pause"
+            class="inline"
+          >
+            <input type="hidden" name="token" value="{{ run.command_token }}" />
+            <input type="hidden" name="surface" value="conversation" />
+            <button class="btn btn-secondary btn-sm" type="submit">
+              Pause after task
+            </button>
+          </form>
+        {% endif %}
+        {% if run.can_continue %}
+          <form
+            data-graft
+            method="post"
+            action="/runs/loops/{{ run.loop_id }}/continue"
+            class="inline"
+          >
+            <input type="hidden" name="token" value="{{ run.command_token }}" />
+            <input type="hidden" name="surface" value="conversation" />
+            <button class="btn btn-primary btn-sm" type="submit">
+              Continue
+            </button>
+          </form>
+        {% endif %}
+        {% if run.can_retry %}
+          <form
+            data-graft
+            method="post"
+            action="/runs/loops/{{ run.loop_id }}/retry"
+            class="inline"
+          >
+            <input type="hidden" name="token" value="{{ run.command_token }}" />
+            <input type="hidden" name="surface" value="conversation" />
+            <button class="btn btn-primary btn-sm" type="submit">
+              Retry current task
+            </button>
+          </form>
+        {% endif %}
+        {% if run.can_stop %}
+          <form
+            data-graft
+            method="post"
+            action="/runs/loops/{{ run.loop_id }}/stop"
+            class="inline"
+          >
+            <input type="hidden" name="token" value="{{ run.command_token }}" />
+            <input type="hidden" name="surface" value="conversation" />
+            <button class="btn btn-ghost btn-sm" type="submit">Stop now</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+</section>

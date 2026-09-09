@@ -41,6 +41,45 @@ function countSubmissions(form: HTMLFormElement): { count: number } {
     return state;
 }
 
+test("an ancestor command patch restarts observation after the unsafe guard releases", () => {
+    vi.useFakeTimers();
+    const parent = document.createElement("section");
+    parent.id = "conversation-detail";
+    const root = observeRoot("conversation-observe");
+    parent.append(root);
+    document.body.append(parent);
+    const form = root.querySelector("form")!;
+    const submissions = countSubmissions(form);
+    const island = initObserve(root);
+    vi.advanceTimersByTime(0);
+    const patch = (target: string) =>
+        island.reconcile?.({
+            cause: "patch",
+            detail: {
+                requestKind: "patch",
+                form,
+                url: "/conversations/example",
+                outcome: "applied-patch",
+                status: 200,
+                targetIds: [target],
+            },
+        });
+    patch("recent-conversations");
+    vi.advanceTimersByTime(0);
+    expect(submissions.count).toBe(1);
+    patch("conversation-detail");
+    expect(submissions.count).toBe(1);
+    vi.advanceTimersByTime(0);
+    expect(submissions.count).toBe(2);
+    root.dataset.observeActive = "false";
+    patch("conversation-detail");
+    vi.advanceTimersByTime(0);
+    expect(submissions.count).toBe(2);
+    island.destroy();
+    parent.remove();
+    vi.useRealTimers();
+});
+
 for (const config of configurations) {
     test(`${config.name}: an active island submits after mount`, () => {
         vi.useFakeTimers();
@@ -79,7 +118,7 @@ for (const config of configurations) {
         vi.useRealTimers();
     });
 
-    test(`${config.name}: a relevant applied patch continues immediately`, () => {
+    test(`${config.name}: a relevant applied patch continues after settlement`, () => {
         vi.useFakeTimers();
         const root = observeRoot(config.target, true, config.action);
         const form = root.querySelector("form")!;
@@ -98,6 +137,8 @@ for (const config of configurations) {
                 targetIds: [config.target],
             },
         });
+        expect(submissions.count).toBe(1);
+        vi.advanceTimersByTime(0);
         expect(submissions.count).toBe(2);
         island.destroy();
         vi.useRealTimers();
@@ -120,7 +161,7 @@ for (const config of configurations) {
                 targetIds: [config.target],
             },
         });
-        expect(submissions.count).toBe(1);
+        expect(submissions.count).toBe(0);
         vi.advanceTimersByTime(0);
         expect(submissions.count).toBe(1);
         island.destroy();

@@ -1,0 +1,92 @@
+{% if let Some(saved) = self.saved() %}
+  {% if let Some(command) = pending_host_command %}
+    <section
+      id="conversation-host-command"
+      class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+      aria-labelledby="conversation-host-command-heading"
+    >
+      <div>
+        <h2
+          id="conversation-host-command-heading"
+          class="text-lg font-semibold"
+        >
+          Run command?
+        </h2>
+        <p class="text-quiet mt-1 max-w-[65ch] text-sm">
+          This command runs on this computer with unrestricted host access.
+          Approval covers the submitted shell request, not every action inside a
+          script. Output is sent to the hosted model.
+        </p>
+      </div>
+      <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+        <dt class="text-quiet">Command</dt>
+        <dd class="font-mono break-all whitespace-pre-wrap">
+          {{ command.command }}
+        </dd>
+        <dt class="text-quiet">Work location</dt>
+        <dd class="font-mono break-all">{{ command.directory }}</dd>
+        <dt class="text-quiet">Explanation</dt>
+        <dd class="break-words whitespace-pre-wrap">
+          {{ command.explanation }}
+        </dd>
+      </dl>
+      <div class="flex flex-wrap gap-3 border-t pt-4">
+        <form
+          data-graft
+          method="post"
+          action="/conversations/{{ saved.id }}/host-command/approve"
+        >
+          <input type="hidden" name="revision" value="{{ command.revision }}" />
+          <input type="hidden" name="job" value="{{ command.job }}" />
+          <input type="hidden" name="request" value="{{ command.request }}" />
+          <input
+            type="hidden"
+            name="command"
+            value="{{ command.command_input }}"
+          />
+          <button
+            id="host-command-approve-{{ command.request }}"
+            class="btn btn-primary"
+            type="submit"
+          >
+            Run command
+          </button>
+        </form>
+        <form
+          data-graft
+          method="post"
+          action="/conversations/{{ saved.id }}/host-command/reject"
+        >
+          <input type="hidden" name="revision" value="{{ command.revision }}" />
+          <input type="hidden" name="job" value="{{ command.job }}" />
+          <input type="hidden" name="request" value="{{ command.request }}" />
+          <input
+            type="hidden"
+            name="command"
+            value="{{ command.command_input }}"
+          />
+          <button
+            id="host-command-reject-{{ command.request }}"
+            class="btn btn-outline"
+            type="submit"
+          >
+            Reject
+          </button>
+        </form>
+      </div>
+    </section>
+  {% endif %}
+  {% if let Some(gate) = saved.pending_gate %}
+    {% include "conversations/templates/candidate.html" %}
+  {% endif %}
+  {% if let Some(run) = saved.workflow_progress %}
+    {% if saved.pending_gate.is_some() %}
+      <details class="workspace-execution-details">
+        <summary>Execution details</summary>
+        {% include "conversations/templates/workflow_progress.html" %}
+      </details>
+    {% else %}
+      {% include "conversations/templates/workflow_progress.html" %}
+    {% endif %}
+  {% endif %}
+{% endif %}

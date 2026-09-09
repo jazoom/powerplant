@@ -466,6 +466,12 @@ mod scripted_fixture {
             }
         }
 
+        pub(crate) fn events(events: Vec<Result<ModelEvent, ProviderError>>) -> Self {
+            let mut backend = Self::accept();
+            backend.script = Ok(Script::Rounds(vec![events]));
+            backend
+        }
+
         pub(crate) fn tool_then(name: &str, arguments: serde_json::Value, reply: &str) -> Self {
             Self {
                 verify_result: Ok(()),

@@ -464,7 +464,10 @@ async fn discard_and_switch(
     )))
 }
 
-fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun) -> String {
+pub(in crate::slices) fn application_destination(
+    state: &AppState,
+    run: &crate::workflows::WorkflowRun,
+) -> String {
     let conversation = run
         .conversation_id
         .and_then(|id| state.conversations.get(&id));
@@ -486,6 +489,12 @@ fn application_destination(state: &AppState, run: &crate::workflows::WorkflowRun
                 .map(|grant| format!("{} ({})", grant.alias, grant.host_path.display()))
                 .collect::<Vec<_>>()
                 .join(", ")
+        })
+        .filter(|destination| !destination.is_empty())
+        .or_else(|| {
+            run.project_id
+                .and_then(|id| state.projects.get(&id))
+                .map(|project| project.host_path.display().to_string())
         })
         .unwrap_or_default()
 }

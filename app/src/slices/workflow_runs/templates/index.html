@@ -1,13 +1,13 @@
 <main
   data-section="runs"
-  class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
+  class="workspace-library mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
 >
   <div class="page-intro">
     <div>
-      <h1>Runs</h1>
+      <h1>History</h1>
       <p>
-        Each task creates a run. Open a run to see its steps, outputs and review
-        status.
+        The newest fifty runs and task loops retain their conversations,
+        decisions and evidence.
       </p>
     </div>
   </div>
@@ -24,7 +24,17 @@
     <ul class="record-list">
       {% for run in runs %}
         <li class="record-row">
-          <div>
+          <div class="min-w-0 space-y-2">
+            <p>
+              {% if !run.conversation_href.is_empty() %}<a
+                href="{{ run.conversation_href }}"
+                data-graft
+                class="link font-semibold break-words"
+                >{{ run.conversation_title }}</a
+              >{% else %}<span class="text-quiet"
+                >{{ run.conversation_title }}</span
+              >{% endif %}
+            </p>
             <a
               href="{{ run.href }}"
               data-graft
@@ -36,6 +46,7 @@
                 ·
               {% endif %}
               {{ run.name }}
+              · Run and evidence
             </a>
           </div>
           <div class="flex flex-col items-end gap-1 text-right">

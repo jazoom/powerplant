@@ -1,0 +1,43 @@
+<div
+  class="workspace-effective flex flex-wrap items-center gap-x-3 gap-y-1 px-6 pb-3 text-xs"
+>
+  <button
+    type="button"
+    class="btn btn-ghost btn-sm h-auto text-left"
+    popovertarget="conversation-settings"
+    popovertargetaction="show"
+    data-settings-section="conversation-directory-heading"
+  >
+    {% if directories.is_empty() %}
+      {% if attached_projects.is_empty() %}No directory access{% else %}No
+      additional directories{% endif %}
+    {% else %}
+      <span class="flex flex-wrap gap-x-2"
+        >{% for directory in directories %}
+          <span class="break-all"
+            >{{ directory.name }} ·
+            {% if location_host %}Work location{% else %}{{ directory.access_label }}{% endif %}{% if !directory.available %}
+              · Unavailable
+            {% else if directory.pending_approval %}
+              · Pending approval
+            {% endif %}</span
+          >
+        {% endfor %}</span
+      >
+    {% endif %}
+  </button>
+  {% if location_host %}
+    <span class="w-full">{{ host_summary }} · Unrestricted host access</span>
+  {% else %}
+    <span class="text-quiet ml-auto">Sandbox</span>
+  {% endif %}
+  {% if !attached_projects.is_empty() || !self.draft_project().is_empty() %}
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm"
+      popovertarget="conversation-project-settings"
+    >
+      Project access
+    </button>
+  {% endif %}
+</div>

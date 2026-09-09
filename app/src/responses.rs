@@ -83,6 +83,7 @@ where
             FullDocument::App => nonce.render(&AppPage {
                 title,
                 page_label: title.strip_suffix(" | Power Plant").unwrap_or(title),
+                recent: crate::slices::conversations::recent::RecentConversations::new(state),
                 css_path: &state.assets.css_path,
                 js_path: &state.assets.js_path,
                 theme: state.preferences.theme().as_str(),
@@ -162,6 +163,7 @@ struct ConnectPage<'a> {
 struct AppPage<'a> {
     title: &'a str,
     page_label: &'a str,
+    recent: crate::slices::conversations::recent::RecentConversations,
     css_path: &'a str,
     js_path: &'a str,
     theme: &'a str,

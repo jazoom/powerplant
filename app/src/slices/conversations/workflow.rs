@@ -373,6 +373,21 @@ pub(super) async fn show(
             }
         }
     }
+    if graft != GraftRequest::Patch {
+        let html = view
+            .contents()
+            .render()
+            .map_err(|error| AppError::new("render workflow companion", error))?;
+        if html.len() <= 256 * 1024 {
+            let mut workspace = super::detail_view(&state, session.0, &record, &record.title, "")
+                .with_companion(
+                    format!("<section id=\"workflow-launch\">{html}</section>"),
+                    "workflow",
+                );
+            workspace.document_title = view.document_title.clone();
+            return super::render_detail(&state, session.0, graft, PatchStatus::Ok, workspace);
+        }
+    }
     render(graft, PatchStatus::Ok, &view, &state)
 }
 
@@ -1256,7 +1271,7 @@ async fn launch_view(
             let definition = resolved_policy.as_ref().unwrap_or(&record.definition);
             WorkflowOption {
                 token: selection.as_token(),
-                name: definition.name().to_owned(),
+                name: state.workflows.display_name(record),
                 summary: workflows::summary::process_summary(definition),
                 effects: workflows::summary::code_effects(definition),
                 inputs: workflows::summary::required_inputs(definition).to_owned(),
@@ -1469,21 +1484,41 @@ async fn launch_readiness(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let access = format!(
-            "{} · Tools: {} · Sandbox network: {}",
-            if directories.is_empty() {
-                "Private scratch at /workspace"
-            } else {
-                &directories
-            },
-            settings
-                .tools
+        let access = if settings.location == crate::execution::ToolLocation::Host {
+            let locations = settings
+                .directories
                 .iter()
-                .map(|tool| tool.label())
+                .map(|grant| grant.host_path.display().to_string())
                 .collect::<Vec<_>>()
-                .join(", "),
-            network_label(&settings.network)
-        );
+                .join(", ");
+            format!(
+                "This computer · Unrestricted host access · {} · Work locations: {}",
+                crate::slices::execution_settings::page::host_approval_label(
+                    settings.host_approval
+                ),
+                if locations.is_empty() {
+                    "None selected"
+                } else {
+                    &locations
+                }
+            )
+        } else {
+            format!(
+                "{} · Tools: {} · Sandbox network: {}",
+                if directories.is_empty() {
+                    "Private scratch at /workspace"
+                } else {
+                    &directories
+                },
+                settings
+                    .tools
+                    .iter()
+                    .map(|tool| tool.label())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                network_label(&settings.network)
+            )
+        };
         let Some(selection) = WorkflowSelection::parse(workflow) else {
             return (
                 model_summary,
@@ -2185,7 +2220,7 @@ fn selected_plan_options(
                 .iter()
                 .find(|revision| plan_choice_token(&document.id, revision) == plan_raw)
                 .unwrap_or_else(|| document.current());
-            let title = document.title.clone();
+            let title = document.revision_title(revision.revision).to_owned();
             PlanOption {
                 value: plan_choice_token(&document.id, revision),
                 title,
@@ -2260,6 +2295,47 @@ fn selected_task_list_options(
         });
     }
     (lists, true)
+}
+
+pub(super) fn implementation_href(
+    state: &AppState,
+    document: &crate::conversations::PlanDocument,
+    revision: &crate::conversations::PlanRevision,
+) -> String {
+    let Some(conversation) = document.associated_conversation else {
+        return String::new();
+    };
+    let workflow = state.workflows.list().into_iter().find(|workflow| {
+        workflow.definition.execution_mode() == ExecutionMode::Once
+            && workflow
+                .definition
+                .launch_input_sources()
+                .contains(&LaunchInputSource::SavedPlan)
+    });
+    let Some(workflow) = workflow else {
+        return String::new();
+    };
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            (
+                "workflow",
+                WorkflowSelection {
+                    workflow_id: workflow.id,
+                    definition_version: workflow.definition_version,
+                }
+                .as_token(),
+            ),
+            ("plan", plan_choice_token(&document.id, revision)),
+            (
+                "brief",
+                format!(
+                    "Implement the selected plan: {}",
+                    document.revision_title(revision.revision)
+                ),
+            ),
+        ])
+        .finish();
+    format!("/conversations/{conversation}/workflow?{query}")
 }
 
 fn plan_choice_token(

@@ -71,6 +71,10 @@ pub(crate) fn production_seeds(default_environment: EnvironmentId) -> Vec<Workfl
             implement_with_approval_definition(default_environment),
         ),
         (
+            "implement-saved-plan-v1",
+            implement_saved_plan_definition(default_environment),
+        ),
+        (
             IMPLEMENT_AND_REVIEW_V1,
             implement_and_review_definition(default_environment),
         ),
@@ -165,6 +169,25 @@ pub(crate) fn implement_with_approval_definition(
         roles,
         vec![implementer, approval, commit],
     )
+}
+
+fn implement_saved_plan_definition(environment: EnvironmentId) -> WorkflowDefinition {
+    let base = implement_with_approval_definition(environment);
+    let mut steps = base.steps().to_vec();
+    steps[0].inputs.push(RequiredInput {
+        key: InputKey::parse("plan").expect("plan key"),
+        kind: ArtefactKind::Plan,
+        source: ArtefactSource::LaunchInput {
+            source: super::definition::LaunchInputSource::SavedPlan,
+        },
+    });
+    WorkflowDefinition::from_parts(
+        "Implement a saved plan".to_owned(),
+        environment,
+        base.roles().to_vec(),
+        steps,
+    )
+    .expect("saved plan implementation definition")
 }
 
 pub(crate) fn plan_then_implement_definition(
@@ -319,7 +342,7 @@ pub(crate) fn ralph_task_loop_definition(default_environment: EnvironmentId) -> 
     }
     let commit = commit_with_approval("reviewer", Some("reviewer"), "approval");
     repeating_definition(
-        "Ralph task loop",
+        "Task loop",
         default_environment,
         roles,
         vec![implementer, reviewer, approval, commit],

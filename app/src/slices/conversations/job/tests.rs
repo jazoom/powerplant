@@ -15,6 +15,113 @@ use crate::{
 use std::sync::Arc;
 
 #[tokio::test]
+async fn explicit_plan_actions_publish_only_after_a_valid_complete_response() {
+    use crate::providers::ModelEvent;
+    let call = |name: &str| {
+        Ok(ModelEvent::ToolCall {
+            id: "plan-action".to_owned(),
+            name: name.to_owned(),
+            arguments: serde_json::json!({"title":"Explicit plan", "markdown":"Original plan text"}),
+        })
+    };
+    for (events, expected) in [
+        (vec![call("create_plan")], 1),
+        (
+            vec![Ok(ModelEvent::Text(
+                "Here is a plan in ordinary prose".to_owned(),
+            ))],
+            0,
+        ),
+        (
+            vec![call("create_plan"), Err(ProviderError::Unreachable)],
+            0,
+        ),
+        (vec![call("run")], 0),
+        (vec![call("create_plan"), call("create_plan")], 0),
+    ] {
+        let mut state = crate::tests::test_state(RuntimeConfig::development());
+        state.chat = Arc::new(ChatBackend::Scripted(ScriptedBackend::events(events)));
+        let token = generate_session_token().unwrap();
+        state.sessions.insert(token.id());
+        let connection = ProviderConnection::with_key(ProviderKind::Xai, "test-key", "grok-4.6");
+        let record = state
+            .conversations
+            .create("Conversation".to_owned())
+            .unwrap();
+        let job = state
+            .sessions
+            .begin_conversation_job(&token.id(), record.id, 1)
+            .unwrap();
+        let record = state
+            .conversations
+            .begin_message(
+                &record.id,
+                record.revision,
+                ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
+                job.id(),
+                "Discuss the change".to_owned(),
+            )
+            .unwrap();
+        super::run(
+            state.clone(),
+            token.id(),
+            record.id,
+            record.clone(),
+            connection,
+            job,
+            None,
+        )
+        .await;
+        let documents = state.documents.list_for_conversation(record.id);
+        assert_eq!(documents.len(), expected);
+        assert!(state.workflow_runs.for_conversation(&record.id).is_empty());
+        if expected == 1 {
+            assert_eq!(
+                state.documents.content(&documents[0], 1).unwrap(),
+                "Original plan text"
+            );
+            assert!(matches!(
+                &documents[0].current().source,
+                crate::conversations::PlanSource::Action {
+                    assistant: true,
+                    message_index: 1,
+                    ..
+                }
+            ));
+            let saved = state.conversations.get(&record.id).unwrap();
+            state
+                .documents
+                .publish_action(
+                    &saved,
+                    crate::conversations::DocumentAction {
+                        title: "Revised title".to_owned(),
+                        markdown: "Revised plan text".to_owned(),
+                        assistant: false,
+                        message_index: 1,
+                        previous: Some((documents[0].id, 1)),
+                        plan: None,
+                    },
+                    None,
+                )
+                .unwrap();
+            let view = super::super::detail_view(&state, token.id(), &saved, &saved.title, "");
+            let html = askama::Template::render(&view).unwrap();
+            assert!(html.contains("Explicit plan"));
+            assert!(html.contains("Original plan text"));
+            assert!(html.contains("Revised plan text"));
+        }
+        assert!(
+            state
+                .conversations
+                .get(&record.id)
+                .unwrap()
+                .active_job
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
 async fn conversation_instructions_apply_before_and_after_the_first_exchange() {
     let mut state = crate::tests::test_state(RuntimeConfig::development());
     let backend = ScriptedBackend::chunks([Ok("Reply".to_owned())]);
@@ -60,13 +167,17 @@ async fn conversation_instructions_apply_before_and_after_the_first_exchange() {
             record.clone(),
             connection.clone(),
             job,
+            None,
         )
         .await;
         record = state.conversations.get(&record.id).unwrap();
-        assert_eq!(
-            backend.last_preamble().as_deref(),
-            Some("Answer from the supplied evidence.")
+        assert!(
+            backend
+                .last_preamble()
+                .unwrap()
+                .starts_with("Answer from the supplied evidence.")
         );
+        assert!(state.documents.list_for_conversation(record.id).is_empty());
         assert!(record.active_job.is_none());
     }
 }
@@ -117,6 +228,7 @@ async fn bounded_partial_reply_settles_and_observation_restores_commands() {
         record.clone(),
         connection,
         job.clone(),
+        None,
     )
     .await;
     let saved = state.conversations.get(&record.id).expect("saved");
@@ -124,8 +236,11 @@ async fn bounded_partial_reply_settles_and_observation_restores_commands() {
     assert_eq!(saved.messages[1].status, MessageStatus::Failed);
     assert!(saved.active_job.is_none());
     assert!(!state.sessions.busy(&token.id()));
-    assert!(backend.last_tools().is_empty());
-    let mut instructions = String::new();
+    assert_eq!(
+        backend.last_tools(),
+        ["create_plan", "revise_plan", "create_task_breakdown"]
+    );
+    let mut instructions = super::super::plans::context(&state, &record);
     language.append_instructions(&mut instructions);
     assert_eq!(
         backend.last_preamble().as_deref(),
@@ -200,6 +315,7 @@ async fn cancellation_and_stale_settlement_cannot_release_another_command() {
         record.clone(),
         connection,
         job.clone(),
+        None,
     )
     .await;
     assert_eq!(job.snapshot().status, JobStatus::Cancelled);
@@ -269,6 +385,7 @@ async fn provider_failure_retains_partial_output_and_safe_error_details() {
         record.clone(),
         connection,
         job.clone(),
+        None,
     )
     .await;
     let record = state.conversations.get(&record.id).expect("record");

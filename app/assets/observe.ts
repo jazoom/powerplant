@@ -48,13 +48,17 @@ export function initObserve(root: HTMLElement): IslandInstance {
             if (context.detail.outcome === "applied-patch") {
                 const target = root.dataset.observeTarget ?? "";
                 if (
-                    target === "" ||
-                    !context.detail.targetIds.includes(target)
+                    !context.detail.targetIds.some(
+                        (id) =>
+                            id === target ||
+                            document.getElementById(id)?.contains(root),
+                    )
                 ) {
                     return;
                 }
-                clearTimer();
-                submit();
+                // Ancestor command patches can cancel the previous observation.
+                // Restart after the unsafe request releases its guard.
+                schedule(0);
                 return;
             }
             if (context.detail.form !== form()) {

@@ -7,8 +7,8 @@ pub(crate) mod titles;
 pub(crate) use access::resolve_project_free_authority;
 pub(crate) use access::{apply_settings_ceiling, resolve_workflow_authority, secondary_alias};
 pub(crate) use documents::{
-    DocumentError, DocumentId, DocumentKind, PlanDocument, PlanDocumentStore, PlanRevision,
-    PlanRevisionReference, PlanSource,
+    DocumentAction, DocumentError, DocumentId, DocumentKind, PlanDocument, PlanDocumentStore,
+    PlanRevision, PlanRevisionReference, PlanSource,
 };
 pub(crate) use id::ConversationId;
 pub(crate) use store::{

@@ -26,9 +26,19 @@ pub(super) async fn run(
     record: ConversationRecord,
     connection: ProviderConnection,
     job: Arc<Job>,
+    scope: Option<super::plans::Scope>,
 ) {
     let language = state.sessions.language(&session);
     let mut instructions = instructions(&state, &record);
+    if matches!(scope, None | Some(super::plans::Scope::Create)) {
+        instructions.push_str(&super::plans::context(&state, &record));
+    } else {
+        instructions.push_str("\n\nSubmit the requested explicit plan action. Use the exact source revision in the request. The action grants no execution approval.");
+    }
+    let definitions: Vec<_> = super::plans::definitions()
+        .into_iter()
+        .filter(|definition| scope.is_none_or(|scope| scope.name() == definition.name))
+        .collect();
     if let Some(language) = &language {
         language.append_instructions(&mut instructions);
     }
@@ -38,13 +48,17 @@ pub(super) async fn run(
     };
     let mut reply = String::new();
     let mut event_count = 0usize;
+    let mut plan_action = None;
     let result = tokio::select! {
         biased;
         _ = job.cancelled() => Err(Failure::Cancelled),
         _ = tokio::time::sleep(Duration::from_secs(600)) => Err(Failure::Provider(ProviderError::Unreachable)),
         result = async {
-            let history = history_with_review(&state, &record, secret).map_err(Failure::Context)?;
-            let mut stream = state.chat.stream_turn(&connection, &history, &[], &[], &instructions).await.map_err(Failure::Provider)?;
+            let history = match super::plans::selected_history(&state, &record, scope).map_err(|error| Failure::Context(error.message()))? {
+                Some(history) => history,
+                None => history_with_review(&state, &record, secret).map_err(Failure::Context)?,
+            };
+            let mut stream = state.chat.stream_turn(&connection, &history, &[], &definitions, &instructions).await.map_err(Failure::Provider)?;
             while let Some(event) = tokio::select! {
                 biased;
                 _ = job.cancelled() => return Err(Failure::Cancelled),
@@ -68,10 +82,24 @@ pub(super) async fn run(
                             input_tokens,
                         });
                     }
-                    ModelEvent::ToolCall { .. } => return Err(Failure::Provider(ProviderError::Refused)),
+                    ModelEvent::ToolCall { name, arguments, .. } => {
+                        if plan_action.is_some() { return Err(Failure::Provider(ProviderError::Refused)); }
+                        plan_action = Some((name, arguments));
+                    }
                 }
             }
-            if reply.trim().is_empty() { return Err(Failure::Provider(ProviderError::EmptyReply)); }
+            if let Some((name, arguments)) = plan_action.take() {
+                super::plans::publish(&state, &record, job.assistant_index(), &name, arguments, secret, scope)
+                    .map_err(|error| Failure::Context(match error {
+                        crate::conversations::DocumentError::Source => "The model submitted a mismatched plan source. No plan changed.",
+                        crate::conversations::DocumentError::Content => "The model submitted invalid plan contents. No plan changed.",
+                        _ => error.message(),
+                    }))?;
+            } else if scope.is_some() {
+                return Err(Failure::Context("The model did not submit the requested plan action. No plan changed."));
+            } else if reply.trim().is_empty() {
+                return Err(Failure::Provider(ProviderError::EmptyReply));
+            }
             Ok(())
         } => result,
     };

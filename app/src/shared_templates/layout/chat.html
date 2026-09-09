@@ -2,60 +2,67 @@
 {% let csp_nonce = "nonce"|crate::template_filters::csp_nonce -%}
 {% block body %}
   <a class="skip-link" href="#chat-main">Skip to main content</a>
-  <div class="app-frame">
-    <aside class="app-index" aria-label="Product index">
+  <div class="app-frame" data-island="workspace">
+    <aside class="app-index" aria-label="Product index" id="workspace-index">
       <a href="/conversations" data-graft class="app-brand">
         <img
           src="/static/images/logo.svg"
           alt=""
-          width="60"
-          height="43"
+          width="40"
+          height="29"
           class="powerplant-mark"
         />
-        <span>
-          <strong>Power Plant</strong>
-          <small>Local conversation workspace</small>
-        </span>
+        <strong>Power Plant</strong>
       </a>
-      <nav class="app-index-nav-desktop" aria-label="Primary navigation">
-        <div class="app-index-group">
-          <p class="app-index-group-label">Work</p>
-          <a href="/conversations" data-graft data-nav="conversations"
-            >Conversations</a
+      <a
+        href="/conversations/new"
+        data-graft
+        class="btn btn-primary workspace-new"
+        ><svg class="workspace-icon" aria-hidden="true">
+          <use href="/static/images/workspace-icons.svg#plus" /></svg
+        >New conversation</a
+      >
+      <nav class="workspace-navigation" aria-label="Primary navigation">
+        <a href="/conversations" data-graft
+          ><svg class="workspace-icon" aria-hidden="true">
+            <use href="/static/images/workspace-icons.svg#search" /></svg
+          >Find a conversation</a
+        >
+        <a href="/attention" data-graft
+          ><svg class="workspace-icon" aria-hidden="true">
+            <use href="/static/images/workspace-icons.svg#attention" /></svg
+          >Needs your attention</a
+        >
+        <a href="/runs" data-graft
+          ><svg class="workspace-icon" aria-hidden="true">
+            <use href="/static/images/workspace-icons.svg#clock" /></svg
+          >History</a
+        >
+        <div id="recent-conversations">{{ recent|safe }}</div>
+        <form
+          id="recent-conversations-projection"
+          method="get"
+          action="/conversations"
+          data-graft
+          data-graft-live
+          hidden
+        >
+          <input type="hidden" name="index" value="true" />
+        </form>
+        <div class="workspace-resources">
+          <a href="/resources" data-graft
+            ><svg class="workspace-icon" aria-hidden="true">
+              <use href="/static/images/workspace-icons.svg#grid" /></svg
+            >Workflows and presets</a
           >
-          <a href="/workflows" data-graft data-nav="workflows">Workflows</a>
-        </div>
-        <div class="app-index-group">
-          <p class="app-index-group-label">History</p>
-          <a href="/runs" data-graft data-nav="runs">Runs</a>
-        </div>
-        <div class="app-index-group">
-          <p class="app-index-group-label">System</p>
-          <a href="/connect" data-graft data-nav="providers">Providers</a>
-          <a href="/settings" data-graft data-nav="settings">Settings</a>
+          <a href="/settings" data-graft
+            ><svg class="workspace-icon" aria-hidden="true">
+              <use href="/static/images/workspace-icons.svg#sliders" /></svg
+            >Settings</a
+          >
         </div>
       </nav>
-      <nav class="app-index-nav-mobile" aria-label="Primary navigation">
-        <a href="/conversations" data-graft data-nav="conversations"
-          >Conversations</a
-        >
-        <a href="/workflows" data-graft data-nav="workflows">Workflows</a>
-        <a href="/runs" data-graft data-nav="runs">Runs</a>
-        <details
-          class="dropdown dropdown-end app-index-more"
-          data-island="navigation-more"
-        >
-          <summary>More</summary>
-          <ul class="menu dropdown-content z-40 mt-1 w-52 p-1">
-            <li>
-              <a href="/connect" data-graft data-nav="providers">Providers</a>
-            </li>
-            <li>
-              <a href="/settings" data-graft data-nav="settings">Settings</a>
-            </li>
-          </ul>
-        </details>
-      </nav>
+      <p class="workspace-local">On this computer</p>
     </aside>
     <div class="app-file">
       <header
@@ -63,6 +70,15 @@
         aria-label="Current location and activity"
         data-island="app-context"
       >
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm workspace-menu"
+          data-workspace-menu
+          aria-controls="workspace-index"
+          aria-expanded="false"
+        >
+          Menu
+        </button>
         <nav class="app-context-breadcrumbs" aria-label="Breadcrumb">
           <ol data-app-context-breadcrumbs>
             <li class="app-context-current">

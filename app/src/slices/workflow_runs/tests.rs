@@ -245,6 +245,7 @@ fn review_verdict_skips_candidate_outputs_from_fixing_reviews() {
 fn run_timeline_renders_status_handoffs_and_the_commit_identifier() {
     let view = super::page::RunDetailView {
         run_id: "run".to_owned(),
+        conversation_href: String::new(),
         project_href: String::new(),
         project_name: String::new(),
         name: "Sequential team".to_owned(),

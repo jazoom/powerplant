@@ -1,0 +1,64 @@
+<main
+  data-section="resources"
+  class="workspace-library mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
+>
+  <header class="page-intro">
+    <div>
+      <h1>Workflows and presets</h1>
+      <p>
+        Reusable processes and requested settings. Each conversation keeps its
+        own values and execution approval.
+      </p>
+    </div>
+  </header>
+  <section class="file-section space-y-4" aria-labelledby="resources-workflows">
+    <h2 id="resources-workflows" class="text-lg font-semibold">Workflows</h2>
+    <p class="text-quiet max-w-prose">
+      A workflow defines phases, inputs and approval stops. The conversation
+      supplies the brief and exact saved revisions.
+    </p>
+    <div class="flex flex-wrap gap-3">
+      <a href="/workflows" data-graft class="btn btn-secondary btn-sm"
+        >Manage workflows</a
+      ><a href="/conversations" data-graft class="link"
+        >Choose a conversation to run a workflow</a
+      >
+    </div>
+  </section>
+  <section class="file-section space-y-4" aria-labelledby="resources-presets">
+    <h2 id="resources-presets" class="text-lg font-semibold">Presets</h2>
+    <p class="text-quiet max-w-prose">
+      A preset replaces the complete settings after a preview. Copied values
+      never include execution consent.
+    </p>
+    <a href="/presets" data-graft class="btn btn-secondary btn-sm"
+      >Manage presets</a
+    >
+  </section>
+  <section class="file-section space-y-4" aria-labelledby="resources-machine">
+    <h2 id="resources-machine" class="text-lg font-semibold">
+      On this computer
+    </h2>
+    <dl class="grid gap-x-6 gap-y-4 sm:grid-cols-[10rem_1fr]">
+      <dt><a href="/connect" data-graft class="link">Providers</a></dt>
+      <dd class="text-quiet">Provider keys and plan logins.</dd>
+      <dt><a href="/environments" data-graft class="link">Environments</a></dt>
+      <dd class="text-quiet">
+        Recipes, preparation and sandbox readiness. Preparation starts no task.
+      </dd>
+      <dt><a href="/projects" data-graft class="link">Projects</a></dt>
+      <dd class="text-quiet">
+        Registered Git worktrees and related conversations. Registration grants
+        no access.
+      </dd>
+      <dt><a href="/agents" data-graft class="link">Agents</a></dt>
+      <dd class="text-quiet">
+        Saved instructions, tools and directory grants.
+      </dd>
+      <dt><a href="/settings" data-graft class="link">Settings</a></dt>
+      <dd class="text-quiet">
+        Themes, response visibility and model catalogue refresh.
+      </dd>
+    </dl>
+  </section>
+</main>

@@ -1,0 +1,19 @@
+<section class="workspace-plan-action my-5 space-y-4 border-y py-5">
+  <p class="text-quiet text-sm font-semibold">{{ label }}</p>
+  <h3 class="text-lg font-semibold">{{ title }}</h3>
+  <div>{{ html|safe }}</div>
+  {% if truncated %}<p class="text-quiet text-xs">
+    The transcript shows an excerpt. The plan page contains the complete text.
+  </p>{% endif %}
+  <div class="flex flex-wrap items-center gap-3">
+    <a href="{{ href }}" data-graft class="btn btn-secondary btn-sm"
+      >{% if task_list %}Open tasks{% else %}Open plan{% endif %}</a
+    >
+    <details class="text-quiet text-xs">
+      <summary>Action details</summary>
+      <p>{{ provenance }} · Revision {{ revision }}</p>
+      <p class="break-all">{{ hash }}</p>
+      <p>This action grants no execution approval.</p>
+    </details>
+  </div>
+</section>

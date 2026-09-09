@@ -441,6 +441,38 @@ fn connected_state() -> AppState {
 }
 
 #[tokio::test]
+async fn host_preview_does_not_describe_sandbox_boundaries() {
+    let state = connected_state();
+    let record = state
+        .conversations
+        .create("Host preview".to_owned())
+        .unwrap();
+    let settings = directory_settings()
+        .with_location(crate::execution::ToolLocation::Host)
+        .with_host_approval(crate::execution::HostApprovalPolicy::Automatic);
+    let record = state
+        .conversations
+        .update_execution_settings(&record.id, record.revision, settings)
+        .unwrap();
+    let workflow = state
+        .workflows
+        .create(workflows::seeds::plan_a_change_definition(
+            crate::tests::test_environment_id(),
+        ))
+        .unwrap();
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let (_, access, _) = launch_readiness(&state, &record, None, &selection).await;
+    assert!(access.contains("Unrestricted host access"));
+    assert!(access.contains("Run without approval"));
+    assert!(!access.contains("/workspace"));
+    assert!(!access.contains("Sandbox network"));
+}
+
+#[tokio::test]
 async fn task_loop_launch_accepts_a_whole_list_without_a_task_index() {
     let state = connected_state();
     let conversation = state

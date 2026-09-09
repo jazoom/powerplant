@@ -2,119 +2,37 @@
   <main
     data-section="conversations"
     data-context-detail
-    class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
+    class="mx-auto flex w-full max-w-4xl flex-1 flex-col px-5 py-8"
   >
-    <section id="plan-detail" class="flex min-h-0 flex-1 flex-col gap-6">
+    <section id="plan-detail" class="flex min-h-full flex-col">
       {% block plan_detail %}
-        <div class="page-intro">
-          <div>
-            <h1>{{ title }}</h1>
-            <p>
-              {% if task_count > 0 %}
-                A saved task list for a repeatable workflow.
-              {% else %}
-                A saved plan for reuse, task preparation or independent review.
-              {% endif %}
+        <div
+          class="workspace-plan-body min-h-0 flex-1 space-y-6 overflow-y-auto p-5"
+        >
+          <div class="space-y-2">
+            <h1 class="text-lg font-semibold">{{ title }}</h1>
+            <p class="text-quiet text-xs">
+              {% if task_count > 0 %}Task breakdown{% else %}Proposed approach{% endif %}
+              · Not execution approval
             </p>
           </div>
-          <a
-            href="{{ back_href }}"
-            data-graft
-            class="link link-hover whitespace-nowrap"
-            >Back to conversation</a
-          >
-        </div>
-        {% if error != "" %}
-          <div class="alert alert-error" role="alert" tabindex="-1">
-            <p>{{ error }}</p>
-          </div>
-        {% endif %}
-        {% if associated %}
-          <div class="flex flex-wrap items-center gap-3">
-            {% if task_count > 0 %}
-              {% if eligible_task_count > 0 %}
-                <a href="{{ action_href }}" data-graft class="btn btn-primary"
-                  >Run tasks</a
-                >
-              {% endif %}
-              <p class="text-quiet text-sm">
-                Run tasks opens workflow setup. No task starts before explicit
-                confirmation.
-              </p>
-            {% else %}
-              <form data-graft method="post" action="{{ action_href }}">
-                <input
-                  type="hidden"
-                  name="revision"
-                  value="{{ conversation_revision }}"
-                />
-                <input
-                  type="hidden"
-                  name="document_revision"
-                  value="{{ document_revision }}"
-                />
-                <button type="submit" class="btn btn-primary">
-                  Create task list
-                </button>
-              </form>
-              <p class="text-quiet text-sm">
-                Preparation calls the conversation model without tools. It
-                executes no tasks.
-              </p>
-            {% endif %}
-            <a href="{{ review_href }}" data-graft class="btn btn-secondary"
-              >Review in a new conversation</a
-            >
-          </div>
-        {% endif %}
-        <details class="file-disclosure">
-          <summary>Document provenance</summary>
-          <section
-            class="space-y-3 pt-3"
-            aria-labelledby="plan-provenance-heading"
-          >
-            <h2 id="plan-provenance-heading" class="text-lg font-semibold">
-              Document provenance
-            </h2>
-            <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
-              {% if task_count > 0 %}
-                <dt class="text-quiet">Tasks</dt>
-                <dd>
-                  {{ task_count }} total. {{ eligible_task_count }} unchecked
-                  and eligible.
-                </dd>
-              {% endif %}
-              <dt class="text-quiet">Revision</dt>
-              <dd>
-                {{ document_revision }}{% if document_revision == current_revision %}(current){% endif %}
-              </dd>
-              <dt class="text-quiet">Source</dt>
-              <dd>{{ provenance }}</dd>
-              <dt class="text-quiet">Content hash</dt>
-              <dd class="font-mono break-all">{{ content_hash }}</dd>
-            </dl>
-            {% if !associated %}
-              <p class="text-quiet text-sm">
-                This document is no longer associated with a conversation.
-              </p>
-            {% endif %}
-          </section>
-        </details>
-        <section
-          class="file-section space-y-3"
-          aria-labelledby="plan-content-heading"
-        >
-          <h2 id="plan-content-heading" class="text-lg font-semibold">
-            Document content
-          </h2>
-          {% if task_count > 0 %}
-            <p class="text-quiet text-sm">
-              Unchecked tasks are eligible. Checked tasks remain context. No
-              tasks start from this page.
+          {% if error != "" %}
+            <div class="alert alert-error" role="alert" tabindex="-1">
+              <p>{{ error }}</p>
+            </div>
+          {% endif %}
+          {% if outdated %}
+            <p class="alert alert-warning">
+              This breakdown uses an older or removed source plan. A new run
+              retains this selected revision, not the current plan.
             </p>
           {% endif %}
           <div class="prose max-w-none">{{ content_html|safe }}</div>
           {% if task_count > 0 %}
+            <p class="text-quiet text-sm">
+              {{ eligible_task_count }} unchecked tasks are eligible. Checked
+              tasks remain context.
+            </p>
             <ol class="record-list" aria-label="Task eligibility">
               {% for task in tasks %}
                 <li class="space-y-2 border-t py-4">
@@ -134,7 +52,7 @@
                     <a
                       href="{{ task.run_href }}"
                       data-graft
-                      class="btn btn-primary btn-sm"
+                      class="btn btn-secondary btn-sm"
                       >Run this task</a
                     >
                   {% endif %}
@@ -142,99 +60,218 @@
               {% endfor %}
             </ol>
           {% endif %}
-        </section>
-        <section
-          class="file-section space-y-3"
-          aria-labelledby="plan-revisions-heading"
-        >
-          <h2 id="plan-revisions-heading" class="text-lg font-semibold">
-            Revisions
-          </h2>
-          <ul class="record-list" aria-label="Document revisions">
-            {% for revision in revisions %}
-              <li class="record-row flex-wrap gap-3">
-                <div class="min-w-0 flex-1">
-                  <p class="font-medium">Revision {{ revision.revision }}</p>
-                  <p class="text-quiet mt-1 text-xs break-all">
-                    {{ revision.provenance }} · {{ revision.content_hash }}
-                  </p>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                  <a
-                    href="{{ revision.open_href }}"
-                    data-graft
-                    class="btn btn-ghost btn-sm"
-                    >Open</a
-                  >
-                  <a
-                    href="{{ revision.export_href }}"
-                    class="btn btn-ghost btn-sm"
-                    >Export</a
-                  >
-                </div>
-              </li>
-            {% endfor %}
-          </ul>
-        </section>
-        {% if document_revision == current_revision %}
-          <section
-            class="file-section space-y-3"
-            aria-labelledby="plan-correction-heading"
-          >
-            <h2 id="plan-correction-heading" class="text-lg font-semibold">
-              Correct this document
-            </h2>
-            <p class="text-quiet text-sm">
-              Save a correction as a new revision. Earlier revisions remain
-              unchanged.
-            </p>
-            <form
-              data-graft
-              method="post"
-              action="/plans/{{ document_id }}/revisions"
-              class="flex max-w-3xl flex-col gap-3"
+          <div class="flex flex-wrap gap-2">
+            <a
+              href="/plans/{{ document_id }}/export?revision={{ document_revision }}"
+              class="btn btn-secondary btn-sm"
+              >{% if task_count > 0 %}Export for Pi{% else %}Export{% endif %}</a
             >
-              <input
-                type="hidden"
-                name="revision"
-                value="{{ current_revision }}"
-              />
-              <label class="flex flex-col gap-1" for="plan-correction-title">
-                <span class="text-sm">Title</span>
-                <input
-                  id="plan-correction-title"
-                  class="input input-bordered"
-                  name="title"
-                  required
-                  maxlength="120"
-                  value="{{ title }}"
-                />
-              </label>
-              <label class="flex flex-col gap-1" for="plan-correction-markdown">
-                <span class="text-sm">Document text</span>
-                <textarea
-                  id="plan-correction-markdown"
-                  class="textarea textarea-bordered min-h-48"
-                  name="markdown"
-                  required
-                  maxlength="65536"
+            {% if associated %}
+              <a
+                href="{{ review_href }}"
+                data-graft
+                class="btn btn-ghost btn-sm"
+                >Independent review</a
+              >
+            {% endif %}
+          </div>
+          {% if document_revision == current_revision %}
+            <details class="border-t pt-5">
+              <summary class="font-semibold">
+                Revise {% if task_count > 0 %}tasks{% else %}plan{% endif %}
+              </summary>
+              {% if associated && task_count == 0 %}
+                <form
+                  data-graft
+                  method="post"
+                  action="{{ back_href }}/plans/request"
+                  class="my-3 flex flex-col gap-3"
                 >
+                  <input
+                    type="hidden"
+                    name="revision"
+                    value="{{ conversation_revision }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="document_id"
+                    value="{{ document_id }}"
+                  />
+                  <input
+                    type="hidden"
+                    name="document_revision"
+                    value="{{ document_revision }}"
+                  />
+                  <input type="hidden" name="title" value="{{ title }}" />
+                  <label class="flex flex-col gap-1" for="revision-request"
+                    ><span class="text-sm">Request</span
+                    ><textarea
+                      id="revision-request"
+                      class="textarea textarea-bordered w-full"
+                      name="request"
+                      required
+                      maxlength="8192"
+                    ></textarea>
+                  </label>
+                  <button class="btn btn-secondary self-start" type="submit">
+                    Request a revision
+                  </button>
+                </form>
+              {% endif %}
+              <p class="text-quiet my-3 text-sm">
+                Supplied text creates a new revision. Earlier action text and
+                existing run inputs remain unchanged.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/plans/{{ document_id }}/revisions"
+                class="flex flex-col gap-3"
+              >
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ current_revision }}"
+                />
+                <label class="flex flex-col gap-1" for="plan-correction-title"
+                  ><span class="text-sm">Title</span
+                  ><input
+                    id="plan-correction-title"
+                    class="input input-bordered w-full"
+                    name="title"
+                    required
+                    maxlength="120"
+                    value="{{ title }}"
+                /></label>
+                <label
+                  class="flex flex-col gap-1"
+                  for="plan-correction-markdown"
+                  ><span class="text-sm">Plan text</span
+                  ><textarea
+                    id="plan-correction-markdown"
+                    class="textarea textarea-bordered min-h-48 w-full"
+                    name="markdown"
+                    required
+                    maxlength="65536"
+                  >
 {{ content }}</textarea>
-              </label>
-              <button class="btn btn-primary self-start" type="submit">
-                Save new revision
-              </button>
-            </form>
-          </section>
-        {% endif %}
-        <div class="flex flex-wrap gap-3 border-t pt-4">
-          <a
-            href="/plans/{{ document_id }}/export?revision={{ document_revision }}"
-            class="btn btn-secondary"
-            >{% if task_count > 0 %}Export for Pi{% else %}Export this revision{% endif %}</a
-          >
-          <a href="{{ back_href }}" data-graft class="btn btn-ghost">Back</a>
+                </label>
+                <button class="btn btn-secondary self-start" type="submit">
+                  Save new revision
+                </button>
+              </form>
+            </details>
+          {% endif %}
+          {% if associated && task_count == 0 %}
+            <section class="space-y-3 border-t pt-5">
+              <h2 class="font-semibold">A larger change?</h2>
+              <p class="text-quiet text-sm">
+                An optional breakdown divides this plan into separate tasks. You
+                can also implement this plan as one change.
+              </p>
+              {% for breakdown in breakdowns %}
+                <div class="space-y-2 border-t pt-3">
+                  <a
+                    href="{{ breakdown.open_href }}"
+                    data-graft
+                    class="link font-semibold"
+                    >{{ breakdown.title }}</a
+                  >
+                  <p class="text-quiet text-xs">{{ breakdown.provenance }}</p>
+                </div>
+              {% endfor %}
+              <form data-graft method="post" action="{{ action_href }}">
+                <input
+                  type="hidden"
+                  name="revision"
+                  value="{{ conversation_revision }}"
+                />
+                <input
+                  type="hidden"
+                  name="document_revision"
+                  value="{{ document_revision }}"
+                />
+                <button type="submit" class="btn btn-secondary btn-sm">
+                  {% if breakdowns.is_empty() %}
+                    Break into tasks
+                  {% else %}
+                    Update task breakdown
+                  {% endif %}
+                </button>
+              </form>
+            </section>
+          {% endif %}
+          <details class="space-y-3 border-t pt-4">
+            <summary class="text-xs">Plan history and source</summary>
+            <p class="text-quiet text-sm">
+              Revision
+              {{ document_revision }}{% if document_revision == current_revision %}(current){% endif %}
+              · {{ provenance }}
+            </p>
+            <p class="font-mono text-xs break-all">{{ content_hash }}</p>
+            {% if !associated %}
+              <p class="text-quiet text-sm">
+                This document is no longer associated with a conversation.
+              </p>
+            {% endif %}
+            <ul class="record-list" aria-label="Document revisions">
+              {% for revision in revisions %}
+                <li class="space-y-2 border-t py-3">
+                  <p class="text-sm">
+                    Revision {{ revision.revision }} · {{ revision.provenance }}
+                  </p>
+                  <div class="flex gap-2">
+                    <a
+                      href="{{ revision.open_href }}"
+                      data-graft
+                      class="btn btn-ghost btn-sm"
+                      >Open</a
+                    ><a
+                      href="{{ revision.export_href }}"
+                      class="btn btn-ghost btn-sm"
+                      >Export</a
+                    >
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
         </div>
+        <footer class="workspace-plan-footer shrink-0 space-y-2 border-t p-5">
+          {% if associated %}
+            {% if task_count > 0 %}
+              {% if eligible_task_count > 0 %}
+                <a
+                  href="{{ action_href }}"
+                  data-graft
+                  class="btn btn-primary w-full"
+                  >Run tasks</a
+                >
+              {% endif %}
+            {% else if !implementation_href.is_empty() %}
+              <p class="text-quiet text-center text-xs">
+                This opens a preview. It starts no work.
+              </p>
+              <a
+                href="{{ implementation_href }}"
+                data-graft
+                class="btn btn-primary w-full"
+                >Prepare implementation</a
+              >
+            {% else %}
+              <p class="text-quiet text-sm">
+                No workflow accepts a saved plan. The workflow catalogue retains
+                the saved-plan implementation option.
+              </p>
+              <a href="/workflows" data-graft class="btn btn-secondary w-full"
+                >Open workflows</a
+              >
+            {% endif %}
+          {% endif %}
+          <a href="{{ back_href }}" data-graft class="btn btn-ghost w-full"
+            >Back to conversation</a
+          >
+        </footer>
       {% endblock plan_detail %}
     </section>
   </main>

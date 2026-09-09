@@ -119,6 +119,15 @@ pub(crate) enum PlanSource {
     Correction {
         previous: PlanRevisionReference,
     },
+    // The action and revision share one catalogue transaction. Transcript projections never substitute the current revision.
+    Action {
+        conversation_id: ConversationId,
+        message_index: u32,
+        title: String,
+        assistant: bool,
+        previous: Option<PlanRevisionReference>,
+        plan: Option<PlanRevisionReference>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -159,6 +168,13 @@ impl PlanDocument {
     pub(crate) fn revision(&self, revision: u32) -> Option<&PlanRevision> {
         self.revisions.iter().find(|item| item.revision == revision)
     }
+
+    pub(crate) fn revision_title(&self, revision: u32) -> &str {
+        match self.revision(revision).map(|revision| &revision.source) {
+            Some(PlanSource::Action { title, .. }) => title,
+            _ => &self.title,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,6 +189,7 @@ pub(crate) enum DocumentError {
     Title,
     Content,
     TaskList,
+    TaskBreakdown,
     Credential,
     Source,
     Active,
@@ -194,6 +211,9 @@ impl DocumentError {
             Self::Content => "Enter plan text with content within the plan limit.",
             Self::TaskList => {
                 "Use a heading and at most 256 top-level checkbox tasks within 64 KiB. Put literal checkbox examples inside code fences."
+            }
+            Self::TaskBreakdown => {
+                "Use a heading and at most 128 top-level checkbox tasks for a generated breakdown."
             }
             Self::Credential => "Do not save provider credentials in a plan.",
             Self::Source => "Select a completed assistant message as the plan source.",
@@ -269,6 +289,14 @@ enum SourceFile {
     Correction {
         previous: RevisionReferenceFile,
     },
+    Action {
+        conversation_id: String,
+        message_index: u32,
+        title: String,
+        assistant: bool,
+        previous: Option<RevisionReferenceFile>,
+        plan: Option<RevisionReferenceFile>,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -328,37 +356,6 @@ impl PlanDocumentStore {
         Ok(text)
     }
 
-    pub(crate) fn create_from_message(
-        &self,
-        conversation: &ConversationRecord,
-        message_index: usize,
-        title: String,
-        secret: Option<&str>,
-    ) -> Result<PlanDocument, DocumentError> {
-        let Some(message) = conversation.messages.get(message_index) else {
-            return Err(DocumentError::Source);
-        };
-        if message.role != MessageRole::Assistant
-            || message.status != MessageStatus::Complete
-            || message.text.trim().is_empty()
-        {
-            return Err(DocumentError::Source);
-        }
-        let source = PlanSource::ConversationMessage {
-            conversation_id: conversation.id,
-            message_index: u32::try_from(message_index).map_err(|_| DocumentError::Source)?,
-            source_hash: ObjectHash::of(message.text.as_bytes()),
-        };
-        self.create(
-            DocumentKind::Plan,
-            conversation.id,
-            title,
-            &message.text,
-            source,
-            secret,
-        )
-    }
-
     pub(crate) fn create_task_list_from_message(
         &self,
         conversation: &ConversationRecord,
@@ -404,27 +401,6 @@ impl PlanDocumentStore {
         )
     }
 
-    pub(crate) fn create_from_text(
-        &self,
-        conversation_id: ConversationId,
-        title: String,
-        markdown: String,
-        secret: Option<&str>,
-    ) -> Result<PlanDocument, DocumentError> {
-        let source = PlanSource::SubmittedText {
-            conversation_id,
-            source_hash: ObjectHash::of(markdown.as_bytes()),
-        };
-        self.create(
-            DocumentKind::Plan,
-            conversation_id,
-            title,
-            &markdown,
-            source,
-            secret,
-        )
-    }
-
     pub(crate) fn create_task_list(
         &self,
         conversation_id: ConversationId,
@@ -451,10 +427,32 @@ impl PlanDocumentStore {
         markdown: String,
         secret: Option<&str>,
     ) -> Result<PlanDocument, DocumentError> {
+        self.revise_with_source(id, expected_revision, title, markdown, secret, None)
+    }
+
+    fn revise_with_source(
+        &self,
+        id: &DocumentId,
+        expected_revision: u32,
+        title: String,
+        markdown: String,
+        secret: Option<&str>,
+        source: Option<PlanSource>,
+    ) -> Result<PlanDocument, DocumentError> {
         let title = normalise_title(&title)?;
         encode_document(&title, secret)?;
         let mut documents = self.lock();
         let current = documents.get(id).cloned().ok_or(DocumentError::Missing)?;
+        if let Some(PlanSource::Action {
+            conversation_id,
+            previous,
+            ..
+        }) = &source
+            && (current.associated_conversation != Some(*conversation_id)
+                || previous.as_ref() != Some(&current.current().reference(current.id)))
+        {
+            return Err(DocumentError::Conflict);
+        }
         let encoded = encode_document_kind(&markdown, secret, current.kind)?;
         if current.current_revision() != expected_revision {
             return Err(DocumentError::Conflict);
@@ -489,7 +487,7 @@ impl PlanDocumentStore {
             object_hash: encoded.object_hash,
             artefact_hash: encoded.artefact_hash,
             content_bytes: encoded.content_bytes,
-            source: PlanSource::Correction {
+            source: source.unwrap_or(PlanSource::Correction {
                 previous: PlanRevisionReference {
                     document_id: current.id,
                     revision: previous.revision,
@@ -497,7 +495,7 @@ impl PlanDocumentStore {
                     object_hash: previous.object_hash,
                     artefact_hash: previous.artefact_hash,
                 },
-            },
+            }),
             created_at_ms: now,
         });
         documents.insert(*id, updated.clone());
@@ -567,6 +565,15 @@ impl PlanDocumentStore {
             crate::workflows::task_list::parse(markdown).map_err(|_| DocumentError::TaskList)?;
         }
         let mut documents = self.lock();
+        if let PlanSource::Action {
+            plan: Some(plan), ..
+        } = &source
+            && documents
+                .get(&plan.document_id)
+                .is_none_or(|parent| parent.associated_conversation != Some(conversation_id))
+        {
+            return Err(DocumentError::Conflict);
+        }
         if documents.len() >= MAXIMUM_DOCUMENTS {
             return Err(DocumentError::Full);
         }
@@ -606,10 +613,115 @@ impl PlanDocumentStore {
         Ok(document)
     }
 
+    pub(crate) fn action_documents(&self, conversation: ConversationId) -> Vec<PlanDocument> {
+        self.lock().values().filter(|document| document.revisions.iter().any(|revision| {
+            matches!(&revision.source, PlanSource::Action { conversation_id, .. } if *conversation_id == conversation)
+        })).cloned().collect()
+    }
+
+    pub(crate) fn publish_action(
+        &self,
+        conversation: &ConversationRecord,
+        action: DocumentAction,
+        secret: Option<&str>,
+    ) -> Result<PlanDocument, DocumentError> {
+        let title = normalise_title(&action.title)?;
+        if action.plan.is_some()
+            && crate::workflows::task_list::parse(&action.markdown)
+                .is_ok_and(|list| list.tasks.len() > 128)
+        {
+            return Err(DocumentError::TaskBreakdown);
+        }
+        if action.message_index > conversation.messages.len()
+            || (action.assistant
+                && conversation
+                    .messages
+                    .get(action.message_index)
+                    .is_none_or(|message| message.role != MessageRole::Assistant))
+        {
+            return Err(DocumentError::Source);
+        }
+        let reference =
+            |id: DocumentId, number: u32| -> Result<PlanRevisionReference, DocumentError> {
+                let document = self.get(&id).ok_or(DocumentError::Missing)?;
+                if document.associated_conversation != Some(conversation.id)
+                    || document.kind != DocumentKind::Plan
+                {
+                    return Err(DocumentError::Source);
+                }
+                let revision = document.revision(number).ok_or(DocumentError::Conflict)?;
+                Ok(revision.reference(id))
+            };
+        let previous = action
+            .previous
+            .map(|(id, number)| reference(id, number))
+            .transpose()?;
+        let plan = action
+            .plan
+            .map(|(id, number)| reference(id, number))
+            .transpose()?;
+        if previous.is_some() && plan.is_some() {
+            return Err(DocumentError::Source);
+        }
+        let source = PlanSource::Action {
+            conversation_id: conversation.id,
+            message_index: u32::try_from(action.message_index)
+                .map_err(|_| DocumentError::Source)?,
+            title: title.clone(),
+            assistant: action.assistant,
+            previous: previous.clone(),
+            plan,
+        };
+        if let Some(previous) = previous {
+            self.revise_with_source(
+                &previous.document_id,
+                previous.revision,
+                title,
+                action.markdown,
+                secret,
+                Some(source),
+            )
+        } else {
+            self.create(
+                if action.plan.is_some() {
+                    DocumentKind::TaskList
+                } else {
+                    DocumentKind::Plan
+                },
+                conversation.id,
+                title,
+                &action.markdown,
+                source,
+                secret,
+            )
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, BTreeMap<DocumentId, PlanDocument>> {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+pub(crate) struct DocumentAction {
+    pub(crate) title: String,
+    pub(crate) markdown: String,
+    pub(crate) assistant: bool,
+    pub(crate) message_index: usize,
+    pub(crate) previous: Option<(DocumentId, u32)>,
+    pub(crate) plan: Option<(DocumentId, u32)>,
+}
+
+impl PlanRevision {
+    pub(crate) fn reference(&self, document_id: DocumentId) -> PlanRevisionReference {
+        PlanRevisionReference {
+            document_id,
+            revision: self.revision,
+            content_hash: self.content_hash,
+            object_hash: self.object_hash,
+            artefact_hash: self.artefact_hash,
+        }
     }
 }
 
@@ -740,8 +852,58 @@ fn load_path(
 fn validate_sources(documents: &BTreeMap<DocumentId, PlanDocument>) -> Result<(), DocumentError> {
     for document in documents.values() {
         for revision in &document.revisions {
-            let PlanSource::Correction { previous } = &revision.source else {
-                continue;
+            if let PlanSource::Action {
+                previous,
+                plan,
+                conversation_id,
+                title,
+                ..
+            } = &revision.source
+            {
+                let origin = match &document.revisions[0].source {
+                    PlanSource::ConversationMessage {
+                        conversation_id, ..
+                    }
+                    | PlanSource::SubmittedText {
+                        conversation_id, ..
+                    }
+                    | PlanSource::DirectoryFile {
+                        conversation_id, ..
+                    }
+                    | PlanSource::Action {
+                        conversation_id, ..
+                    } => conversation_id,
+                    PlanSource::Correction { .. } => return Err(DocumentError::Corrupt),
+                };
+                if conversation_id != origin
+                    || (revision.revision > 1) != previous.is_some()
+                    || (document.current_revision() == revision.revision
+                        && title != &document.title)
+                    || (previous.is_some() && plan.is_some())
+                {
+                    return Err(DocumentError::Corrupt);
+                }
+                for reference in previous.iter().chain(plan.iter()) {
+                    let source = documents
+                        .get(&reference.document_id)
+                        .ok_or(DocumentError::Corrupt)?;
+                    let selected = source
+                        .revision(reference.revision)
+                        .ok_or(DocumentError::Corrupt)?;
+                    if source.kind != DocumentKind::Plan
+                        || selected.reference(source.id) != *reference
+                        || (previous.is_some()
+                            && (source.id != document.id
+                                || reference.revision >= revision.revision))
+                        || (plan.is_some() && document.kind != DocumentKind::TaskList)
+                    {
+                        return Err(DocumentError::Corrupt);
+                    }
+                }
+            }
+            let previous = match &revision.source {
+                PlanSource::Correction { previous } => previous,
+                _ => continue,
             };
             let Some(source_document) = documents.get(&previous.document_id) else {
                 return Err(DocumentError::Corrupt);
@@ -838,6 +1000,22 @@ fn source_from_file(file: SourceFile) -> Result<PlanSource, DocumentError> {
                 source_hash: ObjectHash::parse(&source_hash).ok_or(DocumentError::Corrupt)?,
             })
         }
+        SourceFile::Action {
+            conversation_id,
+            message_index,
+            title,
+            assistant,
+            previous,
+            plan,
+        } => Ok(PlanSource::Action {
+            conversation_id: ConversationId::parse(&conversation_id)
+                .ok_or(DocumentError::Corrupt)?,
+            message_index,
+            title: normalise_title(&title).map_err(|_| DocumentError::Corrupt)?,
+            assistant,
+            previous: previous.map(reference_from_file).transpose()?,
+            plan: plan.map(reference_from_file).transpose()?,
+        }),
         SourceFile::Correction { previous } => Ok(PlanSource::Correction {
             previous: reference_from_file(previous)?,
         }),
@@ -927,6 +1105,21 @@ fn source_to_file(source: &PlanSource) -> SourceFile {
             path: path.clone(),
             source_hash: source_hash.as_str(),
         },
+        PlanSource::Action {
+            conversation_id,
+            message_index,
+            title,
+            assistant,
+            previous,
+            plan,
+        } => SourceFile::Action {
+            conversation_id: conversation_id.as_hex(),
+            message_index: *message_index,
+            title: title.clone(),
+            assistant: *assistant,
+            previous: previous.as_ref().map(reference_to_file),
+            plan: plan.as_ref().map(reference_to_file),
+        },
         PlanSource::Correction { previous } => SourceFile::Correction {
             previous: RevisionReferenceFile {
                 document_id: previous.document_id.as_hex(),
@@ -936,6 +1129,16 @@ fn source_to_file(source: &PlanSource) -> SourceFile {
                 artefact_hash: previous.artefact_hash.as_str(),
             },
         },
+    }
+}
+
+fn reference_to_file(reference: &PlanRevisionReference) -> RevisionReferenceFile {
+    RevisionReferenceFile {
+        document_id: reference.document_id.as_hex(),
+        revision: reference.revision,
+        content_hash: reference.content_hash.as_str(),
+        object_hash: reference.object_hash.as_str(),
+        artefact_hash: reference.artefact_hash.as_str(),
     }
 }
 

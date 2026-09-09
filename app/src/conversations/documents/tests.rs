@@ -5,6 +5,59 @@ use crate::conversations::{ConversationMessage, ConversationStore, MessageRole, 
 use crate::workflows::artefacts::WorkflowArtefactRepository;
 
 impl PlanDocumentStore {
+    pub(crate) fn create_from_text(
+        &self,
+        conversation_id: ConversationId,
+        title: String,
+        markdown: String,
+        secret: Option<&str>,
+    ) -> Result<PlanDocument, DocumentError> {
+        let source = PlanSource::SubmittedText {
+            conversation_id,
+            source_hash: ObjectHash::of(markdown.as_bytes()),
+        };
+        self.create(
+            DocumentKind::Plan,
+            conversation_id,
+            title,
+            &markdown,
+            source,
+            secret,
+        )
+    }
+
+    pub(crate) fn create_from_message(
+        &self,
+        conversation: &ConversationRecord,
+        message_index: usize,
+        title: String,
+        secret: Option<&str>,
+    ) -> Result<PlanDocument, DocumentError> {
+        let message = conversation
+            .messages
+            .get(message_index)
+            .ok_or(DocumentError::Source)?;
+        if message.role != MessageRole::Assistant
+            || message.status != MessageStatus::Complete
+            || message.text.trim().is_empty()
+        {
+            return Err(DocumentError::Source);
+        }
+        let source = PlanSource::ConversationMessage {
+            conversation_id: conversation.id,
+            message_index: message_index as u32,
+            source_hash: ObjectHash::of(message.text.as_bytes()),
+        };
+        self.create(
+            DocumentKind::Plan,
+            conversation.id,
+            title,
+            &message.text,
+            source,
+            secret,
+        )
+    }
+
     pub(crate) fn in_memory(content: Arc<WorkflowArtefactRepository>) -> Self {
         Self {
             path: None,
@@ -25,6 +78,135 @@ fn conversation() -> ConversationRecord {
         request: None,
     });
     record
+}
+
+#[test]
+fn explicit_actions_keep_titles_sources_and_content_after_revision_and_removal() {
+    let directory = tempfile::tempdir().unwrap();
+    let content = Arc::new(WorkflowArtefactRepository::in_memory());
+    let store = PlanDocumentStore::open(directory.path().to_path_buf(), content.clone()).unwrap();
+    let record = conversation();
+    let action = |title: &str, markdown: &str, previous, plan| DocumentAction {
+        title: title.to_owned(),
+        markdown: markdown.to_owned(),
+        assistant: true,
+        message_index: 0,
+        previous,
+        plan,
+    };
+    let first = store
+        .publish_action(
+            &record,
+            action("Original title", "Original text", None, None),
+            None,
+        )
+        .unwrap();
+    let tasks = store
+        .publish_action(
+            &record,
+            action(
+                "Breakdown",
+                "# Tasks\n- [ ] Original task",
+                None,
+                Some((first.id, 1)),
+            ),
+            None,
+        )
+        .unwrap();
+    let revised = store
+        .publish_action(
+            &record,
+            action("New title", "New text", Some((first.id, 1)), None),
+            None,
+        )
+        .unwrap();
+    assert_eq!(revised.revisions[0], first.revisions[0]);
+    assert!(
+        matches!(&revised.revisions[0].source, PlanSource::Action { title, .. } if title == "Original title")
+    );
+    assert!(
+        matches!(&tasks.current().source, PlanSource::Action { plan: Some(plan), .. } if *plan == first.current().reference(first.id))
+    );
+    assert_eq!(
+        store
+            .publish_action(
+                &record,
+                action("Stale", "Stale", Some((first.id, 1)), None),
+                None
+            )
+            .err(),
+        Some(DocumentError::Conflict)
+    );
+    store.disassociate(&first.id, 2, record.id).unwrap();
+    drop(store);
+    let reopened = PlanDocumentStore::open(directory.path().to_path_buf(), content).unwrap();
+    let retained = reopened.get(&first.id).unwrap();
+    assert_eq!(reopened.content(&retained, 1).unwrap(), "Original text");
+    assert_eq!(reopened.action_documents(record.id).len(), 2);
+    let path = directory.path().join(CATALOGUE_FILE);
+    let mut file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    file["documents"][0]["title"] = serde_json::json!("Forged current title");
+    crate::storage::write_private(&path, &serde_json::to_vec(&file).unwrap()).unwrap();
+    assert_eq!(
+        PlanDocumentStore::open(directory.path().to_path_buf(), reopened.content.clone()).err(),
+        Some(DocumentError::Corrupt)
+    );
+}
+
+#[test]
+fn explicit_actions_reject_cross_conversation_identity_and_invalid_content_without_publication() {
+    let store = memory_store();
+    let owner = conversation();
+    let other = conversation();
+    let action = |markdown: &str, previous, plan| DocumentAction {
+        title: "Plan".to_owned(),
+        markdown: markdown.to_owned(),
+        assistant: true,
+        message_index: 0,
+        previous,
+        plan,
+    };
+    let plan = store
+        .publish_action(&owner, action("Original", None, None), None)
+        .unwrap();
+    assert_eq!(
+        store
+            .publish_action(&other, action("Revision", Some((plan.id, 1)), None), None)
+            .err(),
+        Some(DocumentError::Source)
+    );
+    assert_eq!(
+        store
+            .publish_action(
+                &owner,
+                action("No checkboxes", None, Some((plan.id, 1))),
+                None
+            )
+            .err(),
+        Some(DocumentError::TaskList)
+    );
+    assert_eq!(
+        store
+            .publish_action(&owner, action("credential", None, None), Some("credential"))
+            .err(),
+        Some(DocumentError::Credential)
+    );
+    let excessive = format!(
+        "# Tasks\n{}",
+        (0..129)
+            .map(|index| format!("- [ ] Task {index}\n"))
+            .collect::<String>()
+    );
+    assert_eq!(
+        store
+            .publish_action(&owner, action(&excessive, None, Some((plan.id, 1))), None)
+            .err(),
+        Some(DocumentError::TaskBreakdown)
+    );
+    assert_eq!(store.get(&plan.id), Some(plan));
+    assert_eq!(store.list_for_conversation(owner.id).len(), 1);
+    assert!(store.list_for_conversation(other.id).is_empty());
 }
 
 fn memory_store() -> PlanDocumentStore {

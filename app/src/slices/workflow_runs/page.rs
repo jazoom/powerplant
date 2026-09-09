@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::workflows::summary::ProcessPhase;
 use crate::workflows::{LoopSummary, RunSummary, TaskLoop, WorkflowCatalogue, WorkflowRun};
 
-pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
+pub(super) const INDEX_TITLE: &str = "History | Power Plant";
 pub(super) const DETAIL_TITLE: &str = "Run | Power Plant";
 pub(super) const ARTEFACT_TITLE: &str = "Artefact | Power Plant";
 
@@ -199,6 +199,8 @@ pub(super) struct IndexRow {
     pub(super) id: String,
     pub(super) href: String,
     pub(super) project_name: String,
+    pub(super) conversation_href: String,
+    pub(super) conversation_title: String,
     pub(super) name: String,
     pub(super) state: String,
     pub(super) created: String,
@@ -212,12 +214,24 @@ impl RunIndexView {
             .summaries()
             .into_iter()
             .map(|summary| {
-                let row = index_row_from_run(&summary, &state.projects);
+                let mut row = index_row_from_run(&summary, &state.projects);
+                let owner = state
+                    .workflow_runs
+                    .get(&summary.id)
+                    .and_then(|run| run.conversation_id);
+                (row.conversation_href, row.conversation_title) =
+                    conversation_presentation(state, owner);
                 (summary.created_at_ms, summary.id.as_hex(), row)
             })
             .collect();
         rows.extend(state.task_loops.summaries().into_iter().map(|summary| {
-            let row = index_row_from_loop(&summary, &state.projects);
+            let mut row = index_row_from_loop(&summary, &state.projects);
+            let owner = state
+                .task_loops
+                .get(&summary.id)
+                .map(|record| record.conversation_id);
+            (row.conversation_href, row.conversation_title) =
+                conversation_presentation(state, owner);
             (summary.created_at_ms, summary.id.as_hex(), row)
         }));
         rows.sort_by(|left, right| right.0.cmp(&left.0).then(right.1.cmp(&left.1)));
@@ -225,6 +239,19 @@ impl RunIndexView {
         Self {
             runs: rows.into_iter().map(|(_, _, row)| row).collect(),
         }
+    }
+}
+
+fn conversation_presentation(
+    state: &AppState,
+    owner: Option<crate::conversations::ConversationId>,
+) -> (String, String) {
+    match owner {
+        Some(id) => match state.conversations.get(&id) {
+            Some(record) => (format!("/conversations/{}", id.as_hex()), record.title),
+            None => (String::new(), "Conversation unavailable".to_owned()),
+        },
+        None => (String::new(), "No owning conversation".to_owned()),
     }
 }
 
@@ -265,6 +292,8 @@ fn index_row_from_run(summary: &RunSummary, projects: &ProjectStore) -> IndexRow
     IndexRow {
         id: summary.id.as_hex(),
         href: format!("/runs/{}", summary.id.as_hex()),
+        conversation_href: String::new(),
+        conversation_title: String::new(),
         project_name,
         name: summary.name.clone(),
         state: summary.state.clone(),
@@ -278,6 +307,8 @@ fn index_row_from_loop(summary: &LoopSummary, projects: &ProjectStore) -> IndexR
     IndexRow {
         id: summary.id.as_hex(),
         href: format!("/runs/loops/{}", summary.id.as_hex()),
+        conversation_href: String::new(),
+        conversation_title: String::new(),
         project_name,
         name: summary.name.clone(),
         state: summary.state.clone(),
@@ -429,6 +460,7 @@ pub(super) fn loop_controls(
 #[template(path = "workflow_runs/templates/detail.html")]
 pub(super) struct RunDetailView {
     pub(super) run_id: String,
+    pub(super) conversation_href: String,
     pub(super) project_href: String,
     pub(super) project_name: String,
     pub(super) name: String,
@@ -467,6 +499,7 @@ pub(super) struct ArtefactRow {
 #[template(path = "workflow_runs/templates/detail.html", block = "run_detail")]
 pub(super) struct RunDetailContents<'a> {
     pub(super) run_id: &'a str,
+    pub(super) conversation_href: &'a str,
     pub(super) project_href: &'a str,
     pub(super) project_name: &'a str,
     pub(super) name: &'a str,
@@ -518,6 +551,7 @@ impl RunDetailView {
             run_hierarchy(run, parent, &current_step);
         Self {
             run_id: run.id.as_hex(),
+            conversation_href: run.conversation_id.map(|id| format!("/conversations/{}", id.as_hex())).unwrap_or_default(),
             project_href,
             project_name,
             name: run.pinned.definition.name().to_owned(),
@@ -797,6 +831,7 @@ impl RunDetailView {
     pub(super) fn contents(&self) -> RunDetailContents<'_> {
         RunDetailContents {
             run_id: &self.run_id,
+            conversation_href: &self.conversation_href,
             project_href: &self.project_href,
             project_name: &self.project_name,
             name: &self.name,

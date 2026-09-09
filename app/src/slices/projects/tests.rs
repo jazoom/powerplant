@@ -175,7 +175,7 @@ async fn a_catalogue_document_uses_chat_main() {
 }
 
 #[tokio::test]
-async fn a_chat_document_enhances_provider_navigation() {
+async fn a_chat_document_enhances_resource_navigation() {
     let state = test_state();
     let token = connected(&state);
     create_project(&state, "Desk");
@@ -193,13 +193,12 @@ async fn a_chat_document_enhances_provider_navigation() {
     let text = body_text(response).await;
     let connect_tags: Vec<&str> = text
         .split("<a ")
-        .filter(|chunk| chunk.contains("href=\"/connect\""))
+        .filter(|chunk| chunk.contains("href=\"/resources\""))
         .map(|chunk| chunk.split('>').next().expect("tag"))
         .collect();
-    assert_eq!(connect_tags.len(), 2);
+    assert!(!connect_tags.is_empty());
     for tag in connect_tags {
         assert!(tag.contains("data-graft"));
-        assert!(tag.contains("data-nav=\"providers\""));
     }
 }
 

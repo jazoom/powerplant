@@ -46,7 +46,7 @@ The preset editor shares instruction, tool and environment presentation with con
 
 Unavailable providers, models, recipes and directories retain their requested values. Preset deletion needs no available provider or execution resource.
 
-Conversation Settings identifies the source snapshot and local customisation. Local edits never update the source preset. The Presets page provides that explicit action.
+Conversation Setup identifies the source snapshot and local customisation. Local edits never update the source preset. The Presets page provides that explicit action.
 
 Preset previews expire after 30 minutes. Each preview binds its replacement to the session and the destination settings revision or draft digest.
 
@@ -124,7 +124,23 @@ They open that origin in a browser. They add a key or a plan login for a provide
 
 They choose a provider, model and model-specific thinking effort in each conversation.
 
-Conversations and Workflows are the primary navigation destinations. Runs provides history. Settings links to Presets and Environments.
+New conversation is the primary navigation action. The persistent index shows up to twelve recent conversations with real titles and status.
+
+Needs your attention lists unresolved candidate, plan and host-command decisions across conversations. Each entry opens its owning context without execution approval.
+
+The decision view uses pages of thirty entries. Refresh decisions reads the current server state.
+
+History links the newest fifty runs and task loops to their owning conversations. Child runs retain parent links and immutable evidence.
+
+Settings also links to Environments.
+
+Workflows and presets opens `/resources`. The shared resource page links to the existing catalogues:
+
+- Workflows and their authoring controls.
+- Presets and their revision-bound editors.
+- Providers and environment preparation.
+- Projects and saved agents.
+- Machine-wide settings.
 
 Directory filters in conversation history provide work discovery without additional access grants.
 
@@ -176,18 +192,19 @@ Power Plant queues preparation for each recipe. A successful preparation creates
 
 They create workflow definitions with a default environment, roles and ordered steps. A definition can run once or repeat one group of phases for each remaining task. A task list is not required for a one-shot definition. Ordinary chat still needs no workflow.
 
-A new installation includes six starter processes.
+A new installation includes seven starter processes.
 
 The starters are:
 
 - Plan a change
 - Review current code
 - Implement with approval
+- Implement a saved plan
 - Implement and review
 - Plan then implement
-- Ralph task loop
+- Task loop
 
-Each process preview shows its required inputs, candidate effects and approval stops. Independent review appears only when that process contains a separate read-only review phase. Ralph repeats implementation and optional review-and-fix. It does not add an extra independent review. A step can run an agent, a registered system command or a human gate.
+Each process preview shows its required inputs, candidate effects and approval stops. Independent review appears only when that process contains a separate read-only review phase. The task loop repeats implementation and optional review-and-fix. It does not add an extra independent review. A step can run an agent, a registered system command or a human gate.
 
 They open a project to see its conversations. The project page lists conversations that reference the project and offers New conversation. The new conversation form carries the project reference without granting file access.
 
@@ -203,7 +220,17 @@ An unchanged Quick task completes automatically after the assistant reply. The p
 
 A changed Quick task waits at a human gate. The user must approve the exact candidate. The host worktree does not change before that approval. Approval creates a local Git commit through the current transaction path.
 
-Configured workflows start from Workflows… beside the conversation title. Setup shows the selected process, brief, effective settings, environment readiness and approval stops.
+Configured workflows start from Run a workflow above the transcript. Setup opens in the conversation companion at its canonical URL.
+
+Choose, inputs and review retain the brief and selected revisions through Back controls. Preview starts no work.
+
+The content scrolls separately from the action footer. Mobile closure restores focus to Run a workflow.
+
+Review distinguishes run defaults from effective phase settings. Host summaries name unrestricted access and the requested command policy, not sandbox boundaries.
+
+Provider and environment failures retain direct recovery links. Large workflow forms use the standalone representation at the same URL.
+
+New starters use Task loop. Untouched older starters receive that presentation label without a stored definition change. User-authored names and pinned run names remain unchanged.
 
 Ordinary one-shot workflows copy conversation settings and directory grants into their phase snapshots. They need no project registration or saved agent.
 
@@ -227,13 +254,51 @@ Explicit Git commands retain an explicit supported project binding. Directory or
 
 Task-loop completion recognises verified generic file application separately from commits. Every application root must report Applied or Unchanged, and managed cleanup must finish. Unsettled application transactions block completion, continuation and retry. Host task loops need no project registration or sandbox environment.
 
-Saved documents sits in a stable inline section above the transcript. Its summary shows the document count when documents exist.
+Plans opens the conversation companion. It contains explicit plans and standalone task lists. Generated breakdowns stay under their source plans.
 
-Completed responses offer Save as plan and Save as tasks. The user can also paste plan or task-list text. These actions execute nothing.
+Current work contains execution progress, host command approval and candidate review. The transcript and composer remain separate from those controls.
 
-Plans offer Create task list. Preparation sends the selected plan to the conversation model without tools, directory access or a sandbox requirement. Conversation settings remain unchanged.
+Current work also exposes eligible job-bound cancellation while the mobile composer is inert. Cancellation leaves direct writes and host command effects unchanged.
 
-Task lists offer Run tasks, which opens workflow setup without execution. Document views retain export, immutable revision history and independent review.
+Observation resumes after parent command patches, including cancellation. New output preserves the transcript offset when the reader leaves the end.
+
+Candidate review shows bounded file previews and the exact application destination. Expanded review retains the owning conversation and its URL.
+
+Setup occupies the companion position. One native selector replaces the former hidden section tabs. Section changes retain unsaved fields.
+
+Effective access stays beside the composer until a successful settings switch. Setup closure restores focus after a command replaces its original trigger.
+
+On mobile, an open companion excludes the hidden transcript and composer from interaction. Closure returns focus to a conversation control.
+
+Ordinary responses create no plan automatically. Tool-free conversation exposes explicit plan actions separately from file and command tools.
+
+The model can submit these actions:
+
+- `create_plan`
+- `revise_plan`
+- `create_task_breakdown`
+
+Each response permits one validated action. The action stores its contents and provenance together, after the provider stream completes successfully.
+
+Create a plan from this requests a model action. Add your own plan stores supplied text without a model call.
+
+Plan revisions add immutable action entries with their original titles and contents. Action details identify the author and exact revision.
+
+Plan actions grant no execution or application approval. Explicit requests use no directory access or sandbox, even when the conversation permits execution tools.
+
+Revision and breakdown requests bind publication to the selected document and revision. Their model context contains the selected source, not newer plan contents.
+
+Prepare implementation opens the existing workflow preview with an exact plan revision. The Implement a saved plan starter requires no task breakdown.
+
+Break into tasks requests an explicit breakdown from the selected plan revision. Generated breakdowns permit at most 128 tasks.
+
+A later source revision marks an older breakdown as outdated for a new run. Existing runs retain their own pinned inputs.
+
+Standalone task imports remain independent documents. Completed replies still offer an explicit Save as task list action.
+
+Task lists offer Run tasks, which opens workflow setup without execution. Document views retain export and independent review.
+
+The document catalogue retains action provenance after association removal. Existing records remain readable without a migration or format-version change.
 
 An explicit import reads one file from an authorised directory through a read-only sandbox with the selected environment and no network. Import calls no model and executes no tasks.
 
@@ -241,7 +306,7 @@ Import rejects parent paths and symlinks. It revalidates directory identity and 
 
 Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Pi export use the saved revision.
 
-The Ralph task loop starter runs each remaining task in order. It pins the task list, workflow body and phase selections at launch. Each task receives fresh implementation and optional review-and-fix contexts. The complete task file remains context, but each worker receives only one assigned task. Human approval precedes each task commit by default. An extra independent review is present only when the selected definition includes that phase.
+The Task loop starter runs each remaining task in order. It pins the task list, workflow body and phase selections at launch. Each task receives fresh implementation and optional review-and-fix contexts. The complete task file remains context, but each worker receives only one assigned task. Human approval precedes each task commit by default. An extra independent review is present only when the selected definition includes that phase.
 
 One parent record shows task progress and links to child evidence. A successful commit or explicit no-change result permits the next task. The next task starts from the completed code, not an earlier worker transcript. A child approval gate retains the parent conversation reservation but releases execution reservations for another conversation. Earlier commits remain if a later task fails.
 
@@ -361,7 +426,7 @@ Current capabilities:
 Current constraints:
 
 - The product does not create user accounts.
-- A conversation stays a transcript plus composer with explicit project controls.
+- A conversation stays a transcript plus composer with an optional work companion and explicit access controls.
 - Sandbox tools run only in the guest. The guest does not receive a provider key or plan token. Agent steps use the saved network policy. System-command steps have no network access. Environment preparation permits public destinations but excludes the host and private networks. Model inference stays on the host through Rig. Host mode runs approved shell commands as the Power Plant process user. It adds no privileges. Approval covers the submitted command, not script internals. Command output is sent to the hosted model.
 - Conversation history, presets, project records, run records and artefacts persist locally. The old project desk routes no longer exist.
 - One session command can be active at a time.
@@ -388,6 +453,16 @@ Later work:
 The product name is Power Plant. The wordmark in the product is `Power Plant`. The mark is `app/public/images/logo.svg`.
 
 UI copy uses Australian English. Capitalise only the first letter of a title, button or heading.
+
+## UI validation
+
+[The final UI report](docs/ui-overhaul/MILESTONE-4.md) records the capability audit and browser evidence for milestones 1–4.
+
+The UI overhaul preserves the existing execution engine, consent boundaries and persisted format versions. It removes no catalogue capability.
+
+Final browser exercises include scripted tool-free responses and cancellation without directory access. They also include unavailable-environment rejection and provider recovery.
+
+Successful hosted responses and successful reviewed file application remain unverified in a browser. Automated recovery tests do not replace that execution evidence.
 
 ## Evidence on Hand
 

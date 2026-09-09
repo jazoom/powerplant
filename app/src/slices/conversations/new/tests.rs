@@ -47,6 +47,7 @@ async fn copied_draft_is_independent_and_navigation_creates_no_record() {
         let response = app(&state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = text(response).await;
+        let body = body.split("id=\"chat-main\"").last().unwrap();
         assert!(body.contains("Copied instructions"));
         assert!(!body.contains("Private source title"));
         assert!(!body.contains("Unfinished source work"));

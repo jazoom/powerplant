@@ -123,7 +123,7 @@ async fn detail(
             .and_then(|record| record.active_job)
             .and_then(|job_id| state.host_approvals.pending_for(conversation, job_id))
     });
-    let view = RunDetailView::from_run(
+    let mut view = RunDetailView::from_run(
         &run,
         &state.workflows,
         &state.environments,
@@ -131,7 +131,17 @@ async fn detail(
         &state.workflow_evidence,
         parent.as_ref(),
     )
-    .with_pending_host_command(pending);
+    .with_pending_host_command(
+        pending.filter(|command| command.run.as_deref() == Some(run.id.as_hex().as_str())),
+    );
+    if run
+        .conversation_id
+        .is_some_and(|id| state.conversations.get(&id).is_none())
+    {
+        view.conversation_href.clear();
+        view.catalogue_note
+            .push_str(" Owning conversation unavailable. Run evidence remains available.");
+    }
     match graft {
         GraftRequest::Document => {
             let mut response = responses::chat_page_response(page::DETAIL_TITLE, &state, &view)?;

@@ -1,3 +1,39 @@
+#[tokio::test]
+async fn conversation_workspace_keeps_exact_gate_fields_in_each_representation() {
+    let fixture = conversation_awaiting_gate();
+    let path = format!("/conversations/{}", fixture.conversation_id.unwrap());
+    for graft in [None, Some("navigation"), Some("patch")] {
+        let mut request = Request::builder()
+            .uri(&path)
+            .header(header::COOKIE, cookie(&fixture.token));
+        if let Some(kind) = graft {
+            request = request
+                .header("Graft-Request", kind)
+                .header(header::ACCEPT, "text/vnd.hypergraft.patches+html");
+        }
+        let response = app(&fixture.state)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        for action in ["approve", "cancel", "request-revision"] {
+            let action = format!("action=\"{}/{action}\"", fixture.gate_path());
+            let form = body
+                .split("<form")
+                .find(|form| form.split("</form>").next().unwrap().contains(&action))
+                .expect("gate command");
+            let form = form.split("</form>").next().unwrap();
+            assert!(form.contains("name=\"gate-revision\""));
+            assert!(form.contains("value=\"1\""));
+            assert!(form.contains("name=\"candidate\""));
+            assert!(form.contains(&format!("value=\"{}\"", fixture.candidate)));
+            assert!(form.contains("name=\"surface\" value=\"conversation\""));
+        }
+        assert!(body.contains(fixture.host.to_str().unwrap()));
+    }
+}
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},

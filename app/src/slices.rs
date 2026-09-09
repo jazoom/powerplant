@@ -3,14 +3,16 @@ use axum::Router;
 use crate::state::AppState;
 
 mod agents;
+mod attention;
 pub(crate) mod chat;
 mod connect;
-mod conversations;
+pub(crate) mod conversations;
 mod environments;
 mod execution_settings;
 mod human_gates;
 mod presets;
 mod projects;
+mod resources;
 mod settings;
 mod workflow_runs;
 mod workflows;
@@ -23,6 +25,8 @@ pub(crate) use chat::{AgentOutcome, AgentRunSpec, bound_reply, run_agent_action}
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .merge(connect::router())
+        .merge(attention::router())
+        .merge(resources::router())
         .merge(conversations::router())
         .merge(projects::router())
         .merge(agents::router())

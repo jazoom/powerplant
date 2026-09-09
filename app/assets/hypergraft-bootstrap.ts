@@ -8,13 +8,13 @@ import { initComposer, initShortcutHint } from "./composer";
 import { initConnectErrors } from "./connect-errors";
 import { initConnectPlan } from "./connect-plan";
 import { initDeskSettings } from "./desk-settings";
-import { initNavigationMore } from "./navigation-more";
 import { initConversation } from "./conversation";
 import { initObserve } from "./observe";
 import { initThemeSelector } from "./theme";
 import { initThinkingVisibility } from "./thinking-visibility";
 import { initTranscript } from "./transcript";
 import { initWorkflowEditor } from "./workflow-editor";
+import { initWorkspace } from "./workspace";
 
 export function startApp(): void {
     const bound = bindTransportFeedback(document);
@@ -33,7 +33,6 @@ export function startApp(): void {
             "connect-errors": initConnectErrors,
             "connect-plan": initConnectPlan,
             "desk-settings": initDeskSettings,
-            "navigation-more": initNavigationMore,
             conversation: initConversation,
             observe: initObserve,
             "shortcut-hint": initShortcutHint,
@@ -41,6 +40,7 @@ export function startApp(): void {
             "thinking-visibility": initThinkingVisibility,
             transcript: initTranscript,
             "workflow-editor": initWorkflowEditor,
+            workspace: initWorkspace,
         },
     });
 }

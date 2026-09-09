@@ -24,17 +24,12 @@ function syncExecutionModeFields() {
     if (policy) policy.hidden = !host;
 }
 
-function selectConversationSettingsTab(panel: HTMLElement, id: string) {
+function selectConversationSettingsSection(panel: HTMLElement, id: string) {
     panel
-        .querySelectorAll<HTMLElement>('[role="tabpanel"]')
+        .querySelectorAll<HTMLElement>("[data-settings-panel]")
         .forEach((section) => {
             section.hidden = section.id !== id;
         });
-    panel.querySelectorAll<HTMLElement>('[role="tab"]').forEach((tab) => {
-        const active = tab.getAttribute("aria-controls") === id;
-        tab.setAttribute("aria-selected", String(active));
-        tab.tabIndex = active ? 0 : -1;
-    });
     const menu = panel.querySelector<HTMLSelectElement>("[data-settings-menu]");
     if (menu) menu.value = id;
     const actions = panel.querySelector<HTMLElement>(
@@ -54,11 +49,14 @@ function revealConversationSetting(target: HTMLElement, focus = true) {
     const panel = target.closest<HTMLElement>("#conversation-settings");
     const scroll = panel?.querySelector<HTMLElement>("[data-settings-scroll]");
     if (!panel || !scroll) return;
-    const section = target.closest<HTMLElement>('[role="tabpanel"]');
+    const section = target.closest<HTMLElement>("[data-settings-panel]");
     if (target.closest("[data-execution-actions]"))
-        selectConversationSettingsTab(panel, "settings-execution");
+        selectConversationSettingsSection(panel, "settings-execution");
     else if (section || target.id === "conversation-settings-heading")
-        selectConversationSettingsTab(panel, section?.id ?? "settings-model");
+        selectConversationSettingsSection(
+            panel,
+            section?.id ?? "settings-model",
+        );
     let parent = target.parentElement;
     while (parent && parent !== panel) {
         if (parent instanceof HTMLDetailsElement) parent.open = true;
@@ -89,57 +87,16 @@ document.addEventListener("click", (event) => {
     if (!target) return;
     const panel = target.closest<HTMLElement>("#conversation-settings");
     if (!panel) return;
-    // Select before native activation so the first visible frame uses the destination tab.
-    selectConversationSettingsTab(
+    selectConversationSettingsSection(
         panel,
-        target.closest('[role="tabpanel"]')?.id ?? "settings-model",
+        target.closest("[data-settings-panel]")?.id ?? "settings-model",
     );
     // Native activation retains the trigger for Escape focus restoration.
-    requestAnimationFrame(() => {
-        revealConversationSetting(
-            target,
-            shortcut.getAttribute("role") !== "tab",
-        );
-    });
-});
-
-document.addEventListener("keydown", (event) => {
-    const tab = event.target;
-    if (
-        !(tab instanceof HTMLElement) ||
-        !tab.matches('#conversation-settings [role="tab"]')
-    )
-        return;
-    const tabs = Array.from(
-        tab.parentElement!.querySelectorAll<HTMLElement>('[role="tab"]'),
-    );
-    const index = tabs.indexOf(tab);
-    let next: number;
-    switch (event.key) {
-        case "ArrowRight":
-        case "ArrowDown":
-            next = (index + 1) % tabs.length;
-            break;
-        case "ArrowLeft":
-        case "ArrowUp":
-            next = (index + tabs.length - 1) % tabs.length;
-            break;
-        case "Home":
-            next = 0;
-            break;
-        case "End":
-            next = tabs.length - 1;
-            break;
-        default:
-            return;
-    }
-    event.preventDefault();
-    tabs[next].focus();
-    tabs[next].click();
+    requestAnimationFrame(() => revealConversationSetting(target));
 });
 
 let settingsScroll: number | undefined;
-let settingsTab: string | undefined;
+let settingsSection: string | undefined;
 document.addEventListener(
     "submit",
     () => {
@@ -149,12 +106,9 @@ document.addEventListener(
         settingsScroll = panel?.querySelector<HTMLElement>(
             "[data-settings-scroll]",
         )?.scrollTop;
-        settingsTab =
-            panel
-                ?.querySelector<HTMLElement>(
-                    '[role="tab"][aria-selected="true"]',
-                )
-                ?.getAttribute("aria-controls") ?? undefined;
+        settingsSection = panel?.querySelector<HTMLSelectElement>(
+            "[data-settings-menu]",
+        )?.value;
     },
     true,
 );
@@ -167,9 +121,9 @@ listenForRequestSettled((detail) => {
         return;
     }
     const previousScroll = settingsScroll;
-    const previousTab = settingsTab;
+    const previousSection = settingsSection;
     settingsScroll = undefined;
-    settingsTab = undefined;
+    settingsSection = undefined;
     syncExecutionModeFields();
     // Retained external submitters can retain transport-only ARIA state after a patch.
     document
@@ -194,8 +148,8 @@ listenForRequestSettled((detail) => {
                 panel.hidePopover();
         });
     if (detail.outcome === "applied-patch" && requestedPanel) {
-        if (previousTab)
-            selectConversationSettingsTab(requestedPanel, previousTab);
+        if (previousSection)
+            selectConversationSettingsSection(requestedPanel, previousSection);
         if (!requestedPanel.matches(":popover-open"))
             requestedPanel.showPopover();
         const destination =
@@ -229,7 +183,7 @@ document.addEventListener("change", (event) => {
     ) {
         const panel = field.closest<HTMLElement>("#conversation-settings");
         if (panel) {
-            selectConversationSettingsTab(panel, field.value);
+            selectConversationSettingsSection(panel, field.value);
             const scroll = panel.querySelector<HTMLElement>(
                 "[data-settings-scroll]",
             );

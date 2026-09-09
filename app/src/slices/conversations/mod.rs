@@ -1,6 +1,8 @@
 mod directories;
 mod job;
 mod new;
+mod plans;
+pub(crate) mod recent;
 mod title;
 mod tool_approval;
 pub(super) use title::live_router;
@@ -89,8 +91,12 @@ pub(super) fn router() -> Router<AppState> {
             get(workflow::show).post(workflow::launch),
         )
         .route(
-            "/conversations/{conversation_id}/plans",
-            post(save_plan_message),
+            "/conversations/{conversation_id}/plans/from-message",
+            post(request_plan_from_message),
+        )
+        .route(
+            "/conversations/{conversation_id}/plans/request",
+            post(plans::request),
         )
         .route(
             "/conversations/{conversation_id}/plans/text",
@@ -262,6 +268,8 @@ struct PlanMessageForm {
     revision: String,
     message_index: String,
     title: String,
+    #[serde(default)]
+    request: String,
 }
 
 #[derive(Deserialize)]
@@ -367,6 +375,7 @@ struct NetworkForm {
 #[serde(default, deny_unknown_fields)]
 struct CatalogueQuery {
     directory: String,
+    index: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -376,6 +385,7 @@ struct ObserveQuery {
     cursor: String,
     #[serde(default)]
     title: bool,
+    plans: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -390,6 +400,9 @@ async fn catalogue(
     graft: GraftRequest,
     Query(query): Query<CatalogueQuery>,
 ) -> AppResult<Response> {
+    if query.index && graft == GraftRequest::Patch {
+        return recent::response(&state);
+    }
     let valid = query.directory.is_empty()
         || (query.directory.len() == 33
             && state
@@ -445,13 +458,9 @@ async fn detail(
     if graft == GraftRequest::Patch && !query.job.is_empty() {
         return observe_message(state, session.0, record, query);
     }
-    render_detail(
-        &state,
-        session.0,
-        graft,
-        PatchStatus::Ok,
-        detail_view(&state, session.0, &record, &record.title, ""),
-    )
+    let mut view = detail_view(&state, session.0, &record, &record.title, "");
+    view.documents_open = query.plans;
+    render_detail(&state, session.0, graft, PatchStatus::Ok, view)
 }
 
 pub(super) fn refresh_after_loop_command(
@@ -1279,7 +1288,7 @@ fn render_candidate_review_error(
     }
 }
 
-async fn save_plan_message(
+async fn request_plan_from_message(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: PatchGraft,
@@ -1312,23 +1321,69 @@ async fn save_plan_message(
             DocumentError::Source,
         );
     };
+    if form.title.trim().is_empty()
+        || form.title.len() > 120
+        || form.title.chars().any(char::is_control)
+    {
+        return render_detail_document_error(
+            &state,
+            _session.0,
+            graft,
+            &record,
+            DocumentError::Title,
+        );
+    }
+    if form.request.len() > 8192 {
+        return render_detail_document_error(
+            &state,
+            _session.0,
+            graft,
+            &record,
+            DocumentError::Content,
+        );
+    }
     let text = record
         .messages
         .get(message_index)
         .map_or("", |message| message.text.as_str());
-    let secret = plan_secret(&state, &[&form.title, text]);
-    match state.documents.create_from_message(
-        &record,
-        message_index,
-        form.title.clone(),
-        secret.as_deref(),
-    ) {
-        Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
-        Err(error @ (DocumentError::Persist | DocumentError::Corrupt)) => {
-            Err(AppError::new("store plan document", error))
-        }
-        Err(error) => render_detail_document_error(&state, _session.0, graft, &record, error),
+    let secret = plan_secret(&state, &[&form.title, &form.request, text]);
+    if record.messages.get(message_index).is_none_or(|message| {
+        message.role != crate::conversations::MessageRole::Assistant
+            || message.status != crate::conversations::MessageStatus::Complete
+            || message.text.trim().is_empty()
+    }) {
+        return render_detail_document_error(
+            &state,
+            _session.0,
+            graft,
+            &record,
+            DocumentError::Source,
+        );
     }
+    if secret.is_some() {
+        return render_detail_document_error(
+            &state,
+            _session.0,
+            graft,
+            &record,
+            DocumentError::Credential,
+        );
+    }
+    let prompt = format!(
+        "Create an explicit plan with create_plan from assistant message {}. Suggested title: {}\nRequest: {}",
+        message_index + 1,
+        form.title,
+        form.request
+    );
+    send_preparation(
+        state,
+        _session,
+        graft,
+        record,
+        prompt,
+        plans::Scope::FromMessage(message_index),
+    )
+    .await
 }
 
 async fn save_plan_text(
@@ -1361,10 +1416,23 @@ async fn save_plan_text(
     if revision != record.revision {
         return render_detail_command(graft, PatchStatus::Conflict, error_view(REVISION_MESSAGE));
     }
-    match state.documents.create_from_text(
-        record.id,
-        form.title.clone(),
-        form.markdown.clone(),
+    if record.active_job.is_some() {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            error_view(DocumentError::Active.message()),
+        );
+    }
+    match state.documents.publish_action(
+        &record,
+        crate::conversations::DocumentAction {
+            title: form.title.clone(),
+            markdown: form.markdown.clone(),
+            assistant: false,
+            message_index: record.messages.len().saturating_sub(1),
+            previous: None,
+            plan: None,
+        },
         secret.as_deref(),
     ) {
         Ok(_) => Ok(responses::command_navigation(&conversation_path(&record))),
@@ -1415,18 +1483,21 @@ async fn prepare_tasks(
     let selected = document
         .revision(parse_revision(&form.document_revision).expect("validated revision"))
         .expect("selected plan revision");
-    let content = state
-        .documents
-        .content(&document, selected.revision)
-        .map_err(|error| AppError::new("read task preparation plan", error))?;
     let prompt = format!(
-        "Prepare a task list from the following selected plan. Return only Markdown, without an outer code fence. Use a level-one heading, shared context preamble, and ordered top-level '- [ ] Task' entries with indented details. Put literal checkbox examples inside code fences. Preserve the plan requirements. Do not execute tasks or modify project files.\n\nSelected plan: {}\nRevision: {}\nContent hash: {}\n\n{}",
-        document.title,
+        "Create an explicit task breakdown with create_task_breakdown from the selected plan. Submit Markdown, without an outer code fence. Use a level-one heading, shared context preamble, and at most 128 ordered top-level '- [ ] Task' entries with indented details. Put literal checkbox examples inside code fences. Preserve the plan requirements. Do not execute tasks or modify project files.\n\nSelected plan: {}\nRevision: {}\nContent hash: {}",
+        document.id,
         selected.revision,
-        selected.content_hash.as_str(),
-        content
+        selected.content_hash.as_str()
     );
-    send_preparation(state, session, graft, record, prompt).await
+    send_preparation(
+        state,
+        session,
+        graft,
+        record,
+        prompt,
+        plans::Scope::Tasks(document.id, selected.revision),
+    )
+    .await
 }
 
 async fn send_preparation(
@@ -1435,6 +1506,7 @@ async fn send_preparation(
     graft: PatchGraft,
     record: ConversationRecord,
     prompt: String,
+    scope: plans::Scope,
 ) -> AppResult<Response> {
     let Some(model) = effective_model(&state, &record) else {
         return render_preparation_command(
@@ -1459,7 +1531,7 @@ async fn send_preparation(
         record.revision,
         model,
         prompt,
-        false,
+        MessageMode::Plan(scope),
     )
     .await
     {
@@ -1651,6 +1723,22 @@ async fn open_plan(
         .documents
         .content(&document, revision)
         .map_err(|error| AppError::new("read plan document", error))?;
+    if graft != GraftRequest::Patch
+        && let Some(record) = document
+            .associated_conversation
+            .and_then(|id| state.conversations.get(&id))
+    {
+        let plan = PlanDocumentPage::from_document(&document, revision, content.clone(), "")
+            .with_context(&state, &document);
+        let html = askama::Template::render(&plan.contents())
+            .map_err(|error| AppError::new("render plan companion", error))?;
+        // Large plans use the standalone representation to reserve envelope space for conversation controls.
+        if html.len() <= 256 * 1024 {
+            let view = detail_view(&state, _session.0, &record, &record.title, "")
+                .with_companion(html, "plan");
+            return render_detail(&state, _session.0, graft, PatchStatus::Ok, view);
+        }
+    }
     render_plan_page_with_content(
         &state,
         graft,
@@ -1776,13 +1864,34 @@ async fn revise_plan(
         );
     };
     let secret = plan_secret(&state, &[&form.title, &form.markdown]);
-    match state.documents.revise(
-        &document.id,
-        revision,
-        form.title.clone(),
-        form.markdown.clone(),
-        secret.as_deref(),
-    ) {
+    let owner = document
+        .associated_conversation
+        .and_then(|id| state.conversations.get(&id));
+    let result = if let Some(owner) =
+        owner.filter(|_| document.kind == crate::conversations::DocumentKind::Plan)
+    {
+        state.documents.publish_action(
+            &owner,
+            crate::conversations::DocumentAction {
+                title: form.title.clone(),
+                markdown: form.markdown.clone(),
+                assistant: false,
+                message_index: owner.messages.len().saturating_sub(1),
+                previous: Some((document.id, revision)),
+                plan: None,
+            },
+            secret.as_deref(),
+        )
+    } else {
+        state.documents.revise(
+            &document.id,
+            revision,
+            form.title.clone(),
+            form.markdown.clone(),
+            secret.as_deref(),
+        )
+    };
+    match result {
         Ok(updated) => Ok(responses::command_navigation(&format!(
             "/plans/{}",
             updated.id
@@ -2060,7 +2169,22 @@ pub(super) async fn start_message(
     model: ConversationModelConfiguration,
     text: String,
 ) -> Result<ConversationRecord, StartMessageError> {
-    start_message_mode(state, session, record, revision, model, text, true).await
+    start_message_mode(
+        state,
+        session,
+        record,
+        revision,
+        model,
+        text,
+        MessageMode::Conversation,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum MessageMode {
+    Conversation,
+    Plan(plans::Scope),
 }
 
 async fn start_message_mode(
@@ -2070,10 +2194,10 @@ async fn start_message_mode(
     revision: u32,
     mut model: ConversationModelConfiguration,
     text: String,
-    tools: bool,
+    mode: MessageMode,
 ) -> Result<ConversationRecord, StartMessageError> {
     let persisted_model = model.clone();
-    if !tools {
+    if matches!(mode, MessageMode::Plan(_)) {
         model.settings.tools.clear();
         model.settings.directories.clear();
     }
@@ -2378,6 +2502,10 @@ async fn start_message_mode(
             started,
             connection,
             job,
+            match mode {
+                MessageMode::Conversation => None,
+                MessageMode::Plan(scope) => Some(scope),
+            },
         ));
     }
     Ok(state.conversations.get(&record.id).unwrap_or(record))
@@ -3118,7 +3246,8 @@ fn render_plan_page_with_content(
     content: String,
     error: &'static str,
 ) -> AppResult<Response> {
-    let mut view = PlanDocumentPage::from_document(document, revision, content, error);
+    let mut view = PlanDocumentPage::from_document(document, revision, content, error)
+        .with_context(state, document);
     view.conversation_revision = document
         .associated_conversation
         .and_then(|id| state.conversations.get(&id))
@@ -3310,27 +3439,9 @@ fn detail_view(
         .workflow_runs
         .active_runs()
         .into_iter()
-        .find(|run| {
-            run.conversation_id == Some(record.id)
-                && (run.kind == workflows::RunKind::QuickTask || run.parent_loop.is_some())
-        })
+        .find(|run| run.conversation_id == Some(record.id))
         .and_then(|run| {
-            let destination = record
-                .model
-                .as_ref()
-                .map(|model| {
-                    model
-                        .settings
-                        .directories
-                        .iter()
-                        .filter(|grant| {
-                            grant.access == crate::execution::DirectoryAccess::ReviewBeforeApply
-                        })
-                        .map(|grant| format!("{} ({})", grant.alias, grant.host_path.display()))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let destination = crate::slices::human_gates::application_destination(state, &run);
             page::pending_code_gate(&run, &state.workflow_artefacts, destination)
         });
     let (source_review, linked_reviews, source_candidate_review, linked_candidate_reviews) =
@@ -3395,6 +3506,7 @@ fn detail_view(
             .and_then(|job_id| state.host_approvals.pending_for(record.id, job_id)),
     )
     .with_workflow_progress(workflow_progress)
+    .with_plan_actions(state, record)
 }
 
 fn conversation_links(
@@ -3724,7 +3836,10 @@ fn plan_origin_matches(
         return false;
     };
     match &revision.source {
-        PlanSource::ConversationMessage {
+        PlanSource::Action {
+            conversation_id, ..
+        }
+        | PlanSource::ConversationMessage {
             conversation_id, ..
         }
         | PlanSource::SubmittedText {
