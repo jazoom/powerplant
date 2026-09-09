@@ -6,6 +6,7 @@
   <section
     id="conversation-detail"
     data-island="conversation"
+    tabindex="-1"
     class="flex min-h-0 flex-1 flex-col"
   >
     {% block conversation_detail %}
@@ -17,6 +18,15 @@
         class="border-base-300 flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b px-5 py-3 sm:px-8 sm:py-4"
       >
         <div class="flex min-w-0 flex-1 items-center gap-3">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm workspace-menu"
+            data-workspace-menu
+            aria-controls="workspace-index"
+            aria-expanded="false"
+          >
+            Menu
+          </button>
           <h1
             id="conversation-heading"
             class="min-w-0 flex-1 text-lg font-semibold [overflow-wrap:anywhere] sm:flex-initial"

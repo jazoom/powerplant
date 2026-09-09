@@ -117,6 +117,12 @@ The existing Power Plant mark remains unchanged. Workspace icons use the approve
 
 New conversation remains prominent. The index contains up to twelve server-derived recent conversations with real titles and status.
 
+The sidebar search filters those recent titles live as plain text. The catalogue link beside it stays the native fallback. The filter survives live replacement of recent records.
+
+Needs your attention carries the positive server decision count. The live projection refreshes the count with the recent list. Recent records show state dots. Untouched saved records read Draft. Responsive idle records read Ready. Review, completion and cancellation transitions stay live. The footer keeps its local state dot.
+
+Conversation pages carry their own header with the mobile menu trigger. The separate location bar stays for catalogue pages that need navigation and execution status.
+
 Needs your attention lists real unresolved decisions with owning context links. History connects conversations to runs, task loops and evidence.
 
 Workflows and presets opens the shared resource page. Ruled sections distinguish reusable processes from complete settings snapshots.

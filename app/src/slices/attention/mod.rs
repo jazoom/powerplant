@@ -1,4 +1,4 @@
-mod page;
+pub(crate) mod page;
 
 #[cfg(test)]
 mod tests;

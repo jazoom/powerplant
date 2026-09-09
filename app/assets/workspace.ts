@@ -13,6 +13,7 @@ export function initWorkspace(
     let previousPlan = false;
     let plansReturnFocus: HTMLElement | null = null;
     let setupReturnFocus: HTMLElement | null = null;
+    let menuTrigger: HTMLElement | null = null;
     let header: HTMLElement | null = null;
     const positionPanels = () => {
         if (header)
@@ -106,6 +107,81 @@ export function initWorkspace(
             if (link.pathname === (owner || location.pathname))
                 link.setAttribute("aria-current", "page");
             else link.removeAttribute("aria-current");
+        });
+        applyRecentFilter();
+        syncSkipLink();
+    }
+
+    function recentFilterQuery(): string {
+        return (
+            root
+                .querySelector<HTMLInputElement>("#recent-filter-input")
+                ?.value.trim()
+                .toLowerCase() ?? ""
+        );
+    }
+
+    // The sidebar input filters the bounded recent list without navigation.
+    // Untrusted titles stay inert because matching reads text, never markup.
+    function applyRecentFilter() {
+        const query = recentFilterQuery();
+        const container = root.querySelector<HTMLElement>(
+            "#recent-conversations",
+        );
+        if (!container) return;
+        const items = container.querySelectorAll<HTMLElement>(
+            "[data-recent-conversation]",
+        );
+        let visible = 0;
+        items.forEach((link) => {
+            const title =
+                link.querySelector("strong")?.textContent?.toLowerCase() ??
+                link.textContent?.toLowerCase() ??
+                "";
+            const match = query === "" || title.includes(query);
+            link.closest("li")?.toggleAttribute("hidden", !match);
+            if (match) visible += 1;
+        });
+        let notice = container.querySelector<HTMLElement>(
+            "[data-recent-no-match]",
+        );
+        if (query !== "" && visible === 0 && items.length > 0) {
+            if (!notice) {
+                notice = document.createElement("p");
+                notice.className = "recent-empty";
+                notice.dataset.recentNoMatch = "";
+                notice.textContent = "No conversations match.";
+                container.append(notice);
+            }
+            notice.hidden = false;
+        } else if (notice) notice.hidden = true;
+    }
+
+    function syncSkipLink() {
+        const skip = document.querySelector<HTMLAnchorElement>("#skip-link");
+        if (!skip) return;
+        const detail = root.querySelector("#conversation-detail");
+        if (!detail) {
+            skip.textContent = "Skip to main content";
+            skip.setAttribute("href", "#chat-main");
+            return;
+        }
+        skip.textContent = "Skip to conversation";
+        const companion = root.querySelector<HTMLElement>("#conversation-work");
+        const companionVisible =
+            !!companion && !companion.hidden && mobile.matches;
+        if (companionVisible) skip.setAttribute("href", "#conversation-work");
+        else if (root.querySelector("#transcript"))
+            skip.setAttribute("href", "#transcript");
+        else skip.setAttribute("href", "#conversation-detail");
+    }
+
+    function setMenuOpen(open: boolean) {
+        const menu = root.querySelector<HTMLElement>("#workspace-index");
+        if (open) menu?.setAttribute("data-menu-open", "");
+        else menu?.removeAttribute("data-menu-open");
+        root.querySelectorAll("[data-workspace-menu]").forEach((trigger) => {
+            trigger.setAttribute("aria-expanded", String(open));
         });
     }
 
@@ -209,17 +285,12 @@ export function initWorkspace(
             }
             const menu = root.querySelector<HTMLElement>("#workspace-index");
             if (target?.closest("[data-workspace-menu]")) {
-                menu?.toggleAttribute("data-menu-open");
-                root.querySelector("[data-workspace-menu]")?.setAttribute(
-                    "aria-expanded",
-                    String(menu?.hasAttribute("data-menu-open")),
+                menuTrigger = target.closest<HTMLElement>(
+                    "[data-workspace-menu]",
                 );
+                setMenuOpen(!menu?.hasAttribute("data-menu-open"));
             } else if (target?.closest("a[data-graft]")) {
-                menu?.removeAttribute("data-menu-open");
-                root.querySelector("[data-workspace-menu]")?.setAttribute(
-                    "aria-expanded",
-                    "false",
-                );
+                setMenuOpen(false);
             }
         },
         { signal },
@@ -235,11 +306,15 @@ export function initWorkspace(
                     "#workspace-index[data-menu-open]",
                 );
                 if (menu) {
-                    menu.removeAttribute("data-menu-open");
-                    const trigger = root.querySelector<HTMLElement>(
-                        "[data-workspace-menu]",
-                    );
-                    trigger?.setAttribute("aria-expanded", "false");
+                    setMenuOpen(false);
+                    const trigger = menuTrigger?.isConnected
+                        ? menuTrigger
+                        : (root.querySelector<HTMLElement>(
+                              "#conversation-detail [data-workspace-menu]",
+                          ) ??
+                          root.querySelector<HTMLElement>(
+                              "[data-workspace-menu]",
+                          ));
                     trigger?.focus();
                 } else if (workOpen) closeWork();
             }
@@ -275,6 +350,17 @@ export function initWorkspace(
             }
         },
         { capture: true, signal },
+    );
+    root.addEventListener(
+        "input",
+        (event) => {
+            if (
+                event.target instanceof HTMLInputElement &&
+                event.target.id === "recent-filter-input"
+            )
+                applyRecentFilter();
+        },
+        { signal },
     );
     mobile.addEventListener("change", sync, { signal });
     sync();

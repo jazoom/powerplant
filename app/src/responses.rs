@@ -82,8 +82,8 @@ where
             })?,
             FullDocument::App => nonce.render(&AppPage {
                 title,
-                page_label: title.strip_suffix(" | Power Plant").unwrap_or(title),
                 recent: crate::slices::conversations::recent::RecentConversations::new(state),
+                attention_count: crate::slices::attention::page::AttentionPage::count(state),
                 css_path: &state.assets.css_path,
                 js_path: &state.assets.js_path,
                 theme: state.preferences.theme().as_str(),
@@ -162,8 +162,8 @@ struct ConnectPage<'a> {
 #[template(path = "layout/chat.html")]
 struct AppPage<'a> {
     title: &'a str,
-    page_label: &'a str,
     recent: crate::slices::conversations::recent::RecentConversations,
+    attention_count: usize,
     css_path: &'a str,
     js_path: &'a str,
     theme: &'a str,

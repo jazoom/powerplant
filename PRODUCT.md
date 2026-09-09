@@ -126,6 +126,8 @@ They choose a provider, model and model-specific thinking effort in each convers
 
 New conversation is the primary navigation action. The persistent index shows up to twelve recent conversations with real titles and status.
 
+The sidebar search filters those recent titles live as plain text, with the catalogue link as the native fallback. Needs your attention shows the positive server decision count, refreshed live. Untouched saved records read Draft, while responsive idle records read Ready.
+
 Needs your attention lists unresolved candidate, plan and host-command decisions across conversations. Each entry opens its owning context without execution approval.
 
 The decision view uses pages of thirty entries. Refresh decisions reads the current server state.

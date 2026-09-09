@@ -160,3 +160,110 @@ test("diff colours preserve untrusted text without HTML interpretation", () => {
     island.destroy?.();
     controller.abort();
 });
+
+function mountSidebar(matches: boolean, body: string) {
+    vi.stubGlobal("matchMedia", () => ({
+        matches,
+        addEventListener() {},
+    }));
+    const skip = document.createElement("a");
+    skip.id = "skip-link";
+    skip.href = "#chat-main";
+    skip.textContent = "Skip to main content";
+    document.body.append(skip);
+    const root = document.createElement("div");
+    root.innerHTML = body;
+    document.body.append(root);
+    const controller = new AbortController();
+    const island = initWorkspace(root, {
+        signal: controller.signal,
+    } as Parameters<typeof initWorkspace>[1]);
+    return { root, skip, island, controller };
+}
+
+const sidebarBody = `<form id="recent-filter-form" method="get" action="/conversations" data-graft><label for="recent-filter-input">Find a conversation<input id="recent-filter-input" type="search" autocomplete="off" /></label><a href="/conversations" data-graft>All conversations</a></form><div id="recent-conversations"><ul class="recent-list"><li><a href="/conversations/one" data-graft data-recent-conversation><strong>Quarterly planning</strong><span class="recent-meta">Ready</span></a></li><li><a href="/conversations/two" data-graft data-recent-conversation><strong>&lt;script&gt;alert(1)&lt;/script&gt;</strong><span class="recent-meta">Draft</span></a></li></ul></div><section id="conversation-detail"><section id="transcript"></section><aside id="conversation-work" data-work-active="false" hidden></aside></section>`;
+
+test("sidebar search filters recent titles as plain text and survives replacement", () => {
+    const { root, island, controller } = mountSidebar(false, sidebarBody);
+    const input = root.querySelector<HTMLInputElement>("#recent-filter-input")!;
+    input.value = "<script>alert(1)";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const links = Array.from(
+        root.querySelectorAll<HTMLElement>("[data-recent-conversation]"),
+    );
+    expect(links[0].closest("li")?.hasAttribute("hidden")).toBe(true);
+    expect(links[1].closest("li")?.hasAttribute("hidden")).toBe(false);
+    expect(root.querySelector("script")).toBeNull();
+    input.value = "no such title";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(root.querySelector("[data-recent-no-match]")?.textContent).toBe(
+        "No conversations match.",
+    );
+    // A live replacement rebuilds the list. The filter stays applied.
+    root.querySelector("#recent-conversations")!.innerHTML =
+        `<ul class="recent-list"><li><a href="/conversations/one" data-graft data-recent-conversation><strong>Quarterly planning</strong><span class="recent-meta">Ready</span></a></li></ul>`;
+    island.reconcile?.(
+        {} as Parameters<NonNullable<typeof island.reconcile>>[0],
+    );
+    const replaced = root.querySelector<HTMLElement>(
+        "[data-recent-conversation]",
+    )!;
+    expect(replaced.closest("li")?.hasAttribute("hidden")).toBe(true);
+    expect(root.querySelector("[data-recent-no-match]")?.textContent).toBe(
+        "No conversations match.",
+    );
+    island.destroy?.();
+    controller.abort();
+});
+
+test("skip link targets the transcript and the open mobile companion", () => {
+    const { root, skip, island, controller } = mountSidebar(false, sidebarBody);
+    expect(skip.textContent).toBe("Skip to conversation");
+    expect(skip.getAttribute("href")).toBe("#transcript");
+    island.destroy?.();
+    controller.abort();
+    document.body.replaceChildren();
+    const mobile = mountSidebar(true, sidebarBody);
+    const companion =
+        mobile.root.querySelector<HTMLElement>("#conversation-work")!;
+    companion.dataset.workActive = "true";
+    mobile.island.reconcile?.(
+        {} as Parameters<NonNullable<typeof mobile.island.reconcile>>[0],
+    );
+    expect(companion.hidden).toBe(false);
+    expect(mobile.skip.getAttribute("href")).toBe("#conversation-work");
+    mobile.island.destroy?.();
+    mobile.controller.abort();
+    root.remove();
+});
+
+test("skip link keeps the main content destination on catalogue pages", () => {
+    const { skip, island, controller } = mountSidebar(
+        false,
+        `<div id="recent-conversations"><ul class="recent-list"></ul></div>`,
+    );
+    expect(skip.textContent).toBe("Skip to main content");
+    expect(skip.getAttribute("href")).toBe("#chat-main");
+    island.destroy?.();
+    controller.abort();
+});
+
+test("every menu trigger shares open state and Escape restores its trigger", () => {
+    const { root, island, controller } = mountSidebar(
+        true,
+        `<button data-workspace-menu aria-expanded="false">Menu</button><aside id="workspace-index"></aside><section id="conversation-detail"><button data-workspace-menu aria-expanded="false">Menu</button><section id="transcript"></section><aside id="conversation-work" data-work-active="false" hidden></aside></section>`,
+    );
+    const triggers = Array.from(
+        root.querySelectorAll<HTMLButtonElement>("[data-workspace-menu]"),
+    );
+    triggers[1].click();
+    expect(triggers[0].getAttribute("aria-expanded")).toBe("true");
+    expect(triggers[1].getAttribute("aria-expanded")).toBe("true");
+    root.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(triggers[0].getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(triggers[1]);
+    island.destroy?.();
+    controller.abort();
+});

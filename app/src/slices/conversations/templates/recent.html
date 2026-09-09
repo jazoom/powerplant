@@ -4,11 +4,19 @@
     <li>
       <a href="{{ conversation.href }}" data-graft data-recent-conversation>
         <strong>{{ conversation.title }}</strong>
-        <span>{{ conversation.status }}</span>
+        <span class="recent-meta"
+          ><span
+            class="state-dot {{ conversation.dot }}"
+            aria-hidden="true"
+          ></span
+          >{{ conversation.status }}</span
+        >
       </a>
     </li>
   {% endfor %}
 </ul>
-{% if conversations.is_empty() %}<p class="recent-empty">
-  Your conversations will appear here after the first message.
-</p>{% endif %}
+{% if conversations.is_empty() %}
+  <p class="recent-empty">
+    Your conversations will appear here after the first message.
+  </p>
+{% endif %}

@@ -158,8 +158,95 @@ body {
     color: var(--workspace-cover-text);
 }
 .app-brand .powerplant-mark {
-    width: 40px;
-    height: 29px;
+    width: 43px;
+    height: 32px;
+}
+.workspace-search {
+    margin: 20px 7px 16px;
+}
+.workspace-search-field {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--workspace-cover-muted);
+}
+.workspace-search-field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+.workspace-search-field input {
+    width: 100%;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    padding: 5px 0;
+    font-size: 12px;
+    color: var(--workspace-cover-text);
+}
+.workspace-search-field input::placeholder {
+    color: var(--workspace-cover-muted);
+}
+.workspace-search-fallback {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 10px;
+    text-decoration: none;
+    font-size: 13px;
+}
+.attention-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 20px;
+    height: 20px;
+    margin-left: auto;
+    padding-inline: 4px;
+    border-radius: 3px;
+    background: var(--color-primary);
+    color: var(--color-primary-content);
+    font-size: 11px;
+    font-weight: 600;
+}
+.attention-count:empty {
+    display: none;
+}
+.state-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--workspace-cover-muted);
+}
+.state-dot.attention {
+    background: var(--color-primary);
+}
+.state-dot.active {
+    background: #a4c98b;
+}
+.state-dot.quiet {
+    opacity: 0.65;
+}
+.state-dot.ready {
+    background: #a4c98b;
+}
+.recent-list .recent-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* The conversation carries its own header. The location bar stays for
+   catalogue pages that need navigation and execution status. */
+.app-file:has(#conversation-detail) .app-file-bar {
+    display: none;
+}
+.app-frame:has(#conversation-detail) .app-index[data-menu-open] {
+    inset: 0 auto 0 0;
+    height: 100dvh;
 }
 .workspace-new {
     margin: 0 14px 16px;

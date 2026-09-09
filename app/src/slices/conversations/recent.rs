@@ -16,10 +16,41 @@ pub(crate) struct RecentConversations {
     conversations: Vec<RecentConversation>,
 }
 
+/// Positive attention badge beside the navigation entry. An empty badge
+/// renders no digits. The live projection refreshes it with the list.
+#[derive(Template)]
+#[template(source = "{% if count > 0 %}{{ count }}{% endif %}", ext = "html")]
+pub(crate) struct AttentionCount {
+    count: usize,
+}
+
 struct RecentConversation {
     href: String,
     title: String,
     status: &'static str,
+    dot: &'static str,
+}
+
+/// State dot for a recent status. Attention states use the primary dot,
+/// active work uses the progress dot and settled records stay quiet.
+pub(crate) fn status_dot(status: &str) -> &'static str {
+    match status {
+        "Needs your review" | "Needs command approval" | "Needs recovery" => "attention",
+        "In progress" | "Active" | "Awaiting decision" => "active",
+        _ => "quiet",
+    }
+}
+
+/// Idle status for records without active work or runs. Saved records
+/// without a first message are drafts. Responsive idle records stay ready.
+fn idle_status(last: Option<crate::conversations::MessageStatus>) -> &'static str {
+    match last {
+        None => "Draft",
+        Some(crate::conversations::MessageStatus::Failed) => "Response failed",
+        Some(crate::conversations::MessageStatus::Interrupted) => "Interrupted",
+        Some(crate::conversations::MessageStatus::Pending) => "In progress",
+        Some(crate::conversations::MessageStatus::Complete) => "Ready",
+    }
 }
 
 impl RecentConversations {
@@ -74,17 +105,14 @@ impl RecentConversations {
                 } else if let Some(run) = latest {
                     super::page::workflow_progress(&run).state
                 } else {
-                    match record.messages.last().map(|message| message.status) {
-                        Some(crate::conversations::MessageStatus::Failed) => "Response failed",
-                        Some(crate::conversations::MessageStatus::Interrupted) => "Interrupted",
-                        Some(crate::conversations::MessageStatus::Pending) => "In progress",
-                        _ => "Ready",
-                    }
+                    idle_status(record.messages.last().map(|message| message.status))
                 };
+                let dot = status_dot(status);
                 RecentConversation {
                     href: format!("/conversations/{}", record.id.as_hex()),
                     title: record.title,
                     status,
+                    dot,
                 }
             })
             .collect();
@@ -93,7 +121,14 @@ impl RecentConversations {
 }
 
 fn patches(state: &AppState) -> Result<PatchSet, hypergraft::PatchBuildError> {
-    PatchSet::new().with_children("recent-conversations", &RecentConversations::new(state))
+    PatchSet::new()
+        .with_children("recent-conversations", &RecentConversations::new(state))?
+        .with_children(
+            "attention-count",
+            &AttentionCount {
+                count: crate::slices::attention::page::AttentionPage::count(state),
+            },
+        )
 }
 
 pub(super) fn response(state: &AppState) -> AppResult<axum::response::Response> {

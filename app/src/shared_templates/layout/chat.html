@@ -1,15 +1,15 @@
 {% extends "layout/base.html" %}
 {% let csp_nonce = "nonce"|crate::template_filters::csp_nonce -%}
 {% block body %}
-  <a class="skip-link" href="#chat-main">Skip to main content</a>
+  <a class="skip-link" id="skip-link" href="#chat-main">Skip to main content</a>
   <div class="app-frame" data-island="workspace">
     <aside class="app-index" aria-label="Product index" id="workspace-index">
       <a href="/conversations" data-graft class="app-brand">
         <img
           src="/static/images/logo.svg"
           alt=""
-          width="40"
-          height="29"
+          width="43"
+          height="32"
           class="powerplant-mark"
         />
         <strong>Power Plant</strong>
@@ -22,16 +22,39 @@
           <use href="/static/images/workspace-icons.svg#plus" /></svg
         >New conversation</a
       >
-      <nav class="workspace-navigation" aria-label="Primary navigation">
-        <a href="/conversations" data-graft
-          ><svg class="workspace-icon" aria-hidden="true">
+      <form
+        id="recent-filter-form"
+        method="get"
+        action="/conversations"
+        data-graft
+        class="workspace-search"
+        role="search"
+      >
+        <label class="workspace-search-field" for="recent-filter-input">
+          <svg class="workspace-icon" aria-hidden="true">
             <use href="/static/images/workspace-icons.svg#search" /></svg
-          >Find a conversation</a
+          ><span>Find a conversation</span>
+          <input
+            id="recent-filter-input"
+            type="search"
+            placeholder="Find a conversation"
+            autocomplete="off"
+          />
+        </label>
+        <a href="/conversations" data-graft class="workspace-search-fallback"
+          >All conversations</a
         >
+      </form>
+      <nav class="workspace-navigation" aria-label="Primary navigation">
         <a href="/attention" data-graft
           ><svg class="workspace-icon" aria-hidden="true">
             <use href="/static/images/workspace-icons.svg#attention" /></svg
-          >Needs your attention</a
+          >Needs your attention<span
+            id="attention-count"
+            class="attention-count"
+            data-attention-count
+            >{% if attention_count > 0 %}{{ attention_count }}{% endif %}</span
+          ></a
         >
         <a href="/runs" data-graft
           ><svg class="workspace-icon" aria-hidden="true">
@@ -62,7 +85,9 @@
           >
         </div>
       </nav>
-      <p class="workspace-local">On this computer</p>
+      <p class="workspace-local">
+        <span class="state-dot ready" aria-hidden="true"></span>On this computer
+      </p>
     </aside>
     <div class="app-file">
       <header
@@ -79,13 +104,6 @@
         >
           Menu
         </button>
-        <nav class="app-context-breadcrumbs" aria-label="Breadcrumb">
-          <ol data-app-context-breadcrumbs>
-            <li class="app-context-current">
-              <span aria-current="page">{{ page_label }}</span>
-            </li>
-          </ol>
-        </nav>
         <div class="app-context-status" data-app-context-status hidden>
           <a href="/runs" data-graft data-app-context-status-link hidden></a>
           <span data-app-context-status-label hidden></span>
