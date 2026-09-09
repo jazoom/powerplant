@@ -56,12 +56,24 @@ async fn index(
     State(state): State<AppState>,
     _session: RequiredSession,
     graft: PageGraft,
+    Query(query): Query<HistoryQuery>,
 ) -> AppResult<Response> {
-    let view = RunIndexView::combined(&state);
+    let valid = query.directory.is_empty() || known_history_directory(&state, &query.directory);
+    let error = if valid {
+        ""
+    } else {
+        "Choose a directory from run history."
+    };
+    let status = if valid {
+        PatchStatus::Ok
+    } else {
+        PatchStatus::UnprocessableEntity
+    };
+    let view = RunIndexView::filtered(&state, &query.directory, error);
     match graft {
         PageGraft::Document => {
             let mut response = responses::chat_page_response(page::INDEX_TITLE, &state, &view)?;
-            responses::apply_patch_status(&mut response, PatchStatus::Ok);
+            responses::apply_patch_status(&mut response, status);
             Ok(response)
         }
         PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(
@@ -70,6 +82,25 @@ async fn index(
             &view,
         )?),
     }
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct HistoryQuery {
+    directory: String,
+}
+
+fn known_history_directory(state: &AppState, filter: &str) -> bool {
+    if filter.len() != 33 {
+        return false;
+    }
+    state.workflow_runs.all_summaries().iter().any(|summary| {
+        state.workflow_runs.get(&summary.id).is_some_and(|run| {
+            page::run_grants(&run).any(|grant| page::run_directory_key(grant) == filter)
+        })
+    }) || state.task_loops.list().iter().any(|record| {
+        page::loop_grants(record).any(|grant| page::run_directory_key(grant) == filter)
+    })
 }
 
 async fn loop_detail(

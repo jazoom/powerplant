@@ -756,7 +756,7 @@ async fn directory_history_matches_identity_without_granting_access() {
     moved.model.as_mut().unwrap().settings.directories =
         vec![crate::execution::DirectoryGrant::from_selected(&moved_path, &[]).unwrap()];
     for pair in [[original.clone(), moved.clone()], [moved, original]] {
-        let view = super::page::CatalogueView::from_records(&pair, &key, "");
+        let view = super::page::CatalogueView::from_records(&pair, &key, "", "");
         assert_eq!(view.conversations.len(), 2);
         assert_eq!(view.directories.len(), 1);
         assert_eq!(view.directories[0].name, moved_path.display().to_string());
@@ -772,7 +772,7 @@ async fn directory_history_matches_identity_without_granting_access() {
         .settings
         .directories = vec![replacement];
     records.push(replacement_record);
-    let view = super::page::CatalogueView::from_records(&records, &key, "");
+    let view = super::page::CatalogueView::from_records(&records, &key, "", "");
     assert_eq!(view.conversations.len(), 2);
     assert!(
         view.conversations
@@ -2452,4 +2452,119 @@ async fn plan_review_rejects_an_oversized_task_brief_without_creating_a_link() {
         .expect("oversized review");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(state.conversations.list().len(), 1);
+}
+
+#[tokio::test]
+async fn catalogue_title_search_trims_case_and_combines_with_directory() {
+    let state = test_state();
+    let token = connected(&state);
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first");
+    std::fs::create_dir_all(&first).unwrap();
+    let grant = crate::execution::DirectoryGrant::from_selected(&first, &[]).unwrap();
+    let key = super::page::history_directory_key(&grant);
+    for (title, directory) in [
+        ("Alpha Springfield", Some(grant.clone())),
+        ("alpha beta", None),
+        ("Gamma", Some(grant.clone())),
+    ] {
+        let mut model = crate::conversations::ConversationModelConfiguration::direct(
+            ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None).unwrap(),
+            crate::tests::test_environment_id(),
+        );
+        if let Some(directory) = directory {
+            model.settings.directories = vec![directory];
+        }
+        state
+            .conversations
+            .create_saved(
+                crate::conversations::ConversationId::generate().unwrap(),
+                None,
+                Some(title.to_owned()),
+                Some(model),
+                Vec::new(),
+            )
+            .unwrap();
+    }
+    let filtered = text(
+        app(&state)
+            .oneshot(document("/conversations?q=alpha", &token))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let filtered = filtered.split("id=\"chat-main\"").last().unwrap();
+    assert!(filtered.contains("Alpha Springfield"));
+    assert!(filtered.contains("alpha beta"));
+    assert!(!filtered.contains("Gamma"));
+    assert!(filtered.contains("value=\"alpha\""));
+    assert!(filtered.contains("id=\"conversation-title-filter\""));
+
+    let padded = text(
+        app(&state)
+            .oneshot(document("/conversations?q=++ALPHA++", &token))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let padded = padded.split("id=\"chat-main\"").last().unwrap();
+    assert!(padded.contains("Alpha Springfield"));
+    assert!(padded.contains("alpha beta"));
+    assert!(!padded.contains("Gamma"));
+
+    let combined = text(
+        app(&state)
+            .oneshot(document(
+                &format!("/conversations?directory={key}&q=alpha"),
+                &token,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let combined = combined.split("id=\"chat-main\"").last().unwrap();
+    assert!(combined.contains("Alpha Springfield"));
+    assert!(!combined.contains("alpha beta"));
+    assert!(!combined.contains("Gamma"));
+
+    let navigation = app(&state)
+        .oneshot(navigation("/conversations?q=alpha", &token))
+        .await
+        .unwrap();
+    assert_eq!(navigation.status(), StatusCode::OK);
+    assert!(
+        text(navigation)
+            .await
+            .contains("operation=\"children\" target=\"chat-main\"")
+    );
+    let patch = Request::builder()
+        .uri("/conversations?q=alpha")
+        .header(header::COOKIE, cookie(&token))
+        .header("graft-request", "patch")
+        .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+        .body(Body::empty())
+        .unwrap();
+    let patch = app(&state).oneshot(patch).await.unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+    assert!(text(patch).await.contains("target=\"chat-main\""));
+
+    let too_long = app(&state)
+        .oneshot(document(
+            &format!("/conversations?q={}", "a".repeat(257)),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(too_long.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(too_long).await.contains("Search is too long"));
+
+    assert_eq!(
+        app(&state)
+            .oneshot(document("/conversations?title=alpha", &token))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(state.conversations.list().len(), 3);
 }

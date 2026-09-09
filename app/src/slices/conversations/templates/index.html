@@ -11,13 +11,28 @@
         >New conversation</a
       >
     </div>
-    {% if !directories.is_empty() || !filter.is_empty() %}
+    {% if !directories.is_empty() || !filter.is_empty() || !query.is_empty() || !conversations.is_empty() %}
       <form
         method="get"
         action="/conversations"
         data-graft
         class="flex flex-wrap items-end gap-3"
       >
+        <label
+          class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
+          for="conversation-title-filter"
+        >
+          <span class="text-sm">Title</span>
+          <input
+            id="conversation-title-filter"
+            class="input input-bordered w-full"
+            type="search"
+            name="q"
+            value="{{ query }}"
+            maxlength="256"
+            autocomplete="off"
+          />
+        </label>
         <label
           class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
           for="conversation-directory-filter"
@@ -42,6 +57,9 @@
             {% endfor %}
           </select>
         </label>
+        <button type="submit" class="btn btn-primary btn-sm min-h-11">
+          Filter
+        </button>
         {% for directory in directories %}
           {% if directory.selected %}
             <p class="w-full text-sm break-all">{{ directory.name }}</p>
@@ -55,15 +73,30 @@
       </div>
     {% endif %}
     {% if conversations.is_empty() %}
-      <section class="file-section space-y-3">
-        <h2 class="text-lg font-semibold">Start a conversation</h2>
-        <p class="text-quiet max-w-[60ch]">
-          A new conversation starts without directory access.
-        </p>
-        <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
-          >New conversation</a
-        >
-      </section>
+      {% if filter.is_empty() && query.is_empty() && error == "" %}
+        <section class="file-section space-y-3">
+          <h2 class="text-lg font-semibold">Start a conversation</h2>
+          <p class="text-quiet max-w-[60ch]">
+            A new conversation starts without directory access.
+          </p>
+          <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
+            >New conversation</a
+          >
+        </section>
+      {% else %}
+        <section class="file-section space-y-3">
+          <h2 class="text-lg font-semibold">
+            No conversations match these filters
+          </h2>
+          <p class="text-quiet max-w-[60ch]">
+            No saved conversation matches the current title or directory
+            filters.
+          </p>
+          <a href="/conversations" data-graft class="btn btn-primary btn-sm"
+            >Show all conversations</a
+          >
+        </section>
+      {% endif %}
     {% else %}
       <ul class="record-list" aria-label="Saved conversations">
         {% for conversation in conversations %}

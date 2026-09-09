@@ -193,6 +193,16 @@ pub(super) struct PinnedEnvironmentView {
 #[template(path = "workflow_runs/templates/index.html")]
 pub(super) struct RunIndexView {
     pub(super) runs: Vec<IndexRow>,
+    pub(super) directories: Vec<RunDirectoryOption>,
+    pub(super) filter: String,
+    pub(super) error: &'static str,
+}
+
+pub(super) struct RunDirectoryOption {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) selected: bool,
+    available: bool,
 }
 
 pub(super) struct IndexRow {
@@ -208,11 +218,56 @@ pub(super) struct IndexRow {
 }
 
 impl RunIndexView {
-    pub(super) fn combined(state: &AppState) -> Self {
-        let mut rows: Vec<(u64, String, IndexRow)> = state
-            .workflow_runs
-            .summaries()
+    pub(super) fn filtered(state: &AppState, filter: &str, error: &'static str) -> Self {
+        let mut directories: std::collections::BTreeMap<String, RunDirectoryOption> =
+            std::collections::BTreeMap::new();
+        let mut note_directory = |grant: &crate::execution::DirectoryGrant| {
+            let id = run_directory_key(grant);
+            let available = grant.is_available();
+            let option = RunDirectoryOption {
+                selected: filter == id,
+                id: id.clone(),
+                name: format!(
+                    "{}{}",
+                    grant.host_path.display(),
+                    if available { "" } else { " — Unavailable" }
+                ),
+                available,
+            };
+            let existing = directories.entry(id).or_insert(option);
+            if available && !existing.available {
+                existing.name = grant.host_path.display().to_string();
+                existing.available = true;
+            }
+        };
+        for summary in state.workflow_runs.all_summaries() {
+            if let Some(run) = state.workflow_runs.get(&summary.id) {
+                for grant in run_grants(&run) {
+                    note_directory(grant);
+                }
+            }
+        }
+        for record in state.task_loops.list() {
+            for grant in loop_grants(&record) {
+                note_directory(grant);
+            }
+        }
+        // An empty filter can use the truncated summaries. Any run beyond the
+        // newest fifty cannot enter the newest fifty combined rows. A directory
+        // filter must start from every stored identity before the bound.
+        let run_summaries = if filter.is_empty() {
+            state.workflow_runs.summaries()
+        } else {
+            state.workflow_runs.all_summaries()
+        };
+        let mut rows: Vec<(u64, String, IndexRow)> = run_summaries
             .into_iter()
+            .filter(|summary| {
+                filter.is_empty()
+                    || state.workflow_runs.get(&summary.id).is_some_and(|run| {
+                        run_grants(&run).any(|grant| run_directory_key(grant) == filter)
+                    })
+            })
             .map(|summary| {
                 let mut row = index_row_from_run(&summary, &state.projects);
                 let owner = state
@@ -224,22 +279,65 @@ impl RunIndexView {
                 (summary.created_at_ms, summary.id.as_hex(), row)
             })
             .collect();
-        rows.extend(state.task_loops.summaries().into_iter().map(|summary| {
-            let mut row = index_row_from_loop(&summary, &state.projects);
-            let owner = state
+        rows.extend(
+            state
                 .task_loops
-                .get(&summary.id)
-                .map(|record| record.conversation_id);
-            (row.conversation_href, row.conversation_title) =
-                conversation_presentation(state, owner);
-            (summary.created_at_ms, summary.id.as_hex(), row)
-        }));
+                .summaries()
+                .into_iter()
+                .filter(|summary| {
+                    filter.is_empty()
+                        || state.task_loops.get(&summary.id).is_some_and(|record| {
+                            loop_grants(&record).any(|grant| run_directory_key(grant) == filter)
+                        })
+                })
+                .map(|summary| {
+                    let mut row = index_row_from_loop(&summary, &state.projects);
+                    let owner = state
+                        .task_loops
+                        .get(&summary.id)
+                        .map(|record| record.conversation_id);
+                    (row.conversation_href, row.conversation_title) =
+                        conversation_presentation(state, owner);
+                    (summary.created_at_ms, summary.id.as_hex(), row)
+                }),
+        );
         rows.sort_by(|left, right| right.0.cmp(&left.0).then(right.1.cmp(&left.1)));
         rows.truncate(50);
+        let mut directories: Vec<_> = directories.into_values().collect();
+        directories.sort_by(|left, right| left.name.cmp(&right.name));
         Self {
             runs: rows.into_iter().map(|(_, _, row)| row).collect(),
+            directories,
+            filter: filter.to_owned(),
+            error,
         }
     }
+}
+
+pub(super) fn run_grants(
+    run: &WorkflowRun,
+) -> impl Iterator<Item = &crate::execution::DirectoryGrant> {
+    run.phase_models
+        .iter()
+        .filter_map(|phase| phase.settings.as_ref())
+        .flat_map(|settings| &settings.directories)
+}
+
+pub(super) fn loop_grants(
+    record: &TaskLoop,
+) -> impl Iterator<Item = &crate::execution::DirectoryGrant> {
+    record
+        .phase_models
+        .iter()
+        .filter_map(|phase| phase.settings.as_ref())
+        .flat_map(|settings| &settings.directories)
+}
+
+pub(super) fn run_directory_key(grant: &crate::execution::DirectoryGrant) -> String {
+    format!(
+        "{:016x}-{:016x}",
+        grant.identity.device, grant.identity.inode
+    )
 }
 
 fn conversation_presentation(

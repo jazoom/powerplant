@@ -144,7 +144,7 @@ Workflows and presets opens `/resources`. The shared resource page links to the 
 - Projects and saved agents.
 - Machine-wide settings.
 
-Directory filters in conversation history provide work discovery without additional access grants.
+Directory filters in conversation and run history provide work discovery without additional access grants. Conversation history also offers a title search that trims and matches without case sensitivity.
 
 Each legacy project has a name and one immutable host path. The path must be a supported Git worktree. Users can create projects and rename them. They cannot edit paths or delete project records.
 

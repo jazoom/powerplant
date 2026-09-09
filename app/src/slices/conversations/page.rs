@@ -101,6 +101,7 @@ pub(super) struct CatalogueView {
     pub(super) conversations: Vec<ConversationListItem>,
     pub(super) directories: Vec<HistoryDirectoryOption>,
     pub(super) filter: String,
+    pub(super) query: String,
     pub(super) error: &'static str,
 }
 
@@ -115,13 +116,16 @@ impl CatalogueView {
     pub(super) fn from_records(
         records: &[ConversationRecord],
         filter: &str,
+        query: &str,
         error: &'static str,
     ) -> Self {
+        let needle = query.trim().to_lowercase();
         let mut conversations: Vec<_> = records
             .iter()
             .filter(|record| {
-                filter.is_empty()
-                    || history_grants(record).any(|grant| history_directory_key(grant) == filter)
+                (filter.is_empty()
+                    || history_grants(record).any(|grant| history_directory_key(grant) == filter))
+                    && (needle.is_empty() || record.title.to_lowercase().contains(&needle))
             })
             .map(|record| ConversationListItem {
                 id: record.id.as_hex(),
@@ -155,6 +159,7 @@ impl CatalogueView {
             conversations,
             directories,
             filter: filter.to_owned(),
+            query: query.trim().to_owned(),
             error,
         }
     }

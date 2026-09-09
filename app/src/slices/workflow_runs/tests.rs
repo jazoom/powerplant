@@ -1029,3 +1029,248 @@ fn recovered_retry_uses_the_recorded_base_not_a_new_host_capture() {
     .expect("host");
     assert_ne!(after, live);
 }
+
+#[tokio::test]
+async fn history_directory_filter_matches_stored_identities_before_the_limit() {
+    let state = test_state();
+    let token = connected(&state);
+    let root = tempfile::tempdir().expect("filter directories");
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    std::fs::create_dir_all(&first).expect("first");
+    std::fs::create_dir_all(&second).expect("second");
+    let first_grant =
+        crate::execution::DirectoryGrant::from_selected(&first, &[]).expect("first grant");
+    let second_grant =
+        crate::execution::DirectoryGrant::from_selected(&second, &[]).expect("second grant");
+    let first_key = super::page::run_directory_key(&first_grant);
+    let older = stored_run(&state);
+    let newer = stored_run(&state);
+    for (id, grant) in [(older, first_grant.clone()), (newer, second_grant.clone())] {
+        state
+            .workflow_runs
+            .mutate(&id, |run| {
+                let step = run
+                    .pinned
+                    .definition
+                    .steps()
+                    .iter()
+                    .find(|step| {
+                        matches!(
+                            step.action,
+                            crate::workflows::definition::StepAction::Agent(_)
+                        )
+                    })
+                    .expect("model phase")
+                    .key
+                    .clone();
+                let selection = crate::providers::ModelSelection::new(
+                    ProviderKind::Xai,
+                    "grok-4.6".to_owned(),
+                    None,
+                )
+                .expect("model");
+                let mut settings = crate::execution::ExecutionSettings::new(
+                    selection.clone(),
+                    String::new(),
+                    Vec::new(),
+                    crate::tests::test_environment_id(),
+                )
+                .expect("settings");
+                settings.directories = vec![grant];
+                run.phase_models = vec![crate::workflows::PhaseModelSelection {
+                    step,
+                    selection,
+                    instructions: String::new(),
+                    preset: None,
+                    settings: Some(settings),
+                }];
+                Ok(())
+            })
+            .expect("pin directories");
+    }
+    let view = super::page::RunIndexView::filtered(&state, &first_key, "");
+    assert_eq!(view.runs.len(), 1);
+    assert_eq!(view.runs[0].id, older.as_hex());
+    assert_eq!(view.directories.len(), 2);
+
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs?directory={first_key}"))
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("filtered document");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(&older.as_hex()));
+    assert!(!text.contains(&newer.as_hex()));
+    assert!(text.contains("id=\"run-directory-filter\""));
+    assert!(text.contains(&first.to_string_lossy().into_owned()));
+    assert!(text.contains("data-graft-submit-on=\"change\""));
+
+    let navigation = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs?directory={first_key}"))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "navigation")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("filtered navigation");
+    assert_eq!(navigation.status(), axum::http::StatusCode::OK);
+
+    let patch = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs?directory={first_key}"))
+                .header(header::COOKIE, cookie(&token))
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("filtered patch");
+    assert_eq!(patch.status(), axum::http::StatusCode::BAD_REQUEST);
+
+    let unknown = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/runs?directory=0000000000000000-0000000000000000")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("unknown directory");
+    assert_eq!(
+        unknown.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(unknown.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose a directory from run history"));
+    assert!(text.contains("No runs match this filter"));
+
+    let malformed = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/runs?project=abc")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("malformed filter");
+    assert_eq!(malformed.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn history_filter_applies_before_limit_newest_first() {
+    let state = test_state();
+    let project_dir = tempfile::tempdir().expect("project");
+    git_init(project_dir.path());
+    let project = state
+        .projects
+        .create("Harbour".to_owned(), project_dir.path().to_path_buf())
+        .expect("project");
+    state.keep_temp_dir(project_dir);
+    let root = tempfile::tempdir().expect("filter directories");
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    std::fs::create_dir_all(&first).expect("first");
+    std::fs::create_dir_all(&second).expect("second");
+    let first_grant =
+        crate::execution::DirectoryGrant::from_selected(&first, &[]).expect("first grant");
+    let second_grant =
+        crate::execution::DirectoryGrant::from_selected(&second, &[]).expect("second grant");
+    let first_key = super::page::run_directory_key(&first_grant);
+    let definition = one_agent_definition(crate::tests::test_environment_id());
+    let environments = crate::tests::test_environment_set(&definition);
+    let step = definition
+        .steps()
+        .iter()
+        .find(|step| {
+            matches!(
+                step.action,
+                crate::workflows::definition::StepAction::Agent(_)
+            )
+        })
+        .expect("model phase")
+        .key
+        .clone();
+    let mut oldest = None;
+    let mut newest = None;
+    for index in 0..55 {
+        let id = RunId::generate().expect("run id");
+        let grant = if index == 0 || index == 54 {
+            first_grant.clone()
+        } else {
+            second_grant.clone()
+        };
+        let selection =
+            crate::providers::ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), None)
+                .expect("model");
+        let mut settings = crate::execution::ExecutionSettings::new(
+            selection.clone(),
+            String::new(),
+            Vec::new(),
+            crate::tests::test_environment_id(),
+        )
+        .expect("settings");
+        settings.directories = vec![grant];
+        let mut run = WorkflowRun::create(
+            id,
+            (index + 1) as u64,
+            project.id,
+            None,
+            crate::workflows::RunKind::Configured,
+            PinnedWorkflowDefinition::pin(None, definition.clone()),
+            environments.clone(),
+        );
+        run.phase_models = vec![crate::workflows::PhaseModelSelection {
+            step: step.clone(),
+            selection,
+            instructions: String::new(),
+            preset: None,
+            settings: Some(settings),
+        }];
+        state.workflow_runs.create(run).expect("store run");
+        if index == 0 {
+            oldest = Some(id);
+        }
+        if index == 54 {
+            newest = Some(id);
+        }
+    }
+    let (oldest, newest) = (oldest.expect("oldest"), newest.expect("newest"));
+    let filtered = super::page::RunIndexView::filtered(&state, &first_key, "");
+    assert_eq!(filtered.runs.len(), 2);
+    assert_eq!(filtered.runs[0].id, newest.as_hex());
+    assert_eq!(filtered.runs[1].id, oldest.as_hex());
+    let unfiltered = super::page::RunIndexView::filtered(&state, "", "");
+    assert_eq!(unfiltered.runs.len(), 50);
+    assert!(
+        !unfiltered.runs.iter().any(|row| row.id == oldest.as_hex()),
+        "oldest match stays available through the filtered view"
+    );
+    std::fs::rename(&first, root.path().join("old-first")).expect("rename");
+    std::fs::create_dir(&first).expect("recreate");
+    let unavailable = super::page::RunIndexView::filtered(&state, &first_key, "");
+    assert_eq!(unavailable.runs.len(), 2);
+    assert!(
+        unavailable
+            .directories
+            .iter()
+            .any(|option| option.id == first_key && option.name.contains("Unavailable")),
+        "moved directories keep an unavailable label"
+    );
+}

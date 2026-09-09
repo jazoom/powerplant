@@ -193,6 +193,10 @@ History and resources use a 24-pixel title and 14-pixel body text. Thin rules an
 
 Decision entries link to conversations and exact gate pages. The decision list contains no approval form.
 
+The conversation catalogue pairs its directory filter with a title search. The query trims and matches titles without case sensitivity. Both filters stay in the canonical address and native form navigation. Access grants stay unchanged.
+
+Run history filters by stored canonical directory identity. The filter applies before the fifty-record bound with newest matches first. Unavailable directories keep their labels. Run history stays run-centred as an approved difference from the reference conversation rows.
+
 Run details retain the owning conversation and parent loop links. Evidence pages retain their canonical run links.
 
 ### Other surfaces

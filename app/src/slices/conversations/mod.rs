@@ -375,6 +375,7 @@ struct NetworkForm {
 #[serde(default, deny_unknown_fields)]
 struct CatalogueQuery {
     directory: String,
+    q: String,
     index: bool,
 }
 
@@ -403,7 +404,8 @@ async fn catalogue(
     if query.index && graft == GraftRequest::Patch {
         return recent::response(&state);
     }
-    let valid = query.directory.is_empty()
+    let trimmed = query.q.trim();
+    let valid_directory = query.directory.is_empty()
         || (query.directory.len() == 33
             && state
                 .conversations
@@ -411,12 +413,14 @@ async fn catalogue(
                 .iter()
                 .flat_map(page::history_grants)
                 .any(|grant| page::history_directory_key(grant) == query.directory));
-    let error = if valid {
-        ""
-    } else {
+    let error = if !valid_directory {
         "Choose a directory from conversation history."
+    } else if trimmed.len() > 256 {
+        "Search is too long. Use at most 256 characters."
+    } else {
+        ""
     };
-    render_catalogue(&state, graft, &query.directory, error)
+    render_catalogue(&state, graft, &query.directory, trimmed, error)
 }
 
 async fn create(
@@ -3882,6 +3886,7 @@ fn render_catalogue(
     state: &AppState,
     graft: GraftRequest,
     filter: &str,
+    query: &str,
     error: &'static str,
 ) -> AppResult<Response> {
     render_page(
@@ -3893,12 +3898,12 @@ fn render_catalogue(
             PatchStatus::UnprocessableEntity
         },
         page::CATALOGUE_TITLE,
-        &CatalogueView::from_records(&state.conversations.list(), filter, error),
+        &CatalogueView::from_records(&state.conversations.list(), filter, query, error),
     )
 }
 
 fn creation_error(state: &AppState, error: &'static str) -> AppResult<Response> {
-    let view = CatalogueView::from_records(&state.conversations.list(), "", error);
+    let view = CatalogueView::from_records(&state.conversations.list(), "", "", error);
     let mut patches = hypergraft::PatchSet::new().title(page::CATALOGUE_TITLE);
     patches.children("chat-main", &view)?;
     patches.replace_location("/conversations")?;

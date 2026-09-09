@@ -12,28 +12,92 @@
     </div>
   </div>
 
-  {% if runs.is_empty() %}
-    <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">No runs yet</h2>
-      <p class="text-quiet">Open a conversation and run your first workflow.</p>
-      <a href="/conversations" data-graft class="btn btn-primary btn-sm"
-        >Open conversations</a
+  {% if !directories.is_empty() || !filter.is_empty() %}
+    <form
+      method="get"
+      action="/runs"
+      data-graft
+      class="flex flex-wrap items-end gap-3"
+    >
+      <label
+        class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
+        for="run-directory-filter"
       >
-    </section>
+        <span class="text-sm">Directory</span>
+        <select
+          id="run-directory-filter"
+          class="select select-bordered w-full"
+          name="directory"
+          data-graft-submit-on="change"
+        >
+          <option value="" {% if filter.is_empty() %}selected{% endif %}>
+            All directories
+          </option>
+          {% for directory in directories %}
+            <option
+              value="{{ directory.id }}"
+              {% if directory.selected %}selected{% endif %}
+            >
+              {{ directory.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="btn btn-primary btn-sm min-h-11">
+        Filter
+      </button>
+      {% for directory in directories %}
+        {% if directory.selected %}
+          <p class="w-full text-sm break-all">{{ directory.name }}</p>
+        {% endif %}
+      {% endfor %}
+    </form>
+  {% endif %}
+  {% if error != "" %}
+    <div class="alert alert-error" role="alert" tabindex="-1">
+      <p>{{ error }}</p>
+    </div>
+  {% endif %}
+
+  {% if runs.is_empty() %}
+    {% if filter.is_empty() && error == "" %}
+      <section class="file-section space-y-3">
+        <h2 class="text-lg font-semibold">No runs yet</h2>
+        <p class="text-quiet">
+          Open a conversation and run your first workflow.
+        </p>
+        <a href="/conversations" data-graft class="btn btn-primary btn-sm"
+          >Open conversations</a
+        >
+      </section>
+    {% else %}
+      <section class="file-section space-y-3">
+        <h2 class="text-lg font-semibold">No runs match this filter</h2>
+        <p class="text-quiet">
+          No retained run used the selected directory. The newest fifty runs
+          remain available.
+        </p>
+        <a href="/runs" data-graft class="btn btn-primary btn-sm"
+          >Show all runs</a
+        >
+      </section>
+    {% endif %}
   {% else %}
     <ul class="record-list">
       {% for run in runs %}
         <li class="record-row">
           <div class="min-w-0 space-y-2">
             <p>
-              {% if !run.conversation_href.is_empty() %}<a
-                href="{{ run.conversation_href }}"
-                data-graft
-                class="link font-semibold break-words"
-                >{{ run.conversation_title }}</a
-              >{% else %}<span class="text-quiet"
-                >{{ run.conversation_title }}</span
-              >{% endif %}
+              {% if !run.conversation_href.is_empty() %}
+                <a
+                  href="{{ run.conversation_href }}"
+                  data-graft
+                  class="link font-semibold break-words"
+                  >{{ run.conversation_title }}</a
+                >
+              {% else %}
+                <span class="text-quiet">{{ run.conversation_title }}</span>
+              {% endif %}
             </p>
             <a
               href="{{ run.href }}"

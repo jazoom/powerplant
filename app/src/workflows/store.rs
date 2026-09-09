@@ -125,6 +125,12 @@ impl WorkflowRunStore {
     }
 
     pub(crate) fn summaries(&self) -> Vec<RunSummary> {
+        let mut summaries = self.all_summaries();
+        summaries.truncate(BROWSER_SUMMARY_LIMIT);
+        summaries
+    }
+
+    pub(crate) fn all_summaries(&self) -> Vec<RunSummary> {
         let mut summaries: Vec<RunSummary> = self
             .lock()
             .values()
@@ -137,7 +143,6 @@ impl WorkflowRunStore {
                 .cmp(&left.created_at_ms)
                 .then(right.id.cmp(&left.id))
         });
-        summaries.truncate(BROWSER_SUMMARY_LIMIT);
         summaries
     }
 
