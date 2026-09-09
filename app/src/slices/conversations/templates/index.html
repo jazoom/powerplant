@@ -6,10 +6,6 @@
     <div class="page-intro">
       <div>
         <h1>Conversations</h1>
-        <p>
-          Conversation history stays on this local Power Plant installation. Any
-          local browser session can open it.
-        </p>
       </div>
       <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
         >New conversation</a
@@ -19,7 +15,8 @@
       <form
         method="get"
         action="/conversations"
-        class="border-base-300 flex flex-wrap items-end gap-3 border-y py-4"
+        data-graft
+        class="flex flex-wrap items-end gap-3"
       >
         <label
           class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
@@ -30,6 +27,7 @@
             id="conversation-directory-filter"
             class="select select-bordered w-full"
             name="directory"
+            data-graft-submit-on="change"
           >
             <option value="" {% if filter.is_empty() %}selected{% endif %}>
               All directories
@@ -44,20 +42,11 @@
             {% endfor %}
           </select>
         </label>
-        <button class="btn btn-secondary btn-sm" type="submit">Filter</button>
-        {% if !filter.is_empty() %}
-          <a href="/conversations" data-graft class="btn btn-ghost btn-sm"
-            >Clear filter</a
-          >
-        {% endif %}
         {% for directory in directories %}
           {% if directory.selected %}
             <p class="w-full text-sm break-all">{{ directory.name }}</p>
           {% endif %}
         {% endfor %}
-        <p class="text-quiet w-full text-sm">
-          This filter shows history only. It grants no directory access.
-        </p>
       </form>
     {% endif %}
     {% if error != "" %}
@@ -78,18 +67,21 @@
     {% else %}
       <ul class="record-list" aria-label="Saved conversations">
         {% for conversation in conversations %}
-          <li class="record-row">
+          <li
+            class="record-row grid-cols-1 gap-1 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4"
+          >
             <a
               href="/conversations/{{ conversation.id }}"
               data-graft
-              class="link link-hover min-w-0 break-words"
+              class="link link-hover text-base-content flex min-h-11 min-w-0 items-center font-semibold [overflow-wrap:anywhere]"
               >{{ conversation.title }}</a
             >
             <a
               href="/conversations/new?source={{ conversation.id }}"
               data-graft
-              class="link link-hover text-sm"
-              >New with same settings</a
+              class="btn btn-ghost btn-sm min-h-11 justify-self-start font-normal sm:justify-self-end"
+              aria-label="New conversation with same setup as {{ conversation.title }}"
+              >New conversation with same setup</a
             >
           </li>
         {% endfor %}

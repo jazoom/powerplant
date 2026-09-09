@@ -378,7 +378,7 @@ async fn catalogue_uses_document_and_navigation_without_creating_a_conversation(
         .expect("document");
     assert_eq!(document_response.status(), StatusCode::OK);
     let document_body = text(document_response).await;
-    assert!(document_body.contains("Conversation history stays on this local"));
+    assert!(document_body.contains("Conversations"));
     assert_eq!(document_body.matches("id=\"chat-main\"").count(), 1);
 
     let navigation_response = app(&state)
@@ -708,7 +708,9 @@ async fn directory_history_matches_identity_without_granting_access() {
         assert!(body.contains(first.to_str().unwrap()));
         assert!(body.contains(second.to_str().unwrap()));
         assert!(body.contains("href=\"/conversations/new\""));
-        assert!(body.contains("Clear filter"));
+        assert!(body.contains("id=\"conversation-directory-filter\""));
+        assert!(body.contains("data-graft-submit-on=\"change\""));
+        assert!(!body.contains("Clear filter"));
     }
     std::fs::rename(&first, root.path().join("old-code")).unwrap();
     std::fs::create_dir(&first).unwrap();
