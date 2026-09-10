@@ -428,15 +428,61 @@ body {
     margin-block: 8px;
     font-size: 14px;
 }
-.chat-turn-user {
+/* input.css loads after this sheet, so user rules need transcript scope to win. */
+#transcript .chat-turn-user {
     border: 0;
     background: none;
 }
-.chat-turn-user .chat-turn-body {
+#transcript .chat-turn-user .chat-turn-body {
+    border: 0;
+    background: none;
+    padding: 0;
+}
+#transcript .chat-turn-user .chat-prose {
     border: 1px solid var(--color-base-300);
     border-radius: 3px;
     background: var(--color-base-200);
     padding: 14px 16px;
+}
+#transcript .chat-turn-user .chat-turn-meta {
+    margin-bottom: 11px;
+    font-size: 12px;
+}
+.user-avatar {
+    display: inline-grid;
+    width: 23px;
+    height: 23px;
+    place-items: center;
+    border: 1px solid var(--color-base-300);
+    border-radius: 50%;
+    background: var(--color-base-200);
+    font-size: 10px;
+}
+.empty-conversation {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-block: 35px 55px;
+    text-align: center;
+}
+.empty-conversation > img {
+    margin-bottom: 22px;
+}
+.empty-conversation h2 {
+    font-size: 28px;
+    letter-spacing: -0.025em;
+}
+.empty-conversation > p {
+    margin-top: 13px;
+    max-width: 52ch;
+}
+.empty-conversation .btn {
+    margin-top: 27px;
+}
+.empty-conversation .empty-footnote {
+    margin-top: 16px;
+    font-size: 11px;
 }
 .chat-turn-meta strong {
     display: flex;

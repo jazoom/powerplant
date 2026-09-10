@@ -1,5 +1,9 @@
 <header class="chat-turn-meta flex items-center gap-2">
-  <strong>{% if message.user %}You{% else %}Power Plant{% endif %}</strong>
+  {% if message.user %}<span class="user-avatar" aria-hidden="true"
+    >Y</span
+  >{% endif %}<strong
+    >{% if message.user %}You{% else %}Power Plant{% endif %}</strong
+  >
   {% if message.status != "" && message.error == "" %}
     <span class="inline-flex items-center gap-1.5 text-xs" role="status">
       {% if message.streaming %}
@@ -27,7 +31,9 @@
   {% if message.saveable_plan %}
     <details class="mt-2">
       <summary class="btn btn-ghost btn-sm min-h-11">
-        Create a plan from this
+        <svg class="workspace-icon" aria-hidden="true">
+          <use href="/static/images/workspace-icons.svg#file" /></svg
+        >Create a plan from this
       </summary>
       <form
         data-graft

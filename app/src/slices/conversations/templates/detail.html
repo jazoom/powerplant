@@ -746,11 +746,25 @@
           {% endif %}
         {% endif %}
         {% if self.transcript_empty() %}
-          <div class="m-auto max-w-xl px-6 py-8 text-center">
+          <div class="empty-conversation m-auto max-w-xl px-6 py-8 text-center">
+            <img src="/static/images/logo.svg" width="70" height="50" alt="" />
             <h2 class="text-2xl font-semibold text-balance sm:text-3xl">
-              What do you want to work on?
+              What do you want to change?
             </h2>
-            <p class="text-quiet mt-3">Ask a question or describe a task.</p>
+            <p class="text-quiet mt-3">
+              Describe the task. The conversation keeps your discussion, work
+              and decisions together.
+            </p>
+            <button
+              type="button"
+              class="btn btn-outline mt-7 font-normal"
+              data-example-prompt
+            >
+              Try the error message example
+            </button>
+            <p class="empty-footnote text-quiet mt-4 text-xs">
+              You can start with a question. Directory access is optional.
+            </p>
           </div>
         {% endif %}
         {% if omitted_messages > 0 %}
