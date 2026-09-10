@@ -14,6 +14,7 @@ impl PlanDocumentStore {
     ) -> Result<PlanDocument, DocumentError> {
         let source = PlanSource::SubmittedText {
             conversation_id,
+            message_count: 0,
             source_hash: ObjectHash::of(markdown.as_bytes()),
         };
         self.create(
@@ -328,17 +329,23 @@ fn task_lists_require_valid_model_or_submitted_output() {
     let conversation = conversation();
     let document = store
         .create_task_list_from_text(
-            conversation.id,
+            &conversation,
             "Tasks".to_owned(),
             "# Tasks\n\n- [x] Done\n- [ ] Next\n".to_owned(),
             None,
         )
         .expect("task list");
     assert_eq!(document.kind, DocumentKind::TaskList);
+    let source = &document.current().source;
+    assert!(
+        matches!(source, PlanSource::SubmittedText { message_count, .. }
+        if *message_count as usize == conversation.messages.len())
+    );
+    assert_eq!(source_from_file(source_to_file(source)).unwrap(), *source);
     assert_eq!(
         store
             .create_task_list_from_text(
-                conversation.id,
+                &conversation,
                 "Invalid".to_owned(),
                 "# Missing tasks\n".to_owned(),
                 None,
@@ -470,7 +477,7 @@ fn task_corrections_reject_invalid_structure_without_replacing_the_original() {
     let record = conversation();
     let source = "# Tasks\r\n\r\n- [x] Done\r\n- [ ] Pending\r\n";
     let document = store
-        .create_task_list_from_text(record.id, "Tasks".to_owned(), source.to_owned(), None)
+        .create_task_list_from_text(&record, "Tasks".to_owned(), source.to_owned(), None)
         .expect("tasks");
     assert_eq!(
         store

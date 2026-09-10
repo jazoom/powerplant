@@ -108,6 +108,7 @@ pub(crate) enum PlanSource {
     },
     SubmittedText {
         conversation_id: ConversationId,
+        message_count: u32,
         source_hash: ObjectHash,
     },
     DirectoryFile {
@@ -278,6 +279,7 @@ enum SourceFile {
     },
     SubmittedText {
         conversation_id: String,
+        message_count: u32,
         source_hash: String,
     },
     DirectoryFile {
@@ -384,17 +386,19 @@ impl PlanDocumentStore {
 
     pub(crate) fn create_task_list_from_text(
         &self,
-        conversation_id: ConversationId,
+        conversation: &ConversationRecord,
         title: String,
         markdown: String,
         secret: Option<&str>,
     ) -> Result<PlanDocument, DocumentError> {
         self.create_task_list(
-            conversation_id,
+            conversation.id,
             title,
             &markdown,
             PlanSource::SubmittedText {
-                conversation_id,
+                conversation_id: conversation.id,
+                message_count: u32::try_from(conversation.messages.len())
+                    .map_err(|_| DocumentError::Source)?,
                 source_hash: ObjectHash::of(markdown.as_bytes()),
             },
             secret,
@@ -976,10 +980,12 @@ fn source_from_file(file: SourceFile) -> Result<PlanSource, DocumentError> {
         }),
         SourceFile::SubmittedText {
             conversation_id,
+            message_count,
             source_hash,
         } => Ok(PlanSource::SubmittedText {
             conversation_id: ConversationId::parse(&conversation_id)
                 .ok_or(DocumentError::Corrupt)?,
+            message_count,
             source_hash: ObjectHash::parse(&source_hash).ok_or(DocumentError::Corrupt)?,
         }),
         SourceFile::DirectoryFile {
@@ -1089,9 +1095,11 @@ fn source_to_file(source: &PlanSource) -> SourceFile {
         },
         PlanSource::SubmittedText {
             conversation_id,
+            message_count,
             source_hash,
         } => SourceFile::SubmittedText {
             conversation_id: conversation_id.as_hex(),
+            message_count: *message_count,
             source_hash: source_hash.as_str(),
         },
         PlanSource::DirectoryFile {

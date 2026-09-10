@@ -619,7 +619,7 @@ body {
     border-radius: 3px;
     cursor: pointer;
 }
-.workflow-choice.selected {
+.workflow-choice:has(input:checked) {
     border-color: var(--color-primary-content);
     background: color-mix(
         in srgb,

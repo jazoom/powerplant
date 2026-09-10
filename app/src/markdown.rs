@@ -2,14 +2,17 @@
 
 use pulldown_cmark::{Options, Parser, html};
 
-pub(crate) fn render(markdown: &str) -> String {
+pub(crate) fn parser(markdown: &str) -> Parser<'_> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(markdown, options);
+    Parser::new_ext(markdown, options)
+}
+
+pub(crate) fn render(markdown: &str) -> String {
     let mut html_output = String::new();
-    html::push_html(&mut html_output, parser);
+    html::push_html(&mut html_output, parser(markdown));
     ammonia::clean(&html_output)
 }
 

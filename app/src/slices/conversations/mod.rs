@@ -1779,7 +1779,7 @@ async fn save_task_list_text(
     }
     let secret = plan_secret(&state, &[&form.title, &form.markdown]);
     match state.documents.create_task_list_from_text(
-        record.id,
+        &record,
         form.title.clone(),
         form.markdown.clone(),
         secret.as_deref(),
@@ -3974,7 +3974,7 @@ fn detail_view(
                 .is_none_or(|run| parent.created_at_ms >= run.created_at_ms) =>
         {
             let child = parent
-                .current_child()
+                .occupied_child()
                 .and_then(|child| state.workflow_runs.get(&child));
             Some(page::loop_progress_with_child(
                 &parent,

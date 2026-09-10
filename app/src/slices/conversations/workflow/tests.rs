@@ -544,7 +544,7 @@ async fn task_loop_launch_accepts_a_whole_list_without_a_task_index() {
     let document = state
         .documents
         .create_task_list_from_text(
-            conversation.id,
+            &conversation,
             "Tasks".to_owned(),
             "# Tasks\n\n- [x] Done\n- [ ] Remaining\n".to_owned(),
             None,
@@ -647,12 +647,7 @@ fn task_selection_rejects_foreign_checked_and_removed_items() {
         "# Tasks\n\nShared context.\n\n- [x] Done.\n- [ ] First pending.\n- [ ] Selected.\n";
     let document = state
         .documents
-        .create_task_list_from_text(
-            conversation.id,
-            "Tasks".to_owned(),
-            markdown.to_owned(),
-            None,
-        )
+        .create_task_list_from_text(&conversation, "Tasks".to_owned(), markdown.to_owned(), None)
         .expect("tasks");
     let id = document.id.as_hex();
     let hash = document.current().content_hash.as_str();
@@ -736,7 +731,7 @@ fn saved_plan_selection_rejects_substitution_and_removal_but_pins_old_revisions(
     let tasks = state
         .documents
         .create_task_list_from_text(
-            conversation.id,
+            &conversation,
             "Tasks".to_owned(),
             "# Tasks\n- [ ] Implement\n".to_owned(),
             None,
@@ -964,7 +959,7 @@ async fn launch_sheet_supports_document_navigation_and_selection_preview() {
     let document = state
         .documents
         .create_task_list_from_text(
-            conversation.id,
+            &conversation,
             "Review input".to_owned(),
             "# Tasks\n\n- [ ] Keep the selected task\n".to_owned(),
             None,
@@ -1209,7 +1204,7 @@ async fn host_workflows_gate_commands_and_stop_failed_task_loops_without_a_sandb
             let document = state
                 .documents
                 .create_task_list_from_text(
-                    conversation.id,
+                    &conversation,
                     "Tasks".to_owned(),
                     "# Tasks\n\n- [ ] First\n- [ ] Second\n".to_owned(),
                     None,

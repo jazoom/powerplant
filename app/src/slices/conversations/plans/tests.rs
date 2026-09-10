@@ -432,6 +432,11 @@ async fn plans_request_companions_validate_mode_and_source_message() {
     assert!(from.contains("Exact source reply."));
     assert!(from.contains("Response 2"));
     assert!(from.contains(&format!("/conversations/{}/plans/from-message", record.id)));
+    assert!(from.contains(&format!(
+        "formaction=\"/conversations/{}/tasks\"",
+        record.id
+    )));
+    assert!(from.contains("name=\"message_index\" value=\"1\""));
 
     for raw in ["0", "9", "not-an-index"] {
         let rejected = app(&state)
@@ -486,9 +491,10 @@ fn plan_sections_preserve_markdown_structure_and_revision_identity() {
     use super::super::page::{PlanDocumentPage, split_plan_sections};
     let state = test_state();
     let record = state.conversations.create("Sections".to_owned()).unwrap();
-    let content = (0..3000)
-        .map(|line| format!("# Heading\n- item {line}\n"))
-        .collect::<String>();
+    let content = format!(
+        "{}\n\n```text\n# Literal heading\n```\n\n[Reference][target]\n\n[target]: https://example.com/\n",
+        "x".repeat(23_980)
+    );
     assert!(content.len() > super::super::page::PLAN_SECTION_CHARS);
     let plan = state
         .documents
@@ -508,12 +514,33 @@ fn plan_sections_preserve_markdown_structure_and_revision_identity() {
     assert_eq!(second.document_revision, 1);
     assert_eq!(first.content, content);
     assert_ne!(first.content_html, second.content_html);
+    assert!(second.content_html.contains("<pre><code"));
+    assert!(!second.content_html.contains("<h1>Literal heading</h1>"));
+    assert!(
+        second
+            .content_html
+            .contains("href=\"https://example.com/\"")
+    );
     assert!(first.section_next.contains("&section=1"));
     assert!(second.section_prev.contains("revision=1"));
     if chunks.len() > 2 {
         assert!(second.section_next.contains("&section=2"));
     } else {
         assert!(second.section_next.is_empty());
+    }
+    let oversized = format!(
+        "```text\n{}# Literal heading\n```\nAfter.\n",
+        "line\n".repeat(4990)
+    );
+    let oversized_chunks = split_plan_sections(&oversized);
+    assert_eq!(oversized_chunks.concat(), oversized);
+    for (index, chunk) in oversized_chunks.iter().enumerate() {
+        assert!(chunk.len() <= super::super::page::PLAN_SECTION_CHARS);
+        let section = PlanDocumentPage::from_document(&plan, 1, oversized.clone(), index, "");
+        assert_eq!(
+            section.content_html,
+            format!("<pre>{}</pre>", ammonia::clean_text(chunk))
+        );
     }
     let last_index = chunks.len() - 1;
     let last = PlanDocumentPage::from_document(&plan, 1, content.clone(), last_index, "");
@@ -529,7 +556,7 @@ fn plan_sections_preserve_markdown_structure_and_revision_identity() {
 }
 
 #[test]
-fn plan_detail_uses_canonical_copy_and_escapes_untrusted_content() {
+fn plan_detail_escapes_untrusted_content() {
     use super::super::page::PlanDocumentPage;
     use askama::Template;
     let state = test_state();
@@ -547,16 +574,6 @@ fn plan_detail_uses_canonical_copy_and_escapes_untrusted_content() {
     let view =
         PlanDocumentPage::from_document(&plan, 1, content, 0, "").with_context(&state, &plan);
     let html = view.contents().render().unwrap();
-    assert!(html.contains("Proposed approach"));
-    assert!(html.contains("not execution approval"));
-    assert!(!html.contains("Not execution approval"));
-    assert!(html.contains(">Export<"));
-    assert!(!html.contains("Export for Pi"));
-    assert!(html.contains("Back to plans"));
-    assert!(!html.contains("Back to conversation"));
-    assert!(html.contains("Revise plan"));
-    assert!(html.contains("Independent review"));
-    assert!(html.contains("Plan history and source"));
     assert!(!html.contains("<script>alert(1)</script>"));
     assert!(!html.contains("<img src=x"));
 }
@@ -619,7 +636,7 @@ async fn task_continuation_validates_preamble_sections() {
     assert!(markdown.len() > super::super::page::PLAN_SECTION_CHARS);
     let plan = state
         .documents
-        .create_task_list_from_text(record.id, "Tasks".to_owned(), markdown.clone(), None)
+        .create_task_list_from_text(&record, "Tasks".to_owned(), markdown.clone(), None)
         .unwrap();
     let content = state.documents.content(&plan, 1).unwrap();
     let list = crate::workflows::task_list::parse(&content).unwrap();

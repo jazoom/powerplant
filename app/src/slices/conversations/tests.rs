@@ -736,29 +736,14 @@ async fn conversation_actions_keep_rename_delete_and_draft_copy_behind_confirmat
     // An idle conversation hides both the review strip and Current work.
     assert!(!body.contains("data-attention-strip"));
     assert!(!body.contains("data-work-toggle"));
-    // Header order runs Plans, Setup, then Conversation actions.
-    let plans = body.find("data-plans-toggle").expect("plans");
-    let setup = body
-        .find("popovertarget=\"conversation-settings\"")
-        .expect("setup");
-    let menu = body
-        .find("popovertarget=\"conversation-actions\"")
-        .expect("menu");
-    assert!(plans < setup && setup < menu);
 }
 
 fn normalised(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A live awaiting gate drives the header review strip and Current work
-/// from the same server decision source, without dispatching approval.
-#[tokio::test]
-async fn decision_waiting_header_exposes_the_review_strip_and_current_work() {
+pub(super) fn awaiting_gate(state: &AppState) {
     use crate::workflows::definition::{InputKey, OutputKey, StepKey};
-
-    let state = test_state();
-    let token = connected(&state);
     let project_dir = tempfile::tempdir().expect("work dir");
     assert!(
         std::process::Command::new("git")
@@ -913,17 +898,6 @@ async fn decision_waiting_header_exposes_the_review_strip_and_current_work() {
     )
     .expect("gate");
     state.workflow_runs.create(run).expect("store run");
-    let path = format!("/conversations/{}", conversation.id.as_hex());
-    let detail = app(&state)
-        .oneshot(document(&path, &token))
-        .await
-        .expect("detail");
-    assert_eq!(detail.status(), StatusCode::OK);
-    let body = text(detail).await;
-    // The strip and Current work open the companion through a local
-    // transition. Neither submits a decision command.
-    assert!(body.contains("data-attention-strip"));
-    assert!(body.contains("data-work-toggle"));
 }
 
 #[tokio::test]

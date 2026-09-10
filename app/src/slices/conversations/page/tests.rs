@@ -108,11 +108,11 @@ fn dense_markup_uses_escaped_text_with_bounded_nodes() {
 #[test]
 fn document_actions_keep_the_selected_revision_identity_after_a_correction() {
     let state = crate::tests::test_state(RuntimeConfig::development());
-    let record = state.conversations.create("Documents".to_owned()).unwrap();
+    let mut record = state.conversations.create("Documents".to_owned()).unwrap();
     let content = "# Tasks\n- [ ] First task\n";
     let document = state
         .documents
-        .create_task_list_from_text(record.id, "Tasks".to_owned(), content.to_owned(), None)
+        .create_task_list_from_text(&record, "Tasks".to_owned(), content.to_owned(), None)
         .unwrap();
     let hash = document.current().content_hash.as_str();
     let document = state
@@ -133,6 +133,19 @@ fn document_actions_keep_the_selected_revision_identity_after_a_correction() {
         document.id
     )));
     assert!(view.review_href.ends_with("?revision=1"));
+    record.messages.push(ConversationMessage {
+        role: MessageRole::User,
+        text: "A later message".to_owned(),
+        status: MessageStatus::Complete,
+        error: None,
+        request: None,
+    });
+    let token = super::super::tests::connected(&state);
+    let session = super::super::tests::session_id(&token);
+    let transcript = super::super::detail_view(&state, session, &record, &record.title, "");
+    assert!(transcript.messages[0].html.contains("First task"));
+    assert!(!transcript.messages[0].html.contains("Replacement"));
+    assert_eq!(transcript.messages[1].index, 0);
     assert!(
         view.tasks[0]
             .run_href
@@ -255,4 +268,55 @@ fn partial_progress_links_the_exact_attempt_and_settlement_identity() {
     assert!(html.contains("name=\"attempt\""));
     assert!(html.contains("value=\"bbb\""));
     assert!(html.contains("value=\"recovered\""));
+}
+
+#[test]
+fn failed_loop_retains_the_exact_child_application_evidence() {
+    use crate::workflows::apply::{ApplyTransaction, ApplyTransactionState};
+    use crate::workflows::task_loop::{TaskLoopState, TaskOutcome};
+    let state = crate::tests::test_state(RuntimeConfig::development());
+    let token = super::super::tests::connected(&state);
+    super::super::tests::awaiting_gate(&state);
+    let run = state.workflow_runs.active_runs().remove(0);
+    let conversation = state
+        .conversations
+        .get(&run.conversation_id.unwrap())
+        .unwrap();
+    let mut parent = crate::workflows::task_loop::tests::loop_record();
+    parent.conversation_id = conversation.id;
+    parent.state = TaskLoopState::Failed;
+    parent.tasks[0].child_id = Some(run.id);
+    parent.tasks[0].outcome = TaskOutcome::Failed;
+    let attempt = run.attempts[0].id;
+    state
+        .workflow_runs
+        .mutate(&run.id, |child| {
+            child.parent_loop = Some(parent.id);
+            child.state = crate::workflows::run::RunState::Failed;
+            child.attempts[0].apply_transaction = Some(ApplyTransaction {
+                state: ApplyTransactionState::Recovered,
+                roots: Vec::new(),
+                baseline: child.gates[0].diff_base.clone(),
+                candidate: child.gates[0].candidate.clone(),
+                approval: child.gates[0].candidate.clone(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    state.task_loops.create(parent).unwrap();
+    let view = super::super::detail_view(
+        &state,
+        super::super::tests::session_id(&token),
+        &conversation,
+        &conversation.title,
+        "",
+    );
+    let progress = view.saved().unwrap().workflow_progress.as_ref().unwrap();
+    assert!(progress.apply_partial);
+    assert_eq!(progress.apply_run_id, run.id.as_hex());
+    assert_eq!(progress.apply_attempt_id, attempt.as_hex());
+    assert_eq!(
+        progress.apply_resolve_href,
+        format!("/runs/{}/attempts/{attempt}/changes", run.id)
+    );
 }

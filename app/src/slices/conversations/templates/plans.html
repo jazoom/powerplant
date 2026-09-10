@@ -247,7 +247,7 @@
             id="plan-request-brief"
             class="textarea textarea-bordered w-full"
             name="request"
-            required
+            {% if mode != "from" %}required{% endif %}
             maxlength="8192"
           >
 {{ request }}</textarea>
@@ -258,9 +258,26 @@
           This calls the model without directory access or execution tools.
         </p>
       {% endif %}
-      <button type="submit" class="btn btn-primary self-start">
-        {{ submit_label }}
-      </button>
+      <div class="flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">
+          {{ submit_label }}
+        </button>
+        {% if mode == "from" %}
+          <button
+            type="submit"
+            formaction="{{ task_action }}"
+            class="btn btn-secondary"
+          >
+            Save as task list
+          </button>
+        {% endif %}
+      </div>
+      {% if mode == "from" %}
+        <p class="text-quiet text-xs">
+          Save as task list stores this reply with its original source. It calls
+          no model and executes no tasks.
+        </p>
+      {% endif %}
     </form>
   </div>
   <footer class="workspace-plans-footer shrink-0 space-y-2 border-t p-5">

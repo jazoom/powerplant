@@ -33,7 +33,7 @@ struct RecentConversation {
 
 /// State dot for a recent status. Attention states use the primary dot,
 /// active work uses the progress dot and settled records stay quiet.
-pub(crate) fn status_dot(status: &str) -> &'static str {
+fn status_dot(status: &str) -> &'static str {
     match status {
         "Needs your review" | "Needs command approval" | "Needs recovery" => "attention",
         "In progress" | "Active" | "Awaiting decision" => "active",

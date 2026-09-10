@@ -2021,6 +2021,7 @@ pub(super) struct PlanRequestContents<'a> {
     pub(super) error: &'a str,
     pub(super) back_href: &'a str,
     pub(super) form_action: &'a str,
+    pub(super) task_action: &'a str,
     pub(super) submit_label: &'a str,
 }
 
@@ -2143,6 +2144,7 @@ impl ConversationDetailView {
             error,
             back_href: &format!("/conversations/{}/plans", saved.id),
             form_action: &form_action,
+            task_action: &format!("/conversations/{}/tasks", saved.id),
             submit_label,
         }
         .render()
@@ -2204,7 +2206,7 @@ impl ConversationDetailView {
                 };
                 actions.push((
                     revision.created_at_ms,
-                    *message_index as usize,
+                    *message_index as usize + usize::from(!assistant),
                     *assistant,
                     view,
                 ));
@@ -2219,8 +2221,10 @@ impl ConversationDetailView {
             };
             let anchor = match &revision.source {
                 PlanSource::SubmittedText {
-                    conversation_id, ..
-                } if *conversation_id == record.id => usize::MAX,
+                    conversation_id,
+                    message_count,
+                    ..
+                } if *conversation_id == record.id => *message_count as usize,
                 PlanSource::ConversationMessage {
                     conversation_id,
                     message_index,
@@ -2230,7 +2234,7 @@ impl ConversationDetailView {
                     if !self.messages.iter().any(|message| message.index == index) {
                         continue;
                     }
-                    index
+                    index + 1
                 }
                 _ => continue,
             };
@@ -2283,12 +2287,12 @@ impl ConversationDetailView {
         }
         for (action_index, (index, assistant, html)) in selected.into_iter().rev().enumerate() {
             if !assistant {
-                // The source index anchors chronology. It does not transfer authorship to that message.
+                // The saved message boundary keeps actions before later replies.
                 let position = self
                     .messages
                     .iter()
                     .position(|message| {
-                        message.index > index && message.index < record.messages.len()
+                        message.index >= index && message.index < record.messages.len()
                     })
                     .unwrap_or(self.messages.len());
                 self.messages.insert(
@@ -2476,17 +2480,15 @@ impl PlanDocumentPage {
             || "/conversations".to_owned(),
             |id| format!("/conversations/{id}/plans"),
         );
-        // Bounded delivery splits oversized revisions into line-bounded
-        // sections on the same canonical route. Markdown structure stays
-        // intact because splits happen at line boundaries. Revision identity
-        // and the complete pinned export never change across sections.
+        // Sections share the full Markdown parser context, including reference links.
+        // An oversized block uses escaped text rather than partial Markdown.
         // Task display demotes the saved heading so the page keeps one h1.
         // The stored revision and the pinned export retain the exact source.
         let display_preamble = task_list
             .as_ref()
             .map(|list| demote_task_heading(&list.preamble));
         let preview_source = display_preamble.as_deref().unwrap_or(content.as_str());
-        let chunks = split_plan_sections(preview_source);
+        let (chunks, plain) = plan_sections(preview_source);
         let sections = chunks.len().max(1);
         let section = section.min(sections.saturating_sub(1));
         let section_text = chunks.get(section).cloned().unwrap_or_default();
@@ -2506,13 +2508,18 @@ impl PlanDocumentPage {
                 )
             }
         };
-        let content_html = {
-            let html = reply_html(&section_text);
-            if html.len() > 400 * 1024 {
-                plain_html(&section_text)
-            } else {
-                html
-            }
+        let content_html = if plain {
+            plain_html(&section_text)
+        } else {
+            let start: usize = chunks.iter().take(section).map(String::len).sum();
+            let end = start + section_text.len();
+            let events = crate::markdown::parser(preview_source)
+                .into_offset_iter()
+                .filter(|(_, range)| range.start >= start && range.end <= end)
+                .map(|(event, _)| event);
+            let mut html = String::new();
+            pulldown_cmark::html::push_html(&mut html, events);
+            bounded_reply_html(ammonia::clean(&html), &section_text)
         };
         Self {
             conversation_revision: 0,
@@ -2661,16 +2668,47 @@ pub(super) fn demote_task_heading(preamble: &str) -> String {
 }
 
 pub(super) fn split_plan_sections(content: &str) -> Vec<String> {
+    plan_sections(content).0
+}
+
+fn plan_sections(content: &str) -> (Vec<String>, bool) {
+    let mut sections = Vec::new();
+    let mut start = 0;
+    let mut end = 0;
+    let mut depth = 0usize;
+    for (event, range) in crate::markdown::parser(content).into_offset_iter() {
+        match event {
+            pulldown_cmark::Event::Start(_) => depth += 1,
+            pulldown_cmark::Event::End(_) => depth -= 1,
+            _ => {}
+        }
+        if depth != 0 {
+            continue;
+        }
+        if range.end - end > PLAN_SECTION_CHARS {
+            return (split_plain_sections(content), true);
+        }
+        if range.end - start > PLAN_SECTION_CHARS {
+            sections.push(content[start..end].to_owned());
+            start = end;
+        }
+        end = range.end;
+    }
+    if content.len() - start > PLAN_SECTION_CHARS {
+        return (split_plain_sections(content), true);
+    }
+    sections.push(content[start..].to_owned());
+    (sections, false)
+}
+
+fn split_plain_sections(content: &str) -> Vec<String> {
     if content.len() <= PLAN_SECTION_CHARS {
         return vec![content.to_owned()];
     }
     let mut sections = Vec::new();
     let mut current = String::new();
     for line in content.split_inclusive('\n') {
-        // Overlong lines split on character boundaries so single-line
-        // documents still receive bounded continuation. Ordinary lines stay
-        // atomic so sections end at line boundaries and Markdown structure
-        // survives. Concatenation preserves the exact source bytes.
+        // Escaped continuation preserves exact bytes and UTF-8 boundaries.
         if line.len() > PLAN_SECTION_CHARS {
             if !current.is_empty() {
                 sections.push(std::mem::take(&mut current));
@@ -2710,7 +2748,10 @@ fn plain_html(text: &str) -> String {
 }
 
 pub(super) fn reply_html(text: &str) -> String {
-    let html = crate::markdown::render(text);
+    bounded_reply_html(crate::markdown::render(text), text)
+}
+
+fn bounded_reply_html(html: String, text: &str) -> String {
     if html.len() > 768 * 1024 || html.matches('<').count() > 64 {
         // Dense markup uses plain text so one message cannot exhaust the browser node bound.
         plain_html(text)
