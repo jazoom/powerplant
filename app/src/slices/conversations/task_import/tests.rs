@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn import_request_confines_execution_to_the_authorised_guest_directory() {
+    let request = super::import_request("tasks/release.md", "/access/work");
+    assert_eq!(request.program, "sh");
+    assert_eq!(
+        request.args,
+        vec![
+            "-c".to_owned(),
+            super::IMPORT_SCRIPT.to_owned(),
+            "task-import".to_owned(),
+            "tasks/release.md".to_owned(),
+            "/access/work".to_owned(),
+        ]
+    );
+    // Relative resolution in the guest must match the read-only mount.
+    // The submitted path stays a positional argument, never shell syntax.
+    assert_eq!(request.cwd, "/access/work");
+}
+
+#[test]
 fn file_read_rejects_links_and_bounds_output_without_shell_interpolation() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
@@ -103,4 +122,47 @@ async fn import_requires_exact_live_directory_consent() {
     std::fs::create_dir(root.path()).unwrap();
     assert!(import_grant(&state, session, &record, &id).is_err());
     std::fs::remove_dir(old).unwrap();
+}
+
+#[tokio::test]
+async fn import_requires_consent_for_sensitive_read_only_directories() {
+    let state = super::super::tests::test_state();
+    let token = super::super::tests::connected(&state);
+    let session = super::super::tests::session_id(&token);
+    let mut record = state.conversations.create("Import".to_owned()).unwrap();
+    // The filesystem root overlaps every data root, so it is always a
+    // sensitive directory. No writes occur; selection only reads metadata.
+    let sensitive = std::path::Path::new("/");
+    let grant = crate::execution::DirectoryGrant::from_selected(sensitive, &[]).unwrap();
+    assert_eq!(grant.access, crate::execution::DirectoryAccess::ReadOnly);
+    let settings = crate::execution::ExecutionSettings::new(
+        crate::providers::ModelSelection::new(
+            crate::providers::ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            None,
+        )
+        .unwrap(),
+        String::new(),
+        Vec::new(),
+        crate::tests::test_environment_id(),
+    )
+    .unwrap()
+    .with_directories(vec![grant.clone()])
+    .unwrap();
+    record.model = Some(ConversationModelConfiguration {
+        settings: settings.clone(),
+        preset: None,
+    });
+    let id = grant.id.as_hex();
+    // Read-only access alone grants no import authority inside local data.
+    assert!(import_grant(&state, session, &record, &id).is_err());
+    let request = state
+        .access_consent
+        .request_conversation(session, record.id, &settings, &grant)
+        .unwrap();
+    state
+        .access_consent
+        .approve_conversation(&request, session, record.id, &settings, &grant)
+        .unwrap();
+    assert!(import_grant(&state, session, &record, &id).is_ok());
 }

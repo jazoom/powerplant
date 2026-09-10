@@ -192,6 +192,24 @@ async fn import_file(
     Ok(())
 }
 
+/// The file read runs with the authorised guest directory as its working
+/// directory, so relative resolution matches the read-only mount.
+/// Positional arguments keep submitted paths out of shell syntax. Each
+/// component rejects symlinks.
+fn import_request(path: &str, root: &str) -> GuestExec {
+    GuestExec::command(
+        "sh",
+        vec![
+            "-c".to_owned(),
+            IMPORT_SCRIPT.to_owned(),
+            "task-import".to_owned(),
+            path.to_owned(),
+            root.to_owned(),
+        ],
+    )
+    .in_dir(root.to_owned())
+}
+
 fn import_grant<'a>(
     state: &AppState,
     session: crate::sessions::SessionId,
@@ -236,17 +254,7 @@ async fn read_file(
     path: &str,
     root: &str,
 ) -> Result<String, &'static str> {
-    // Positional arguments keep submitted paths out of shell syntax. Each component rejects symlinks.
-    let request = GuestExec::command(
-        "sh",
-        vec![
-            "-c".to_owned(),
-            IMPORT_SCRIPT.to_owned(),
-            "task-import".to_owned(),
-            path.to_owned(),
-            root.to_owned(),
-        ],
-    );
+    let request = import_request(path, root);
     let mut command = sandbox
         .exec_cmd(request)
         .await
