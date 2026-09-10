@@ -70,7 +70,7 @@ async fn new_agent(
         graft,
         PatchStatus::Ok,
         page::NEW_TITLE,
-        create_form_view(starter.as_ref(), starter_form(starter.as_ref()), ""),
+        create_form_view(&state, starter.as_ref(), starter_form(starter.as_ref()), ""),
     )
 }
 
@@ -94,6 +94,7 @@ async fn create(
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
                 create_form_view(
+                    &state,
                     starter.as_ref(),
                     starter_form(starter.as_ref()),
                     error.message(),
@@ -108,7 +109,7 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                create_form_view(starter.as_ref(), form, error.message()),
+                create_form_view(&state, starter.as_ref(), form, error.message()),
             );
         }
         return render_form_command(
@@ -116,7 +117,7 @@ async fn create(
             graft,
             PatchStatus::Ok,
             page::NEW_TITLE,
-            create_form_view(starter.as_ref(), form, ""),
+            create_form_view(&state, starter.as_ref(), form, ""),
         );
     }
     let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
@@ -125,7 +126,7 @@ async fn create(
             graft,
             PatchStatus::Conflict,
             page::NEW_TITLE,
-            create_form_view(starter.as_ref(), form, HOST_PATH_RESET_PENDING),
+            create_form_view(&state, starter.as_ref(), form, HOST_PATH_RESET_PENDING),
         );
     };
     if let Some(project) = &starter {
@@ -140,17 +141,17 @@ async fn create(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::NEW_TITLE,
-                create_form_view(starter.as_ref(), form, error.message()),
+                create_form_view(&state, starter.as_ref(), form, error.message()),
             );
         }
     };
-    if let Err(error) = validate_preset_selection(&state, &draft) {
+    if let Err(error) = validate_agent_selection(&state, &draft) {
         return render_form_command(
             &state,
             graft,
             PatchStatus::UnprocessableEntity,
             page::NEW_TITLE,
-            create_form_view(starter.as_ref(), form, error),
+            create_form_view(&state, starter.as_ref(), form, error),
         );
     }
     match state.agents.create(draft) {
@@ -169,7 +170,7 @@ async fn create(
             graft,
             PatchStatus::UnprocessableEntity,
             page::NEW_TITLE,
-            create_form_view(starter.as_ref(), form, error.message()),
+            create_form_view(&state, starter.as_ref(), form, error.message()),
         ),
     }
 }
@@ -188,7 +189,7 @@ async fn show_configuration(
         graft,
         PatchStatus::Ok,
         page::CONFIG_TITLE,
-        AgentFormView::edit(&record, AgentFormState::from_record(&record), ""),
+        AgentFormView::edit(&state, &record, AgentFormState::from_record(&record), ""),
     )
 }
 
@@ -211,6 +212,7 @@ async fn update_configuration(
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
                 AgentFormView::edit(
+                    &state,
                     &record,
                     AgentFormState::from_record(&record),
                     error.message(),
@@ -225,7 +227,7 @@ async fn update_configuration(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
-                AgentFormView::edit(&record, form, error.message()),
+                AgentFormView::edit(&state, &record, form, error.message()),
             );
         }
         return render_form_command(
@@ -233,7 +235,7 @@ async fn update_configuration(
             graft,
             PatchStatus::Ok,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&record, form, ""),
+            AgentFormView::edit(&state, &record, form, ""),
         );
     }
     let Ok(_permit) = state.local_data.begin_host_path_mutation().await else {
@@ -242,7 +244,7 @@ async fn update_configuration(
             graft,
             PatchStatus::Conflict,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&record, form, HOST_PATH_RESET_PENDING),
+            AgentFormView::edit(&state, &record, form, HOST_PATH_RESET_PENDING),
         );
     };
     let Ok(_operation) = state.agent_leases.acquire(record.id) else {
@@ -251,7 +253,7 @@ async fn update_configuration(
             graft,
             PatchStatus::UnprocessableEntity,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&record, form, "Wait until this reply finishes."),
+            AgentFormView::edit(&state, &record, form, "Wait until this reply finishes."),
         );
     };
     let revision = match form.revision() {
@@ -262,7 +264,7 @@ async fn update_configuration(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
-                AgentFormView::edit(&record, form, REVISION_MESSAGE),
+                AgentFormView::edit(&state, &record, form, REVISION_MESSAGE),
             );
         }
     };
@@ -274,17 +276,17 @@ async fn update_configuration(
                 graft,
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
-                AgentFormView::edit(&record, form, error.message()),
+                AgentFormView::edit(&state, &record, form, error.message()),
             );
         }
     };
-    if let Err(error) = validate_preset_selection(&state, &draft) {
+    if let Err(error) = validate_agent_selection(&state, &draft) {
         return render_form_command(
             &state,
             graft,
             PatchStatus::UnprocessableEntity,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&record, form, error),
+            AgentFormView::edit(&state, &record, form, error),
         );
     }
     match state.agents.update(&record.id, revision, draft) {
@@ -293,7 +295,7 @@ async fn update_configuration(
             graft,
             PatchStatus::Ok,
             page::CONFIG_TITLE,
-            AgentFormView::edit(&updated, AgentFormState::from_record(&updated), ""),
+            AgentFormView::edit(&state, &updated, AgentFormState::from_record(&updated), ""),
         ),
         Err(error) => render_configuration_error(&state, graft, record, form, error),
     }
@@ -316,6 +318,7 @@ async fn delete_agent(
             PatchStatus::Conflict,
             page::CONFIG_TITLE,
             AgentFormView::edit(
+                &state,
                 &record,
                 AgentFormState::from_record(&record),
                 HOST_PATH_RESET_PENDING,
@@ -329,6 +332,7 @@ async fn delete_agent(
             PatchStatus::UnprocessableEntity,
             page::CONFIG_TITLE,
             AgentFormView::edit(
+                &state,
                 &record,
                 AgentFormState::from_record(&record),
                 "Wait until this reply finishes.",
@@ -344,6 +348,7 @@ async fn delete_agent(
                 PatchStatus::UnprocessableEntity,
                 page::CONFIG_TITLE,
                 AgentFormView::edit(
+                    &state,
                     &record,
                     AgentFormState::from_record(&record),
                     REVISION_MESSAGE,
@@ -378,7 +383,7 @@ async fn remove_orphan(
     render_catalogue(&state, graft.into(), status, error)
 }
 
-fn validate_preset_selection(state: &AppState, draft: &AgentDraft) -> Result<(), &'static str> {
+fn validate_agent_selection(state: &AppState, draft: &AgentDraft) -> Result<(), &'static str> {
     let Some(selection) = &draft.selection else {
         return Ok(());
     };
@@ -387,7 +392,7 @@ fn validate_preset_selection(state: &AppState, draft: &AgentDraft) -> Result<(),
 
 fn valid_selection(state: &AppState, selection: &ModelSelection) -> Result<(), &'static str> {
     if !state.vault.contains(selection.provider) {
-        return Err("Connect the selected provider before you save this preset.");
+        return Err("Connect the selected provider before you save this agent.");
     }
     if state
         .models_dev
@@ -435,13 +440,14 @@ fn starter_form(project: Option<&ProjectRecord>) -> AgentFormState {
 }
 
 fn create_form_view(
+    state: &AppState,
     project: Option<&ProjectRecord>,
     form: AgentFormState,
     error: &'static str,
 ) -> AgentFormView {
     match project {
-        Some(record) => AgentFormView::create_for_project(form, error, record),
-        None => AgentFormView::create(form, error),
+        Some(record) => AgentFormView::create_for_project(state, form, error, record),
+        None => AgentFormView::create(state, form, error),
     }
 }
 
@@ -466,12 +472,13 @@ fn render_configuration_error(
         AgentError::Conflict => {
             let latest = state.agents.get(&record.id).unwrap_or(record);
             AgentFormView::edit(
+                state,
                 &latest,
                 AgentFormState::from_record(&latest),
                 error.message(),
             )
         }
-        _ => AgentFormView::edit(&record, form, error.message()),
+        _ => AgentFormView::edit(state, &record, form, error.message()),
     };
     render_form_command(state, graft, status, page::CONFIG_TITLE, view)
 }

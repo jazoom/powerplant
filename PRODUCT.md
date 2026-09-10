@@ -178,7 +178,7 @@ At the conversation limit, Power Plant rejects a new save. Existing conversation
 
 The project catalogue is not host access authority. Explicit conversation grants authorise conversation work. Saved-agent execution uses agent directory grants. An agent is eligible when one stored canonical grant path equals the project path. Prefix matches give no authority. Project registration gives no authority.
 
-They create agents in the local catalogue. Each agent has a name, instructions, tools, a network policy and host directory grants. The selected project grant maps to `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`.
+They create agents in the local catalogue. Each agent has a name, instructions, tools, a network policy and host directory grants. The agent form offers connected providers and catalogue models with model-specific effort choices, and shows `Not available` for models without adjustable effort. The selected project grant maps to `/project` during sandbox-backed steps. A workflow step can expose selected secondary grants as read-only context under `/access/<alias>`. Grant aliases are labels only. The typed folder path decides host access.
 
 An agent network policy permits no network, selected domain suffixes or the public internet. No network is the default. Public access excludes the host and private networks. Restricted access includes each listed domain, its subdomains and all ports.
 

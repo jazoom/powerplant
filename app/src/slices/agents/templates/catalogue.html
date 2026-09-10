@@ -6,13 +6,13 @@
     <div>
       <h1>Agents</h1>
       <p>
-        Presets define reusable model preferences, instructions and authority
+        Agents define reusable model preferences, instructions and authority
         ceilings.
       </p>
     </div>
     {% if !agents.is_empty() %}
       <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
-        >New preset</a
+        >New agent</a
       >
     {% endif %}
   </div>
@@ -25,13 +25,13 @@
 
   {% if agents.is_empty() %}
     <section class="file-section space-y-3">
-      <h2 class="text-lg font-semibold">Create your first preset</h2>
+      <h2 class="text-lg font-semibold">Create your first agent</h2>
       <p class="text-quiet max-w-[60ch]">
         Define a reusable model preference and instructions. Local project
         access is optional.
       </p>
       <a href="/agents/new" data-graft class="btn btn-primary btn-sm"
-        >Create the first preset</a
+        >Create the first agent</a
       >
     </section>
   {% else %}

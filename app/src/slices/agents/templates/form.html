@@ -62,47 +62,93 @@
           >
 {{- instructions -}}</textarea>
           <span id="agent-instructions-help" class="text-quiet text-xs">
-            Give this reusable preset a role, context and project rules.
+            Give this saved agent a role, context and project rules.
           </span>
         </label>
         <fieldset class="file-section space-y-3">
           <legend class="text-sm">Model preference</legend>
           <p class="text-quiet text-xs">
             This preference is optional. A conversation can use a model
-            directly.
+            directly. Choose a connected provider and catalogue model.
           </p>
-          <div class="grid gap-3 sm:grid-cols-3">
-            <label class="flex flex-col gap-1">
+          <div class="grid gap-3 sm:grid-cols-3" data-review-model-picker>
+            <label class="flex flex-col gap-1" for="agent-provider">
               <span class="text-sm">Provider</span>
-              <input
-                class="input input-bordered"
+              <select
+                id="agent-provider"
+                class="select select-bordered"
                 name="provider"
-                maxlength="32"
-                value="{{ provider }}"
-                placeholder="Optional"
-              />
+                data-review-provider
+              >
+                <option value="" {% if provider == "" %}selected{% endif %}>
+                  No preference
+                </option>
+                {% if let Some(missing) = unavailable_provider %}
+                  <option value="{{ missing.as_str() }}" selected>
+                    Unavailable · {{ missing.label() }}
+                  </option>
+                {% else if providers.is_empty() %}
+                  <option value="" disabled>No connected providers</option>
+                {% endif %}
+                {% for item in providers %}
+                  <option
+                    value="{{ item.value }}"
+                    {% if item.selected %}selected{% endif %}
+                  >
+                    {{ item.label }}
+                  </option>
+                {% endfor %}
+              </select>
             </label>
-            <label class="flex flex-col gap-1">
+            <label class="flex flex-col gap-1" for="agent-model">
               <span class="text-sm">Model</span>
-              <input
-                class="input input-bordered"
+              <select
+                id="agent-model"
+                class="select select-bordered"
                 name="model"
-                maxlength="256"
-                value="{{ model }}"
-                placeholder="Optional"
-              />
+                data-review-model
+              >
+                {% if models.is_empty() && !model_unavailable %}
+                  <option value="" disabled>No models available</option>
+                {% endif %}
+                {% if model_unavailable %}
+                  <option value="{{ model }}" selected>
+                    Unavailable · {{ model }}
+                  </option>
+                {% endif %}
+                {% for item in models %}
+                  <option
+                    value="{{ item.id }}"
+                    {% if item.selected %}selected{% endif %}
+                  >
+                    {{ item.id }}
+                  </option>
+                {% endfor %}
+              </select>
             </label>
-            <label class="flex flex-col gap-1">
+            <label class="flex flex-col gap-1" for="agent-thinking">
               <span class="text-sm">Thinking effort</span>
-              <input
-                class="input input-bordered"
+              <select
+                id="agent-thinking"
+                class="select select-bordered"
                 name="thinking"
-                maxlength="32"
-                value="{{ thinking }}"
-                placeholder="Optional"
-              />
+                data-review-thinking
+              >
+                {% if efforts.is_empty() %}
+                  <option value="">Not available</option>
+                {% endif %}
+                {% for effort in efforts %}
+                  <option
+                    value="{{ effort.value }}"
+                    {% if effort.value == thinking %}selected{% endif %}
+                  >
+                    {{ effort.label }}
+                  </option>
+                {% endfor %}
+              </select>
             </label>
           </div>
+          <template data-review-model-catalogue="{{ catalogue }}"></template>
         </fieldset>
         <fieldset class="file-section space-y-2">
           <legend class="text-sm">Tools</legend>
@@ -202,13 +248,14 @@
         <fieldset class="file-section space-y-3">
           <legend class="text-sm">Project access</legend>
           <p class="text-quiet text-xs">
-            Local folders are optional. Without one, this preset cannot run
+            Local folders are optional. Without one, this agent cannot run
             saved-agent work. Conversations need their own explicit access
-            grant.
+            grant. Aliases are labels only. The typed folder path decides host
+            access.
           </p>
           {% if grants.len() == 1 %}
             <p class="alert alert-warning text-sm">
-              Removal of this final directory removes the preset's directory
+              Removal of this final directory removes the agent's directory
               ceiling. Explicit conversation grants and workflow ceilings still
               limit project access. Tool and network ceilings stay unchanged.
               Saved-agent project execution becomes unavailable.
@@ -275,6 +322,18 @@
                   </select>
                 </label>
               </div>
+              <p class="text-quiet text-xs">
+                {% if grant.guest_path != "" %}
+                  Sandbox path:
+                  <code class="break-all">{{ grant.guest_path }}</code>
+                  with
+                  {% if grant.access == "read-only" %}read-only{% else %}read
+                  and write{% endif %}
+                  directory access.
+                {% else %}
+                  Enter an alias to preview the sandbox path.
+                {% endif %}
+              </p>
               {% if grant.can_remove %}
                 <button
                   class="btn btn-ghost btn-sm"
@@ -323,8 +382,8 @@
           <summary>Delete agent</summary>
           <div class="max-w-xl space-y-3 pt-4">
             <p class="text-quiet text-sm">
-              This removes the reusable preset and its sandbox. Project files
-              stay unchanged.
+              This removes the saved agent and its sandbox. Project files stay
+              unchanged.
             </p>
             <form
               data-graft

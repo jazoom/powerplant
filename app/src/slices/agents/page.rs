@@ -1,14 +1,15 @@
 use askama::Template;
+use serde::Serialize;
 
-use crate::agents::{AgentRecord, MAXIMUM_GRANTS, ToolId};
+use crate::agents::{AgentRecord, MAXIMUM_GRANTS, ToolId, guest_path_for};
 use crate::projects::{ProjectRecord, eligible_projects};
 use crate::sandbox::OrphanSandbox;
 
 use super::forms::AgentFormState;
 
 pub(super) const CATALOGUE_TITLE: &str = "Agents | Power Plant";
-pub(super) const NEW_TITLE: &str = "New preset | Power Plant";
-pub(super) const CONFIG_TITLE: &str = "Configure preset | Power Plant";
+pub(super) const NEW_TITLE: &str = "New agent | Power Plant";
+pub(super) const CONFIG_TITLE: &str = "Configure agent | Power Plant";
 
 pub(super) struct AgentListItem {
     pub(super) id: String,
@@ -27,8 +28,25 @@ pub(super) struct GrantRow {
     pub(super) alias: String,
     pub(super) path: String,
     pub(super) access: String,
+    pub(super) guest_path: String,
     pub(super) path_locked: bool,
     pub(super) can_remove: bool,
+}
+
+pub(super) struct AgentProviderOption {
+    pub(super) value: &'static str,
+    pub(super) label: &'static str,
+    pub(super) selected: bool,
+}
+
+pub(super) struct AgentModelOption {
+    pub(super) id: String,
+    pub(super) selected: bool,
+}
+
+pub(super) struct AgentEffortOption {
+    pub(super) value: String,
+    pub(super) label: String,
 }
 
 pub(super) struct ToolRow {
@@ -89,6 +107,12 @@ pub(super) struct AgentFormView {
     pub(super) provider: String,
     pub(super) model: String,
     pub(super) thinking: String,
+    pub(super) providers: Vec<AgentProviderOption>,
+    pub(super) unavailable_provider: Option<crate::providers::ProviderKind>,
+    pub(super) models: Vec<AgentModelOption>,
+    pub(super) model_unavailable: bool,
+    pub(super) efforts: Vec<AgentEffortOption>,
+    pub(super) catalogue: String,
     pub(super) primary: String,
     pub(super) network: String,
     pub(super) network_domains: String,
@@ -113,6 +137,12 @@ pub(super) struct AgentFormContents<'a> {
     pub(super) provider: &'a str,
     pub(super) model: &'a str,
     pub(super) thinking: &'a str,
+    pub(super) providers: &'a [AgentProviderOption],
+    pub(super) unavailable_provider: Option<crate::providers::ProviderKind>,
+    pub(super) models: &'a [AgentModelOption],
+    pub(super) model_unavailable: bool,
+    pub(super) efforts: &'a [AgentEffortOption],
+    pub(super) catalogue: &'a str,
     pub(super) primary: &'a str,
     pub(super) network: &'a str,
     pub(super) network_domains: &'a str,
@@ -126,11 +156,16 @@ pub(super) struct AgentFormContents<'a> {
 }
 
 impl AgentFormView {
-    pub(super) fn create(state: AgentFormState, error: &'static str) -> Self {
+    pub(super) fn create(
+        app: &crate::state::AppState,
+        state: AgentFormState,
+        error: &'static str,
+    ) -> Self {
         Self::from_state(
-            "New preset",
+            app,
+            "New agent",
             "/agents",
-            "Create preset",
+            "Create agent",
             state,
             error,
             "",
@@ -139,6 +174,7 @@ impl AgentFormView {
     }
 
     pub(super) fn create_for_project(
+        app: &crate::state::AppState,
         mut state: AgentFormState,
         error: &'static str,
         project: &ProjectRecord,
@@ -146,9 +182,10 @@ impl AgentFormView {
         state.assign_project_path(&project.host_path);
         let project_id = project.id.as_hex();
         let mut view = Self::from_state(
-            "New preset",
+            app,
+            "New agent",
             &format!("/agents?project={project_id}"),
-            "Create preset",
+            "Create agent",
             state,
             error,
             "",
@@ -168,11 +205,17 @@ impl AgentFormView {
         view
     }
 
-    pub(super) fn edit(record: &AgentRecord, state: AgentFormState, error: &'static str) -> Self {
+    pub(super) fn edit(
+        app: &crate::state::AppState,
+        record: &AgentRecord,
+        state: AgentFormState,
+        error: &'static str,
+    ) -> Self {
         let mut view = Self::from_state(
-            "Configure preset",
+            app,
+            "Configure agent",
             &format!("/agents/{}/configuration", record.id.as_hex()),
-            "Save",
+            "Save agent",
             state,
             error,
             &record.id.as_hex(),
@@ -183,7 +226,9 @@ impl AgentFormView {
         view
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_state(
+        app: &crate::state::AppState,
         title: &'static str,
         action: &str,
         submit: &'static str,
@@ -193,6 +238,8 @@ impl AgentFormView {
         show_delete: bool,
     ) -> Self {
         let grant_count = state.directories.len();
+        let picker = agent_model_picker(app, &state.provider, &state.model, &state.thinking);
+        let primary_trim = state.primary.trim().to_owned();
         Self {
             title: title.to_owned(),
             lead: "Define how this agent works and which local projects they can access."
@@ -207,6 +254,12 @@ impl AgentFormView {
             provider: state.provider,
             model: state.model,
             thinking: state.thinking,
+            providers: picker.providers,
+            unavailable_provider: picker.unavailable_provider,
+            models: picker.models,
+            model_unavailable: picker.model_unavailable,
+            efforts: picker.efforts,
+            catalogue: picker.catalogue,
             primary: state.primary,
             network: state.network,
             network_domains: state.network_domains,
@@ -222,13 +275,17 @@ impl AgentFormView {
                 .directories
                 .into_iter()
                 .enumerate()
-                .map(|(index, grant)| GrantRow {
-                    index,
-                    alias: grant.alias,
-                    path: grant.path,
-                    access: grant.access,
-                    path_locked: false,
-                    can_remove: true,
+                .map(|(index, grant)| {
+                    let guest_path = grant_guest_path(&grant.alias, &primary_trim);
+                    GrantRow {
+                        index,
+                        alias: grant.alias,
+                        path: grant.path,
+                        access: grant.access,
+                        guest_path,
+                        path_locked: false,
+                        can_remove: true,
+                    }
                 })
                 .collect(),
             can_add: grant_count < MAXIMUM_GRANTS,
@@ -250,6 +307,12 @@ impl AgentFormView {
             provider: &self.provider,
             model: &self.model,
             thinking: &self.thinking,
+            providers: &self.providers,
+            unavailable_provider: self.unavailable_provider,
+            models: &self.models,
+            model_unavailable: self.model_unavailable,
+            efforts: &self.efforts,
+            catalogue: &self.catalogue,
             primary: &self.primary,
             network: &self.network,
             network_domains: &self.network_domains,
@@ -261,5 +324,126 @@ impl AgentFormView {
             revision: &self.revision,
             show_delete: self.show_delete,
         }
+    }
+}
+
+struct AgentPicker {
+    providers: Vec<AgentProviderOption>,
+    unavailable_provider: Option<crate::providers::ProviderKind>,
+    models: Vec<AgentModelOption>,
+    model_unavailable: bool,
+    efforts: Vec<AgentEffortOption>,
+    catalogue: String,
+}
+
+#[derive(Serialize)]
+struct AgentCatalogueModel {
+    id: String,
+    default_effort: String,
+    efforts: Vec<AgentCatalogueEffort>,
+}
+
+#[derive(Serialize)]
+struct AgentCatalogueEffort {
+    value: String,
+    label: String,
+}
+
+fn grant_guest_path(alias: &str, primary: &str) -> String {
+    let alias = alias.trim();
+    if alias.is_empty() {
+        return String::new();
+    }
+    guest_path_for(alias, primary.trim())
+}
+
+fn agent_model_picker(
+    app: &crate::state::AppState,
+    provider: &str,
+    model: &str,
+    thinking: &str,
+) -> AgentPicker {
+    let connections = app.preferences.desk_providers(&app.vault);
+    let mut catalogue: std::collections::BTreeMap<&str, Vec<AgentCatalogueModel>> =
+        std::collections::BTreeMap::new();
+    for connection in &connections {
+        let models = app
+            .models_dev
+            .models(connection.kind)
+            .into_iter()
+            .map(|item| {
+                let efforts = app
+                    .models_dev
+                    .efforts(connection.kind, &item.id)
+                    .into_iter()
+                    .map(|effort| AgentCatalogueEffort {
+                        value: effort.as_str().to_owned(),
+                        label: effort.label(),
+                    })
+                    .collect::<Vec<_>>();
+                let default_effort = app
+                    .models_dev
+                    .effective_effort(connection.kind, &item.id, connection.thinking.as_ref())
+                    .map(|effort| effort.as_str().to_owned())
+                    .unwrap_or_default();
+                AgentCatalogueModel {
+                    id: item.id,
+                    default_effort,
+                    efforts,
+                }
+            })
+            .collect();
+        catalogue.insert(connection.kind.as_str(), models);
+    }
+    let selected_kind = crate::providers::ProviderKind::parse(provider.trim());
+    let connected = selected_kind
+        .is_some_and(|kind| connections.iter().any(|connection| connection.kind == kind));
+    let models = selected_kind
+        .filter(|_| connected)
+        .map(|kind| app.models_dev.models(kind))
+        .unwrap_or_default();
+    let model_options = models
+        .into_iter()
+        .map(|item| AgentModelOption {
+            selected: item.id == model,
+            id: item.id,
+        })
+        .collect::<Vec<_>>();
+    let model_unavailable =
+        !model.is_empty() && !model_options.iter().any(|option| option.id == model);
+    let mut efforts = selected_kind
+        .filter(|_| connected)
+        .map(|kind| {
+            app.models_dev
+                .efforts(kind, model)
+                .into_iter()
+                .map(|effort| AgentEffortOption {
+                    value: effort.as_str().to_owned(),
+                    label: effort.label(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !thinking.is_empty() && !efforts.iter().any(|effort| effort.value == thinking) {
+        efforts.push(AgentEffortOption {
+            value: thinking.to_owned(),
+            label: format!("Unavailable · {thinking}"),
+        });
+    }
+    AgentPicker {
+        providers: connections
+            .into_iter()
+            .map(|connection| AgentProviderOption {
+                value: connection.kind.as_str(),
+                label: connection.kind.label(),
+                selected: connection.kind.as_str() == provider.trim(),
+            })
+            .collect(),
+        unavailable_provider: selected_kind.filter(|_| !connected),
+        models: model_options,
+        model_unavailable,
+        efforts,
+        catalogue: serde_json::to_string(&catalogue)
+            .expect("agent catalogue options contain only strings"),
     }
 }

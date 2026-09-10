@@ -499,7 +499,7 @@ fn encoded_path(path: &std::path::Path) -> String {
 }
 
 #[tokio::test]
-async fn preset_creation_accepts_instructions_and_tool_ceilings_without_a_project() {
+async fn agent_creation_accepts_instructions_and_tool_ceilings_without_a_project() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
@@ -516,7 +516,7 @@ async fn preset_creation_accepts_instructions_and_tool_ceilings_without_a_projec
                 .unwrap(),
         )
         .await
-        .expect("new preset");
+        .expect("new agent");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let records = state.agents.list();
     assert_eq!(records.len(), 1);
@@ -982,4 +982,157 @@ async fn assert_connect_redirect(
             "/connect"
         );
     }
+}
+
+#[tokio::test]
+async fn unconnected_provider_selection_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(
+                    "intent=save&name=Reader&instructions=&provider=openrouter&model=openai%2Fgpt-4o-mini&network=none",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("unconnected provider");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Connect the selected provider before you save this agent."));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn unknown_catalogue_model_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(
+                    "intent=save&name=Reader&instructions=&provider=xai&model=no-such-model&network=none",
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("unknown model");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose an available model."));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn unsupported_thinking_effort_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let models = state.models_dev.models(ProviderKind::Xai);
+    assert!(!models.is_empty(), "bundled catalogue holds xai models");
+    let model = models[0].id.clone();
+    let efforts = state.models_dev.efforts(ProviderKind::Xai, &model);
+    let bad_thinking = if efforts
+        .iter()
+        .any(|effort| effort.as_str() == "bogus-effort")
+    {
+        "other-bogus-effort"
+    } else {
+        "bogus-effort"
+    };
+    let encoded = model
+        .replace('/', "%2F")
+        .replace(':', "%3A")
+        .replace(' ', "+");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "intent=save&name=Reader&instructions=&provider=xai&model={encoded}&thinking={bad_thinking}&network=none"
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("bad effort");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose an available thinking effort."));
+    assert!(state.agents.list().is_empty());
+}
+
+#[tokio::test]
+async fn missing_effort_for_a_capable_model_is_rejected() {
+    let state = test_state();
+    let token = connected(&state);
+    let models = state.models_dev.models(ProviderKind::Xai);
+    let capable = models.iter().find(|item| {
+        !state
+            .models_dev
+            .efforts(ProviderKind::Xai, &item.id)
+            .is_empty()
+    });
+    assert!(
+        capable.is_some(),
+        "bundled catalogue holds a capable xai model"
+    );
+    let capable = capable.expect("capable model");
+    let encoded = capable
+        .id
+        .replace('/', "%2F")
+        .replace(':', "%3A")
+        .replace(' ', "+");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "intent=save&name=Reader&instructions=&provider=xai&model={encoded}&network=none"
+                )))
+                .unwrap(),
+        )
+        .await
+        .expect("missing effort");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Choose an available thinking effort."));
+    assert!(state.agents.list().is_empty());
 }
