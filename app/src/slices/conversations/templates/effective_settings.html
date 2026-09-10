@@ -8,9 +8,19 @@
     popovertargetaction="show"
     data-settings-section="conversation-directory-heading"
   >
+    <svg class="workspace-icon" aria-hidden="true">
+      {% if directories.is_empty() %}<use
+        href="/static/images/workspace-icons.svg#folder"
+      />{% else %}<use
+        href="/static/images/workspace-icons.svg#shield"
+      />{% endif %}
+    </svg>
     {% if directories.is_empty() %}
-      {% if attached_projects.is_empty() %}No directory access{% else %}No
-      additional directories{% endif %}
+      {% if attached_projects.is_empty() %}
+        No directory access
+      {% else %}
+        No additional directories
+      {% endif %}
     {% else %}
       <span class="flex flex-wrap gap-x-2"
         >{% for directory in directories %}
@@ -31,13 +41,11 @@
   {% else %}
     <span class="text-quiet ml-auto">Sandbox</span>
   {% endif %}
-  {% if !attached_projects.is_empty() || !self.draft_project().is_empty() %}
-    <button
-      type="button"
-      class="btn btn-ghost btn-sm"
-      popovertarget="conversation-project-settings"
-    >
-      Project access
-    </button>
-  {% endif %}
+  <button
+    type="button"
+    class="btn btn-ghost btn-sm"
+    popovertarget="conversation-project-settings"
+  >
+    Project access
+  </button>
 </div>

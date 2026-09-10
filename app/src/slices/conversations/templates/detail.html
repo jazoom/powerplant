@@ -851,7 +851,7 @@
                   cancellation.
                 </p>
                 <button class="btn btn-outline w-full" type="submit">
-                  Cancel reply
+                  Stop task
                 </button>
               </form>
             {% endif %}
@@ -962,11 +962,11 @@
             <textarea
               id="composer-message"
               name="message"
-              class="textarea textarea-bordered field-sizing-content max-h-[min(12rem,24dvh)] min-h-24 w-full min-w-0 resize-y text-base leading-relaxed"
+              class="textarea textarea-bordered field-sizing-content max-h-[min(12rem,24dvh)] min-h-16 w-full min-w-0 resize-y text-base leading-relaxed"
               placeholder="Ask a question or describe a task…"
-              rows="3"
+              rows="2"
               {% if !self.is_new() %}required{% endif %}
-              maxlength="32768"
+              maxlength="8000"
               {% if self.composer_disabled() %}disabled{% endif %}
             >
 {{ self.draft_message() }}</textarea>
@@ -979,7 +979,9 @@
             >
               <span data-conversation-model-summary
                 >{% if model_picker.model.is_empty() %}Choose a model{% else %}{{ model_picker.model }}{% endif %}</span
-              >
+              ><svg class="workspace-icon" aria-hidden="true">
+                <use href="/static/images/workspace-icons.svg#down" />
+              </svg>
             </button>
 
             <div class="flex flex-col gap-2">
@@ -992,7 +994,7 @@
                 aria-disabled="{{ self.composer_disabled() }}"
                 {% if self.composer_disabled() %}disabled{% endif %}
               >
-                Send<svg class="workspace-icon" aria-hidden="true">
+                Send message<svg class="workspace-icon" aria-hidden="true">
                   <use href="/static/images/workspace-icons.svg#up" />
                 </svg>
               </button>
@@ -1033,7 +1035,7 @@
                 name="job"
                 value="{{ saved.job_id }}"
               /><button class="btn btn-ghost btn-sm" type="submit">
-                Cancel reply
+                Stop task
               </button>
             </form>
           {% endif %}{% endif %}
@@ -1082,6 +1084,12 @@
             Project context grants no file access. Saved conversations offer
             explicit access controls.
           </p>
+          {% if attachable_projects.is_empty() %}
+            <p class="text-quiet text-sm">
+              <a href="/projects/new" data-graft class="link">Add a project</a>
+              to make its files available here.
+            </p>
+          {% endif %}
         {% else if let Some(saved) = self.saved() %}
           <div>
             <p class="text-quiet mt-1 max-w-[60ch] text-sm">
@@ -1269,8 +1277,8 @@
             </p>
           {% else if attachable_projects.is_empty() %}
             <p class="text-quiet text-sm">
-              <a href="/projects" data-graft class="link">Add a project</a> to
-              make its files available here.
+              <a href="/projects/new" data-graft class="link">Add a project</a>
+              to make its files available here.
             </p>
           {% else %}
             <form

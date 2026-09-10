@@ -799,8 +799,14 @@ impl ConversationDetailView {
         )
     }
 
+    // The composer stays locked while a candidate or host command awaits a
+    // decision. The editor maxlength in the template is not the persisted
+    // message bound in the conversation store.
     fn composer_disabled(&self) -> bool {
-        !self.is_new() && (self.job_active || self.session_busy || !self.model_available)
+        if self.is_new() {
+            return false;
+        }
+        self.job_active || self.session_busy || !self.model_available || self.needs_review()
     }
 
     fn transcript_empty(&self) -> bool {

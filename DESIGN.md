@@ -133,7 +133,7 @@ The resource page retains destinations for providers, environments, projects and
 
 User messages use a tinted, ruled surface. Assistant messages identify Power Plant with its mark.
 
-The model control sits inside the composer. Effective directory access appears below it. Host mode names unrestricted access.
+The model control sits inside the composer with a dropdown chevron. The composer uses two rows with an 8000 character editor limit. The persisted message bound stays in the conversation store. The send control reads Send message. Effective directory access appears below it with a folder or shield icon and a visible Sandbox label. Project access stays beside the composer even with no attached project. An empty project catalogue links to project registration. Host mode names unrestricted access. Job-bound cancellation reads Stop task beside the composer and in Current work. The composer stays locked while a candidate or host command awaits a decision.
 
 Jump to latest appears when the reader leaves the transcript end. New output does not move the reader away from earlier messages.
 
