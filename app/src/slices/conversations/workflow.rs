@@ -86,7 +86,6 @@ pub(super) struct WorkflowLaunchForm {
 struct WorkflowOption {
     token: String,
     name: String,
-    summary: String,
     effects: String,
     inputs: String,
     approvals: String,
@@ -1209,6 +1208,21 @@ async fn launch_view(
                     && workflows::run::supports_task_execution(&record.definition))
         })
         .collect();
+    let mut ranked: Vec<_> = records
+        .into_iter()
+        .map(|record| {
+            let display = state.workflows.display_name(&record);
+            let rank = starter_rank(&display);
+            (rank, display.to_lowercase(), record)
+        })
+        .collect();
+    ranked.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.id.cmp(&right.2.id))
+    });
+    let records: Vec<_> = ranked.into_iter().map(|(_, _, record)| record).collect();
     let selected_workflow = workflow_raw.unwrap_or_default().trim().to_owned();
     let selection_available = records.iter().any(|record| {
         WorkflowSelection {
@@ -1272,7 +1286,6 @@ async fn launch_view(
             WorkflowOption {
                 token: selection.as_token(),
                 name: state.workflows.display_name(record),
-                summary: workflows::summary::process_summary(definition),
                 effects: workflows::summary::code_effects(definition),
                 inputs: workflows::summary::required_inputs(definition).to_owned(),
                 approvals: workflows::summary::approval_stops(definition),
@@ -2117,6 +2130,19 @@ async fn preview_phase_access(
         .request_launch(session, record.id, snapshots)
         .map_err(|_| "The access preview is unavailable. Reload workflow setup.")?;
     Ok(())
+}
+
+fn starter_rank(display_name: &str) -> usize {
+    match display_name {
+        "Implement a saved plan" => 0,
+        "Plan a change" => 1,
+        "Review current code" => 2,
+        "Implement with approval" => 3,
+        "Implement and review" => 4,
+        "Plan then implement" => 5,
+        "Task loop" | "Ralph task loop" => 6,
+        _ => usize::MAX,
+    }
 }
 
 fn uses_conversation_directories(definition: &workflows::definition::WorkflowDefinition) -> bool {

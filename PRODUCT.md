@@ -198,10 +198,10 @@ A new installation includes seven starter processes.
 
 The starters are:
 
+- Implement a saved plan
 - Plan a change
 - Review current code
 - Implement with approval
-- Implement a saved plan
 - Implement and review
 - Plan then implement
 - Task loop

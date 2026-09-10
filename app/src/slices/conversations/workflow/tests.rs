@@ -441,6 +441,68 @@ fn connected_state() -> AppState {
 }
 
 #[tokio::test]
+async fn chooser_lists_starters_in_approved_order_with_custom_workflows_last() {
+    let state = connected_state();
+    let environment = crate::tests::test_environment_id();
+    let mut seeds = workflows::seeds::production_seeds(environment);
+    seeds.reverse();
+    for seed in seeds {
+        state.workflows.create(seed.definition).expect("seed");
+    }
+    let custom = workflows::seeds::one_agent_definition(environment);
+    state.workflows.create(custom).expect("custom");
+    let conversation = state
+        .conversations
+        .create("Ordering".to_owned())
+        .expect("conversation");
+    let view = launch_view(
+        &state,
+        &conversation,
+        None,
+        None,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        &[],
+        "",
+    )
+    .await;
+    let names: Vec<_> = view
+        .workflows
+        .iter()
+        .map(|workflow| workflow.name.clone())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "Implement a saved plan".to_owned(),
+            "Plan a change".to_owned(),
+            "Review current code".to_owned(),
+            "Implement with approval".to_owned(),
+            "Implement and review".to_owned(),
+            "Plan then implement".to_owned(),
+            "Task loop".to_owned(),
+            "One agent".to_owned(),
+        ]
+    );
+    assert!(
+        !view
+            .workflows
+            .iter()
+            .any(|workflow| workflow.effects.is_empty())
+    );
+    assert!(
+        view.workflows
+            .iter()
+            .all(|workflow| !workflow.process_phases.is_empty())
+    );
+}
+
+#[tokio::test]
 async fn host_preview_does_not_describe_sandbox_boundaries() {
     let state = connected_state();
     let record = state

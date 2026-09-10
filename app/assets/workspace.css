@@ -609,6 +609,40 @@ body {
 #workflow-detail .page-intro > a {
     display: none;
 }
+/* Large workflow choices keep radio semantics with an outcome summary,
+   a visible selected marker and a phase preview for the selection. */
+.workflow-choices {
+    border: 0;
+    padding: 0;
+}
+.workflow-choice {
+    border-radius: 3px;
+    cursor: pointer;
+}
+.workflow-choice.selected {
+    border-color: var(--color-primary-content);
+    background: color-mix(
+        in srgb,
+        var(--color-primary) 12%,
+        var(--color-base-100)
+    );
+}
+.workflow-choice .workflow-icon {
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.workflow-phase-preview {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+}
 .workspace-plan-footer,
 .workspace-plans-footer {
     background: var(--color-base-100);

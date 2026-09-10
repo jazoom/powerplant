@@ -193,7 +193,7 @@ Ordinary replies never become plans through text recognition. A plan action gran
 
 ### Workflow setup
 
-Workflow setup occupies the 400-pixel companion. Choose, inputs and review retain the brief and exact input selection through Back controls.
+Workflow setup occupies the 400-pixel companion. Choose, inputs and review retain the brief and exact input selection through Back controls. The chooser lists Implement a saved plan first, then the six reference processes in reference order, then user-authored workflows. Implement a saved plan is the production difference from the six-process reference mock.
 
 The content scrolls separately from the footer. The footer retains Back and the eligible next action.
 
