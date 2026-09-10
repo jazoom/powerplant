@@ -680,3 +680,82 @@ async fn assert_connect_redirect(
         );
     }
 }
+
+#[tokio::test]
+async fn update_mode_preview_preserves_values_and_refreshes_process_overview() {
+    let state = test_state();
+    let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
+    let body = [
+        "intent=update-mode",
+        "name=Draft+workflow",
+        "execution-mode=task-list",
+        &format!("default-environment={}", environment.as_hex()),
+        "step_0_name=Implement+the+change",
+        "step_0_purpose=implementation",
+        "step_0_review-policy=none",
+        "step_1_name=Approve+the+code",
+        "step_1_purpose=code-approval",
+        "step_1_review-policy=none",
+        "step_2_name=Commit+the+candidate",
+        "step_2_purpose=commit",
+        "step_2_review-policy=none",
+    ]
+    .join("&");
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("mode preview");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"workflow-form\""));
+    assert!(text.contains("Draft workflow"));
+    assert!(text.contains("Implement the change"));
+    assert!(text.contains("Repeated for each remaining task"));
+    assert!(state.workflows.list().is_empty());
+}
+
+#[tokio::test]
+async fn update_mode_preview_rejects_a_malformed_execution_mode() {
+    let state = test_state();
+    let token = connected(&state);
+    let environment = seed_ready_environment(&state).await;
+    let body = format!(
+        "intent=update-mode&name=Draft&execution-mode=graph&default-environment={}&step_0_name=Work&step_0_purpose=implementation&step_0_review-policy=none",
+        environment.as_hex()
+    );
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows")
+                .header(header::COOKIE, cookie(&token))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("malformed preview");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("target=\"workflow-form\""));
+    assert!(text.contains("Choose Run once or For each task."));
+    assert!(state.workflows.list().is_empty());
+}

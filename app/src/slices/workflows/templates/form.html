@@ -73,6 +73,7 @@
               type="radio"
               name="execution-mode"
               value="once"
+              data-workflow-execution-mode
               {% if execution_mode == "once" %}checked{% endif %}
             />
             <span>
@@ -88,6 +89,7 @@
               type="radio"
               name="execution-mode"
               value="task-list"
+              data-workflow-execution-mode
               {% if execution_mode == "task-list" %}checked{% endif %}
             />
             <span>
@@ -99,14 +101,15 @@
             </span>
           </label>
           <button
-            class="btn btn-outline btn-sm"
             type="submit"
             formnovalidate
             name="intent"
             value="update-mode"
-          >
-            Update mode preview
-          </button>
+            data-workflow-mode-preview
+            hidden
+            aria-hidden="true"
+            tabindex="-1"
+          ></button>
           {% if execution_mode_error != "" %}
             <p class="text-error text-sm">{{ execution_mode_error }}</p>
           {% endif %}
