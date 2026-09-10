@@ -183,7 +183,7 @@ Revision controls accept a model request or supplied text. Earlier action titles
 
 Task breakdowns stay under their source plan. Older breakdowns identify their source revision and show an outdated notice for new runs.
 
-Standalone task imports remain distinct from plans. Export and independent review retain their canonical routes.
+Standalone task imports remain distinct from plans. Export and independent review retain their canonical routes. A saved standalone list records an Added tasks transcript action. The task detail keeps one h1 title and demotes the saved Markdown heading for display without changing the stored revision or pinned export.
 
 On mobile, both Plans and a selected plan exclude the hidden conversation controls. Closure returns focus to a conversation control.
 

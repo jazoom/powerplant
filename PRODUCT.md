@@ -296,7 +296,7 @@ Break into tasks requests an explicit breakdown from the selected plan revision.
 
 A later source revision marks an older breakdown as outdated for a new run. Existing runs retain their own pinned inputs.
 
-Standalone task imports remain independent documents. Completed replies still offer an explicit Save as task list action.
+Standalone task imports remain independent documents. Completed replies still offer an explicit Save as task list action. A saved standalone list records an Added tasks transcript action with its immutable revision and provenance and no plan association.
 
 Task lists offer Run tasks, which opens workflow setup without execution. Document views retain export and independent review.
 
@@ -306,7 +306,7 @@ An explicit import reads one file from an authorised directory through a read-on
 
 Import rejects parent paths and symlinks. It revalidates directory identity and applicable session-bound consent before access and publication. Missing environments receive no substitution.
 
-Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Pi export use the saved revision.
+Task lists retain their preamble, checked tasks and indented details. Unchecked tasks are eligible. Fenced examples are not executable entries. Preview, linked review and Export use the saved revision.
 
 The Task loop starter runs each remaining task in order. It pins the task list, workflow body and phase selections at launch. Each task receives fresh implementation and optional review-and-fix contexts. The complete task file remains context, but each worker receives only one assigned task. Human approval precedes each task commit by default. An extra independent review is present only when the selected definition includes that phase.
 

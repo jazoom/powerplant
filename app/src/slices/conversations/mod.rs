@@ -2042,11 +2042,11 @@ async fn open_plan(
         );
     };
     let sections = if document.kind == crate::conversations::DocumentKind::TaskList {
-        // Task detail renders the preamble as bounded sections with tasks
-        // listed separately, so validation uses the same preamble source as
-        // the page model.
+        // Task detail renders the demoted preamble as bounded sections with
+        // tasks listed separately, so validation uses the same demoted
+        // source as the page model.
         crate::workflows::task_list::parse(&content)
-            .map(|list| page::split_plan_sections(&list.preamble).len())
+            .map(|list| page::split_plan_sections(&page::demote_task_heading(&list.preamble)).len())
             .unwrap_or_else(|_| page::split_plan_sections(&content).len())
     } else {
         page::split_plan_sections(&content).len()

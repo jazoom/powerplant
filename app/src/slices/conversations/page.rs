@@ -2211,6 +2211,49 @@ impl ConversationDetailView {
                 ));
             }
         }
+        for document in state.documents.list_for_conversation(record.id) {
+            if document.kind != crate::conversations::DocumentKind::TaskList {
+                continue;
+            }
+            let Some(revision) = document.revisions.first() else {
+                continue;
+            };
+            let anchor = match &revision.source {
+                PlanSource::SubmittedText {
+                    conversation_id, ..
+                } if *conversation_id == record.id => usize::MAX,
+                PlanSource::ConversationMessage {
+                    conversation_id,
+                    message_index,
+                    ..
+                } if *conversation_id == record.id => {
+                    let index = *message_index as usize;
+                    if !self.messages.iter().any(|message| message.index == index) {
+                        continue;
+                    }
+                    index
+                }
+                _ => continue,
+            };
+            let Ok(content) = state.documents.content(&document, revision.revision) else {
+                continue;
+            };
+            // Standalone task saves keep their SubmittedText or
+            // ConversationMessage provenance. The transcript action only
+            // presents that immutable revision without a plan association.
+            let view = PlanActionView {
+                deferred: false,
+                task_list: true,
+                label: "Added tasks",
+                title: document.revision_title(revision.revision).to_owned(),
+                html: reply_html(&content),
+                href: format!("/plans/{}?revision={}", document.id, revision.revision),
+                provenance: source_label(&revision.source),
+                revision: revision.revision,
+                hash: revision.content_hash.as_str(),
+            };
+            actions.push((revision.created_at_ms, anchor, false, view));
+        }
         actions.sort_by_key(|(time, _, _, _)| *time);
         let mut budget = 128 * 1024usize;
         let mut selected = Vec::new();
@@ -2438,9 +2481,12 @@ impl PlanDocumentPage {
         // sections on the same canonical route. Markdown structure stays
         // intact because splits happen at line boundaries. Revision identity
         // and the complete pinned export never change across sections.
-        let preview_source = task_list
+        // Task display demotes the saved heading so the page keeps one h1.
+        // The stored revision and the pinned export retain the exact source.
+        let display_preamble = task_list
             .as_ref()
-            .map_or(content.as_str(), |list| list.preamble.as_str());
+            .map(|list| demote_task_heading(&list.preamble));
+        let preview_source = display_preamble.as_deref().unwrap_or(content.as_str());
         let chunks = split_plan_sections(preview_source);
         let sections = chunks.len().max(1);
         let section = section.min(sections.saturating_sub(1));
@@ -2600,6 +2646,20 @@ impl PlanDocumentPage {
 }
 
 pub(super) const PLAN_SECTION_CHARS: usize = 24_000;
+
+pub(super) fn demote_task_heading(preamble: &str) -> String {
+    // Demote every level-one heading so the page keeps one h1.
+    let mut demoted = String::with_capacity(preamble.len() + preamble.lines().count());
+    for line in preamble.split_inclusive('\n') {
+        if line.starts_with("# ") && !line[2..].trim().is_empty() {
+            demoted.push('#');
+            demoted.push_str(line);
+        } else {
+            demoted.push_str(line);
+        }
+    }
+    demoted
+}
 
 pub(super) fn split_plan_sections(content: &str) -> Vec<String> {
     if content.len() <= PLAN_SECTION_CHARS {
