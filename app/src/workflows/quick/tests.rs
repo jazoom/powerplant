@@ -145,6 +145,33 @@ fn project_free_review_prepares_and_applies_without_a_commit_step() {
 }
 
 #[test]
+fn ordinary_reviewed_quick_task_binds_the_rejected_candidate_with_a_revision_route() {
+    let pinned = super::pin_project_free_quick_task_with_directories(
+        &[ToolId::Read, ToolId::Write],
+        "Change the file.",
+        test_environment_id(),
+        vec![crate::workflows::definition::GuestDirectoryAccess {
+            alias: "source".to_owned(),
+            access: AccessMode::ReadOnly,
+        }],
+        true,
+    )
+    .expect("reviewed quick task");
+
+    let work = &pinned.definition.steps()[0];
+    assert_eq!(work.inputs.len(), 1);
+    assert_eq!(work.inputs[0].kind, ArtefactKind::CandidateRevision);
+    assert_eq!(work.inputs[0].source, ArtefactSource::RunCurrentCandidate);
+    let gate = &pinned.definition.steps()[1];
+    let StepAction::HumanGate(action) = &gate.action else {
+        panic!("gate");
+    };
+    let policy = action.revision.as_ref().expect("revision route");
+    assert_eq!(policy.revision_target.as_str(), AGENT_STEP_KEY);
+    assert_eq!(policy.attempt_limit, 3);
+}
+
+#[test]
 fn pin_versions_are_stable_for_the_same_inputs() {
     let first = pin(AccessMode::ReadWrite, &ToolId::ALL);
     let second = pin(AccessMode::ReadWrite, &ToolId::ALL);

@@ -1751,3 +1751,208 @@ fn unchanged_quick_task_completion_rejects_missing_and_unknown_candidates() {
         Err(TransitionError::Invalid)
     );
 }
+
+#[test]
+fn ordinary_quick_task_revisions_bind_the_candidate_and_enforce_limits() {
+    use crate::workflows::gates::{GateRevision, HumanDecisionKind};
+
+    let pinned = crate::workflows::pin_project_free_quick_task_with_directories(
+        &[ToolId::List],
+        "Change the file.",
+        test_environment_id(),
+        Vec::new(),
+        true,
+    )
+    .expect("ordinary quick task");
+    let gate_key = StepKey::parse("gate").expect("gate");
+    let environments = crate::tests::test_environment_set(&pinned.definition);
+    let mut run = WorkflowRun::create_source_free_for_conversation(
+        RunId::generate().expect("run"),
+        10,
+        crate::conversations::ConversationId::generate().expect("conversation"),
+        pinned,
+        environments,
+        Vec::new(),
+    );
+    let initial = candidate_artefact(
+        run.id,
+        crate::workflows::artefacts::ArtefactProducer::RunSourceCapture,
+        Vec::new(),
+        b"ordinary-initial",
+    );
+    let initial_ref = artefact_reference(&initial);
+    run.record_initial_candidate(initial).expect("initial");
+    let work = StepKey::parse("work").expect("work");
+    let attempt = AttemptId::generate().expect("attempt");
+    run.start_attempt(
+        attempt,
+        vec![super::AttemptArtefactInput {
+            key: InputKey::parse("candidate").expect("input"),
+            artefact: initial_ref.clone(),
+        }],
+        test_agent_capabilities(),
+        step_sandbox(&run, &work),
+        11,
+    )
+    .expect("start");
+    let produced = candidate_artefact(
+        run.id,
+        crate::workflows::artefacts::ArtefactProducer::StepAttempt {
+            attempt_id: attempt,
+            step: work.clone(),
+            output: Some(OutputKey::parse("candidate").expect("output")),
+            disposition: crate::workflows::artefacts::ProductionDisposition::RequiredOutput,
+        },
+        vec![initial_ref.clone()],
+        b"ordinary-rejected",
+    );
+    let produced_ref = artefact_reference(&produced);
+    run.record_attempt_outputs(
+        attempt,
+        vec![produced],
+        vec![super::AttemptArtefactOutput {
+            key: OutputKey::parse("candidate").expect("output"),
+            artefact: produced_ref.clone(),
+        }],
+        Some(produced_ref.clone()),
+        super::ObservedCandidate::Exact {
+            artefact: produced_ref.clone(),
+        },
+    )
+    .expect("outputs");
+    run.record_cleanup(attempt, AttemptCleanupRecord::Complete)
+        .expect("cleanup");
+    run.complete_attempt(attempt, 12).expect("complete work");
+    let gate_id = crate::workflows::GateId::generate().expect("gate");
+    let gate = run
+        .open_gate(gate_id, produced_ref.clone(), initial_ref.clone(), 13)
+        .expect("gate");
+    let run_id = run.id;
+    let decision = |at: u64| crate::workflows::artefacts::ArtefactRecord {
+        id: crate::workflows::ArtefactId::generate().expect("decision"),
+        kind: ArtefactKind::HumanDecision,
+        artefact_hash: crate::workflows::artefacts::ArtefactHash::of(
+            format!("ordinary-decision-{at}").as_bytes(),
+            b"human-decision",
+        ),
+        object_hash: crate::workflows::artefacts::ObjectHash::of(
+            format!("ordinary-decision-{at}").as_bytes(),
+        ),
+        payload_bytes: 1,
+        created_at_ms: at,
+        provenance: crate::workflows::artefacts::ArtefactProvenance {
+            run_id,
+            producer: crate::workflows::artefacts::ArtefactProducer::HumanGate {
+                gate_id,
+                step: gate_key.clone(),
+                output: OutputKey::parse("decision").expect("output"),
+            },
+            inputs: vec![produced_ref.clone()],
+        },
+        summary: crate::workflows::artefacts::ArtefactSummary::HumanDecision {
+            candidate: crate::workflows::artefacts::CandidateHash::of(b"ordinary-rejected"),
+            diff_base: crate::workflows::artefacts::CandidateHash::of(b"ordinary-initial"),
+            decision: HumanDecisionKind::RevisionRequested,
+        },
+    };
+    let stale_revision = GateRevision::new(99).expect("revision");
+    assert_eq!(
+        run.decide_gate(
+            gate_id,
+            stale_revision,
+            decision(14),
+            HumanDecisionKind::RevisionRequested,
+            Some("Fix the candidate".to_owned()),
+            Some(AttemptId::generate().expect("attempt")),
+            14,
+        ),
+        Err(TransitionError::Invalid)
+    );
+    let reserved = AttemptId::generate().expect("attempt");
+    run.decide_gate(
+        gate_id,
+        gate.revision,
+        decision(14),
+        HumanDecisionKind::RevisionRequested,
+        Some("Fix the candidate".to_owned()),
+        Some(reserved),
+        14,
+    )
+    .expect("reserve revision");
+    let reservation = run.revision_reservation.clone().expect("reservation");
+    assert_eq!(reservation.candidate, produced_ref);
+    assert_eq!(reservation.diff_base, initial_ref);
+    assert_eq!(reservation.target.as_str(), "work");
+    assert_eq!(reservation.feedback, "Fix the candidate");
+    assert!(matches!(run.state, RunState::Ready { ref step } if step.as_str() == "work"));
+    assert_eq!(
+        run.decide_gate(
+            gate_id,
+            gate.revision,
+            decision(15),
+            HumanDecisionKind::RevisionRequested,
+            Some("Fix the candidate".to_owned()),
+            Some(AttemptId::generate().expect("attempt")),
+            15,
+        ),
+        Err(TransitionError::Invalid)
+    );
+    let mut exhausted = run.clone();
+    exhausted.revision_reservation = None;
+    for sequence in [2u64, 3u64] {
+        exhausted
+            .gates
+            .push(crate::workflows::gates::HumanGateRecord {
+                id: crate::workflows::GateId::generate().expect("prior gate"),
+                step: gate_key.clone(),
+                sequence: sequence as u32,
+                revision: GateRevision::new(sequence).expect("revision"),
+                opened_at_ms: 10,
+                closed_at_ms: Some(11),
+                candidate: produced_ref.clone(),
+                diff_base: initial_ref.clone(),
+                state: crate::workflows::gates::HumanGateState::RevisionRequested,
+                decision: None,
+                output: OutputKey::parse("decision").expect("output"),
+            });
+    }
+    let next_gate = crate::workflows::GateId::generate().expect("gate");
+    exhausted
+        .gates
+        .push(crate::workflows::gates::HumanGateRecord {
+            id: next_gate,
+            step: gate_key.clone(),
+            sequence: 4,
+            revision: GateRevision::new(4).expect("revision"),
+            opened_at_ms: 16,
+            closed_at_ms: None,
+            candidate: produced_ref.clone(),
+            diff_base: initial_ref.clone(),
+            state: crate::workflows::gates::HumanGateState::AwaitingDecision,
+            decision: None,
+            output: OutputKey::parse("decision").expect("output"),
+        });
+    exhausted.state = RunState::AwaitingHuman {
+        step: gate_key.clone(),
+        gate: next_gate,
+    };
+    exhausted
+        .decide_gate(
+            next_gate,
+            GateRevision::new(4).expect("revision"),
+            decision(17),
+            HumanDecisionKind::RevisionRequested,
+            Some("Fix the candidate".to_owned()),
+            Some(AttemptId::generate().expect("attempt")),
+            17,
+        )
+        .expect("exhaust limit");
+    assert!(matches!(
+        exhausted.state,
+        RunState::Escalated {
+            reason: EscalationReason::AttemptLimit,
+            ..
+        }
+    ));
+    assert!(exhausted.revision_reservation.is_none());
+}

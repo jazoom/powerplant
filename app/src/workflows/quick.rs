@@ -67,7 +67,14 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
             "Use tools"
         }
         .to_owned(),
-        inputs: reviewed.then(initial_candidate_input).into_iter().collect(),
+        inputs: reviewed
+            .then(|| RequiredInput {
+                key: InputKey::parse("candidate").expect("quick candidate"),
+                kind: ArtefactKind::CandidateRevision,
+                source: ArtefactSource::RunCurrentCandidate,
+            })
+            .into_iter()
+            .collect(),
         action: StepAction::Agent(AgentStep {
             role: RoleKey::parse(ROLE_KEY).expect("quick task role"),
             environment: StepEnvironment::WorkflowDefault,
@@ -88,11 +95,10 @@ pub(crate) fn pin_project_free_quick_task_with_directories(
     };
     let mut steps = vec![work];
     if reviewed {
-        let mut gate = gate_step();
-        if let StepAction::HumanGate(action) = &mut gate.action {
-            action.revision = None;
-        }
-        steps.push(gate);
+        // Ordinary reviewed-directory Quick tasks share the Git-backed
+        // revision route: the new attempt binds the rejected candidate and
+        // the original diff base through the engine reservation.
+        steps.push(gate_step());
         steps.push(apply_step());
     }
     let definition =
