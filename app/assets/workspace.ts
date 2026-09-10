@@ -24,7 +24,9 @@ export function initWorkspace(
     const headerResize = new ResizeObserver(positionPanels);
 
     function sync() {
-        root.querySelectorAll<HTMLElement>(".prose pre").forEach((pre) => {
+        root.querySelectorAll<HTMLElement>(
+            ".prose pre, .chat-prose pre",
+        ).forEach((pre) => {
             pre.tabIndex = 0;
             pre.setAttribute("role", "region");
             pre.setAttribute("aria-label", "Code block");
