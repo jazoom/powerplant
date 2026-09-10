@@ -132,6 +132,36 @@ async fn the_initial_document_renders_the_saved_theme_and_selection() {
 }
 
 #[tokio::test]
+async fn the_settings_document_binds_the_thinking_visibility_patch_target() {
+    let state = test_state();
+    state.preferences.set_show_thinking(true).expect("thinking");
+    let token = connected(&state);
+
+    let response = app(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/settings")
+                .header(header::COOKIE, cookie(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("settings");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+
+    let thinking_start = text.find("id=\"thinking-visibility\"").expect("thinking");
+    let thinking_end = text[thinking_start..]
+        .find("</form>")
+        .map(|offset| thinking_start + offset)
+        .expect("thinking form");
+    let thinking_section = &text[thinking_start..thinking_end];
+    assert!(thinking_section.contains("action=\"/thinking-visibility\""));
+    assert!(thinking_section.contains("name=\"show_thinking\""));
+    assert!(thinking_section.contains("checked"));
+}
+
+#[tokio::test]
 async fn a_theme_patch_persists_and_returns_the_authoritative_selector() {
     let state = test_state();
     let token = connected(&state);

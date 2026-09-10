@@ -23,6 +23,26 @@
       </form>
     </li>
     <li class="settings-row">
+      <div>
+        <h2 id="thinking-details-heading">Thinking details</h2>
+        <p class="text-quiet mt-1 max-w-[60ch] text-sm">
+          Choose whether to show thinking details in conversations. This choice
+          stays on this machine and never changes model effort.
+        </p>
+      </div>
+      <form
+        id="thinking-visibility"
+        method="post"
+        action="/thinking-visibility"
+        data-graft
+        data-island="thinking-visibility"
+        class="settings-control"
+        aria-labelledby="thinking-details-heading"
+      >
+        {% include "chat/templates/thinking_visibility.html" %}
+      </form>
+    </li>
+    <li class="settings-row">
       <form
         id="model-catalogue-setting"
         method="post"

@@ -8,12 +8,12 @@
   {% endif %}
 </div>
 <div class="settings-control">
-  <label class="label" for="theme-select">Colour theme</label>
   <select
     id="theme-select"
     name="theme"
     class="select"
     data-theme-select
+    aria-labelledby="theme-heading"
     aria-describedby="theme-description"
   >
     {% for option in themes %}

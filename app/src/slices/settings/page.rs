@@ -17,17 +17,21 @@ pub(super) struct SettingsPage {
     theme: &'static str,
     themes: &'static [Theme],
     error: Option<&'static str>,
+    show_thinking: bool,
+    thinking_visibility_error: Option<&'static str>,
     catalogue_status: Option<&'static str>,
     catalogue_error: Option<&'static str>,
     reset_error: Option<&'static str>,
 }
 
 impl SettingsPage {
-    pub(super) fn new(theme: Theme) -> Self {
+    pub(super) fn new(theme: Theme, show_thinking: bool) -> Self {
         Self {
             theme: theme.as_str(),
             themes: Theme::ALL,
             error: None,
+            show_thinking,
+            thinking_visibility_error: None,
             catalogue_status: None,
             catalogue_error: None,
             reset_error: None,
