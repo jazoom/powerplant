@@ -127,7 +127,7 @@ async fn body_text(response: axum::http::Response<Body>) -> String {
 }
 
 #[tokio::test]
-async fn an_empty_catalogue_document_redirects_to_new_project() {
+async fn an_empty_catalogue_document_renders_an_empty_state() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
@@ -140,11 +140,13 @@ async fn an_empty_catalogue_document_redirects_to_new_project() {
         )
         .await
         .expect("catalogue");
-    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        "/projects/new"
-    );
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("<!doctype html>"));
+    assert!(text.contains("No projects yet"));
+    assert!(text.contains("href=\"/projects/new\""));
+    assert!(text.contains("data-graft"));
+    assert!(state.projects.list().is_empty());
 }
 
 #[tokio::test]
@@ -203,7 +205,7 @@ async fn a_chat_document_enhances_resource_navigation() {
 }
 
 #[tokio::test]
-async fn an_empty_catalogue_navigation_redirects_to_new_project() {
+async fn an_empty_catalogue_navigation_patches_chat_main() {
     let state = test_state();
     let token = connected(&state);
     let response = app(&state)
@@ -220,7 +222,10 @@ async fn an_empty_catalogue_navigation_redirects_to_new_project() {
         .expect("navigation");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
-    assert!(text.contains("navigate=\"/projects/new\""));
+    assert!(text.contains("operation=\"children\" target=\"chat-main\""));
+    assert!(text.contains("No projects yet"));
+    assert!(text.contains("href=\"/projects/new\""));
+    assert!(!text.contains("navigate=\"/projects/new\""));
 }
 
 #[tokio::test]

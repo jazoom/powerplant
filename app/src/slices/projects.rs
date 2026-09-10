@@ -495,9 +495,6 @@ fn render_configuration_error(
 
 fn render_catalogue(state: &AppState, graft: PageGraft) -> AppResult<Response> {
     let projects = ordered_projects(state);
-    if projects.is_empty() {
-        return Ok(responses::request_navigation(graft, "/projects/new"));
-    }
     let view = CatalogueView::from_records(&projects);
     match graft {
         PageGraft::Document => {
