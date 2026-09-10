@@ -149,9 +149,11 @@ Per-file addition and removal counts derive from the complete stored diff. Binar
 
 The candidate footer has a bounded scroll area for long destinations and feedback forms. Current work retains the eligible job-bound cancellation control.
 
-The approval footer names the destination and the actual application consequence. It distinguishes ordinary file application from a local Git commit.
+The approval footer names the destination and the actual application consequence. It distinguishes ordinary file application from a local Git commit. It distinguishes configured continuation to the next step from both file outcomes.
 
-Request changes retains candidate-bound feedback. Discard does not reverse direct writes or host command effects.
+Host approval reads Run this command. It shows the exact command, work location and effective approval policy beside the decision. Session-bound approval and rejection evidence remains in the run record.
+
+Request changes retains candidate-bound feedback. Discard posts directly without a confirmation dialog. Discard keeps evidence and history, so it is not destructive in the data sense. Discard does not reverse direct writes or host command effects.
 
 Current work shows per-directory file-application outcomes from the authoritative run transaction record. Known partial application stays distinct from uncertain recovery and successful completion. Resolve the conflict links to the exact run attempt and its directory evidence. The link opens evidence and starts no write, retry or simulated resolution. This manual recovery destination is the production difference from the mock simulated conflict button.
 

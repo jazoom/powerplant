@@ -3668,6 +3668,15 @@ fn detail_view(
         record
             .active_job
             .and_then(|job_id| state.host_approvals.pending_for(record.id, job_id)),
+        record
+            .model
+            .as_ref()
+            .map(|model| {
+                crate::slices::execution_settings::page::host_approval_label(
+                    model.settings.host_approval,
+                )
+            })
+            .unwrap_or("Ask each time"),
     )
     .with_workflow_progress(workflow_progress)
     .with_plan_actions(state, record)

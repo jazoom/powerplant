@@ -17,12 +17,11 @@
 
       <nav aria-label="Run context" class="mb-5 flex flex-wrap gap-4 text-sm">
         <a href="/runs" data-graft class="link">History</a>
-        {% if !conversation_href.is_empty() %}<a
-          href="{{ conversation_href }}"
-          data-graft
-          class="link"
-          >Owning conversation</a
-        >{% endif %}
+        {% if !conversation_href.is_empty() %}
+          <a href="{{ conversation_href }}" data-graft class="link"
+            >Owning conversation</a
+          >
+        {% endif %}
       </nav>
       <header
         class="border-base-content flex items-start justify-between gap-8 border-b-2 pb-4 max-sm:block"
@@ -119,7 +118,7 @@
           aria-labelledby="run-host-command-title"
         >
           <h2 id="run-host-command-title" class="text-lg font-semibold">
-            Run command?
+            Run this command?
           </h2>
           <p class="text-quiet max-w-[65ch] text-sm">
             This command waits on the owning conversation. Approval is bound to

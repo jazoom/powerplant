@@ -448,6 +448,7 @@ pub(super) struct HostCommandView {
     pub(super) command_input: String,
     pub(super) directory: String,
     pub(super) explanation: String,
+    pub(super) approval_policy: String,
 }
 
 pub(super) struct ExecutionSwitchView {
@@ -1226,6 +1227,7 @@ impl ConversationDetailView {
     pub(super) fn with_pending_host_command(
         mut self,
         command: Option<crate::execution::HostCommandRequest>,
+        approval_policy: &str,
     ) -> Self {
         self.pending_host_command = command.map(|command| HostCommandView {
             request: command.token,
@@ -1239,6 +1241,7 @@ impl ConversationDetailView {
             } else {
                 command.explanation
             },
+            approval_policy: approval_policy.to_owned(),
         });
         self
     }

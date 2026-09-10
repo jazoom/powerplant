@@ -10,7 +10,7 @@
           id="conversation-host-command-heading"
           class="text-lg font-semibold"
         >
-          Run command?
+          Run this command?
         </h2>
         <p class="text-quiet mt-1 max-w-[65ch] text-sm">
           This command runs on this computer with unrestricted host access.
@@ -29,6 +29,8 @@
         <dd class="break-words whitespace-pre-wrap">
           {{ command.explanation }}
         </dd>
+        <dt class="text-quiet">Approval policy</dt>
+        <dd>{{ command.approval_policy }}</dd>
       </dl>
       <div class="flex flex-wrap gap-3 border-t pt-4">
         <form
@@ -49,7 +51,7 @@
             class="btn btn-primary"
             type="submit"
           >
-            Run command
+            Run this command
           </button>
         </form>
         <form
