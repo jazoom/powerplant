@@ -1999,6 +1999,77 @@ impl WorkflowRun {
         )
     }
 
+    /// The latest attempt that carries a file-application transaction, if any.
+    /// Current work reads per-directory outcomes from this authoritative record.
+    pub(crate) fn latest_apply_attempt(&self) -> Option<&AttemptRecord> {
+        self.attempts
+            .iter()
+            .rev()
+            .find(|attempt| attempt.apply_transaction.is_some())
+    }
+
+    /// Uncertain recovery blocks settlement, retry and continuation.
+    pub(crate) fn apply_is_uncertain(&self) -> bool {
+        self.attempts.iter().any(|attempt| {
+            let Some(transaction) = attempt.apply_transaction.as_ref() else {
+                return false;
+            };
+            transaction.state == ApplyTransactionState::RecoveryUncertain
+                || !transaction.is_settled()
+                || transaction.roots.iter().any(|root| {
+                    matches!(
+                        root.outcome,
+                        ApplyRootOutcome::Pending | ApplyRootOutcome::Uncertain
+                    )
+                })
+                || attempt.cleanup != AttemptCleanupRecord::Complete
+        })
+    }
+
+    /// A known partial outcome shows the latest recovered transaction
+    /// with every stored transaction settled and cleanup complete.
+    pub(crate) fn apply_is_known_partial(&self) -> bool {
+        let Some(latest) = self.latest_apply_attempt() else {
+            return false;
+        };
+        let Some(transaction) = latest.apply_transaction.as_ref() else {
+            return false;
+        };
+        transaction.state == ApplyTransactionState::Recovered && !self.apply_is_uncertain()
+    }
+
+    /// Successful completion shows the latest verified transaction
+    /// over applied roots with every stored transaction settled.
+    pub(crate) fn apply_is_complete(&self) -> bool {
+        let Some(latest) = self.latest_apply_attempt() else {
+            return false;
+        };
+        let Some(transaction) = latest.apply_transaction.as_ref() else {
+            return false;
+        };
+        transaction.is_verified()
+            && transaction.roots.iter().all(|root| {
+                matches!(
+                    root.outcome,
+                    ApplyRootOutcome::Applied | ApplyRootOutcome::Unchanged
+                )
+            })
+            && !self.apply_is_uncertain()
+    }
+
+    /// Settlement keeps applied files and ends ownership without another write.
+    pub(crate) fn partial_settlement_eligible(&self) -> bool {
+        !self.is_terminal() && self.apply_is_known_partial()
+    }
+
+    /// End a known partial task through cancellation, never completion.
+    pub(crate) fn settle_known_partial(&mut self, at_ms: u64) -> Result<(), TransitionError> {
+        if !self.partial_settlement_eligible() {
+            return Err(TransitionError::Invalid);
+        }
+        self.cancel(at_ms)
+    }
+
     pub(crate) fn current_step_name(&self) -> Option<&str> {
         let key = match &self.state {
             RunState::Ready { step }

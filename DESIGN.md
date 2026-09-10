@@ -153,6 +153,10 @@ The approval footer names the destination and the actual application consequence
 
 Request changes retains candidate-bound feedback. Discard does not reverse direct writes or host command effects.
 
+Current work shows per-directory file-application outcomes from the authoritative run transaction record. Known partial application stays distinct from uncertain recovery and successful completion. Resolve the conflict links to the exact run attempt and its directory evidence. The link opens evidence and starts no write, retry or simulated resolution. This manual recovery destination is the production difference from the mock simulated conflict button.
+
+Keep applied files and end task appears only when every transaction holds a known settled outcome and managed cleanup succeeded. Settlement binds the displayed run, attempt and outcome state. It keeps applied files and evidence without another application attempt, and ends ownership through cancellation rather than a Completed result. Terminal runs show Continue the conversation instead. Uncertain roots or cleanup retain execution blockers and disable settlement, retry and continuation.
+
 ### Setup
 
 Setup occupies the companion position. One native section selector reveals a group without removal of the other controls. The former hidden tabs are retired.

@@ -360,6 +360,12 @@ pub(super) struct CandidateReviewLinkView {
     pub(super) diff_base_hash: String,
 }
 
+pub(super) struct ApplyOutcomeView {
+    pub(super) directory: String,
+    pub(super) path: String,
+    pub(super) outcome: &'static str,
+}
+
 pub(super) struct WorkflowProgressView {
     pub(super) run_href: String,
     pub(super) name: String,
@@ -375,6 +381,17 @@ pub(super) struct WorkflowProgressView {
     pub(super) can_stop: bool,
     pub(super) pause_requested: bool,
     pub(super) awaiting_gate: bool,
+    pub(super) conversation_id: String,
+    pub(super) apply_run_id: String,
+    pub(super) apply_attempt_id: String,
+    pub(super) apply_state: &'static str,
+    pub(super) apply_outcomes: Vec<ApplyOutcomeView>,
+    pub(super) apply_resolve_href: String,
+    pub(super) apply_partial: bool,
+    pub(super) apply_uncertain: bool,
+    pub(super) apply_complete: bool,
+    pub(super) settlement_eligible: bool,
+    pub(super) run_terminal: bool,
 }
 
 pub(super) struct ModelSources<'a> {
@@ -1591,7 +1608,69 @@ fn network_summary_from_form(network: &str) -> String {
     }
 }
 
+pub(super) fn apply_outcomes(run: &WorkflowRun) -> Vec<ApplyOutcomeView> {
+    run.latest_apply_attempt()
+        .and_then(|attempt| {
+            attempt
+                .apply_transaction
+                .as_ref()
+                .map(|transaction| (attempt, transaction))
+        })
+        .map(|(_, transaction)| {
+            transaction
+                .roots
+                .iter()
+                .map(|root| ApplyOutcomeView {
+                    directory: root.alias.clone(),
+                    path: root.host_path.display().to_string(),
+                    outcome: match root.outcome {
+                        crate::workflows::apply::ApplyRootOutcome::Pending => "Pending",
+                        crate::workflows::apply::ApplyRootOutcome::Unchanged => "Unchanged",
+                        crate::workflows::apply::ApplyRootOutcome::Applied => "Applied",
+                        crate::workflows::apply::ApplyRootOutcome::Conflicted => "Conflicted",
+                        crate::workflows::apply::ApplyRootOutcome::Uncertain => "Uncertain",
+                    },
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn apply_attempt_presentation(run: &WorkflowRun) -> (String, String, &'static str, String) {
+    match run.latest_apply_attempt() {
+        Some(attempt) => {
+            let state = attempt
+                .apply_transaction
+                .as_ref()
+                .map(|transaction| match transaction.state {
+                    crate::workflows::apply::ApplyTransactionState::Prepared => "prepared",
+                    crate::workflows::apply::ApplyTransactionState::Applying { .. } => "applying",
+                    crate::workflows::apply::ApplyTransactionState::Applied { .. } => "applied",
+                    crate::workflows::apply::ApplyTransactionState::Verified => "verified",
+                    crate::workflows::apply::ApplyTransactionState::Recovered => "recovered",
+                    crate::workflows::apply::ApplyTransactionState::RecoveryUncertain => {
+                        "recovery-uncertain"
+                    }
+                })
+                .unwrap_or("");
+            (
+                run.id.as_hex(),
+                attempt.id.as_hex(),
+                state,
+                format!(
+                    "/runs/{}/attempts/{}/changes",
+                    run.id.as_hex(),
+                    attempt.id.as_hex()
+                ),
+            )
+        }
+        None => (String::new(), String::new(), "", String::new()),
+    }
+}
+
 pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
+    let (apply_run_id, apply_attempt_id, apply_state, apply_resolve_href) =
+        apply_attempt_presentation(run);
     WorkflowProgressView {
         run_href: format!("/runs/{}", run.id.as_hex()),
         name: run.pinned.definition.name().to_owned(),
@@ -1610,6 +1689,20 @@ pub(super) fn workflow_progress(run: &WorkflowRun) -> WorkflowProgressView {
         can_stop: false,
         pause_requested: false,
         awaiting_gate: false,
+        conversation_id: run
+            .conversation_id
+            .map(|id| id.as_hex())
+            .unwrap_or_default(),
+        apply_outcomes: apply_outcomes(run),
+        apply_run_id,
+        apply_attempt_id,
+        apply_state,
+        apply_resolve_href,
+        apply_partial: run.apply_is_known_partial(),
+        apply_uncertain: run.apply_is_uncertain(),
+        apply_complete: run.apply_is_complete(),
+        settlement_eligible: run.partial_settlement_eligible() && run.conversation_id.is_some(),
+        run_terminal: run.is_terminal(),
     }
 }
 
@@ -1617,6 +1710,19 @@ pub(super) fn loop_progress(
     record: &crate::workflows::TaskLoop,
     awaiting_gate: bool,
 ) -> WorkflowProgressView {
+    loop_progress_with_child(record, awaiting_gate, None)
+}
+
+pub(super) fn loop_progress_with_child(
+    record: &crate::workflows::TaskLoop,
+    awaiting_gate: bool,
+    child: Option<&WorkflowRun>,
+) -> WorkflowProgressView {
+    let (apply_run_id, apply_attempt_id, apply_state, apply_resolve_href) = child
+        .map(apply_attempt_presentation)
+        .unwrap_or((String::new(), String::new(), "", String::new()));
+    // An uncertain child blocks continuation and retry until recovery finishes.
+    let child_uncertain = child.is_some_and(|run| run.apply_is_uncertain());
     WorkflowProgressView {
         run_href: format!("/runs/loops/{}", record.id.as_hex()),
         name: record.pinned.definition.name().to_owned(),
@@ -1631,11 +1737,22 @@ pub(super) fn loop_progress(
             crate::workflows::task_loop::TaskLoopState::Active { .. }
                 | crate::workflows::task_loop::TaskLoopState::AwaitingChild { .. }
         ),
-        can_continue: record.allows_continue(),
-        can_retry: record.allows_retry(),
+        can_continue: record.allows_continue() && !child_uncertain,
+        can_retry: record.allows_retry() && !child_uncertain,
         can_stop: !record.state.is_terminal(),
         pause_requested: record.pause_requested(),
         awaiting_gate,
+        conversation_id: record.conversation_id.as_hex(),
+        apply_outcomes: child.map(apply_outcomes).unwrap_or_default(),
+        apply_run_id,
+        apply_attempt_id,
+        apply_state,
+        apply_resolve_href,
+        apply_partial: child.is_some_and(|run| run.apply_is_known_partial()),
+        apply_uncertain: child_uncertain,
+        apply_complete: child.is_some_and(|run| run.apply_is_complete()),
+        settlement_eligible: false,
+        run_terminal: record.state.is_terminal(),
     }
 }
 

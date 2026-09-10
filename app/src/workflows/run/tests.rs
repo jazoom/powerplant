@@ -1956,3 +1956,116 @@ fn ordinary_quick_task_revisions_bind_the_candidate_and_enforce_limits() {
     ));
     assert!(exhausted.revision_reservation.is_none());
 }
+
+fn partial_transaction(
+    outcome: crate::workflows::apply::ApplyRootOutcome,
+) -> crate::workflows::apply::ApplyTransaction {
+    use crate::execution::{CanonicalDirectoryIdentity, DirectoryGrantId};
+    use crate::workflows::artefacts::{ArtefactHash, ArtefactReference, CandidateHash};
+    let reference =
+        |byte: u8, kind: crate::workflows::definition::ArtefactKind| ArtefactReference {
+            id: crate::workflows::ArtefactId::generate().expect("artefact"),
+            kind,
+            artefact_hash: ArtefactHash::of(b"partial", &[byte]),
+        };
+    crate::workflows::apply::ApplyTransaction {
+        state: crate::workflows::apply::ApplyTransactionState::Recovered,
+        roots: vec![crate::workflows::apply::ApplyRoot {
+            grant_id: DirectoryGrantId::generate().expect("grant"),
+            alias: "fieldnotes".to_owned(),
+            host_path: std::path::PathBuf::from("/tmp/fieldnotes"),
+            identity: CanonicalDirectoryIdentity {
+                device: 7,
+                inode: 8,
+            },
+            baseline_candidate: CandidateHash::of(b"base"),
+            candidate_hash: CandidateHash::of(b"candidate"),
+            exclusions: Vec::new(),
+            outcome,
+        }],
+        baseline: reference(
+            1,
+            crate::workflows::definition::ArtefactKind::CandidateRevision,
+        ),
+        candidate: reference(
+            2,
+            crate::workflows::definition::ArtefactKind::CandidateRevision,
+        ),
+        approval: reference(3, crate::workflows::definition::ArtefactKind::HumanDecision),
+    }
+}
+
+fn active_run_with_apply(
+    outcome: crate::workflows::apply::ApplyRootOutcome,
+    state: crate::workflows::apply::ApplyTransactionState,
+    cleanup: AttemptCleanupRecord,
+) -> (WorkflowRun, AttemptId) {
+    let mut run = new_run();
+    let attempt = start(&mut run);
+    let mut transaction = partial_transaction(outcome);
+    transaction.state = state;
+    run.record_apply_transaction(attempt, transaction)
+        .expect("apply transaction");
+    if cleanup != AttemptCleanupRecord::Pending {
+        run.record_cleanup(attempt, cleanup).expect("cleanup");
+    }
+    (run, attempt)
+}
+
+#[test]
+fn known_partial_settlement_ends_through_cancellation() {
+    use crate::workflows::apply::{ApplyRootOutcome, ApplyTransactionState};
+    let (mut run, _) = active_run_with_apply(
+        ApplyRootOutcome::Applied,
+        ApplyTransactionState::Recovered,
+        AttemptCleanupRecord::Complete,
+    );
+    assert!(run.apply_is_known_partial());
+    assert!(!run.apply_is_uncertain());
+    assert!(run.partial_settlement_eligible());
+    run.settle_known_partial(12).expect("settle");
+    assert_eq!(run.state, RunState::Cancelled);
+}
+
+#[test]
+fn uncertain_recovery_blocks_settlement_release() {
+    use crate::workflows::apply::{ApplyRootOutcome, ApplyTransactionState};
+    let (mut run, _) = active_run_with_apply(
+        ApplyRootOutcome::Uncertain,
+        ApplyTransactionState::RecoveryUncertain,
+        AttemptCleanupRecord::Complete,
+    );
+    assert!(run.apply_is_uncertain());
+    assert!(!run.apply_is_known_partial());
+    assert!(!run.partial_settlement_eligible());
+    assert!(run.settle_known_partial(12).is_err());
+    assert!(!run.is_terminal());
+}
+
+#[test]
+fn pending_cleanup_blocks_settlement_release() {
+    use crate::workflows::apply::{ApplyRootOutcome, ApplyTransactionState};
+    let (mut run, _) = active_run_with_apply(
+        ApplyRootOutcome::Applied,
+        ApplyTransactionState::Recovered,
+        AttemptCleanupRecord::Pending,
+    );
+    assert!(run.apply_is_uncertain());
+    assert!(!run.partial_settlement_eligible());
+    assert!(run.settle_known_partial(12).is_err());
+}
+
+#[test]
+fn terminal_partial_offers_no_redundant_settlement() {
+    use crate::workflows::apply::{ApplyRootOutcome, ApplyTransactionState};
+    let (mut run, attempt) = active_run_with_apply(
+        ApplyRootOutcome::Applied,
+        ApplyTransactionState::Recovered,
+        AttemptCleanupRecord::Complete,
+    );
+    run.fail_attempt(attempt, FailureCategory::Apply, 12)
+        .expect("fail");
+    assert!(run.is_terminal());
+    assert!(!run.partial_settlement_eligible());
+    assert!(run.settle_known_partial(13).is_err());
+}

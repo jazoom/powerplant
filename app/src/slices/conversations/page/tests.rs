@@ -200,3 +200,59 @@ fn candidate_review_escapes_untrusted_file_contents() {
     assert!(html.contains("&#60;script&#62;"));
     assert!(html.contains("&#60;img"));
 }
+
+#[derive(askama::Template)]
+#[template(path = "conversations/templates/workflow_progress.html")]
+struct ProgressHarness {
+    run: WorkflowProgressView,
+}
+
+fn partial_progress_view() -> WorkflowProgressView {
+    WorkflowProgressView {
+        run_href: "/runs/aaa".to_owned(),
+        name: "Quick task".to_owned(),
+        state: "Active",
+        current_step: "Apply changes".to_owned(),
+        result: "Worker activity stays in the run record.",
+        task_progress: String::new(),
+        loop_id: String::new(),
+        command_token: String::new(),
+        can_pause: false,
+        can_continue: false,
+        can_retry: false,
+        can_stop: false,
+        pause_requested: false,
+        awaiting_gate: false,
+        conversation_id: "ccc".to_owned(),
+        apply_run_id: "aaa".to_owned(),
+        apply_attempt_id: "bbb".to_owned(),
+        apply_state: "recovered",
+        apply_outcomes: vec![ApplyOutcomeView {
+            directory: "fieldnotes".to_owned(),
+            path: "/tmp/fieldnotes".to_owned(),
+            outcome: "Applied",
+        }],
+        apply_resolve_href: "/runs/aaa/attempts/bbb/changes".to_owned(),
+        apply_partial: true,
+        apply_uncertain: false,
+        apply_complete: false,
+        settlement_eligible: true,
+        run_terminal: false,
+    }
+}
+
+// Recovery controls bind the displayed run, attempt and outcome state.
+#[test]
+fn partial_progress_links_the_exact_attempt_and_settlement_identity() {
+    use askama::Template;
+    let html = ProgressHarness {
+        run: partial_progress_view(),
+    }
+    .render()
+    .expect("progress");
+    assert!(html.contains("/runs/aaa/attempts/bbb/changes"));
+    assert!(html.contains("/conversations/ccc/runs/aaa/settle-partial"));
+    assert!(html.contains("name=\"attempt\""));
+    assert!(html.contains("value=\"bbb\""));
+    assert!(html.contains("value=\"recovered\""));
+}

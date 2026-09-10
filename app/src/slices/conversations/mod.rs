@@ -139,6 +139,10 @@ pub(super) fn router() -> Router<AppState> {
             post(cancel_message),
         )
         .route(
+            "/conversations/{conversation_id}/runs/{run_id}/settle-partial",
+            post(settle_partial),
+        )
+        .route(
             "/conversations/{conversation_id}/host-command/approve",
             post(tool_approval::approve),
         )
@@ -2561,6 +2565,153 @@ async fn cancel_message(
     )
 }
 
+#[derive(Deserialize)]
+struct SettlePartialForm {
+    #[serde(default)]
+    attempt: String,
+    #[serde(default)]
+    state: String,
+}
+
+/// Keep applied files and end a known partial task without another write.
+/// Every command revalidates the stored run; disabled controls grant nothing.
+async fn settle_partial(
+    State(state): State<AppState>,
+    session: RequiredSession,
+    graft: PatchGraft,
+    Path((conversation_id, run_id)): Path<(String, String)>,
+    Form(form): Form<SettlePartialForm>,
+) -> AppResult<Response> {
+    let Some(record) = load_conversation(&state, &conversation_id) else {
+        return Ok(responses::command_navigation("/conversations"));
+    };
+    let Some(run_id) = crate::workflows::RunId::parse(&run_id) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::UnprocessableEntity,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    let Some(run) = state.workflow_runs.get(&run_id) else {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    };
+    if run.conversation_id != Some(record.id) {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, session.0, &record, &record.title, REVISION_MESSAGE),
+        );
+    }
+    // Loop children end through the task loop controls, not direct settlement.
+    if run.parent_loop.is_some() {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "That task belongs to a task loop. Use the task loop controls to end it.",
+            ),
+        );
+    }
+    let outcome_matches = run
+        .latest_apply_attempt()
+        .is_some_and(|attempt| attempt.id.as_hex() == form.attempt);
+    if !outcome_matches {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "That file application changed. Reload the conversation and try again.",
+            ),
+        );
+    }
+    // Recovery protection retains its reservations; settlement never force-unlocks.
+    if state.gate_continuations.commit_recovery_locked() {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "This operation requires recovery. The conversation remains reserved until a restart reconciles the local records.",
+            ),
+        );
+    }
+    if !run.partial_settlement_eligible() {
+        let message = if run.apply_is_uncertain() {
+            "Execution remains unsettled. Continuation and retry stay unavailable until recovery and cleanup finish."
+        } else if run.is_terminal() {
+            "That task already ended. Continue the conversation for the next task."
+        } else {
+            "That file application changed. Reload the conversation and try again."
+        };
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(&state, session.0, &record, &record.title, message),
+        );
+    }
+    let expected_state = run
+        .latest_apply_attempt()
+        .and_then(|attempt| attempt.apply_transaction.as_ref())
+        .map(|transaction| match transaction.state {
+            crate::workflows::apply::ApplyTransactionState::Recovered => "recovered",
+            _ => "",
+        })
+        .unwrap_or("");
+    if form.state != expected_state {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "That file application changed. Reload the conversation and try again.",
+            ),
+        );
+    }
+    if state
+        .workflow_runs
+        .mutate(&run_id, |run| {
+            run.settle_known_partial(crate::workflows::now_ms())
+        })
+        .is_err()
+    {
+        return render_detail_command(
+            graft,
+            PatchStatus::Conflict,
+            detail_view(
+                &state,
+                session.0,
+                &record,
+                &record.title,
+                "That file application changed. Reload the conversation and try again.",
+            ),
+        );
+    }
+    let record = load_conversation(&state, &conversation_id).unwrap_or(record);
+    render_detail_command(
+        graft,
+        PatchStatus::Ok,
+        detail_view(&state, session.0, &record, &record.title, ""),
+    )
+}
+
 fn observe_message(
     state: AppState,
     session: crate::sessions::SessionId,
@@ -3473,15 +3624,17 @@ fn detail_view(
                 .as_ref()
                 .is_none_or(|run| parent.created_at_ms >= run.created_at_ms) =>
         {
-            Some(page::loop_progress(
+            let child = parent
+                .current_child()
+                .and_then(|child| state.workflow_runs.get(&child));
+            Some(page::loop_progress_with_child(
                 &parent,
-                parent.current_child().is_some_and(|child| {
-                    state.workflow_runs.get(&child).is_some_and(|run| {
-                        run.gates.iter().any(|gate| {
-                            gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision
-                        })
+                child.as_ref().is_some_and(|run| {
+                    run.gates.iter().any(|gate| {
+                        gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision
                     })
                 }),
+                child.as_ref(),
             ))
         }
         (_, Some(run)) => Some(page::workflow_progress(&run)),
