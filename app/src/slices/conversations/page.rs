@@ -2029,7 +2029,7 @@ pub(super) struct PlanRequestContents<'a> {
 #[template(path = "conversations/templates/plan_action.html")]
 struct PlanActionView {
     task_list: bool,
-    truncated: bool,
+    deferred: bool,
     label: &'static str,
     title: String,
     html: String,
@@ -2179,13 +2179,13 @@ impl ConversationDetailView {
                 let Ok(content) = state.documents.content(&document, revision.revision) else {
                     continue;
                 };
-                let mut html = reply_html(&content);
-                let truncated = html.len() > 16 * 1024;
-                if truncated {
-                    html = reply_html(&content.chars().take(2048).collect::<String>());
-                }
+                // Ordinary actions render their complete original contents.
+                // The transcript budget below defers oversized actions to
+                // their pinned revision instead of excerpting them.
+                let html = reply_html(&content);
+                let href = format!("/plans/{}?revision={}", document.id, revision.revision);
                 let view = PlanActionView {
-                    truncated,
+                    deferred: false,
                     task_list: document.kind == crate::conversations::DocumentKind::TaskList,
                     label: if plan.is_some() {
                         "Created a task breakdown"
@@ -2194,33 +2194,48 @@ impl ConversationDetailView {
                     } else if *assistant {
                         "Created a plan"
                     } else {
-                        "Added your own plan"
+                        "Added a plan"
                     },
                     title: title.clone(),
                     html,
-                    href: format!("/plans/{}?revision={}", document.id, revision.revision),
+                    href,
                     provenance: source_label(&revision.source),
                     revision: revision.revision,
                     hash: revision.content_hash.as_str(),
                 };
-                if let Ok(html) = view.render() {
-                    actions.push((
-                        revision.created_at_ms,
-                        *message_index as usize,
-                        *assistant,
-                        html,
-                    ));
-                }
+                actions.push((
+                    revision.created_at_ms,
+                    *message_index as usize,
+                    *assistant,
+                    view,
+                ));
             }
         }
         actions.sort_by_key(|(time, _, _, _)| *time);
         let mut budget = 128 * 1024usize;
         let mut selected = Vec::new();
-        for (_, index, assistant, html) in actions.into_iter().rev() {
-            if html.len() <= budget {
-                budget -= html.len();
-                selected.push((index, assistant, html));
+        for (_, index, assistant, view) in actions.into_iter().rev() {
+            let Ok(full) = view.render() else {
+                continue;
+            };
+            if full.len() <= budget {
+                budget -= full.len();
+                selected.push((index, assistant, full));
             } else {
+                // Bounded delivery keeps the transcript within the Hypergraft
+                // envelope. Deferred contents stay available at the pinned
+                // revision link inside the fallback. Fallbacks that no longer
+                // fit are dropped so the transcript retains its bound.
+                let mut fallback = view;
+                fallback.deferred = true;
+                fallback.html = String::new();
+                let Ok(html) = fallback.render() else {
+                    continue;
+                };
+                if html.len() <= budget {
+                    budget -= html.len();
+                    selected.push((index, assistant, html));
+                }
                 self.plan_actions_omitted = true;
             }
         }
@@ -2334,10 +2349,15 @@ pub(super) struct PlanDocumentPage {
     pub(super) content_html: String,
     pub(super) revisions: Vec<PlanPageRevision>,
     pub(super) back_href: String,
+    pub(super) plans_href: String,
     pub(super) associated: bool,
     pub(super) task_count: usize,
     pub(super) eligible_task_count: usize,
     pub(super) tasks: Vec<TaskListItemView>,
+    pub(super) section: usize,
+    pub(super) sections: usize,
+    pub(super) section_prev: String,
+    pub(super) section_next: String,
     pub(super) error: &'static str,
 }
 
@@ -2360,10 +2380,15 @@ pub(super) struct PlanDocumentContents<'a> {
     pub(super) content_html: &'a str,
     pub(super) revisions: &'a [PlanPageRevision],
     pub(super) back_href: &'a str,
+    pub(super) plans_href: &'a str,
     pub(super) associated: bool,
     pub(super) task_count: usize,
     pub(super) eligible_task_count: usize,
     pub(super) tasks: &'a [TaskListItemView],
+    pub(super) section: usize,
+    pub(super) sections: usize,
+    pub(super) section_prev: &'a str,
+    pub(super) section_next: &'a str,
     pub(super) error: &'static str,
 }
 
@@ -2372,6 +2397,7 @@ impl PlanDocumentPage {
         document: &PlanDocument,
         revision: u32,
         content: String,
+        section: usize,
         error: &'static str,
     ) -> Self {
         let selected = document
@@ -2404,6 +2430,45 @@ impl PlanDocumentPage {
             || "/conversations".to_owned(),
             |id| format!("/conversations/{id}"),
         );
+        let plans_href = document.associated_conversation.map_or_else(
+            || "/conversations".to_owned(),
+            |id| format!("/conversations/{id}/plans"),
+        );
+        // Bounded delivery splits oversized revisions into line-bounded
+        // sections on the same canonical route. Markdown structure stays
+        // intact because splits happen at line boundaries. Revision identity
+        // and the complete pinned export never change across sections.
+        let preview_source = task_list
+            .as_ref()
+            .map_or(content.as_str(), |list| list.preamble.as_str());
+        let chunks = split_plan_sections(preview_source);
+        let sections = chunks.len().max(1);
+        let section = section.min(sections.saturating_sub(1));
+        let section_text = chunks.get(section).cloned().unwrap_or_default();
+        let section_href = |index: usize| {
+            if index == 0 {
+                format!(
+                    "/plans/{}?revision={}",
+                    document.id.as_hex(),
+                    selected.revision
+                )
+            } else {
+                format!(
+                    "/plans/{}?revision={}&section={}",
+                    document.id.as_hex(),
+                    selected.revision,
+                    index
+                )
+            }
+        };
+        let content_html = {
+            let html = reply_html(&section_text);
+            if html.len() > 400 * 1024 {
+                plain_html(&section_text)
+            } else {
+                html
+            }
+        };
         Self {
             conversation_revision: 0,
             implementation_href: String::new(),
@@ -2428,23 +2493,26 @@ impl PlanDocumentPage {
             current_revision: document.current_revision(),
             provenance: source_label(&selected.source),
             content_hash: selected.content_hash.as_str(),
-            content_html: {
-                let preview = task_list
-                    .as_ref()
-                    .map_or(content.as_str(), |list| list.preamble.as_str());
-                let html = reply_html(preview);
-                if html.len() > 400 * 1024 {
-                    plain_html(preview)
-                } else {
-                    html
-                }
-            },
+            content_html,
             content,
             revisions,
             back_href,
+            plans_href,
             associated,
             task_count,
             eligible_task_count,
+            section,
+            sections,
+            section_prev: if section > 0 {
+                section_href(section - 1)
+            } else {
+                String::new()
+            },
+            section_next: if section + 1 < sections {
+                section_href(section + 1)
+            } else {
+                String::new()
+            },
             tasks: task_list.map_or_else(Vec::new, |list| {
                 list.tasks
                     .into_iter()
@@ -2517,12 +2585,64 @@ impl PlanDocumentPage {
             content_html: &self.content_html,
             revisions: &self.revisions,
             back_href: &self.back_href,
+            plans_href: &self.plans_href,
             associated: self.associated,
             task_count: self.task_count,
             eligible_task_count: self.eligible_task_count,
             tasks: &self.tasks,
+            section: self.section,
+            sections: self.sections,
+            section_prev: &self.section_prev,
+            section_next: &self.section_next,
             error: self.error,
         }
+    }
+}
+
+pub(super) const PLAN_SECTION_CHARS: usize = 24_000;
+
+pub(super) fn split_plan_sections(content: &str) -> Vec<String> {
+    if content.len() <= PLAN_SECTION_CHARS {
+        return vec![content.to_owned()];
+    }
+    let mut sections = Vec::new();
+    let mut current = String::new();
+    for line in content.split_inclusive('\n') {
+        // Overlong lines split on character boundaries so single-line
+        // documents still receive bounded continuation. Ordinary lines stay
+        // atomic so sections end at line boundaries and Markdown structure
+        // survives. Concatenation preserves the exact source bytes.
+        if line.len() > PLAN_SECTION_CHARS {
+            if !current.is_empty() {
+                sections.push(std::mem::take(&mut current));
+            }
+            let mut rest = line;
+            while rest.len() > PLAN_SECTION_CHARS {
+                let mut take = PLAN_SECTION_CHARS;
+                while take > 0 && !rest.is_char_boundary(take) {
+                    take -= 1;
+                }
+                if take == 0 {
+                    take = rest.chars().next().map_or(1, |cell| cell.len_utf8());
+                }
+                sections.push(rest[..take].to_owned());
+                rest = &rest[take..];
+            }
+            current.push_str(rest);
+            continue;
+        }
+        if !current.is_empty() && current.len() + line.len() > PLAN_SECTION_CHARS {
+            sections.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+    }
+    if !current.is_empty() {
+        sections.push(current);
+    }
+    if sections.is_empty() {
+        vec![content.to_owned()]
+    } else {
+        sections
     }
 }
 

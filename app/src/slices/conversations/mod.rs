@@ -398,6 +398,17 @@ struct ObserveQuery {
 #[serde(default)]
 struct PlanQuery {
     revision: String,
+    section: String,
+}
+
+fn parse_plan_section(raw: &str) -> Option<usize> {
+    if raw.is_empty() {
+        return Some(0);
+    }
+    if raw.len() > 4 || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<usize>().ok()
 }
 
 async fn catalogue(
@@ -1997,6 +2008,7 @@ async fn open_plan(
                 PatchStatus::UnprocessableEntity,
                 &document,
                 document.current_revision(),
+                0,
                 "Choose an available plan revision.",
             );
         };
@@ -2009,6 +2021,7 @@ async fn open_plan(
             PatchStatus::UnprocessableEntity,
             &document,
             document.current_revision(),
+            0,
             "Choose an available plan revision.",
         );
     }
@@ -2016,13 +2029,49 @@ async fn open_plan(
         .documents
         .content(&document, revision)
         .map_err(|error| AppError::new("read plan document", error))?;
+    let Some(section) = parse_plan_section(&query.section) else {
+        return render_plan_page_with_content(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &document,
+            revision,
+            content,
+            0,
+            "Choose an available plan section.",
+        );
+    };
+    let sections = if document.kind == crate::conversations::DocumentKind::TaskList {
+        // Task detail renders the preamble as bounded sections with tasks
+        // listed separately, so validation uses the same preamble source as
+        // the page model.
+        crate::workflows::task_list::parse(&content)
+            .map(|list| page::split_plan_sections(&list.preamble).len())
+            .unwrap_or_else(|_| page::split_plan_sections(&content).len())
+    } else {
+        page::split_plan_sections(&content).len()
+    }
+    .max(1);
+    if section >= sections {
+        return render_plan_page_with_content(
+            &state,
+            graft,
+            PatchStatus::UnprocessableEntity,
+            &document,
+            revision,
+            content,
+            0,
+            "Choose an available plan section.",
+        );
+    }
     if graft != GraftRequest::Patch
         && let Some(record) = document
             .associated_conversation
             .and_then(|id| state.conversations.get(&id))
     {
-        let plan = PlanDocumentPage::from_document(&document, revision, content.clone(), "")
-            .with_context(&state, &document);
+        let plan =
+            PlanDocumentPage::from_document(&document, revision, content.clone(), section, "")
+                .with_context(&state, &document);
         let html = askama::Template::render(&plan.contents())
             .map_err(|error| AppError::new("render plan companion", error))?;
         // Large plans use the standalone representation to reserve envelope space for conversation controls.
@@ -2039,6 +2088,7 @@ async fn open_plan(
         &document,
         revision,
         content,
+        section,
         "",
     )
 }
@@ -2139,6 +2189,7 @@ async fn revise_plan(
                 .documents
                 .content(&document, revision)
                 .map_err(|error| AppError::new("read plan document", error))?,
+            0,
             DocumentError::Active.message(),
         );
     }
@@ -2153,6 +2204,7 @@ async fn revise_plan(
                 .documents
                 .content(&document, document.current_revision())
                 .map_err(|error| AppError::new("read plan document", error))?,
+            0,
             DocumentError::Conflict.message(),
         );
     };
@@ -2201,6 +2253,7 @@ async fn revise_plan(
                 &document,
                 document.current_revision(),
                 content,
+                0,
                 DocumentError::TaskList.message(),
             );
             view.conversation_revision = document
@@ -2227,6 +2280,7 @@ async fn revise_plan(
                 &latest,
                 selected,
                 content,
+                0,
                 error.message(),
             )
         }
@@ -3668,15 +3722,19 @@ fn render_plan_page(
     status: PatchStatus,
     document: &PlanDocument,
     revision: u32,
+    section: usize,
     error: &'static str,
 ) -> AppResult<Response> {
     let content = state
         .documents
         .content(document, revision)
         .map_err(|error| AppError::new("read plan document", error))?;
-    render_plan_page_with_content(state, graft, status, document, revision, content, error)
+    render_plan_page_with_content(
+        state, graft, status, document, revision, content, section, error,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_plan_page_with_content(
     state: &AppState,
     graft: impl Into<GraftRequest>,
@@ -3684,9 +3742,10 @@ fn render_plan_page_with_content(
     document: &PlanDocument,
     revision: u32,
     content: String,
+    section: usize,
     error: &'static str,
 ) -> AppResult<Response> {
-    let mut view = PlanDocumentPage::from_document(document, revision, content, error)
+    let mut view = PlanDocumentPage::from_document(document, revision, content, section, error)
         .with_context(state, document);
     view.conversation_revision = document
         .associated_conversation

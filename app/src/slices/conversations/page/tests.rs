@@ -125,7 +125,7 @@ fn document_actions_keep_the_selected_revision_identity_after_a_correction() {
             None,
         )
         .unwrap();
-    let view = PlanDocumentPage::from_document(&document, 1, content.to_owned(), "");
+    let view = PlanDocumentPage::from_document(&document, 1, content.to_owned(), 0, "");
     assert_eq!(view.document_revision, 1);
     assert_eq!(view.current_revision, 2);
     assert!(view.action_href.contains(&format!(

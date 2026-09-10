@@ -2146,9 +2146,9 @@ async fn plans_save_open_export_correct_and_remove_without_losing_old_revisions(
     assert_eq!(view.messages.len(), 3);
     assert!(!view.messages[1].user);
     assert_eq!(view.messages[1].error, "Provider unavailable");
-    assert!(!view.messages[1].html.contains("Added your own plan"));
+    assert!(!view.messages[1].html.contains("Added a plan"));
     assert!(view.messages[2].user);
-    assert!(view.messages[2].html.contains("Added your own plan"));
+    assert!(view.messages[2].html.contains("Added a plan"));
     assert!(
         view.messages[2]
             .html

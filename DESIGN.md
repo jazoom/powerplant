@@ -175,6 +175,8 @@ Plans opens a companion with native navigation fallback. A selected plan retains
 
 Explicit actions show their original contents in ruled transcript sections. Action details identify the author and immutable revision, rather than an inferred attachment.
 
+Bounded delivery keeps the transcript and plan views within the Hypergraft response and node limits. Oversized transcript actions defer their complete contents to the pinned revision link. Oversized plan revisions use bounded continuation sections on the same canonical route with the complete pinned export unchanged. This bounded delivery is the production difference from the small mock examples.
+
 The plan companion separates its content scroll area from its action footer. Prepare implementation opens a workflow preview and starts no work.
 
 Revision controls accept a model request or supplied text. Earlier action titles and contents remain unchanged after either action.

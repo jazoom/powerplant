@@ -480,3 +480,166 @@ async fn plans_request_companions_validate_mode_and_source_message() {
             .is_none()
     );
 }
+
+#[test]
+fn plan_sections_preserve_markdown_structure_and_revision_identity() {
+    use super::super::page::{PlanDocumentPage, split_plan_sections};
+    let state = test_state();
+    let record = state.conversations.create("Sections".to_owned()).unwrap();
+    let content = (0..3000)
+        .map(|line| format!("# Heading\n- item {line}\n"))
+        .collect::<String>();
+    assert!(content.len() > super::super::page::PLAN_SECTION_CHARS);
+    let plan = state
+        .documents
+        .create_from_text(record.id, "Large".to_owned(), content.clone(), None)
+        .unwrap();
+    let chunks = split_plan_sections(&content);
+    assert!(chunks.len() > 1);
+    assert_eq!(chunks.concat(), content);
+    for chunk in &chunks {
+        assert!(chunk.ends_with('\n'));
+    }
+    let first = PlanDocumentPage::from_document(&plan, 1, content.clone(), 0, "");
+    let second = PlanDocumentPage::from_document(&plan, 1, content.clone(), 1, "");
+    assert!(first.sections > 1);
+    assert_eq!(first.sections, chunks.len());
+    assert_eq!(first.document_revision, 1);
+    assert_eq!(second.document_revision, 1);
+    assert_eq!(first.content, content);
+    assert_ne!(first.content_html, second.content_html);
+    assert!(first.section_next.contains("&section=1"));
+    assert!(second.section_prev.contains("revision=1"));
+    if chunks.len() > 2 {
+        assert!(second.section_next.contains("&section=2"));
+    } else {
+        assert!(second.section_next.is_empty());
+    }
+    let last_index = chunks.len() - 1;
+    let last = PlanDocumentPage::from_document(&plan, 1, content.clone(), last_index, "");
+    assert!(last.section_next.is_empty());
+    if last_index == 1 {
+        assert!(last.section_prev.contains("revision=1"));
+    } else {
+        assert!(
+            last.section_prev
+                .contains(&format!("&section={}", last_index - 1))
+        );
+    }
+}
+
+#[test]
+fn plan_detail_uses_canonical_copy_and_escapes_untrusted_content() {
+    use super::super::page::PlanDocumentPage;
+    use askama::Template;
+    let state = test_state();
+    let record = state.conversations.create("Copy".to_owned()).unwrap();
+    let plan = state
+        .documents
+        .create_from_text(
+            record.id,
+            "Plan <script>alert(1)</script>".to_owned(),
+            "Body with <img src=x onerror=alert(1)> markup.".to_owned(),
+            None,
+        )
+        .unwrap();
+    let content = state.documents.content(&plan, 1).unwrap();
+    let view =
+        PlanDocumentPage::from_document(&plan, 1, content, 0, "").with_context(&state, &plan);
+    let html = view.contents().render().unwrap();
+    assert!(html.contains("Proposed approach"));
+    assert!(html.contains("not execution approval"));
+    assert!(!html.contains("Not execution approval"));
+    assert!(html.contains(">Export<"));
+    assert!(!html.contains("Export for Pi"));
+    assert!(html.contains("Back to plans"));
+    assert!(!html.contains("Back to conversation"));
+    assert!(html.contains("Revise plan"));
+    assert!(html.contains("Independent review"));
+    assert!(html.contains("Plan history and source"));
+    assert!(!html.contains("<script>alert(1)</script>"));
+    assert!(!html.contains("<img src=x"));
+}
+
+#[tokio::test]
+async fn plan_continuation_rejects_unknown_sections_without_state_change() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state
+        .conversations
+        .create("Continuation".to_owned())
+        .unwrap();
+    let plan = state
+        .documents
+        .create_from_text(record.id, "Small".to_owned(), "Small text".to_owned(), None)
+        .unwrap();
+    for section in ["not-a-section", "9999", "-1", "1"] {
+        let response = app(&state)
+            .oneshot(document(
+                &format!("/plans/{}?revision=1&section={section}", plan.id),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            text(response)
+                .await
+                .contains("Choose an available plan section.")
+        );
+    }
+    let current = app(&state)
+        .oneshot(document(&format!("/plans/{}?revision=9", plan.id), &token))
+        .await
+        .unwrap();
+    assert_eq!(current.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        text(current)
+            .await
+            .contains("Choose an available plan revision.")
+    );
+    assert_eq!(state.documents.get(&plan.id).unwrap().current_revision(), 1);
+}
+
+#[tokio::test]
+async fn task_continuation_validates_preamble_sections() {
+    use super::super::page::{PlanDocumentPage, split_plan_sections};
+    let state = test_state();
+    let token = connected(&state);
+    let record = state.conversations.create("Tasks".to_owned()).unwrap();
+    let mut markdown = String::from("# Tasks\nSmall intro.\n");
+    for index in 0..250 {
+        use std::fmt::Write;
+        let _ = writeln!(
+            markdown,
+            "- [ ] Task {index:03} with padding {}",
+            "x".repeat(80)
+        );
+    }
+    assert!(markdown.len() > super::super::page::PLAN_SECTION_CHARS);
+    let plan = state
+        .documents
+        .create_task_list_from_text(record.id, "Tasks".to_owned(), markdown.clone(), None)
+        .unwrap();
+    let content = state.documents.content(&plan, 1).unwrap();
+    let list = crate::workflows::task_list::parse(&content).unwrap();
+    assert!(split_plan_sections(&list.preamble).len() == 1);
+    assert!(split_plan_sections(&content).len() > 1);
+    let view = PlanDocumentPage::from_document(&plan, 1, content, 0, "");
+    assert_eq!(view.sections, 1);
+    // Only the preamble section exists, so section 1 is unavailable even
+    // though the complete task markdown spans multiple section lengths.
+    let response = app(&state)
+        .oneshot(document(
+            &format!("/plans/{}?revision=1&section=1", plan.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        text(response)
+            .await
+            .contains("Choose an available plan section.")
+    );
+}

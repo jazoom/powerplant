@@ -492,8 +492,8 @@
         {% endif %}
         {% if plan_actions_omitted %}
           <p class="text-quiet px-6 py-3 text-sm">
-            Some earlier action previews exceed the transcript limit. The plan
-            pages retain their complete revision history.
+            Some plan contents are deferred to their pinned revisions to keep
+            the transcript within the display limit.
           </p>
         {% endif %}
         {% for message in messages %}{% include "conversations/templates/message_article.html" %}{% endfor %}
