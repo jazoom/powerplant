@@ -133,9 +133,9 @@ function selectConversationSettingsSection(panel: HTMLElement, id: string) {
             "settings-execution",
             "settings-directories",
         ].includes(id);
-    const save = panel.querySelector<HTMLElement>("[data-settings-save]");
-    if (save)
-        save.hidden = ["settings-details", "settings-presets"].includes(id);
+    const footer = panel.querySelector<HTMLElement>("[data-settings-footer]");
+    if (footer)
+        footer.hidden = ["settings-details", "settings-presets"].includes(id);
 }
 
 function revealConversationSetting(target: HTMLElement, focus = true) {

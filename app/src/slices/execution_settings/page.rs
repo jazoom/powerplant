@@ -99,6 +99,10 @@ pub(crate) struct ToolOption {
     pub(crate) selected: bool,
 }
 
+pub(crate) fn initial_tool_ids() -> Vec<ToolId> {
+    ToolId::ALL.to_vec()
+}
+
 pub(crate) fn tool_options(selected: &[String]) -> Vec<ToolOption> {
     ToolId::ALL
         .into_iter()

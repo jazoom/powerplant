@@ -73,7 +73,7 @@ impl AgentFormState {
             thinking: String::new(),
             primary: String::new(),
             revision: String::new(),
-            tools: ToolId::ALL.to_vec(),
+            tools: crate::slices::execution_settings::page::initial_tool_ids(),
             network: NetworkAccess::None.as_str().to_owned(),
             network_domains: String::new(),
             directories: Vec::new(),

@@ -54,6 +54,27 @@ struct PresetForm {
 }
 
 impl PresetForm {
+    fn new_form() -> Self {
+        // Genuinely new preset forms share the conversation and agent tool
+        // default. Submitted forms re-render as submitted, so an explicit
+        // empty tool choice survives validation.
+        let initial = crate::slices::execution_settings::page::initial_tool_ids();
+        let selected = |id: ToolId| {
+            if initial.contains(&id) {
+                id.as_str().to_owned()
+            } else {
+                String::new()
+            }
+        };
+        Self {
+            tool_list: selected(ToolId::List),
+            tool_read: selected(ToolId::Read),
+            tool_write: selected(ToolId::Write),
+            tool_run: selected(ToolId::Run),
+            ..Self::default()
+        }
+    }
+
     fn byte_len(&self) -> usize {
         [
             &self.preset_id,
@@ -214,7 +235,10 @@ async fn show(
     };
     let page = page::PresetsPage::new(
         &state,
-        record.as_ref().map(PresetForm::from).unwrap_or_default(),
+        record
+            .as_ref()
+            .map(PresetForm::from)
+            .unwrap_or_else(PresetForm::new_form),
         error,
     );
     match graft {
@@ -282,7 +306,7 @@ async fn save(
     if form.byte_len() > 96 * 1024 {
         return patch(
             state,
-            PresetForm::default(),
+            form,
             "The preset form exceeds 96 KiB.",
             PatchStatus::UnprocessableEntity,
         );

@@ -1892,8 +1892,8 @@
                       No work locations are selected. Commands start in Power
                       Plant's current directory.
                     {% else %}
-                      Tools have no access to your directories. They use
-                      temporary storage at
+                      Tools have no access to your directories. They use scratch
+                      storage at
                       <code>/workspace</code>.
                     {% endif %}
                   </p>
@@ -2267,7 +2267,7 @@
                         <p class="mt-1 text-sm">
                           This change does not save edits to the model,
                           instructions, tools or network access. Those edits
-                          need Save settings afterward.
+                          need Review setup changes afterward.
                         </p>
                         {% if change.backend_changes %}
                           <p class="mt-1 text-sm break-words">
@@ -2589,8 +2589,20 @@
         </div>
         {% if !self.is_new() %}
           <div
-            class="border-base-300 flex min-h-18 shrink-0 items-center justify-end gap-3 border-t px-5 py-3 sm:px-6"
+            data-settings-footer
+            class="border-base-300 flex min-h-18 shrink-0 flex-wrap items-center justify-end gap-3 border-t px-5 py-3 sm:px-6"
           >
+            <p class="text-quiet mr-auto text-xs">
+              Changes stay draft until you apply the setup.
+            </p>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              popovertarget="conversation-settings"
+              popovertargetaction="hide"
+            >
+              Cancel setup changes
+            </button>
             <button
               form="conversation-settings-form"
               data-settings-save
@@ -2598,7 +2610,7 @@
               type="submit"
               {% if job_active || session_busy %}disabled{% endif %}
             >
-              Save settings
+              Review setup changes
             </button>
           </div>
         {% endif %}

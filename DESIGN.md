@@ -161,7 +161,9 @@ Keep applied files and end task appears only when every transaction holds a know
 
 ### Setup
 
-Setup occupies the companion position. One native section selector reveals a group without removal of the other controls. The former hidden tabs are retired.
+Setup occupies the companion position. One native section selector reveals a group without removal of the other controls. The former hidden tabs are retired. The six sections, Model, Instructions and tools, Execution, Directories, Presets and Conversation details, are the approved production difference from the reference tab buttons. Genuinely new conversation, agent and preset forms select List, Read, Write and Run. An explicit empty tool choice stays empty after validation and on existing or copied records.
+
+Setup submits through Review setup changes with Cancel setup changes. Requested values stay draft until the save or approval command succeeds. The execution-switch preview and its Stop task and switch, Discard changes and switch and Change execution settings settlement paths are unchanged.
 
 Setup and Plans follow the actual header height. Long mobile titles remain visible above the open companion.
 

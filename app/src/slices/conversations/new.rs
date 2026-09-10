@@ -52,9 +52,24 @@ pub(super) async fn show(
     graft: GraftRequest,
     Query(query): Query<NewQuery>,
 ) -> AppResult<Response> {
+    // Genuinely new drafts start with every tool selected. Copied drafts
+    // below overwrite these fields from the source, and validation failures
+    // re-render the submitted form, so an explicit empty choice survives.
+    let initial = crate::slices::execution_settings::page::initial_tool_ids();
+    let selected = |id: crate::agents::ToolId| {
+        if initial.contains(&id) {
+            id.as_str().to_owned()
+        } else {
+            String::new()
+        }
+    };
     let mut form = NewForm {
         project: query.project,
         network: "none".to_owned(),
+        tool_list: selected(crate::agents::ToolId::List),
+        tool_read: selected(crate::agents::ToolId::Read),
+        tool_write: selected(crate::agents::ToolId::Write),
+        tool_run: selected(crate::agents::ToolId::Run),
         environment: super::default_environment(&state)
             .map(|id| id.as_hex())
             .unwrap_or_default(),

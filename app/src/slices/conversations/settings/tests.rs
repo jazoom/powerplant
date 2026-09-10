@@ -966,3 +966,56 @@ async fn strategy_switch_binds_existing_roots_and_waits_for_cancelled_commands()
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(state.conversations.get(&active.id).unwrap(), updated);
 }
+
+#[tokio::test]
+async fn explicit_empty_tool_selection_persists_without_default_substitution() {
+    let state = test_state();
+    let token = connected(&state);
+    let record = state.conversations.create("Saved".to_owned()).unwrap();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let path = format!("/conversations/{}/settings", record.id);
+    let fields = format!(
+        "revision={}&provider=xai&model=grok-4.6&thinking={}&instructions=Concise+replies",
+        record.revision,
+        effort.as_str()
+    );
+    let response = app(&state)
+        .oneshot(command(&path, &token, &fields))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = text(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let updated = state.conversations.get(&record.id).unwrap();
+    assert!(updated.model.as_ref().unwrap().settings.tools.is_empty());
+    assert!(body.contains("Review setup changes"));
+    assert!(body.contains("Cancel setup changes"));
+    let invalid = format!(
+        "revision={}&provider=xai&model=grok-4.6&thinking=invalid&instructions=Concise+replies",
+        updated.revision
+    );
+    let response = app(&state)
+        .oneshot(command(&path, &token, &invalid))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = text(response).await;
+    assert!(body.contains("data-settings-open=\"true\""));
+    // The submitted instructions survive validation so the user keeps their edits.
+    assert!(body.contains("Concise replies"));
+    assert!(
+        state
+            .conversations
+            .get(&record.id)
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .settings
+            .tools
+            .is_empty()
+    );
+}
