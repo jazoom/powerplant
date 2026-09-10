@@ -20,6 +20,8 @@ pub(super) fn router() -> Router<AppState> {
 struct Selection {
     #[serde(default)]
     page: usize,
+    #[serde(default)]
+    conversation: Option<String>,
 }
 
 async fn show(
@@ -28,7 +30,16 @@ async fn show(
     graft: PageGraft,
     Query(query): Query<Selection>,
 ) -> AppResult<Response> {
-    let view = page::AttentionPage::new(&state, query.page);
+    // Return paths derive from validated records only. Arbitrary return
+    // URLs are never honoured, so forged context falls back safely.
+    let conversation = query
+        .conversation
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(crate::conversations::ConversationId::parse)
+        .filter(|id| state.conversations.get(id).is_some());
+    let view = page::AttentionPage::new(&state, query.page, conversation);
     match graft {
         PageGraft::Document => responses::chat_page_response("Needs your attention", &state, &view),
         PageGraft::Navigation => Ok(hypergraft::outcome::page_patch(

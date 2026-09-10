@@ -123,7 +123,7 @@ Needs your attention carries the positive server decision count. The live projec
 
 Conversation pages carry their own header with the mobile menu trigger. The separate location bar stays for catalogue pages that need navigation and execution status.
 
-Needs your attention lists real unresolved decisions with owning context links. History connects conversations to runs, task loops and evidence.
+Needs your attention lists real unresolved decisions with owning context links. An optional conversation identifier selects the return destination only: valid context shows Back to conversation, while any other value shows Back to conversations. Refresh and decision pages preserve valid context, and every decision stays visible. History connects conversations to runs, task loops and evidence.
 
 Workflows and presets opens the shared resource page. Ruled sections distinguish reusable processes from complete settings snapshots.
 

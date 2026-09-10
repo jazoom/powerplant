@@ -130,7 +130,7 @@ The sidebar search filters those recent titles live as plain text, with the cata
 
 Needs your attention lists unresolved candidate, plan and host-command decisions across conversations. Each entry opens its owning context without execution approval.
 
-The decision view uses pages of thirty entries. Refresh decisions reads the current server state.
+The decision view uses pages of thirty entries. Refresh decisions reads the current server state. An optional conversation identifier carries the return destination from a conversation: valid context shows Back to conversation and survives refresh and pagination, while all decisions remain visible.
 
 History links the newest fifty runs and task loops to their owning conversations. Child runs retain parent links and immutable evidence.
 

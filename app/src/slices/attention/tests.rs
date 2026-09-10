@@ -91,7 +91,9 @@ async fn decisions_retain_child_gate_and_conversation_identity_without_commands(
             Ok(())
         })
         .unwrap();
-    let body = super::page::AttentionPage::new(&state, 0).render().unwrap();
+    let body = super::page::AttentionPage::new(&state, 0, None)
+        .render()
+        .unwrap();
     assert!(!body.contains(&gate_href));
     let record = state.conversations.get(&parent.conversation_id).unwrap();
     let job = record.active_job.unwrap();
@@ -112,15 +114,155 @@ async fn decisions_retain_child_gate_and_conversation_identity_without_commands(
             attempt: None,
         })
         .unwrap();
-    let body = super::page::AttentionPage::new(&state, 0).render().unwrap();
+    let body = super::page::AttentionPage::new(&state, 0, None)
+        .render()
+        .unwrap();
     assert!(body.contains("Needs command approval"));
     assert!(body.contains(&owner));
     assert!(!body.contains("echo test"));
     state.host_approvals.invalidate_job(job);
     assert!(
-        !super::page::AttentionPage::new(&state, 0)
+        !super::page::AttentionPage::new(&state, 0, None)
             .render()
             .unwrap()
             .contains("Needs command approval")
     );
+}
+
+/// Context selects the return destination only. Forged, malformed or
+/// deleted identifiers fall back to the catalogue without reflection.
+#[tokio::test]
+async fn contextual_attention_validates_identifiers_and_preserves_context() {
+    let (state, token, _, parent) = crate::slices::human_gates::tests::loop_at_gate();
+    let owner = format!("/conversations/{}", parent.conversation_id.as_hex());
+    let child = state
+        .workflow_runs
+        .active_runs()
+        .into_iter()
+        .find(|run| run.parent_loop == Some(parent.id))
+        .unwrap();
+    let gate = child
+        .gates
+        .iter()
+        .find(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
+        .unwrap();
+    let gate_href = format!("/runs/{}/gates/{}", child.id.as_hex(), gate.id.as_hex());
+
+    let contextual = super::page::AttentionPage::new(&state, 0, Some(parent.conversation_id))
+        .render()
+        .unwrap();
+    assert!(contextual.contains(">Back to conversation<"));
+    assert!(contextual.contains(&format!("href=\"{owner}\"")));
+    assert!(contextual.contains(&format!(
+        "/attention?conversation={}",
+        parent.conversation_id.as_hex()
+    )));
+    assert!(contextual.contains(&owner));
+    assert!(contextual.contains(&gate_href));
+
+    let plain = super::page::AttentionPage::new(&state, 0, None)
+        .render()
+        .unwrap();
+    assert!(plain.contains(">Back to conversations<"));
+    assert!(plain.contains("href=\"/conversations\""));
+    assert!(plain.contains(&owner));
+    assert!(plain.contains(&gate_href));
+
+    let unknown =
+        crate::conversations::ConversationId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    assert!(state.conversations.get(&unknown).is_none());
+    let fallback = super::page::AttentionPage::new(&state, 0, Some(unknown))
+        .render()
+        .unwrap();
+    assert!(fallback.contains(">Back to conversations<"));
+    assert!(!fallback.contains(">Back to conversation<"));
+    assert!(fallback.contains(&gate_href));
+
+    let app = crate::slices::router()
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone());
+    let cookie = format!("powerplant_session={token}");
+    let conversation = parent.conversation_id.as_hex();
+    for (uri, back_label, back_href) in [
+        (
+            format!("/attention?conversation={conversation}"),
+            ">Back to conversation<",
+            owner.clone(),
+        ),
+        (
+            "/attention?conversation=not-a-conversation-id".to_owned(),
+            ">Back to conversations<",
+            "/conversations".to_owned(),
+        ),
+        (
+            "/attention?conversation=https%3A%2F%2Fexample.com%2Fevil".to_owned(),
+            ">Back to conversations<",
+            "/conversations".to_owned(),
+        ),
+        (
+            "/attention?conversation=0123456789abcdef0123456789abcdef".to_owned(),
+            ">Back to conversations<",
+            "/conversations".to_owned(),
+        ),
+    ] {
+        for kind in [None, Some("navigation")] {
+            let mut request = Request::builder().uri(&uri).header(header::COOKIE, &cookie);
+            if let Some(kind) = kind {
+                request = request
+                    .header(hypergraft::GRAFT_REQUEST, kind)
+                    .header(header::ACCEPT, hypergraft::MEDIA_TYPE);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = String::from_utf8(
+                to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(body.contains(back_label), "{uri}");
+            assert!(body.contains(&back_href), "{uri}");
+            assert!(body.contains(&gate_href), "{uri}");
+            assert!(!body.contains("example.com/evil"), "{uri}");
+        }
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/attention?page=0&conversation={conversation}"))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains(&format!("/attention?conversation={conversation}")));
+}
+
+/// The shared suffix keeps refresh and decision pages on the validated
+/// conversation without touching return-path construction elsewhere.
+#[test]
+fn attention_context_suffix_preserves_valid_context_only() {
+    let id = crate::conversations::ConversationId::parse(&"a".repeat(32)).expect("identifier");
+    assert_eq!(
+        super::page::context_suffix(Some(id)),
+        format!("&conversation={}", id.as_hex())
+    );
+    assert!(super::page::context_suffix(None).is_empty());
 }

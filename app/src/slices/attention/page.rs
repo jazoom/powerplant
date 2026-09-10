@@ -1,4 +1,4 @@
-use crate::{state::AppState, workflows::gates::HumanGateState};
+use crate::{conversations::ConversationId, state::AppState, workflows::gates::HumanGateState};
 use askama::Template;
 
 #[derive(Template)]
@@ -8,6 +8,9 @@ pub(crate) struct AttentionPage {
     total: usize,
     previous: String,
     next: String,
+    back_href: String,
+    back_label: &'static str,
+    refresh_href: String,
 }
 
 struct Decision {
@@ -23,27 +26,52 @@ impl AttentionPage {
         decisions(state).len()
     }
 
-    pub(super) fn new(state: &AppState, page: usize) -> Self {
+    pub(super) fn new(state: &AppState, page: usize, conversation: Option<ConversationId>) -> Self {
+        // The optional conversation only selects the return destination.
+        // Every decision stays visible so other conversations keep context.
+        let context = conversation.filter(|id| state.conversations.get(id).is_some());
+        let suffix = context_suffix(context);
         let decisions = decisions(state);
         let total = decisions.len();
         let page = page.min(total.saturating_sub(1) / 30);
         let next = if total > (page + 1) * 30 {
-            format!("/attention?page={}", page + 1)
+            format!("/attention?page={}{suffix}", page + 1)
         } else {
             String::new()
         };
         let previous = if page > 0 {
-            format!("/attention?page={}", page - 1)
+            format!("/attention?page={}{suffix}", page - 1)
         } else {
             String::new()
+        };
+        let (back_href, back_label, refresh_href) = match context {
+            Some(id) => (
+                format!("/conversations/{}", id.as_hex()),
+                "Back to conversation",
+                format!("/attention?conversation={}", id.as_hex()),
+            ),
+            None => (
+                "/conversations".to_owned(),
+                "Back to conversations",
+                "/attention".to_owned(),
+            ),
         };
         Self {
             decisions: decisions.into_iter().skip(page * 30).take(30).collect(),
             total,
             previous,
             next,
+            back_href,
+            back_label,
+            refresh_href,
         }
     }
+}
+
+/// Query suffix that preserves validated attention context across refresh
+/// and decision pages. Empty without context, so native links stay clean.
+pub(super) fn context_suffix(conversation: Option<ConversationId>) -> String {
+    conversation.map_or_else(String::new, |id| format!("&conversation={}", id.as_hex()))
 }
 
 fn decisions(state: &AppState) -> Vec<Decision> {

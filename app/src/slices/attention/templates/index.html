@@ -2,6 +2,7 @@
   data-section="attention"
   class="workspace-library mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-5 py-8 sm:px-8"
 >
+  <a href="{{ back_href }}" data-graft class="link">{{ back_label }}</a>
   <header class="page-intro">
     <div>
       <h1>Needs your attention</h1>
@@ -10,7 +11,7 @@
         its conversation and exact execution context.
       </p>
     </div>
-    <a href="/attention" data-graft class="btn btn-secondary btn-sm"
+    <a href="{{ refresh_href }}" data-graft class="btn btn-secondary btn-sm"
       >Refresh decisions</a
     >
   </header>
@@ -35,12 +36,11 @@
           </div>
           <div class="flex flex-col gap-2">
             <span class="text-sm">{{ decision.reason }}</span
-            >{% if !decision.evidence.is_empty() %}<a
-              href="{{ decision.evidence }}"
-              data-graft
-              class="link text-sm"
-              >Review exact decision</a
-            >{% endif %}
+            >{% if !decision.evidence.is_empty() %}
+              <a href="{{ decision.evidence }}" data-graft class="link text-sm"
+                >Review exact decision</a
+              >
+            {% endif %}
           </div>
         </li>
       {% endfor %}
@@ -51,16 +51,10 @@
     </p>
   {% endif %}
   <nav aria-label="Decision pages" class="flex gap-4">
-    {% if !previous.is_empty() %}<a
-      href="{{ previous }}"
-      data-graft
-      class="link"
-      >Previous</a
-    >{% endif %}{% if !next.is_empty() %}<a
-      href="{{ next }}"
-      data-graft
-      class="link"
-      >Next</a
-    >{% endif %}
+    {% if !previous.is_empty() %}
+      <a href="{{ previous }}" data-graft class="link">Previous</a>
+    {% endif %}{% if !next.is_empty() %}
+      <a href="{{ next }}" data-graft class="link">Next</a>
+    {% endif %}
   </nav>
 </main>
