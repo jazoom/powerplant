@@ -11,7 +11,6 @@ export function initWorkspace(
     let returnFocus: HTMLElement | null = null;
     let previousActivity = false;
     let previousPlan = false;
-    let plansReturnFocus: HTMLElement | null = null;
     let setupReturnFocus: HTMLElement | null = null;
     let menuTrigger: HTMLElement | null = null;
     let header: HTMLElement | null = null;
@@ -82,7 +81,9 @@ export function initWorkspace(
             previousActivity = workOpen;
         }
         const active = work?.dataset.workActive === "true";
-        const plan = !!root.querySelector("#plan-detail, #workflow-detail");
+        const plan = !!root.querySelector(
+            "#plan-detail, #workflow-detail, #plans-detail, #plan-request-detail",
+        );
         if (previousActivity && !active && work?.dataset.workEmpty === "true")
             workOpen = false;
         if (previousPlan && !plan && !active) workOpen = false;
@@ -97,7 +98,7 @@ export function initWorkspace(
             },
         );
         const setup = root.querySelector(
-            "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
+            "#conversation-settings:popover-open, #conversation-actions:popover-open",
         );
         if (work) work.inert = !!setup;
         detail?.toggleAttribute(
@@ -236,7 +237,9 @@ export function initWorkspace(
             : root.querySelector<HTMLElement>(
                   root.querySelector("#workflow-detail")
                       ? "[data-workflow-toggle]"
-                      : root.querySelector("#plan-detail")
+                      : root.querySelector(
+                              "#plan-detail, #plans-detail, #plan-request-detail",
+                          )
                         ? "[data-plans-toggle]"
                         : "[data-work-toggle]",
               );
@@ -256,27 +259,11 @@ export function initWorkspace(
                 setupTrigger.getAttribute("popovertargetaction") !== "hide"
             )
                 setupReturnFocus = setupTrigger;
-            if (
-                target?.closest("[data-plans-toggle]") &&
-                !event.ctrlKey &&
-                !event.metaKey &&
-                !event.shiftKey &&
-                !event.altKey &&
-                event.button === 0
-            ) {
-                event.preventDefault();
-                plansReturnFocus = target.closest<HTMLElement>(
-                    "[data-plans-toggle]",
-                );
-                root.querySelector<HTMLElement>(
-                    "#conversation-documents",
-                )?.showPopover();
-                sync();
-            } else if (target?.closest("[data-work-toggle]")) {
+            if (target?.closest("[data-work-toggle]")) {
                 returnFocus = target.closest<HTMLElement>("[data-work-toggle]");
                 workOpen = !workOpen;
                 root.querySelector<HTMLElement>(
-                    "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
+                    "#conversation-settings:popover-open, #conversation-actions:popover-open",
                 )?.hidePopover();
                 sync();
                 if (workOpen)
@@ -366,28 +353,20 @@ export function initWorkspace(
             if (
                 event.target instanceof HTMLElement &&
                 (event.target.id === "conversation-settings" ||
-                    event.target.id === "conversation-documents" ||
                     event.target.id === "conversation-actions")
             ) {
                 sync();
                 if (
                     !event.target.matches(":popover-open") &&
                     !root.querySelector(
-                        "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
+                        "#conversation-settings:popover-open, #conversation-actions:popover-open",
                     )
                 ) {
-                    const plans = event.target.id === "conversation-documents";
                     const actions = event.target.id === "conversation-actions";
-                    const trigger = plans
-                        ? plansReturnFocus
-                        : actions
-                          ? null
-                          : setupReturnFocus;
-                    const fallback = plans
-                        ? "[data-plans-toggle]"
-                        : actions
-                          ? '[popovertarget="conversation-actions"]'
-                          : '[popovertarget="conversation-settings"]';
+                    const trigger = actions ? null : setupReturnFocus;
+                    const fallback = actions
+                        ? '[popovertarget="conversation-actions"]'
+                        : '[popovertarget="conversation-settings"]';
                     const destination = trigger?.isConnected
                         ? trigger
                         : root.querySelector<HTMLElement>(fallback);
@@ -415,16 +394,23 @@ export function initWorkspace(
             if (
                 context.cause === "location" &&
                 context.detail.cause !== "command-patch-replacement" &&
-                /^\/(?:plans\/[^/]+|conversations\/[^/]+\/workflow)$/.test(
-                    new URL(context.detail.url, location.href).pathname,
-                ) &&
-                root.querySelector("#plan-detail, #workflow-detail")
+                root.querySelector(
+                    "#plan-detail, #workflow-detail, #plans-detail, #plan-request-detail",
+                )
             ) {
-                workOpen = true;
-                expanded = false;
-                root.querySelector<HTMLElement>(
-                    "#conversation-settings:popover-open, #conversation-documents:popover-open, #conversation-actions:popover-open",
-                )?.hidePopover();
+                const url = new URL(context.detail.url, location.href);
+                if (
+                    /^\/(?:plans\/[^/]+|conversations\/[^/]+\/(?:workflow|plans(?:\/request)?))$/.test(
+                        url.pathname,
+                    ) ||
+                    url.searchParams.get("plans") === "true"
+                ) {
+                    workOpen = true;
+                    expanded = false;
+                    root.querySelector<HTMLElement>(
+                        "#conversation-settings:popover-open, #conversation-actions:popover-open",
+                    )?.hidePopover();
+                }
             }
             sync();
         },

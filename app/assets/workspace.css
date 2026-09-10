@@ -510,11 +510,7 @@ body {
 }
 #conversation-detail:has(.workspace-companion:not([hidden])),
 #conversation-detail:has(
-    :is(
-        [id="conversation-settings"],
-        [id="conversation-documents"],
-        [id="conversation-actions"]
-    ):popover-open
+    :is([id="conversation-settings"], [id="conversation-actions"]):popover-open
 ) {
     grid-template-columns: minmax(0, 1fr) 400px;
 }
@@ -538,7 +534,9 @@ body {
     font-size: 24px;
 }
 #plan-detail h2,
-#workflow-detail h2 {
+#workflow-detail h2,
+#plans-detail h2,
+#plan-request-detail h2 {
     font-size: 16px;
 }
 .workspace-work-content:has(#workflow-detail) {
@@ -611,13 +609,16 @@ body {
 #workflow-detail .page-intro > a {
     display: none;
 }
-.workspace-plan-footer {
+.workspace-plan-footer,
+.workspace-plans-footer {
     background: var(--color-base-100);
 }
-.workspace-work-content:has(#plan-detail) {
+.workspace-work-content:has(#plan-detail, #plans-detail, #plan-request-detail) {
     overflow: hidden;
 }
-#conversation-work #plan-detail {
+#conversation-work #plan-detail,
+#conversation-work #plans-detail,
+#conversation-work #plan-request-detail {
     height: 100%;
     min-height: 0;
 }
@@ -720,9 +721,7 @@ body {
     border: 0;
     box-shadow: none;
 }
-#conversation-detail:has(
-        :is(#conversation-settings, #conversation-documents):popover-open
-    )
+#conversation-detail:has(:is(#conversation-settings):popover-open)
     .workspace-companion {
     visibility: hidden;
 }
@@ -777,7 +776,7 @@ body {
 .workspace-idle {
     border-top: 1px solid var(--color-base-300);
 }
-:is(#conversation-settings, #conversation-documents):popover-open {
+:is(#conversation-settings):popover-open {
     inset: var(--workspace-panel-top, 121px) 0 0 auto;
     margin: 0;
     width: 400px;
@@ -824,12 +823,7 @@ body {
 }
 @media (max-width: 700px) {
     #conversation-detail:has(.workspace-companion:not([hidden])),
-    #conversation-detail:has(
-        :is(
-            [id="conversation-settings"],
-            [id="conversation-documents"]
-        ):popover-open
-    ) {
+    #conversation-detail:has(:is([id="conversation-settings"]):popover-open) {
         grid-template-columns: minmax(0, 1fr);
     }
     #conversation-detail > header {
@@ -849,7 +843,7 @@ body {
         z-index: 3;
         border-left: 0;
     }
-    :is(#conversation-settings, #conversation-documents):popover-open {
+    :is(#conversation-settings):popover-open {
         width: 100%;
     }
     #conversation-composer-dock {

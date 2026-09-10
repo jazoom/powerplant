@@ -69,12 +69,53 @@ async fn plans_navigation_and_revision_fragments_use_canonical_routes() {
     assert!(state.workflow_runs.for_conversation(&record.id).is_empty());
     let plans = app(&state)
         .oneshot(document(
+            &format!("/conversations/{}/plans", record.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(plans.status(), StatusCode::OK);
+    let plans = text(plans).await;
+    assert!(plans.contains("id=\"plans-detail\""));
+    assert!(plans.contains("Changed source"));
+    assert!(plans.contains("Revision 2"));
+    assert!(plans.contains("Open plan"));
+    assert!(plans.contains("Remove"));
+    assert!(plans.contains("Create a plan"));
+    assert!(plans.contains("Add your own plan"));
+    assert!(plans.contains("Standalone task lists"));
+    // The Plans header action stays highlighted while the companion is open.
+    assert!(plans.contains("aria-current=\"page\""));
+    let legacy = app(&state)
+        .oneshot(document(
             &format!("/conversations/{}?plans=true", record.id),
             &token,
         ))
         .await
         .unwrap();
-    assert!(text(plans).await.contains("data-documents-open=\"true\""));
+    assert_eq!(legacy.status(), StatusCode::OK);
+    assert!(text(legacy).await.contains("id=\"plans-detail\""));
+    let enhanced = app(&state)
+        .oneshot(navigation(
+            &format!("/conversations/{}/plans", record.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(enhanced.status(), StatusCode::OK);
+    assert!(text(enhanced).await.contains("target=\"chat-main\""));
+    let patch = Request::builder()
+        .uri(format!("/conversations/{}/plans", record.id))
+        .header("Cookie", format!("powerplant_session={token}"))
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header("Accept", hypergraft::MEDIA_TYPE)
+        .body(Body::empty())
+        .unwrap();
+    let fragment = app(&state).oneshot(patch).await.unwrap();
+    assert_eq!(fragment.status(), StatusCode::OK);
+    let fragment = text(fragment).await;
+    assert!(fragment.contains("target=\"conversation-detail\""));
+    assert!(fragment.contains("id=\"plans-detail\""));
 }
 
 #[tokio::test]
@@ -266,4 +307,176 @@ async fn native_plan_requests_create_no_action_or_conversation_job() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(state.documents.list_for_conversation(record.id).is_empty());
     assert_eq!(state.conversations.get(&record.id), Some(record));
+}
+
+#[tokio::test]
+async fn plans_request_companions_validate_mode_and_source_message() {
+    let state = test_state();
+    let token = connected(&state);
+    let session = super::super::tests::session_id(&token);
+    let record = state.conversations.create("Requests".to_owned()).unwrap();
+
+    let empty = app(&state)
+        .oneshot(document(
+            &format!("/conversations/{}/plans", record.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::OK);
+    let empty = text(empty).await;
+    assert!(empty.contains("No plans yet."));
+    assert!(empty.contains("A conversation does not need a plan."));
+
+    for (mode, action, submit) in [
+        ("create", "plans/request", "Create plan"),
+        ("paste", "plans/text", "Add plan"),
+    ] {
+        let response = app(&state)
+            .oneshot(document(
+                &format!("/conversations/{}/plans/request?mode={mode}", record.id),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = text(response).await;
+        assert!(body.contains("id=\"plan-request-detail\""));
+        assert!(body.contains(&format!("/conversations/{}/{action}", record.id)));
+        assert!(body.contains(submit));
+        assert!(body.contains("Back to plans"));
+    }
+
+    let unknown = app(&state)
+        .oneshot(document(
+            &format!("/conversations/{}/plans/request?mode=review", record.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        text(unknown)
+            .await
+            .contains("Choose how to create the plan.")
+    );
+
+    let missing = app(&state)
+        .oneshot(document(
+            &format!(
+                "/conversations/{}/plans/request?mode=from&message_index=0",
+                record.id
+            ),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        text(missing)
+            .await
+            .contains("Select a completed assistant message as the plan source.")
+    );
+
+    let job = state
+        .sessions
+        .begin_conversation_job(&session, record.id, 1)
+        .unwrap();
+    let selection = crate::providers::ModelSelection::new(
+        crate::providers::ProviderKind::Xai,
+        "grok-4.6".to_owned(),
+        state
+            .models_dev
+            .effective_effort(crate::providers::ProviderKind::Xai, "grok-4.6", None),
+    )
+    .unwrap();
+    let record = state
+        .conversations
+        .begin_message(
+            &record.id,
+            record.revision,
+            selection,
+            job.id(),
+            "User prompt".to_owned(),
+        )
+        .unwrap();
+    state
+        .conversations
+        .settle_message(
+            &record.id,
+            job.id(),
+            "Exact source reply.".to_owned(),
+            crate::conversations::MessageStatus::Complete,
+            None,
+        )
+        .unwrap();
+    state
+        .sessions
+        .finish_conversation_job(&session, record.id, job.id());
+    let record = state.conversations.get(&record.id).unwrap();
+
+    let from = app(&state)
+        .oneshot(document(
+            &format!(
+                "/conversations/{}/plans/request?mode=from&message_index=1",
+                record.id
+            ),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(from.status(), StatusCode::OK);
+    let from = text(from).await;
+    assert!(from.contains("id=\"plan-request-detail\""));
+    assert!(from.contains("Source reply 2"));
+    assert!(from.contains("Exact source reply."));
+    assert!(from.contains("Response 2"));
+    assert!(from.contains(&format!("/conversations/{}/plans/from-message", record.id)));
+
+    for raw in ["0", "9", "not-an-index"] {
+        let rejected = app(&state)
+            .oneshot(document(
+                &format!(
+                    "/conversations/{}/plans/request?mode=from&message_index={raw}",
+                    record.id
+                ),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            text(rejected)
+                .await
+                .contains("Select a completed assistant message as the plan source.")
+        );
+    }
+
+    // A tampered source index cannot dispatch a plan preparation job.
+    let forged = Request::builder()
+        .method("POST")
+        .uri(format!("/conversations/{}/plans/from-message", record.id))
+        .header("Cookie", format!("powerplant_session={token}"))
+        .header(hypergraft::GRAFT_REQUEST, "patch")
+        .header("Accept", hypergraft::MEDIA_TYPE)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!(
+            "revision={}&message_index=9&title=Forged&request=Forged",
+            record.revision
+        )))
+        .unwrap();
+    let forged = app(&state).oneshot(forged).await.unwrap();
+    assert_eq!(forged.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let forged = text(forged).await;
+    assert!(forged.contains("id=\"plan-request-detail\""));
+    assert!(forged.contains("Select a completed assistant message as the plan source."));
+    assert!(state.documents.list_for_conversation(record.id).is_empty());
+    assert!(
+        state
+            .conversations
+            .get(&record.id)
+            .unwrap()
+            .active_job
+            .is_none()
+    );
 }

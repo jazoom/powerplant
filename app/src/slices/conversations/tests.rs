@@ -712,16 +712,16 @@ async fn conversation_actions_keep_rename_delete_and_draft_copy_behind_confirmat
     let actions_start = body
         .find("id=\"conversation-actions\"")
         .expect("actions menu");
-    let documents_start = body
-        .find("id=\"conversation-documents\"")
-        .expect("plans panel");
     let transcript_start = body.find("id=\"transcript\"").unwrap_or(body.len());
-    let documents = &body[documents_start..actions_start];
     let actions = &body[actions_start..transcript_start];
     // The draft copy carries source identity in Conversation actions, not Plans.
     let draft = format!("/conversations/new?source={}", record.id.as_hex());
     assert!(actions.contains(&draft));
-    assert!(!documents.contains(&draft));
+    // Plans live in the companion beside the transcript. The header keeps a
+    // native link to the canonical list route instead of a floating panel.
+    assert!(!body.contains("id=\"conversation-documents\""));
+    assert!(!body.contains("id=\"plans-detail\""));
+    assert!(body.contains(&format!("{path}/plans\"")));
     assert!(actions.contains(&format!("{path}/rename")));
     assert!(actions.contains(&format!("{path}/delete")));
     assert!(

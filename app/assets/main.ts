@@ -156,7 +156,7 @@ listenForRequestSettled((detail) => {
                 button.removeAttribute("aria-disabled");
         });
     const requestedPanel = document.querySelector<HTMLElement>(
-        '#conversation-settings[data-settings-open="true"], #conversation-documents[data-documents-open="true"]',
+        '#conversation-settings[data-settings-open="true"]',
     );
     // A top-layer panel must not conceal command or transport errors.
     document

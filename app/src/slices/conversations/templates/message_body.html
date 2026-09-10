@@ -1,7 +1,7 @@
 <header class="chat-turn-meta flex items-center gap-2">
-  {% if message.user %}<span class="user-avatar" aria-hidden="true"
-    >Y</span
-  >{% endif %}<strong
+  {% if message.user %}
+    <span class="user-avatar" aria-hidden="true">Y</span>
+  {% endif %}<strong
     >{% if message.user %}You{% else %}Power Plant{% endif %}</strong
   >
   {% if message.status != "" && message.error == "" %}
@@ -29,68 +29,20 @@
     </div>
   {% endif %}
   {% if message.saveable_plan %}
-    <details class="mt-2">
-      <summary class="btn btn-ghost btn-sm min-h-11">
+    <div class="mt-2">
+      <a
+        href="{{ message.plan_request_href }}"
+        data-graft
+        class="btn btn-ghost btn-sm min-h-11"
+      >
         <svg class="workspace-icon" aria-hidden="true">
           <use href="/static/images/workspace-icons.svg#file" /></svg
-        >Create a plan from this
-      </summary>
-      <form
-        data-graft
-        method="post"
-        action="{{ message.plan_action }}"
-        class="border-base-300 mt-2 flex flex-col gap-3 border-t pt-3"
+        >Create a plan from this</a
       >
-        <input
-          type="hidden"
-          name="revision"
-          value="{{ message.conversation_revision }}"
-        />
-        <input type="hidden" name="message_index" value="{{ message.index }}" />
-        <p class="text-quiet text-sm">
-          This requests an explicit plan action from the model. It grants no
-          execution approval.
-        </p>
-        <label
-          class="flex flex-col gap-1"
-          for="document-title-{{ message.index }}"
-        >
-          <span class="text-sm">Plan title</span>
-          <input
-            id="document-title-{{ message.index }}"
-            class="input input-bordered w-full"
-            name="title"
-            required
-            maxlength="120"
-            value="Response {{ message.index + 1 }}"
-          />
-        </label>
-        <label
-          class="flex flex-col gap-1"
-          for="plan-request-{{ message.index }}"
-        >
-          <span class="text-sm">Request</span>
-          <textarea
-            id="plan-request-{{ message.index }}"
-            class="textarea textarea-bordered"
-            name="request"
-            maxlength="8192"
-          >
-Create a plan from this response.</textarea>
-        </label>
-        <div class="flex flex-wrap gap-2">
-          <button class="btn btn-secondary btn-sm min-h-11" type="submit">
-            Create plan
-          </button>
-          <button
-            class="btn btn-secondary btn-sm min-h-11"
-            type="submit"
-            formaction="{{ message.task_action }}"
-          >
-            Save as task list
-          </button>
-        </div>
-      </form>
-    </details>
+      <p class="text-quiet mt-2 text-sm">
+        This requests an explicit plan action from the model. It grants no
+        execution approval.
+      </p>
+    </div>
   {% endif %}
 </div>

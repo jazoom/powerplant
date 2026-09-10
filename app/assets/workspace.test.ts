@@ -7,7 +7,7 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-test.each(["plan", "workflow"])(
+test.each(["plan", "plans", "plan-request", "workflow"])(
     "a %s companion excludes mobile conversation controls and releases them after a command patch",
     (kind) => {
         vi.stubGlobal("matchMedia", () => ({
@@ -27,9 +27,9 @@ test.each(["plan", "workflow"])(
         expect(transcript.inert).toBe(false);
         expect(document.activeElement).toBe(
             root.querySelector(
-                kind === "plan"
-                    ? "[data-plans-toggle]"
-                    : "[data-workflow-toggle]",
+                kind === "workflow"
+                    ? "[data-workflow-toggle]"
+                    : "[data-plans-toggle]",
             ),
         );
         root.querySelector(`#${kind}-detail`)!.remove();
@@ -45,7 +45,7 @@ test.each(["plan", "workflow"])(
     },
 );
 
-test.each(["plan", "workflow"])(
+test.each(["plan", "plans", "plan-request", "workflow"])(
     "explicit %s navigation reopens a closed retained companion, unlike patches",
     (kind) => {
         vi.stubGlobal("matchMedia", () => ({
@@ -94,7 +94,11 @@ test.each(["plan", "workflow"])(
                 url:
                     kind === "plan"
                         ? "/plans/two"
-                        : "/conversations/one/workflow",
+                        : kind === "workflow"
+                          ? "/conversations/one/workflow"
+                          : kind === "plans"
+                            ? "/conversations/one/plans"
+                            : "/conversations/one/plans/request?mode=create",
                 cause: "link-navigation",
             },
         });
@@ -155,7 +159,10 @@ test("diff colours preserve untrusted text without HTML interpretation", () => {
     const island = initWorkspace(root, {
         signal: controller.signal,
     } as Parameters<typeof initWorkspace>[1]);
-    expect(code.textContent).toBe(text);
+    const preserved = Array.from(root.querySelectorAll(".diff-text"))
+        .map((line) => line.textContent ?? "")
+        .join("");
+    expect(preserved).toBe(text);
     expect(root.querySelector("script, img")).toBeNull();
     island.destroy?.();
     controller.abort();

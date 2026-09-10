@@ -328,9 +328,7 @@ pub(super) struct MessageView {
     pub(super) error: String,
     pub(super) streaming: bool,
     pub(super) saveable_plan: bool,
-    pub(super) task_action: String,
-    pub(super) plan_action: String,
-    pub(super) conversation_revision: String,
+    pub(super) plan_request_href: String,
 }
 
 pub(super) struct PlanDocumentView {
@@ -514,7 +512,7 @@ pub(super) struct ConversationDetailView {
     pub(super) messages: Vec<MessageView>,
     pub(super) companion_html: String,
     pub(super) companion_kind: &'static str,
-    pub(super) documents_open: bool,
+    pub(super) companion_title: String,
     pub(super) plan_actions_omitted: bool,
     pub(super) omitted_messages: usize,
     model_picker: ModelPicker,
@@ -571,9 +569,6 @@ pub(super) struct SavedConversationState {
     pub(super) plans: Vec<PlanDocumentView>,
     pub(super) task_text: String,
     pub(super) task_title: String,
-    pub(super) plan_text: String,
-    pub(super) plan_title: String,
-    pub(super) plan_text_error: bool,
     pub(super) source_review: Option<ConversationLinkView>,
     pub(super) linked_reviews: Vec<ConversationLinkView>,
     pub(super) source_candidate_review: Option<CandidateReviewLinkView>,
@@ -707,7 +702,7 @@ impl ConversationDetailView {
             messages: Vec::new(),
             companion_html: String::new(),
             companion_kind: "plan",
-            documents_open: false,
+            companion_title: String::new(),
             plan_actions_omitted: false,
             omitted_messages: 0,
             attached_projects: Vec::new(),
@@ -1053,7 +1048,7 @@ impl ConversationDetailView {
             messages,
             companion_html: String::new(),
             companion_kind: "plan",
-            documents_open: false,
+            companion_title: String::new(),
             plan_actions_omitted: false,
             omitted_messages,
             model_available: selection.is_some(),
@@ -1150,9 +1145,6 @@ impl ConversationDetailView {
                 plans,
                 task_text: String::new(),
                 task_title: String::new(),
-                plan_text: String::new(),
-                plan_title: String::new(),
-                plan_text_error: false,
                 source_review,
                 linked_reviews,
                 source_candidate_review,
@@ -1920,9 +1912,11 @@ fn visible_messages(record: &ConversationRecord, byte_budget: usize) -> Vec<Mess
     for (index, message) in record.messages.iter().enumerate().rev() {
         let mut view = message_view(index, message);
         if view.saveable_plan {
-            view.plan_action = format!("/conversations/{}/plans/from-message", record.id.as_hex());
-            view.task_action = format!("/conversations/{}/tasks", record.id.as_hex());
-            view.conversation_revision = record.revision.to_string();
+            view.plan_request_href = format!(
+                "/conversations/{}/plans/request?mode=from&message_index={}",
+                record.id.as_hex(),
+                index
+            );
         }
         bytes += view.html.len() + 2048;
         if bytes > byte_budget || messages.len() >= 64 {
@@ -1958,9 +1952,7 @@ fn message_view(index: usize, message: &ConversationMessage) -> MessageView {
         saveable_plan: !user
             && message.status == MessageStatus::Complete
             && !message.text.trim().is_empty(),
-        task_action: String::new(),
-        plan_action: String::new(),
-        conversation_revision: String::new(),
+        plan_request_href: String::new(),
     }
 }
 
@@ -1974,7 +1966,7 @@ pub(super) fn message_error(message: &ConversationMessage) -> String {
     }
 }
 
-fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
+pub(super) fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
     let revision = document.current();
     PlanDocumentView {
         title: document.title.clone(),
@@ -1996,6 +1988,41 @@ fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
             document.id.as_hex()
         ),
     }
+}
+
+#[derive(Template)]
+#[template(path = "conversations/templates/plans.html", block = "plans_list")]
+pub(super) struct PlansListContents<'a> {
+    pub(super) conversation_id: &'a str,
+    pub(super) revision: &'a str,
+    pub(super) plans: &'a [PlanDocumentView],
+    pub(super) error: &'a str,
+    pub(super) job_locked: bool,
+    pub(super) task_title: &'a str,
+    pub(super) task_text: &'a str,
+    pub(super) task_open: bool,
+    pub(super) directories: &'a [DirectoryView],
+    pub(super) environment_summary: &'a str,
+    pub(super) create_href: &'a str,
+    pub(super) paste_href: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "conversations/templates/plans.html", block = "plan_request")]
+pub(super) struct PlanRequestContents<'a> {
+    pub(super) revision: &'a str,
+    pub(super) mode: &'a str,
+    pub(super) title: &'a str,
+    pub(super) request: &'a str,
+    pub(super) markdown: &'a str,
+    pub(super) message_index: &'a str,
+    pub(super) show_source: bool,
+    pub(super) source_heading: &'a str,
+    pub(super) source_text: &'a str,
+    pub(super) error: &'a str,
+    pub(super) back_href: &'a str,
+    pub(super) form_action: &'a str,
+    pub(super) submit_label: &'a str,
 }
 
 #[derive(Template)]
@@ -2033,7 +2060,93 @@ impl ConversationDetailView {
         self.omitted_messages += removed;
         self.companion_html = html;
         self.companion_kind = kind;
+        self.companion_title = String::new();
         self
+    }
+
+    pub(super) fn with_companion_titled(
+        self,
+        html: String,
+        kind: &'static str,
+        title: &str,
+    ) -> Self {
+        let mut titled = self.with_companion(html, kind);
+        titled.companion_title = title.to_owned();
+        titled
+    }
+
+    pub(super) fn command_locked(&self) -> bool {
+        self.job_active || self.session_busy
+    }
+
+    /// The Plans list occupies the companion beside the transcript. Its
+    /// header and footer stay outside the content scroll area.
+    pub(super) fn render_plans_list(&self, error: &str) -> Result<String, askama::Error> {
+        use askama::Template;
+        let saved = self.saved().expect("saved plans conversation");
+        PlansListContents {
+            conversation_id: &saved.id,
+            revision: &saved.revision,
+            plans: &saved.plans,
+            error,
+            job_locked: self.command_locked(),
+            task_title: &saved.task_title,
+            task_text: &saved.task_text,
+            task_open: !saved.task_text.is_empty(),
+            directories: &self.directories,
+            environment_summary: &self.environment_summary,
+            create_href: &format!("/conversations/{}/plans/request?mode=create", saved.id),
+            paste_href: &format!("/conversations/{}/plans/request?mode=paste", saved.id),
+        }
+        .render()
+    }
+
+    /// A plan request companion keeps the exact source message and needs an
+    /// explicit submission. Cancellation returns to Plans with no model call.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn render_plan_request(
+        &self,
+        mode: &str,
+        title: &str,
+        request: &str,
+        markdown: &str,
+        message_index: &str,
+        source_heading: &str,
+        source_text: &str,
+        error: &str,
+    ) -> Result<String, askama::Error> {
+        use askama::Template;
+        let saved = self.saved().expect("saved plan request conversation");
+        let (form_action, submit_label) = match mode {
+            "paste" => (
+                format!("/conversations/{}/plans/text", saved.id),
+                "Add plan",
+            ),
+            "from" => (
+                format!("/conversations/{}/plans/from-message", saved.id),
+                "Create plan",
+            ),
+            _ => (
+                format!("/conversations/{}/plans/request", saved.id),
+                "Create plan",
+            ),
+        };
+        PlanRequestContents {
+            revision: &saved.revision,
+            mode,
+            title,
+            request,
+            markdown,
+            message_index,
+            show_source: !source_text.is_empty(),
+            source_heading,
+            source_text,
+            error,
+            back_href: &format!("/conversations/{}/plans", saved.id),
+            form_action: &form_action,
+            submit_label,
+        }
+        .render()
     }
 
     pub(super) fn with_plan_actions(
@@ -2131,9 +2244,7 @@ impl ConversationDetailView {
                         error: String::new(),
                         streaming: false,
                         saveable_plan: false,
-                        task_action: String::new(),
-                        plan_action: String::new(),
-                        conversation_revision: String::new(),
+                        plan_request_href: String::new(),
                     },
                 );
                 continue;

@@ -99,7 +99,19 @@ pub(super) async fn request(
         }
     }
     if let Some(error) = error {
-        return super::render_preparation_document_error(&state, session.0, graft, &record, error);
+        let secret = super::plan_secret(&state, &[&form.title, &form.request]);
+        let view = super::detail_view(&state, session.0, &record, &record.title, error.message());
+        let view = super::attach_plan_request(
+            view,
+            "create",
+            &crate::tools::redact(&form.title, secret.as_deref()),
+            &crate::tools::redact(&form.request, secret.as_deref()),
+            "",
+            "",
+            None,
+            error.message(),
+        )?;
+        return super::render_preparation_command(graft, super::document_status(error), view);
     }
     super::send_preparation(state, session, graft, record, prompt, scope).await
 }

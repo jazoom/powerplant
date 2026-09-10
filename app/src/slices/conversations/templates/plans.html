@@ -1,0 +1,271 @@
+{% block plans_list %}
+  <div
+    class="workspace-plans-body min-h-0 flex-1 space-y-6 overflow-y-auto p-5"
+  >
+    <div class="space-y-2">
+      <p class="text-quiet text-sm">
+        Plans record explicit actions. Task breakdowns stay under their source
+        plan. Standalone task imports remain independent.
+      </p>
+    </div>
+    {% if error != "" %}
+      <div class="alert alert-error" role="alert" tabindex="-1">
+        <p>{{ error }}</p>
+      </div>
+    {% endif %}
+    {% if plans.is_empty() %}
+      <p class="text-sm">No plans yet.</p>
+      <p class="text-quiet text-sm">A conversation does not need a plan.</p>
+    {% else %}
+      <ul class="record-list" aria-label="Saved documents">
+        {% for plan in plans %}
+          <li class="record-row flex-wrap gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="font-medium break-words">{{ plan.title }}</p>
+              <p class="text-quiet mt-1 text-xs">
+                {{ plan.kind }} · Revision {{ plan.revision }} ·
+                {{ plan.provenance }}
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <a
+                href="{{ plan.open_href }}"
+                data-graft
+                class="btn btn-secondary btn-sm"
+                >{% if plan.task_list %}Open tasks{% else %}Open plan{% endif %}</a
+              >
+              <form data-graft method="post" action="{{ plan.remove_href }}">
+                <input type="hidden" name="revision" value="{{ revision }}" />
+                <input
+                  type="hidden"
+                  name="document_revision"
+                  value="{{ plan.revision }}"
+                />
+                <button
+                  class="btn btn-ghost btn-sm"
+                  type="submit"
+                  {% if job_locked %}disabled{% endif %}
+                >
+                  Remove
+                </button>
+              </form>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    <p class="text-quiet text-sm">
+      A plan proposes an approach. It does not approve execution or file
+      changes.
+    </p>
+    <section
+      class="space-y-3 border-t pt-5"
+      aria-labelledby="plans-standalone-heading"
+    >
+      <h3 id="plans-standalone-heading" class="font-semibold">
+        Standalone task lists
+      </h3>
+      <p class="text-quiet text-sm">
+        These entries save or import a task list on its own. They never create a
+        plan.
+      </p>
+      <details class="file-disclosure">
+        <summary>Import tasks from a directory</summary>
+        <p class="text-quiet mt-1 text-sm">
+          Import reads one authorised directory file through a read-only sandbox
+          with {{ environment_summary }}. It calls no model and executes no
+          tasks.
+        </p>
+        <form
+          data-graft
+          method="post"
+          action="/conversations/{{ conversation_id }}/tasks/import"
+          class="mt-3 flex max-w-3xl flex-col gap-3"
+        >
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <label class="flex flex-col gap-1"
+            ><span class="text-sm">Authorised directory</span>
+            <select class="select select-bordered" name="directory_id" required>
+              <option value="">Select a directory</option>
+              {% for directory in directories %}
+                <option value="{{ directory.id }}">
+                  {{ directory.host_path }}{% if !directory.available %}
+                    · Unavailable
+                  {% else if directory.pending_approval %}
+                    · Pending approval
+                  {% endif %}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="flex flex-col gap-1"
+            ><span class="text-sm">Directory-relative file path</span
+            ><input
+              class="input input-bordered"
+              name="path"
+              required
+              maxlength="4096"
+              placeholder="tasks/release.md"
+          /></label>
+          <label class="flex flex-col gap-1"
+            ><span class="text-sm">Title</span
+            ><input
+              class="input input-bordered"
+              name="title"
+              required
+              maxlength="120"
+          /></label>
+          <button
+            class="btn btn-secondary self-start"
+            type="submit"
+            {% if job_locked %}disabled{% endif %}
+          >
+            Import tasks
+          </button>
+        </form>
+      </details>
+      <details class="file-disclosure" {% if task_open %}open{% endif %}>
+        <summary>Save task list text</summary>
+        <p class="text-quiet mt-1 text-sm">
+          Use a heading and top-level checkbox tasks. Checked tasks stay as
+          authored. Power Plant only marks unchecked tasks as eligible.
+        </p>
+        <form
+          data-graft
+          method="post"
+          action="/conversations/{{ conversation_id }}/tasks/text"
+          class="mt-3 flex max-w-3xl flex-col gap-3"
+        >
+          <input type="hidden" name="revision" value="{{ revision }}" />
+          <label class="flex flex-col gap-1" for="plans-task-title"
+            ><span class="text-sm">Title</span
+            ><input
+              id="plans-task-title"
+              class="input input-bordered"
+              name="title"
+              value="{{ task_title }}"
+              required
+              maxlength="120"
+          /></label>
+          <label class="flex flex-col gap-1" for="plans-task-markdown"
+            ><span class="text-sm">Task list text</span
+            ><textarea
+              id="plans-task-markdown"
+              class="textarea textarea-bordered min-h-40"
+              name="markdown"
+              required
+              maxlength="65536"
+            >
+{{ task_text }}</textarea>
+          </label>
+          <button class="btn btn-secondary self-start" type="submit">
+            Save as tasks
+          </button>
+        </form>
+      </details>
+    </section>
+  </div>
+  <footer class="workspace-plans-footer shrink-0 space-y-2 border-t p-5">
+    <a href="{{ create_href }}" data-graft class="btn btn-primary w-full"
+      >Create a plan</a
+    >
+    <a href="{{ paste_href }}" data-graft class="btn btn-ghost w-full"
+      >Add your own plan</a
+    >
+  </footer>
+{% endblock plans_list %}
+{% block plan_request %}
+  <div
+    class="workspace-plans-body min-h-0 flex-1 space-y-6 overflow-y-auto p-5"
+  >
+    {% if mode == "paste" %}
+      <p class="text-quiet text-sm">
+        This action adds exactly the text you provide.
+      </p>
+    {% else %}
+      <p class="text-quiet text-sm">
+        This requests an explicit plan action from the model. It grants no
+        execution approval.
+      </p>
+    {% endif %}
+    {% if error != "" %}
+      <div class="alert alert-error" role="alert" tabindex="-1">
+        <p>{{ error }}</p>
+      </div>
+    {% endif %}
+    {% if show_source %}
+      <section class="space-y-2" aria-labelledby="plan-request-source-heading">
+        <h3 id="plan-request-source-heading" class="font-semibold">
+          {{ source_heading }}
+        </h3>
+        <div
+          class="border-base-300 max-h-60 overflow-y-auto border-y py-3 text-sm"
+        >
+          <p class="whitespace-pre-wrap">{{ source_text }}</p>
+        </div>
+        <p class="text-quiet text-xs">
+          Submission keeps this exact reply as the plan source.
+        </p>
+      </section>
+    {% endif %}
+    <form
+      data-graft
+      method="post"
+      action="{{ form_action }}"
+      class="flex flex-col gap-3"
+    >
+      <input type="hidden" name="revision" value="{{ revision }}" />
+      {% if mode == "from" %}
+        <input type="hidden" name="message_index" value="{{ message_index }}" />
+      {% endif %}
+      <label class="flex flex-col gap-1" for="plan-request-title"
+        ><span class="text-sm">Plan title</span
+        ><input
+          id="plan-request-title"
+          class="input input-bordered w-full"
+          name="title"
+          required
+          maxlength="120"
+          value="{{ title }}"
+      /></label>
+      {% if mode == "paste" %}
+        <label class="flex flex-col gap-1" for="plan-request-markdown"
+          ><span class="text-sm">Plan text</span
+          ><textarea
+            id="plan-request-markdown"
+            class="textarea textarea-bordered min-h-40 w-full"
+            name="markdown"
+            required
+            maxlength="65536"
+          >
+{{ markdown }}</textarea>
+        </label>
+      {% else %}
+        <label class="flex flex-col gap-1" for="plan-request-brief"
+          ><span class="text-sm">Request</span
+          ><textarea
+            id="plan-request-brief"
+            class="textarea textarea-bordered w-full"
+            name="request"
+            required
+            maxlength="8192"
+          >
+{{ request }}</textarea>
+        </label>
+      {% endif %}
+      {% if mode != "paste" %}
+        <p class="text-quiet text-xs">
+          This calls the model without directory access or execution tools.
+        </p>
+      {% endif %}
+      <button type="submit" class="btn btn-primary self-start">
+        {{ submit_label }}
+      </button>
+    </form>
+  </div>
+  <footer class="workspace-plans-footer shrink-0 space-y-2 border-t p-5">
+    <a href="{{ back_href }}" data-graft class="btn btn-ghost w-full"
+      >Back to plans</a
+    >
+  </footer>
+{% endblock plan_request %}

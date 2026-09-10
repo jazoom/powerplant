@@ -597,9 +597,7 @@ fn progress_frame(
         error: String::new(),
         streaming: true,
         saveable_plan: false,
-        task_action: String::new(),
-        plan_action: String::new(),
-        conversation_revision: String::new(),
+        plan_request_href: String::new(),
     };
     let mut patches = PatchSet::new();
     let target = format!("conversation-message-{}", message.index);
@@ -663,9 +661,7 @@ fn final_frame(
             error: super::page::message_error(message),
             streaming: message.status == MessageStatus::Pending,
             saveable_plan: false,
-            task_action: String::new(),
-            plan_action: String::new(),
-            conversation_revision: String::new(),
+            plan_request_href: String::new(),
         };
         let target = format!("conversation-message-{index}");
         let _ = patches.children(&target, &MessageBody { message: &message });
