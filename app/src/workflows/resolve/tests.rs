@@ -33,7 +33,7 @@ pub(crate) fn test_set(definition: &WorkflowDefinition) -> ResolvedEnvironmentSe
     }
 }
 
-use super::{ResolveEnvironmentError, resolve_environments};
+use super::{ResolveEnvironmentError, resolve_environments, validate_replacement_environment};
 use crate::agents::ToolId;
 use crate::environments::{
     EnvironmentCatalogue, EnvironmentDraft, EnvironmentSnapshotRepository, SnapshotAvailability,
@@ -126,4 +126,44 @@ async fn unavailable_snapshots_are_rejected() {
         .await
         .err();
     assert_eq!(error, Some(ResolveEnvironmentError::Unavailable));
+}
+
+#[tokio::test]
+async fn replacement_checks_reject_unknown_identities_without_fallback() {
+    let catalogue = EnvironmentCatalogue::in_memory();
+    let snapshots = EnvironmentSnapshotRepository::in_memory();
+    let error = validate_replacement_environment(&catalogue, &snapshots, test_environment_id())
+        .await
+        .err();
+    assert_eq!(error, Some(ResolveEnvironmentError::Missing));
+}
+
+#[tokio::test]
+async fn replacement_checks_reject_unready_environments_without_fallback() {
+    let catalogue = EnvironmentCatalogue::in_memory();
+    let snapshots = EnvironmentSnapshotRepository::in_memory();
+    let (record, _) = catalogue.create(draft("Alpine Git")).expect("create");
+    let error = validate_replacement_environment(&catalogue, &snapshots, record.id)
+        .await
+        .err();
+    assert_eq!(error, Some(ResolveEnvironmentError::NotReady));
+}
+
+#[tokio::test]
+async fn replacement_checks_accept_ready_environments() {
+    let catalogue = EnvironmentCatalogue::in_memory();
+    let snapshots = EnvironmentSnapshotRepository::in_memory();
+    let (record, preparation) = catalogue.create(draft("Alpine Git")).expect("create");
+    catalogue.claim_oldest_queued().expect("claim");
+    let snapshot = sample_snapshot(preparation.id);
+    snapshots.mark(
+        snapshot.artifact_key.clone(),
+        SnapshotAvailability::Available,
+    );
+    catalogue
+        .finish_ready(&preparation.id, snapshot, preparation.log)
+        .expect("ready");
+    validate_replacement_environment(&catalogue, &snapshots, record.id)
+        .await
+        .expect("ready environment");
 }

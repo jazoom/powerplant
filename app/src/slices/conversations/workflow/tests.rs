@@ -1349,3 +1349,122 @@ fn host_workflow_consent_binds_the_destination_and_approval_policy() {
     ask.host_approval = crate::execution::HostApprovalPolicy::AskEachTime;
     assert!(!consent.authorised_loop(loop_id, session, conversation, &ask));
 }
+
+#[tokio::test]
+async fn unavailable_environments_block_sandbox_launch_without_substitution() {
+    let state = connected_state();
+    let scratch = tempfile::tempdir().expect("scratch");
+    let mut grant =
+        crate::execution::DirectoryGrant::from_selected(scratch.path(), &[]).expect("grant");
+    grant.access = crate::execution::DirectoryAccess::ReviewBeforeApply;
+    let mut settings = directory_settings()
+        .with_directories(vec![grant])
+        .expect("directories");
+    settings.model.thinking =
+        state
+            .models_dev
+            .effective_effort(settings.model.provider, &settings.model.model, None);
+    let conversation = state
+        .conversations
+        .create("Sandbox block".to_owned())
+        .expect("conversation");
+    let conversation = state
+        .conversations
+        .update_execution_settings(&conversation.id, conversation.revision, settings.clone())
+        .expect("settings");
+    let workflow = state
+        .workflows
+        .create(workflows::seeds::implement_and_review_definition(
+            crate::tests::test_environment_id(),
+        ))
+        .expect("workflow");
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let (_, _, environment_summary) =
+        launch_readiness(&state, &conversation, None, &selection).await;
+    assert_eq!(
+        environment_summary,
+        "That environment is no longer in the catalogue."
+    );
+    let definition = state
+        .workflows
+        .resolve(&WorkflowSelection::parse(&selection).expect("selection"))
+        .expect("resolved")
+        .pinned
+        .definition
+        .clone();
+    let phases: Vec<String> = super::phase_steps(&definition)
+        .into_iter()
+        .map(|step| super::phase_choice_token(step.key.as_str(), &settings.model, None))
+        .collect();
+    let token = crate::sessions::generate_session_token().expect("session");
+    state.sessions.insert(token.id());
+    let mut serialiser = url::form_urlencoded::Serializer::new(String::new());
+    serialiser.append_pair("revision", &conversation.revision.to_string());
+    serialiser.append_pair("workflow", &selection);
+    serialiser.append_pair("preview_workflow", &selection);
+    serialiser.append_pair("target", "");
+    serialiser.append_pair("preview_target", "");
+    serialiser.append_pair("brief", "Inspect the code");
+    for phase in &phases {
+        serialiser.append_pair("phase", phase);
+    }
+    let body = serialiser.finish();
+    let app = crate::slices::router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/conversations/{}/workflow",
+                    conversation.id.as_hex()
+                ))
+                .header(
+                    header::COOKIE,
+                    format!("powerplant_session={}", token.raw().as_str()),
+                )
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body")
+            .to_vec(),
+    )
+    .expect("text");
+    assert!(body.contains("That environment is no longer in the catalogue."));
+    assert!(body.contains("href=\"/environments\""));
+    assert!(
+        state
+            .workflow_runs
+            .for_conversation(&conversation.id)
+            .is_empty()
+    );
+    assert_eq!(
+        state
+            .conversations
+            .get(&conversation.id)
+            .expect("conversation")
+            .model
+            .expect("model")
+            .settings
+            .environment,
+        crate::tests::test_environment_id()
+    );
+}
