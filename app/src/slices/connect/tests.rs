@@ -701,3 +701,46 @@ async fn an_unknown_plan_provider_is_rejected() {
     assert!(text.contains("Choose ChatGPT or SuperGrok."));
     assert!(text.contains("href=\"#connect-plan\""));
 }
+
+#[tokio::test]
+async fn empty_vault_offers_both_plan_logins_and_every_api_key_provider() {
+    let response = connect_get(test_state(), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("Connect a provider"));
+    assert!(!text.contains("<h1>Providers</h1>"));
+    assert!(text.contains("Sign in with ChatGPT"));
+    assert!(text.contains("Sign in with SuperGrok"));
+    assert!(text.contains(r#"name="provider" value="openai-codex""#));
+    assert!(text.contains(r#"name="provider" value="xai""#));
+    assert!(text.contains(r#"value="synthetic""#));
+    assert!(text.contains(r#"value="openrouter""#));
+    assert!(text.contains(r#"value="deepseek""#));
+    assert_eq!(text.matches(r#"type="radio""#).count(), 5);
+    assert!(!text.contains("Connected providers"));
+    assert!(!text.contains("Continue to conversations"));
+}
+
+#[tokio::test]
+async fn stored_provider_hides_its_own_plan_login_and_key_option() {
+    let state = test_state();
+    store_provider(&state, SECRET_KEY);
+    let response = connect_get(state, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("<h1>Providers</h1>"));
+    assert!(text.contains("Continue to conversations"));
+    assert!(text.contains("Connected providers"));
+    assert!(text.contains("Sign in with ChatGPT"));
+    assert!(!text.contains("Sign in with SuperGrok"));
+    assert!(text.contains(r#"name="provider" value="openai-codex""#));
+    assert!(text.contains(r#"value="synthetic""#));
+    assert!(text.contains(r#"value="openrouter""#));
+    assert!(text.contains(r#"value="deepseek""#));
+    // The stored provider keeps one hidden forget target and no plan or radio option.
+    assert_eq!(text.matches(r#"value="xai""#).count(), 1);
+    assert_eq!(text.matches(r#"type="radio""#).count(), 4);
+    assert!(!text.contains(SECRET_KEY));
+}
