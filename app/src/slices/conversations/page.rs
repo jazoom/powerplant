@@ -71,8 +71,13 @@ pub(super) struct ProjectContextView {
 #[derive(Clone)]
 pub(super) struct CandidateChangeView {
     pub(super) path: String,
+    pub(super) name: String,
+    pub(super) directory: String,
     pub(super) status: &'static str,
     pub(super) preview: String,
+    pub(super) additions: usize,
+    pub(super) removals: usize,
+    pub(super) has_counts: bool,
 }
 
 #[derive(Clone)]
@@ -90,6 +95,8 @@ pub(super) struct PendingCodeGateView {
     pub(super) quick_task: bool,
     pub(super) exclusions: Vec<String>,
     pub(super) changes: Vec<CandidateChangeView>,
+    pub(super) total_changes: usize,
+    pub(super) changes_truncated: bool,
 }
 
 #[derive(Template)]
@@ -1694,7 +1701,8 @@ pub(super) fn pending_code_gate(
         store,
     )
     .ok()?;
-    let (_, changes) = diff.manifest_page(0, 16).ok()?;
+    let (total_changes, changes) = diff.manifest_page(0, 16).ok()?;
+    let changes_truncated = total_changes > changes.len();
     let mut preview_budget = 128 * 1024;
     Some(PendingCodeGateView {
         run_id: run.id.as_hex(),
@@ -1714,13 +1722,36 @@ pub(super) fn pending_code_gate(
         quick_task: run.kind == crate::workflows::RunKind::QuickTask,
         application_destination,
         exclusions: diff.exclusions().to_vec(),
+        total_changes,
+        changes_truncated,
         changes: changes
             .into_iter()
             .enumerate()
             .map(|(index, change)| {
-                let preview = diff
-                    .change(index, store)
-                    .ok()
+                // Counts derive from the complete stored diff, not the bounded
+                // preview below. Binary or oversized changes omit counts.
+                let full = diff.change(index, store).ok();
+                let (additions, removals, has_counts) = full
+                    .as_ref()
+                    .and_then(|change| change.text.as_ref())
+                    .map(|fragments| {
+                        let text: String = fragments
+                            .iter()
+                            .map(|fragment| fragment.text.as_str())
+                            .collect();
+                        let mut additions = 0;
+                        let mut removals = 0;
+                        for line in text.lines() {
+                            if line.starts_with('+') && !line.starts_with("+++") {
+                                additions += 1;
+                            } else if line.starts_with('-') && !line.starts_with("---") {
+                                removals += 1;
+                            }
+                        }
+                        (additions, removals, true)
+                    })
+                    .unwrap_or((0, 0, false));
+                let preview = full
                     .and_then(|change| {
                         let text: String = change
                             .text?
@@ -1738,14 +1769,28 @@ pub(super) fn pending_code_gate(
                         "Open the full candidate diff for binary content or a larger preview."
                             .to_owned()
                     });
+                let name = candidate_file_name(&change.path);
                 CandidateChangeView {
                     path: change.path,
+                    name,
+                    directory: change.directory,
                     status: change.status,
                     preview,
+                    additions,
+                    removals,
+                    has_counts,
                 }
             })
             .collect(),
     })
+}
+
+fn candidate_file_name(path: &str) -> String {
+    path.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_owned()
 }
 
 // The transcript leaves envelope space for controls and retains stable message indices.

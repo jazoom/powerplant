@@ -740,6 +740,43 @@ body {
     padding: 10px;
     font-size: 12px;
 }
+/* Unified diff rows keep explicit +/- markers with line numbers. Colour
+   supplements those markers and never replaces them. */
+.workspace-diff code {
+    display: block;
+}
+.diff-line {
+    display: flex;
+    gap: 12px;
+    min-width: 0;
+}
+.line-number {
+    flex: 0 0 4ch;
+    text-align: right;
+    opacity: 0.6;
+    user-select: none;
+}
+.diff-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+.workspace-diff-count {
+    display: inline-flex;
+    gap: 6px;
+    font-family: var(--font-mono);
+}
+.workspace-diff-add-text {
+    color: #2f7a3d;
+}
+.workspace-diff-remove-text {
+    color: var(--color-error);
+    font-style: normal;
+}
+.workspace-idle {
+    border-top: 1px solid var(--color-base-300);
+}
 :is(#conversation-settings, #conversation-documents):popover-open {
     inset: var(--workspace-panel-top, 121px) 0 0 auto;
     margin: 0;

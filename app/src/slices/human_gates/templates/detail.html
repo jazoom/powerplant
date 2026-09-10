@@ -207,12 +207,12 @@
               <button
                 type="submit"
                 class="btn {% if quick_task %}
-                  btn-outline
+                  btn-ghost
                 {% else %}
                   btn-error btn-outline
                 {% endif %} w-full"
               >
-                {% if quick_task %}Discard changes{% else %}Cancel run{% endif %}
+                {% if quick_task %}Discard{% else %}Cancel run{% endif %}
               </button>
             </form>
           </div>
@@ -357,9 +357,24 @@
                       >{{ change.path }}</a
                     >
                   </div>
-                  <span class="badge badge-outline badge-sm"
-                    >{{ change.status }}</span
-                  >
+                  <span class="flex shrink-0 items-center gap-2">
+                    {% if change.has_counts %}
+                      <span
+                        class="workspace-diff-count text-xs"
+                        aria-label="{{ change.additions }} additions, {{ change.removals }} removals"
+                      >
+                        <b class="workspace-diff-add-text"
+                          >+{{ change.additions }}</b
+                        >
+                        <i class="workspace-diff-remove-text"
+                          >−{{ change.removals }}</i
+                        >
+                      </span>
+                    {% endif %}
+                    <span class="badge badge-outline badge-sm"
+                      >{{ change.status }}</span
+                    >
+                  </span>
                 </div>
                 <dl class="mt-2 grid gap-2 text-xs sm:grid-cols-[4rem_1fr]">
                   <dt class="text-quiet">Base</dt>
@@ -405,7 +420,8 @@
             </p>
           {% else %}
             <pre
-              class="border-base-300 bg-base-200 max-h-[70vh] overflow-auto rounded-sm border p-3 text-xs"
+              class="workspace-diff border-base-300 bg-base-200 max-h-[70vh] overflow-auto rounded-sm border p-3 text-xs"
+              tabindex="0"
             ><code>{% for row in text %}{{ row.text }}{% if row.continued %}
               ⟦continued {{ row.range }}⟧
             {% endif %}{% endfor %}</code></pre>

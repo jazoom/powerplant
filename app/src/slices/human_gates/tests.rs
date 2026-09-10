@@ -1479,7 +1479,8 @@ async fn a_quick_task_gate_uses_apply_and_discard_labels() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let text = body_text(response).await;
     assert!(text.contains("Apply changes"));
-    assert!(text.contains("Discard changes"));
+    assert!(text.contains("Discard"));
+    assert!(!text.contains("Discard changes"));
     assert!(!text.contains("Request revision"));
     assert!(!text.contains("/request-revision"));
     let safety_at = text.find(HOST_UNCHANGED_SAFETY).expect("safety");
@@ -2075,4 +2076,68 @@ async fn a_linked_review_can_use_the_session_while_a_parent_loop_awaits_a_child_
             .gate_continuations
             .available(&fixture.run_id, &fixture.session)
     );
+}
+
+#[test]
+fn gate_diff_counts_derive_from_complete_evidence_and_reject_out_of_range_navigation() {
+    let fixture = awaiting_gate(RunKind::QuickTask);
+    let run = fixture
+        .state
+        .workflow_runs
+        .get(&fixture.run_id)
+        .expect("run");
+    let gate = run
+        .gates
+        .iter()
+        .find(|gate| gate.id == fixture.gate_id)
+        .expect("gate");
+    let diff = crate::workflows::artefacts::CandidateDiff::load(
+        &run,
+        &gate.diff_base,
+        &gate.candidate,
+        &fixture.state.workflow_artefacts,
+    )
+    .expect("diff");
+    let destination = super::application_destination(&fixture.state, &run);
+    let query = super::forms::DiffQuery::parse(None, None, None).expect("query");
+    let view = super::page::GatePage::new(
+        &run,
+        gate,
+        Some(diff.clone()),
+        None,
+        &fixture.state.workflow_artefacts,
+        query,
+        "",
+        destination.clone(),
+    )
+    .expect("gate page");
+    assert_eq!(view.total, 1);
+    assert_eq!(view.changes.len(), 1);
+    assert!(view.changes[0].has_counts);
+    assert_eq!(
+        (view.changes[0].additions, view.changes[0].removals),
+        (1, 1)
+    );
+    for query in [
+        super::forms::DiffQuery::parse(Some("9999"), None, None),
+        super::forms::DiffQuery::parse(None, Some("9999"), None),
+        super::forms::DiffQuery::parse(None, Some("0"), Some("9999")),
+    ] {
+        assert!(
+            super::page::GatePage::new(
+                &run,
+                gate,
+                Some(diff.clone()),
+                None,
+                &fixture.state.workflow_artefacts,
+                query.expect("query"),
+                "",
+                destination.clone(),
+            )
+            .is_none(),
+            "out-of-range diff navigation cannot render"
+        );
+    }
+    assert!(super::forms::DiffQuery::parse(Some("00"), None, None).is_none());
+    assert!(super::forms::DiffQuery::parse(Some("42949672967"), None, None).is_none());
 }

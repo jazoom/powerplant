@@ -804,9 +804,35 @@
               Current work
             {% endif %}
           </h2>
-          <button type="button" class="btn btn-ghost btn-sm" data-work-close>
-            Close
-          </button>
+          <div class="flex items-center gap-1">
+            {% if let Some(saved) = self.saved() %}
+              {% if saved.pending_gate.is_some() %}
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm btn-square"
+                  data-expand-review
+                  aria-expanded="false"
+                  aria-label="Expand review"
+                  title="Expand review"
+                >
+                  <svg class="workspace-icon" aria-hidden="true">
+                    <use href="/static/images/workspace-icons.svg#expand" />
+                  </svg>
+                </button>
+              {% endif %}
+            {% endif %}
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm btn-square"
+              data-work-close
+              aria-label="Close companion"
+              title="Close companion"
+            >
+              <svg class="workspace-icon" aria-hidden="true">
+                <use href="/static/images/workspace-icons.svg#close" />
+              </svg>
+            </button>
+          </div>
         </header>
         <div class="workspace-work-content min-h-0 flex-1 overflow-y-auto">
           {% if !companion_html.is_empty() %}
@@ -819,14 +845,49 @@
           {% else %}
             {% include "conversations/templates/current_work.html" %}
             {% if let Some(saved) = self.saved() %}
-              {% if saved.workflow_progress.is_none() && saved.pending_gate.is_none() && pending_host_command.is_none() %}
-                <p class="text-quiet p-5 text-sm">
-                  {% if job_active %}
+              {% if saved.pending_gate.is_none() && pending_host_command.is_none() %}
+                {% if job_active %}
+                  <p class="text-quiet p-5 text-sm">
                     The model response is in progress.
-                  {% else %}
-                    No current execution. Responses remain in the conversation.
-                  {% endif %}
-                </p>
+                  </p>
+                {% else %}
+                  <section
+                    class="workspace-idle space-y-4 p-5"
+                    aria-labelledby="workspace-idle-heading"
+                  >
+                    <h3
+                      id="workspace-idle-heading"
+                      class="text-lg font-semibold"
+                    >
+                      Ready when you are
+                    </h3>
+                    <p class="text-quiet text-sm">
+                      The next result or decision will appear here.
+                    </p>
+                    {% if let Some(run) = saved.workflow_progress %}
+                      <a
+                        href="{{ run.run_href }}"
+                        data-graft
+                        class="btn btn-outline w-full"
+                        >View activity and evidence</a
+                      >
+                    {% else %}
+                      <a
+                        href="/conversations/{{ saved.id }}"
+                        data-graft
+                        class="btn btn-outline w-full"
+                        >View activity and evidence</a
+                      >
+                    {% endif %}
+                    <button
+                      type="button"
+                      class="btn btn-primary w-full"
+                      data-continue-conversation
+                    >
+                      Continue the conversation
+                    </button>
+                  </section>
+                {% endif %}
               {% endif %}
             {% else %}
               <p class="text-quiet p-5 text-sm">

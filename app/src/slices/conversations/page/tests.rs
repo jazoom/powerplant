@@ -139,3 +139,64 @@ fn document_actions_keep_the_selected_revision_identity_after_a_correction() {
             .contains(&format!("task_revision=1&task_hash={hash}&task_index=0"))
     );
 }
+
+#[test]
+fn candidate_review_escapes_untrusted_file_contents() {
+    let state = crate::tests::test_state(RuntimeConfig::development());
+    let record = state.conversations.create("Discussion".to_owned()).unwrap();
+    let title = record.title.clone();
+    let gate = super::PendingCodeGateView {
+        run_id: "run".to_owned(),
+        gate_id: "gate".to_owned(),
+        revision: "1".to_owned(),
+        candidate: "abc".to_owned(),
+        diff_base: "def".to_owned(),
+        diff_href: "/runs/run/gates/gate".to_owned(),
+        review_href: "/conversations/candidate-review?run=run".to_owned(),
+        ordinary: true,
+        application_destination: "/tmp/test".to_owned(),
+        can_request_revision: false,
+        quick_task: true,
+        exclusions: Vec::new(),
+        total_changes: 1,
+        changes_truncated: false,
+        changes: vec![super::CandidateChangeView {
+            path: "<script>alert(1)</script>".to_owned(),
+            name: "<script>alert(1)</script>".to_owned(),
+            directory: "project".to_owned(),
+            status: "Added",
+            preview: "+<img src=x onerror=alert(1)>\n".to_owned(),
+            additions: 1,
+            removals: 0,
+            has_counts: true,
+        }],
+    };
+    let view = ConversationDetailView::from_record_with_gate(
+        &record,
+        ModelSources {
+            vault: &state.vault,
+            preferences: &state.preferences,
+            models: &state.models_dev,
+            environments: &state.environments,
+            environment_snapshots: &state.environment_snapshots,
+            projects: &[],
+            documents: &[],
+            presets: &[],
+        },
+        &[],
+        None,
+        false,
+        &title,
+        "",
+        Some(gate),
+        None,
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    let html = view.render().expect("page");
+    assert!(!html.contains("<script>alert(1)</script>"));
+    assert!(!html.contains("<img src=x"));
+    assert!(html.contains("&#60;script&#62;"));
+    assert!(html.contains("&#60;img"));
+}

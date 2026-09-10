@@ -15,6 +15,9 @@ pub(super) struct ChangeRow {
     pub(super) href: String,
     pub(super) base_download: String,
     pub(super) target_download: String,
+    pub(super) additions: usize,
+    pub(super) removals: usize,
+    pub(super) has_counts: bool,
 }
 
 pub(super) struct TextRow {
@@ -88,6 +91,29 @@ impl GatePage {
                 .enumerate()
                 .map(|(offset, change)| {
                     let index = start + offset;
+                    // Counts derive from the complete stored diff for the
+                    // row. Binary or oversized changes omit counts.
+                    let (additions, removals, has_counts) = diff
+                        .change(index, store)
+                        .ok()
+                        .and_then(|full| full.text)
+                        .map(|fragments| {
+                            let text: String = fragments
+                                .into_iter()
+                                .map(|fragment| fragment.text)
+                                .collect();
+                            let mut additions = 0;
+                            let mut removals = 0;
+                            for line in text.lines() {
+                                if line.starts_with('+') && !line.starts_with("+++") {
+                                    additions += 1;
+                                } else if line.starts_with('-') && !line.starts_with("---") {
+                                    removals += 1;
+                                }
+                            }
+                            (additions, removals, true)
+                        })
+                        .unwrap_or((0, 0, false));
                     ChangeRow {
                         directory: change.directory.clone(),
                         path: change.path.clone(),
@@ -97,6 +123,9 @@ impl GatePage {
                         href: format!("{root}?page={}&change={index}", query.page),
                         base_download: download(&root, "base", index, change.old.as_ref()),
                         target_download: download(&root, "target", index, change.new.as_ref()),
+                        additions,
+                        removals,
+                        has_counts,
                     }
                 })
                 .collect();

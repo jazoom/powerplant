@@ -143,7 +143,9 @@ The header shows the directory name followed by Conversation, or Nothing is save
 
 ### Current work
 
-Current work contains execution progress and required decisions. Candidate review shows real changed files and bounded diff previews. Diffs and Markdown code blocks receive keyboard focus.
+Current work contains execution progress and required decisions. Candidate review shows real changed files and bounded diff previews. Diffs and Markdown code blocks receive keyboard focus. The idle companion reads Ready when you are with View activity and evidence and Continue the conversation. Local review expansion stays within the conversation URL and one native link opens the canonical gate page.
+
+Per-file addition and removal counts derive from the complete stored diff. Binary or oversized changes omit counts rather than infer them from truncated previews. The companion lists the total changed-file count and notes when only the first paths render. Recorded test outcomes are not part of the candidate evidence, so neither review surface shows a test result line. These omissions are deliberate: counts and test lines appear only when recorded data supports them.
 
 The candidate footer has a bounded scroll area for long destinations and feedback forms. Current work retains the eligible job-bound cancellation control.
 

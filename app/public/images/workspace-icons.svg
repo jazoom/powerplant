@@ -13,4 +13,6 @@
 <symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
 <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7V5h6l2 2h10v12H3Z"/></symbol>
 <symbol id="shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 11 3 3 5-5"/></symbol>
+<symbol id="expand" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7-7 7M10 21H3v-7m0 7 7-7"/></symbol>
+<symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
 </svg>

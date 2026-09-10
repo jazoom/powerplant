@@ -36,16 +36,31 @@ export function initWorkspace(
             code.dataset.coloured = "true";
             const lines = (code.textContent ?? "").split("\n");
             if (lines.length > 1000) return;
-            // Diff contents are untrusted file text, never HTML.
+            // Diff contents are untrusted file text, never HTML. Each row
+            // keeps its explicit +/- marker plus a line number wash.
             code.replaceChildren(
                 ...lines.map((text, index) => {
                     const line = document.createElement("span");
-                    if (text.startsWith("+") && !text.startsWith("+++"))
-                        line.className = "workspace-diff-add";
-                    else if (text.startsWith("-") && !text.startsWith("---"))
-                        line.className = "workspace-diff-remove";
-                    line.textContent =
+                    const added =
+                        text.startsWith("+") && !text.startsWith("+++");
+                    const removed =
+                        text.startsWith("-") && !text.startsWith("---");
+                    line.className =
+                        "diff-line" +
+                        (added
+                            ? " workspace-diff-add"
+                            : removed
+                              ? " workspace-diff-remove"
+                              : "");
+                    const number = document.createElement("span");
+                    number.className = "line-number";
+                    number.setAttribute("aria-hidden", "true");
+                    number.textContent = String(index + 1);
+                    const content = document.createElement("span");
+                    content.className = "diff-text";
+                    content.textContent =
                         text + (index < lines.length - 1 ? "\n" : "");
+                    line.append(number, content);
                     return line;
                 }),
             );
@@ -115,6 +130,7 @@ export function initWorkspace(
         });
         applyRecentFilter();
         syncSkipLink();
+        syncExpandControls();
     }
 
     function recentFilterQuery(): string {
@@ -190,6 +206,27 @@ export function initWorkspace(
         });
     }
 
+    function syncExpandControls() {
+        const label = expanded ? "Restore conversation" : "Expand review";
+        root.querySelectorAll<HTMLElement>("[data-expand-review]").forEach(
+            (control) => {
+                control.setAttribute("aria-expanded", String(expanded));
+                control.setAttribute("aria-label", label);
+                control.setAttribute("title", label);
+                // Icon buttons keep their icon; text controls keep a label.
+                if ((control.textContent ?? "").trim() !== "")
+                    control.textContent = label;
+            },
+        );
+    }
+
+    function continueConversation() {
+        workOpen = false;
+        expanded = false;
+        sync();
+        root.querySelector<HTMLElement>("#composer-message")?.focus();
+    }
+
     function closeWork() {
         workOpen = false;
         expanded = false;
@@ -247,6 +284,8 @@ export function initWorkspace(
                         "#conversation-work",
                     )?.focus();
             } else if (target?.closest("[data-work-close]")) closeWork();
+            else if (target?.closest("[data-continue-conversation]"))
+                continueConversation();
             else if (
                 target?.closest("[data-review-file]") &&
                 !event.ctrlKey &&
@@ -281,11 +320,6 @@ export function initWorkspace(
             ) {
                 event.preventDefault();
                 expanded = !expanded;
-                const link = target.closest("a");
-                if (link)
-                    link.textContent = expanded
-                        ? "Return to conversation"
-                        : "Expand review";
                 sync();
             }
             const menu = root.querySelector<HTMLElement>("#workspace-index");

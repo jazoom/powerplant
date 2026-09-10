@@ -4,9 +4,9 @@
   aria-labelledby="conversation-candidate-heading"
 >
   <div class="workspace-candidate-body min-h-0 flex-1 overflow-y-auto p-5">
-    <h2 id="conversation-candidate-heading" class="text-2xl font-semibold">
+    <h3 id="conversation-candidate-heading" class="text-2xl font-semibold">
       Changes are ready
-    </h2>
+    </h3>
     <p class="text-quiet mt-3 text-sm">
       {% if gate.ordinary %}
         These changes are isolated. Review them before you apply them.
@@ -17,8 +17,20 @@
     <p class="text-quiet mt-2 text-xs">
       Direct writes and host command effects remain after Discard.
     </p>
+    {% if gate.total_changes > 0 %}
+      <p class="mt-4 text-sm font-semibold">
+        {{ gate.total_changes }}
+        {% if gate.total_changes == 1 %}file{% else %}files{% endif %} changed
+      </p>
+      {% if gate.changes_truncated %}
+        <p class="text-quiet mt-1 text-xs">
+          This companion shows the first {{ gate.changes.len() }} paths. The
+          canonical gate page holds the complete list.
+        </p>
+      {% endif %}
+    {% endif %}
     {% if !gate.changes.is_empty() %}
-      <h3 class="mt-6 mb-3 text-sm font-semibold">Changed files</h3>
+      <h4 class="mt-6 mb-3 text-sm font-semibold">Changed files</h4>
       <ul class="workspace-file-list">
         {% for change in gate.changes %}
           <li>
@@ -29,10 +41,33 @@
               {% if loop.first %}aria-current="true"{% endif %}
               class="flex items-center justify-between gap-3 px-3 py-3 text-sm"
             >
-              <span class="min-w-0 break-all">{{ change.path }}</span
-              ><span class="text-quiet shrink-0 text-xs"
-                >{{ change.status }}</span
-              >
+              <span class="min-w-0">
+                <span class="block break-all">{{ change.name }}</span>
+                {% if !change.directory.is_empty() %}
+                  <span class="text-quiet block text-xs break-all"
+                    >{{ change.directory }}</span
+                  >
+                {% endif %}
+                <span class="text-quiet block text-xs break-all"
+                  >{{ change.path }}</span
+                >
+              </span>
+              <span class="flex shrink-0 items-center gap-2 text-xs">
+                {% if change.has_counts %}
+                  <span
+                    class="workspace-diff-count"
+                    aria-label="{{ change.additions }} additions, {{ change.removals }} removals"
+                  >
+                    <b class="workspace-diff-add-text"
+                      >+{{ change.additions }}</b
+                    >
+                    <i class="workspace-diff-remove-text"
+                      >−{{ change.removals }}</i
+                    >
+                  </span>
+                {% endif %}
+                <span class="text-quiet">{{ change.status }}</span>
+              </span>
             </a>
           </li>
         {% endfor %}
@@ -45,7 +80,7 @@
           <p
             class="text-quiet border-base-300 mt-4 border border-b-0 px-3 py-2 font-mono text-xs break-all"
           >
-            {{ change.path }}
+            {{ change.path }} · Unified diff
           </p>
           <pre
             class="workspace-diff"
@@ -59,9 +94,15 @@
       <p class="text-quiet my-5 text-sm">The candidate has no changed files.</p>
     {% endif %}
     <div class="mt-4 flex flex-wrap gap-3 text-xs">
-      <a href="{{ gate.diff_href }}" data-graft data-expand-review class="link"
-        >Expand review</a
+      <button
+        type="button"
+        data-expand-review
+        aria-expanded="false"
+        aria-label="Expand review"
+        class="link"
       >
+        Expand review
+      </button>
       <a href="{{ gate.diff_href }}" data-graft class="link"
         >Browse the full candidate diff</a
       >
@@ -75,7 +116,7 @@
         <dd class="font-mono break-all">{{ gate.candidate }}</dd>
       </dl>
       {% if !gate.exclusions.is_empty() %}
-        <h3 class="mt-4 text-sm font-semibold">Excluded engine paths</h3>
+        <h4 class="mt-4 text-sm font-semibold">Excluded engine paths</h4>
         <ul class="mt-2 space-y-1">
           {% for exclusion in gate.exclusions %}
             <li class="font-mono text-xs break-all">{{ exclusion }}</li>
@@ -95,7 +136,7 @@
   >
     <p class="text-quiet mb-3 text-center text-xs">
       {% if gate.ordinary %}
-        Apply reviewed files · No Git commit
+        Apply reviewed files · no Git commit
       {% else if gate.quick_task %}
         Apply creates a local Git commit
       {% else %}
