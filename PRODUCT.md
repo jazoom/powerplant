@@ -266,6 +266,8 @@ Observation resumes after parent command patches, including cancellation. New ou
 
 Candidate review shows bounded file previews and the exact application destination. Expanded review retains the owning conversation and its URL.
 
+Independent plan review and candidate review choose the reviewer through the same catalogue controls as conversations. Provider choices contain connected providers only. Model and thinking effort dropdowns use the models.dev snapshot. A model without adjustable effort shows Not available. Optional reviewer presets stay explicit, the source revision stays pinned, and the review starts only through its explicit command.
+
 Setup occupies the companion position. One native selector replaces the former hidden section tabs. Section changes retain unsaved fields.
 
 Effective access stays beside the composer until a successful settings switch. Setup closure restores focus after a command replaces its original trigger.

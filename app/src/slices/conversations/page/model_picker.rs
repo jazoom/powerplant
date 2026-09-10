@@ -1,30 +1,31 @@
 use super::{ModelsDevCatalogue, ProviderOption, ProviderVault};
 
 #[derive(Clone, serde::Serialize)]
-pub(super) struct EffortOption {
-    pub(super) value: String,
-    pub(super) label: String,
+pub(crate) struct EffortOption {
+    pub(crate) value: String,
+    pub(crate) label: String,
 }
 
 #[derive(Clone, serde::Serialize)]
-pub(super) struct ModelOption {
-    pub(super) id: String,
+pub(crate) struct ModelOption {
+    pub(crate) id: String,
     efforts: Vec<EffortOption>,
     default_effort: String,
 }
 
-pub(super) struct ModelPicker {
-    pub(super) providers: Vec<ProviderOption>,
-    pub(super) unavailable_provider: Option<crate::providers::ProviderKind>,
-    pub(super) catalogue: String,
-    pub(super) models: Vec<ModelOption>,
-    pub(super) efforts: Vec<EffortOption>,
-    pub(super) model: String,
-    pub(super) thinking: String,
+pub(crate) struct ModelPicker {
+    pub(crate) providers: Vec<ProviderOption>,
+    pub(crate) unavailable_provider: Option<crate::providers::ProviderKind>,
+    pub(crate) catalogue: String,
+    pub(crate) models: Vec<ModelOption>,
+    pub(crate) efforts: Vec<EffortOption>,
+    pub(crate) model: String,
+    pub(crate) model_unavailable: bool,
+    pub(crate) thinking: String,
 }
 
 impl ModelPicker {
-    pub(super) fn new(
+    pub(crate) fn new(
         vault: &ProviderVault,
         preferences: &crate::preferences::Preferences,
         catalogue: &ModelsDevCatalogue,
@@ -83,6 +84,8 @@ impl ModelPicker {
                 label: format!("Unavailable · {thinking}"),
             });
         }
+        let model_unavailable =
+            !model.is_empty() && !models.iter().any(|option| option.id == model);
         Self {
             unavailable_provider: crate::providers::ProviderKind::parse(provider).filter(|kind| {
                 !connections
@@ -98,12 +101,12 @@ impl ModelPicker {
                     label: connection.kind.label(),
                     selected: connection.kind.as_str() == provider,
                     model: connection.model,
-                    thinking: String::new(),
                 })
                 .collect(),
             models,
             efforts,
             model: model.to_owned(),
+            model_unavailable,
             thinking: thinking.to_owned(),
         }
     }

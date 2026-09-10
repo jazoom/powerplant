@@ -1,4 +1,4 @@
-mod model_picker;
+pub(crate) mod model_picker;
 
 use askama::Template;
 use model_picker::ModelPicker;
@@ -211,7 +211,7 @@ pub(super) struct PlanReviewView {
     pub(super) content_html: String,
     pub(super) brief: String,
     pub(super) reviewer_summary: String,
-    pub(super) providers: Vec<ProviderOption>,
+    pub(super) model_picker: ModelPicker,
     pub(super) presets: Vec<PresetOption>,
     pub(super) read_only_projects: Vec<ReviewProjectOption>,
     pub(super) error: &'static str,
@@ -232,7 +232,7 @@ pub(super) struct PlanReviewContents<'a> {
     pub(super) content_html: &'a str,
     pub(super) brief: &'a str,
     pub(super) reviewer_summary: &'a str,
-    pub(super) providers: &'a [ProviderOption],
+    pub(super) model_picker: &'a ModelPicker,
     pub(super) presets: &'a [PresetOption],
     pub(super) read_only_projects: &'a [ReviewProjectOption],
     pub(super) error: &'static str,
@@ -250,7 +250,7 @@ impl PlanReviewView {
             content_html: &self.content_html,
             brief: &self.brief,
             reviewer_summary: &self.reviewer_summary,
-            providers: &self.providers,
+            model_picker: &self.model_picker,
             presets: &self.presets,
             read_only_projects: &self.read_only_projects,
             error: self.error,
@@ -274,7 +274,7 @@ pub(super) struct CandidateReviewView {
     pub(super) instructions_summary: String,
     pub(super) brief: String,
     pub(super) reviewer_summary: String,
-    pub(super) providers: Vec<ProviderOption>,
+    pub(super) model_picker: ModelPicker,
     pub(super) presets: Vec<PresetOption>,
     pub(super) error: &'static str,
 }
@@ -295,7 +295,7 @@ pub(super) struct CandidateReviewContents<'a> {
     pub(super) instructions_summary: &'a str,
     pub(super) brief: &'a str,
     pub(super) reviewer_summary: &'a str,
-    pub(super) providers: &'a [ProviderOption],
+    pub(super) model_picker: &'a ModelPicker,
     pub(super) presets: &'a [PresetOption],
     pub(super) error: &'static str,
 }
@@ -313,7 +313,7 @@ impl CandidateReviewView {
             instructions_summary: &self.instructions_summary,
             brief: &self.brief,
             reviewer_summary: &self.reviewer_summary,
-            providers: &self.providers,
+            model_picker: &self.model_picker,
             presets: &self.presets,
             error: self.error,
         }
@@ -427,7 +427,6 @@ pub(super) struct ProviderOption {
     pub(super) value: &'static str,
     pub(super) label: &'static str,
     pub(super) model: String,
-    pub(super) thinking: String,
     pub(super) selected: bool,
 }
 

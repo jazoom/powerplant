@@ -7,6 +7,99 @@ import "./input.css";
 import { startApp } from "./hypergraft-bootstrap";
 import { listenForRequestSettled } from "hypergraft/browser";
 
+type ReviewCatalogueModel = {
+    id: string;
+    default_effort: string;
+    efforts: { value: string; label: string }[];
+};
+
+// Independent review pages offer the conversation model catalogue through
+// constrained selects. Provider and model changes refresh the dependent
+// options from the embedded catalogue. The server still validates every
+// choice, so native submission works without this enhancement.
+function reviewCatalogue(
+    section: HTMLElement,
+): Record<string, ReviewCatalogueModel[]> {
+    const source = section.parentElement?.querySelector<HTMLElement>(
+        "[data-review-model-catalogue]",
+    );
+    const raw = source?.dataset.reviewModelCatalogue ?? "{}";
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+            return parsed as Record<string, ReviewCatalogueModel[]>;
+    } catch {
+        // A malformed catalogue keeps the server-rendered options.
+    }
+    return {};
+}
+
+function syncReviewEfforts(
+    section: HTMLElement,
+    catalogue: Record<string, ReviewCatalogueModel[]>,
+) {
+    const provider = section.querySelector<HTMLSelectElement>(
+        "[data-review-provider]",
+    );
+    const model = section.querySelector<HTMLSelectElement>(
+        "[data-review-model]",
+    );
+    const thinking = section.querySelector<HTMLSelectElement>(
+        "[data-review-thinking]",
+    );
+    if (!provider || !model || !thinking) return;
+    const models = catalogue[provider.value] ?? [];
+    const selected = models.find((item) => item.id === model.value);
+    const efforts = selected?.efforts ?? [];
+    const previous = thinking.value;
+    thinking.replaceChildren(
+        ...(efforts.length
+            ? efforts.map((effort) => new Option(effort.label, effort.value))
+            : [new Option("Not available", "")]),
+    );
+    thinking.value = efforts.some((effort) => effort.value === previous)
+        ? previous
+        : (selected?.default_effort ?? "");
+}
+
+function syncReviewModels(section: HTMLElement, resetModel: boolean) {
+    const provider = section.querySelector<HTMLSelectElement>(
+        "[data-review-provider]",
+    );
+    const model = section.querySelector<HTMLSelectElement>(
+        "[data-review-model]",
+    );
+    if (!provider || !model) return;
+    const catalogue = reviewCatalogue(section);
+    const models = catalogue[provider.value] ?? [];
+    let selected = model.value;
+    if (resetModel && !models.some((item) => item.id === selected))
+        selected = models[0]?.id ?? "";
+    // A provider change replaces the model list. The server-rendered
+    // Unavailable entry never survives a move to another provider.
+    if (models.length === 0) {
+        if (selected) {
+            model.replaceChildren(
+                new Option(`Unavailable · ${selected}`, selected),
+            );
+            model.value = selected;
+        } else {
+            const empty = new Option("No models available", "");
+            empty.disabled = true;
+            model.replaceChildren(empty);
+            model.value = "";
+        }
+    } else {
+        model.replaceChildren(
+            ...models.map((item) => new Option(item.id, item.id)),
+        );
+        model.value = models.some((item) => item.id === selected)
+            ? selected
+            : (models[0]?.id ?? "");
+    }
+    syncReviewEfforts(section, catalogue);
+}
+
 function syncExecutionModeFields() {
     const location = document.querySelector<HTMLInputElement>(
         'input[form="conversation-settings-form"][name="location"]:checked',
@@ -207,6 +300,24 @@ document.addEventListener("change", (event) => {
             );
             if (scroll) scroll.scrollTop = 0;
         }
+    }
+    if (
+        field instanceof HTMLSelectElement &&
+        field.matches("[data-review-provider]")
+    ) {
+        const section = field.closest<HTMLElement>(
+            "[data-review-model-picker]",
+        );
+        if (section) syncReviewModels(section, true);
+    }
+    if (
+        field instanceof HTMLSelectElement &&
+        field.matches("[data-review-model]")
+    ) {
+        const section = field.closest<HTMLElement>(
+            "[data-review-model-picker]",
+        );
+        if (section) syncReviewEfforts(section, reviewCatalogue(section));
     }
     if (
         field instanceof HTMLSelectElement &&

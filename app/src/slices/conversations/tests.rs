@@ -2726,6 +2726,188 @@ async fn plan_review_rejects_an_oversized_task_brief_without_creating_a_link() {
 }
 
 #[tokio::test]
+async fn plan_review_rejects_unknown_catalogue_choices() {
+    let mut state = test_state();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        crate::providers::tests::ScriptedBackend::accept(),
+    ));
+    let token = connected(&state);
+    let source = state
+        .conversations
+        .create("Planning discussion".to_owned())
+        .expect("source");
+    let plan = state
+        .documents
+        .create_from_text(source.id, "Plan".to_owned(), "Plan text".to_owned(), None)
+        .expect("plan");
+    let preview = app(&state)
+        .oneshot(document(
+            &format!(
+                "/conversations/{}/plans/{}/review?revision=1",
+                source.id, plan.id
+            ),
+            &token,
+        ))
+        .await
+        .expect("preview");
+    assert_eq!(preview.status(), StatusCode::OK);
+    let _ = text(preview).await;
+
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None);
+    let thinking = effort.as_ref().map(|value| value.as_str()).unwrap_or("");
+    for (model, effort, message) in [
+        ("no-such-model", thinking, "Choose an available model."),
+        (
+            "grok-4.6",
+            "invalid",
+            "Choose an available thinking effort.",
+        ),
+    ] {
+        let body = format!(
+            "source_revision={}&document_revision=1&brief={}&provider=xai&model={}&thinking={}&preset=",
+            source.revision,
+            form_value("Check only the selected plan."),
+            form_value(model),
+            form_value(effort),
+        );
+        let response = app(&state)
+            .oneshot(command(
+                &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+                &token,
+                &body,
+            ))
+            .await
+            .expect("invalid reviewer");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let rejected = text(response).await;
+        assert!(rejected.contains(message), "{rejected}");
+        // Validation retains the selected source revision for resubmission.
+        assert!(rejected.contains("name=\"source_revision\""), "{rejected}");
+        assert!(
+            rejected.contains("name=\"document_revision\""),
+            "{rejected}"
+        );
+        assert!(rejected.contains("value=\"1\""), "{rejected}");
+        assert_eq!(state.conversations.list().len(), 1);
+    }
+    let unknown_provider = format!(
+        "source_revision={}&document_revision=1&brief={}&provider=openai&model=grok-4.6&thinking={}&preset=",
+        source.revision,
+        form_value("Check only the selected plan."),
+        form_value(thinking),
+    );
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+            &token,
+            &unknown_provider,
+        ))
+        .await
+        .expect("unknown provider");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(response).await.contains("Choose a stored provider."));
+    assert_eq!(state.conversations.list().len(), 1);
+}
+
+#[tokio::test]
+async fn plan_review_rejects_project_context_without_an_explicit_grant() {
+    let mut state = test_state();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        crate::providers::tests::ScriptedBackend::accept(),
+    ));
+    let token = connected(&state);
+    let source = state
+        .conversations
+        .create("Planning discussion".to_owned())
+        .expect("source");
+    let plan = state
+        .documents
+        .create_from_text(source.id, "Plan".to_owned(), "Plan text".to_owned(), None)
+        .expect("plan");
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None);
+    let ungranted = crate::projects::ProjectId::generate().expect("project id");
+    let body = format!(
+        "source_revision={}&document_revision=1&brief={}&provider=xai&model=grok-4.6&thinking={}&preset=&read_only_project={}",
+        source.revision,
+        form_value("Check only the selected plan."),
+        form_value(effort.as_ref().map(|value| value.as_str()).unwrap_or("")),
+        ungranted.as_hex(),
+    );
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/plans/{}/review", source.id, plan.id),
+            &token,
+            &body,
+        ))
+        .await
+        .expect("ungranted context");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        text(response)
+            .await
+            .contains("Only explicitly granted projects")
+    );
+    assert_eq!(state.conversations.list().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_review_rejects_unknown_catalogue_choices() {
+    let mut state = test_state();
+    state.chat = std::sync::Arc::new(crate::providers::ChatBackend::Scripted(
+        crate::providers::tests::ScriptedBackend::accept(),
+    ));
+    let token = connected(&state);
+    let (run, candidate) = candidate_run(&state);
+    let preview = app(&state)
+        .oneshot(document(
+            &format!(
+                "/conversations/candidate-review?run={}&candidate={}&diff_base={}",
+                run.id, candidate.id, candidate.id
+            ),
+            &token,
+        ))
+        .await
+        .expect("preview");
+    assert_eq!(preview.status(), StatusCode::OK);
+    let _ = text(preview).await;
+
+    for (model, effort, message) in [
+        ("no-such-model", "medium", "Choose an available model."),
+        (
+            "grok-4.6",
+            "invalid",
+            "Choose an available thinking effort.",
+        ),
+    ] {
+        let response = app(&state)
+            .oneshot(command(
+                "/conversations/candidate-review",
+                &token,
+                &format!(
+                    "run={}&candidate={}&diff_base={}&brief={}&provider=xai&model={}&thinking={}",
+                    run.id,
+                    candidate.id,
+                    candidate.id,
+                    form_value("Review only this candidate."),
+                    form_value(model),
+                    form_value(effort),
+                ),
+            ))
+            .await
+            .expect("invalid reviewer");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let rejected = text(response).await;
+        assert!(rejected.contains(message), "{rejected}");
+        assert!(rejected.contains(&run.id.as_hex()), "{rejected}");
+        assert!(state.conversations.list().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn catalogue_title_search_trims_case_and_combines_with_directory() {
     let state = test_state();
     let token = connected(&state);

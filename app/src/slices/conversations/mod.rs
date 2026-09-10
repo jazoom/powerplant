@@ -40,10 +40,11 @@ use crate::{
     workflows::{self, WorkflowJob, WorkflowRun},
 };
 
+use self::page::model_picker::ModelPicker;
 use self::page::{
     CandidateReviewLinkView, CandidateReviewView, CatalogueView, ConversationDetailView,
     ConversationLinkView, ModelSources, PlanDocumentPage, PlanReviewView, PresetOption,
-    ProviderOption, ReviewProjectOption,
+    ReviewProjectOption,
 };
 
 const REVISION_MESSAGE: &str = "Reload the conversation and try again.";
@@ -1129,51 +1130,56 @@ fn candidate_review_view_model(
     state: &AppState,
     source: Option<&ConversationRecord>,
     form: Option<&CandidateReviewForm>,
-) -> (Vec<ProviderOption>, Vec<PresetOption>, String) {
-    let selection = form
-        .and_then(|form| candidate_submitted_selection(state, form).ok())
-        .or_else(|| {
-            source
-                .and_then(|record| effective_model(state, record).map(|model| model.settings.model))
-        })
-        .or_else(|| {
-            state
-                .preferences
-                .desk_providers(&state.vault)
-                .into_iter()
-                .find(|provider| provider.selected)
-                .map(|provider| ModelSelection {
-                    provider: provider.kind,
-                    model: provider.model.clone(),
-                    thinking: state.models_dev.effective_effort(
-                        provider.kind,
-                        &provider.model,
-                        provider.thinking.as_ref(),
-                    ),
-                })
-        });
-    let providers = state
-        .preferences
-        .desk_providers(&state.vault)
-        .into_iter()
-        .map(|provider| ProviderOption {
-            value: provider.kind.as_str(),
-            label: provider.kind.label(),
-            model: selection
+) -> (ModelPicker, Vec<PresetOption>, String) {
+    let (provider, model, thinking) = if let Some(form) = form {
+        // Requested values stay visible so validation errors never silently
+        // substitute another model. The catalogue picker marks unknown values
+        // unavailable and the POST rejects them again.
+        (
+            form.provider.clone(),
+            form.model.clone(),
+            form.thinking.clone(),
+        )
+    } else {
+        let selection = source
+            .and_then(|record| effective_model(state, record).map(|model| model.settings.model))
+            .or_else(|| {
+                state
+                    .preferences
+                    .desk_providers(&state.vault)
+                    .into_iter()
+                    .find(|provider| provider.selected)
+                    .map(|provider| ModelSelection {
+                        provider: provider.kind,
+                        model: provider.model.clone(),
+                        thinking: state.models_dev.effective_effort(
+                            provider.kind,
+                            &provider.model,
+                            provider.thinking.as_ref(),
+                        ),
+                    })
+            });
+        (
+            selection
                 .as_ref()
-                .filter(|item| item.provider == provider.kind)
-                .map_or(provider.model, |item| item.model.clone()),
-            thinking: selection
+                .map_or(String::new(), |item| item.provider.as_str().to_owned()),
+            selection
                 .as_ref()
-                .filter(|item| item.provider == provider.kind)
+                .map_or(String::new(), |item| item.model.clone()),
+            selection
+                .as_ref()
                 .and_then(|item| item.thinking.as_ref())
-                .map(|item| item.as_str().to_owned())
-                .unwrap_or_default(),
-            selected: selection
-                .as_ref()
-                .is_some_and(|item| item.provider == provider.kind),
-        })
-        .collect();
+                .map_or(String::new(), |effort| effort.as_str().to_owned()),
+        )
+    };
+    let picker = ModelPicker::new(
+        &state.vault,
+        &state.preferences,
+        &state.models_dev,
+        &provider,
+        &model,
+        &thinking,
+    );
     let selected_preset = form.map(|form| form.preset.trim()).unwrap_or_default();
     let presets = state
         .agents
@@ -1200,22 +1206,28 @@ fn candidate_review_view_model(
                 |agent| format!("Preset: {}", agent.name),
             )
     } else {
-        selection.map_or_else(
-            || "Choose a stored provider and model".to_owned(),
-            |item| {
-                format!(
-                    "Direct model: {} · {}{}",
-                    item.provider.label(),
-                    item.model,
-                    item.thinking
-                        .as_ref()
-                        .map(|effort| format!(" · Thinking: {}", effort.label()))
-                        .unwrap_or_default()
-                )
-            },
-        )
+        form.and_then(|form| candidate_submitted_selection(state, form).ok())
+            .or_else(|| {
+                source.and_then(|record| {
+                    effective_model(state, record).map(|model| model.settings.model)
+                })
+            })
+            .map_or_else(
+                || "Choose a stored provider and model".to_owned(),
+                |item| {
+                    format!(
+                        "Direct model: {} · {}{}",
+                        item.provider.label(),
+                        item.model,
+                        item.thinking
+                            .as_ref()
+                            .map(|effort| format!(" · Thinking: {}", effort.label()))
+                            .unwrap_or_default()
+                    )
+                },
+            )
     };
-    (providers, presets, summary)
+    (picker, presets, summary)
 }
 
 fn default_candidate_review_brief() -> &'static str {
@@ -1236,7 +1248,7 @@ fn render_candidate_review(
         .run
         .conversation_id
         .and_then(|id| state.conversations.get(&id));
-    let (providers, presets, reviewer_summary) =
+    let (model_picker, presets, reviewer_summary) =
         candidate_review_view_model(state, source.as_ref(), form);
     let source_title = source.as_ref().map_or_else(
         || selection.run.pinned.definition.name().to_owned(),
@@ -1253,7 +1265,7 @@ fn render_candidate_review(
         instructions_summary: "Automatic project instructions come from the selected candidate's root AGENTS.md. This discussion receives the diff and root instructions without filesystem tools. The current host worktree is not used.".to_owned(),
         brief: if brief.is_empty() { default_candidate_review_brief().to_owned() } else { brief.to_owned() },
         reviewer_summary,
-        providers,
+        model_picker,
         presets,
         error: error.unwrap_or(""),
     };
@@ -4179,32 +4191,39 @@ fn review_view_model(
     state: &AppState,
     source: &ConversationRecord,
     form: Option<&PlanReviewForm>,
-) -> (Vec<ProviderOption>, Vec<PresetOption>, String) {
-    let selection = form
-        .and_then(|form| submitted_selection(state, form).ok())
-        .or_else(|| effective_model(state, source).map(|model| model.settings.model));
-    let providers = state
-        .preferences
-        .desk_providers(&state.vault)
-        .into_iter()
-        .map(|provider| ProviderOption {
-            value: provider.kind.as_str(),
-            label: provider.kind.label(),
-            model: selection
+) -> (ModelPicker, Vec<PresetOption>, String) {
+    let (provider, model, thinking) = if let Some(form) = form {
+        // Requested values stay visible so validation errors never silently
+        // substitute another model. The catalogue picker marks unknown values
+        // unavailable and the POST rejects them again.
+        (
+            form.provider.clone(),
+            form.model.clone(),
+            form.thinking.clone(),
+        )
+    } else {
+        let selection = effective_model(state, source).map(|model| model.settings.model);
+        (
+            selection
                 .as_ref()
-                .filter(|selection| selection.provider == provider.kind)
-                .map_or(provider.model, |selection| selection.model.clone()),
-            thinking: selection
+                .map_or(String::new(), |item| item.provider.as_str().to_owned()),
+            selection
                 .as_ref()
-                .filter(|selection| selection.provider == provider.kind)
-                .and_then(|selection| selection.thinking.as_ref())
-                .map(|value| value.as_str().to_owned())
-                .unwrap_or_default(),
-            selected: selection
+                .map_or(String::new(), |item| item.model.clone()),
+            selection
                 .as_ref()
-                .is_some_and(|selection| selection.provider == provider.kind),
-        })
-        .collect();
+                .and_then(|item| item.thinking.as_ref())
+                .map_or(String::new(), |effort| effort.as_str().to_owned()),
+        )
+    };
+    let picker = ModelPicker::new(
+        &state.vault,
+        &state.preferences,
+        &state.models_dev,
+        &provider,
+        &model,
+        &thinking,
+    );
     let selected_preset = form.map(|form| form.preset.trim()).unwrap_or_default();
     let presets = state
         .agents
@@ -4233,24 +4252,26 @@ fn review_view_model(
                 |agent| format!("Preset: {}", agent.name),
             )
     } else {
-        selection.map_or_else(
-            || "Choose a stored provider and model".to_owned(),
-            |selection| {
-                let effort = selection
-                    .thinking
-                    .as_ref()
-                    .map(|effort| format!(" · Thinking: {}", effort.label()))
-                    .unwrap_or_default();
-                format!(
-                    "Direct model: {} · {}{}",
-                    selection.provider.label(),
-                    selection.model,
-                    effort
-                )
-            },
-        )
+        form.and_then(|form| submitted_selection(state, form).ok())
+            .or_else(|| effective_model(state, source).map(|model| model.settings.model))
+            .map_or_else(
+                || "Choose a stored provider and model".to_owned(),
+                |selection| {
+                    let effort = selection
+                        .thinking
+                        .as_ref()
+                        .map(|effort| format!(" · Thinking: {}", effort.label()))
+                        .unwrap_or_default();
+                    format!(
+                        "Direct model: {} · {}{}",
+                        selection.provider.label(),
+                        selection.model,
+                        effort
+                    )
+                },
+            )
     };
-    (providers, presets, summary)
+    (picker, presets, summary)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4270,7 +4291,7 @@ fn render_plan_review(
         .documents
         .content(document, revision)
         .map_err(|error| AppError::new("read selected plan", error))?;
-    let (providers, presets, reviewer_summary) = review_view_model(state, source, form);
+    let (model_picker, presets, reviewer_summary) = review_view_model(state, source, form);
     let selected_projects: Vec<_> = form
         .map(|form| form.read_only_project.iter().map(String::as_str).collect())
         .unwrap_or_default();
@@ -4314,7 +4335,7 @@ fn render_plan_review(
             brief.to_owned()
         },
         reviewer_summary,
-        providers,
+        model_picker,
         presets,
         read_only_projects,
         error,

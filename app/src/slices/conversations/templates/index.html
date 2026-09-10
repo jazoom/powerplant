@@ -274,7 +274,7 @@
                 >
               </label>
             {% endif %}
-            <div class="grid gap-4 sm:grid-cols-3">
+            <div class="grid gap-4 sm:grid-cols-3" data-review-model-picker>
               <label class="flex flex-col gap-1" for="plan-review-provider">
                 <span class="text-sm">Provider</span>
                 <select
@@ -282,8 +282,16 @@
                   class="select select-bordered"
                   name="provider"
                   required
+                  data-review-provider
                 >
-                  {% for provider in providers %}
+                  {% if let Some(provider) = model_picker.unavailable_provider %}
+                    <option value="{{ provider.as_str() }}" selected>
+                      Unavailable · {{ provider.label() }}
+                    </option>
+                  {% else if model_picker.providers.is_empty() %}
+                    <option value="" disabled>No connected providers</option>
+                  {% endif %}
+                  {% for provider in model_picker.providers %}
                     <option
                       value="{{ provider.value }}"
                       {% if provider.selected %}selected{% endif %}
@@ -295,26 +303,56 @@
               </label>
               <label class="flex flex-col gap-1" for="plan-review-model">
                 <span class="text-sm">Model</span>
-                <input
+                <select
                   id="plan-review-model"
-                  class="input input-bordered"
+                  class="select select-bordered"
                   name="model"
                   required
-                  maxlength="256"
-                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.model }}{% endif %}{% endfor %}"
-                />
+                  data-review-model
+                >
+                  {% if model_picker.models.is_empty() && !model_picker.model_unavailable %}
+                    <option value="" disabled>No models available</option>
+                  {% endif %}
+                  {% if model_picker.model_unavailable %}
+                    <option value="{{ model_picker.model }}" selected>
+                      Unavailable · {{ model_picker.model }}
+                    </option>
+                  {% endif %}
+                  {% for model in model_picker.models %}
+                    <option
+                      value="{{ model.id }}"
+                      {% if model.id == model_picker.model %}selected{% endif %}
+                    >
+                      {{ model.id }}
+                    </option>
+                  {% endfor %}
+                </select>
               </label>
               <label class="flex flex-col gap-1" for="plan-review-thinking">
                 <span class="text-sm">Thinking effort</span>
-                <input
+                <select
                   id="plan-review-thinking"
-                  class="input input-bordered"
+                  class="select select-bordered"
                   name="thinking"
-                  maxlength="32"
-                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.thinking }}{% endif %}{% endfor %}"
-                />
+                  data-review-thinking
+                >
+                  {% if model_picker.efforts.is_empty() %}
+                    <option value="">Not available</option>
+                  {% endif %}
+                  {% for effort in model_picker.efforts %}
+                    <option
+                      value="{{ effort.value }}"
+                      {% if effort.value == model_picker.thinking %}selected{% endif %}
+                    >
+                      {{ effort.label }}
+                    </option>
+                  {% endfor %}
+                </select>
               </label>
             </div>
+            <template
+              data-review-model-catalogue="{{ model_picker.catalogue }}"
+            ></template>
           </section>
           <section
             class="file-section space-y-4"
@@ -537,7 +575,7 @@
                 >
               </label>
             {% endif %}
-            <div class="grid gap-4 sm:grid-cols-3">
+            <div class="grid gap-4 sm:grid-cols-3" data-review-model-picker>
               <label class="flex flex-col gap-1" for="candidate-review-provider"
                 ><span class="text-sm">Provider</span
                 ><select
@@ -545,8 +583,16 @@
                   class="select select-bordered"
                   name="provider"
                   required
+                  data-review-provider
                 >
-                  {% for provider in providers %}
+                  {% if let Some(provider) = model_picker.unavailable_provider %}
+                    <option value="{{ provider.as_str() }}" selected>
+                      Unavailable · {{ provider.label() }}
+                    </option>
+                  {% else if model_picker.providers.is_empty() %}
+                    <option value="" disabled>No connected providers</option>
+                  {% endif %}
+                  {% for provider in model_picker.providers %}
                     <option
                       value="{{ provider.value }}"
                       {% if provider.selected %}selected{% endif %}
@@ -558,24 +604,56 @@
               >
               <label class="flex flex-col gap-1" for="candidate-review-model"
                 ><span class="text-sm">Model</span
-                ><input
+                ><select
                   id="candidate-review-model"
-                  class="input input-bordered"
+                  class="select select-bordered"
                   name="model"
                   required
-                  maxlength="256"
-                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.model }}{% endif %}{% endfor %}"
-              /></label>
+                  data-review-model
+                >
+                  {% if model_picker.models.is_empty() && !model_picker.model_unavailable %}
+                    <option value="" disabled>No models available</option>
+                  {% endif %}
+                  {% if model_picker.model_unavailable %}
+                    <option value="{{ model_picker.model }}" selected>
+                      Unavailable · {{ model_picker.model }}
+                    </option>
+                  {% endif %}
+                  {% for model in model_picker.models %}
+                    <option
+                      value="{{ model.id }}"
+                      {% if model.id == model_picker.model %}selected{% endif %}
+                    >
+                      {{ model.id }}
+                    </option>
+                  {% endfor %}
+                </select></label
+              >
               <label class="flex flex-col gap-1" for="candidate-review-thinking"
                 ><span class="text-sm">Thinking effort</span
-                ><input
+                ><select
                   id="candidate-review-thinking"
-                  class="input input-bordered"
+                  class="select select-bordered"
                   name="thinking"
-                  maxlength="32"
-                  value="{% for provider in providers %}{% if provider.selected %}{{ provider.thinking }}{% endif %}{% endfor %}"
-              /></label>
+                  data-review-thinking
+                >
+                  {% if model_picker.efforts.is_empty() %}
+                    <option value="">Not available</option>
+                  {% endif %}
+                  {% for effort in model_picker.efforts %}
+                    <option
+                      value="{{ effort.value }}"
+                      {% if effort.value == model_picker.thinking %}selected{% endif %}
+                    >
+                      {{ effort.label }}
+                    </option>
+                  {% endfor %}
+                </select></label
+              >
             </div>
+            <template
+              data-review-model-catalogue="{{ model_picker.catalogue }}"
+            ></template>
           </section>
           <div class="flex flex-wrap items-center gap-3 border-t pt-5">
             <button class="btn btn-primary" type="submit">
