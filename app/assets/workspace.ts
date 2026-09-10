@@ -180,24 +180,33 @@ export function initWorkspace(
         } else if (notice) notice.hidden = true;
     }
 
-    // The sidebar keeps a native /attention fallback. On a conversation
-    // the link carries that validated record so attention can return.
+    // The sidebar keeps native /attention and /resources fallbacks. On a
+    // conversation both links carry that record so the destination can
+    // return without inferring an identity.
     function syncAttentionLink() {
-        const link = root.querySelector<HTMLAnchorElement>(
-            "[data-attention-link]",
-        );
-        if (!link) return;
         const owner = root
             .querySelector<HTMLElement>("[data-conversation-url]")
             ?.dataset.conversationUrl?.trim();
         const id = owner?.startsWith("/conversations/")
             ? owner.slice("/conversations/".length).split("/")[0]
             : "";
-        link.setAttribute(
+        const attention = root.querySelector<HTMLAnchorElement>(
+            "[data-attention-link]",
+        );
+        attention?.setAttribute(
             "href",
             id
                 ? `/attention?conversation=${encodeURIComponent(id)}`
                 : "/attention",
+        );
+        const resources = root.querySelector<HTMLAnchorElement>(
+            "[data-resources-link]",
+        );
+        resources?.setAttribute(
+            "href",
+            id
+                ? `/resources?conversation=${encodeURIComponent(id)}`
+                : "/resources",
         );
     }
 

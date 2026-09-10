@@ -2,6 +2,7 @@
   data-section="resources"
   class="workspace-library mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
 >
+  <a href="{{ back_href }}" data-graft class="link">{{ back_label }}</a>
   <header class="page-intro">
     <div>
       <h1>Workflows and presets</h1>
@@ -9,32 +10,211 @@
         Reusable processes and requested settings. Each conversation keeps its
         own values and execution approval.
       </p>
+      {% if !context_title.is_empty() %}
+        <p class="text-quiet text-sm">For conversation: {{ context_title }}</p>
+      {% endif %}
     </div>
   </header>
+  {% if workflow_error != "" %}
+    <div class="alert alert-error" role="alert" tabindex="-1">
+      <p>{{ workflow_error }}</p>
+    </div>
+  {% endif %}
+  {% if preset_error != "" %}
+    <div class="alert alert-error" role="alert" tabindex="-1">
+      <p>{{ preset_error }}</p>
+    </div>
+  {% endif %}
   <section class="file-section space-y-4" aria-labelledby="resources-workflows">
     <h2 id="resources-workflows" class="text-lg font-semibold">Workflows</h2>
     <p class="text-quiet max-w-prose">
       A workflow defines phases, inputs and approval stops. The conversation
       supplies the brief and exact saved revisions.
     </p>
+    {% if workflows.is_empty() %}
+      <p class="text-quiet text-sm">No workflows are available yet.</p>
+    {% else %}
+      <ul class="record-list">
+        {% for workflow in workflows %}
+          <li
+            class="record-row flex-wrap gap-3"
+            {% if workflow.selected %}aria-current="true"{% endif %}
+          >
+            <div class="min-w-0 flex-1 space-y-1">
+              <h3 class="font-medium break-words">{{ workflow.name }}</h3>
+              <p class="text-quiet text-sm break-words">
+                {{ workflow.summary }}
+              </p>
+            </div>
+            <a
+              href="{{ workflow.use_href }}"
+              data-graft
+              class="btn btn-secondary btn-sm"
+              >Use workflow</a
+            >
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
     <div class="flex flex-wrap gap-3">
       <a href="/workflows" data-graft class="btn btn-secondary btn-sm"
         >Manage workflows</a
-      ><a href="/conversations" data-graft class="link"
-        >Choose a conversation to run a workflow</a
       >
     </div>
   </section>
+  {% if !selected_workflow.is_empty() && context_title.is_empty() %}
+    <section
+      class="file-section space-y-4"
+      aria-labelledby="resources-destination"
+    >
+      <h2 id="resources-destination" class="text-lg font-semibold">
+        {{ chooser_heading }}
+      </h2>
+      <p class="text-quiet max-w-prose">
+        Run {{ selected_workflow }} in an existing conversation. Workflow setup
+        opens with the selected workflow and starts no work.
+      </p>
+      {% if has_conversations %}
+        <ul class="record-list">
+          {% for destination in workflow_destinations %}
+            <li class="record-row flex-wrap gap-3">
+              <span class="min-w-0 flex-1 font-medium break-words"
+                >{{ destination.title }}</span
+              >
+              <a href="{{ destination.href }}" data-graft class="link text-sm"
+                >Open workflow setup</a
+              >
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-quiet text-sm">
+          No conversations exist yet. Workflow setup and resource use resume
+          after you save a conversation.
+        </p>
+        <a href="/conversations/new" data-graft class="btn btn-secondary btn-sm"
+          >New conversation</a
+        >
+      {% endif %}
+    </section>
+  {% endif %}
+  {% if !selected_workflow.is_empty() && !context_title.is_empty() %}
+    <section
+      class="file-section space-y-3"
+      aria-labelledby="resources-selected-workflow"
+    >
+      <h2 id="resources-selected-workflow" class="text-lg font-semibold">
+        Selected workflow
+      </h2>
+      <p class="text-quiet text-sm">
+        {{ selected_workflow }} is selected for {{ context_title }}.
+      </p>
+      <a
+        href="{{ selected_workflow_href }}"
+        data-graft
+        class="btn btn-secondary btn-sm"
+        >Continue to workflow setup</a
+      >
+      <p class="text-quiet text-sm">
+        This opens the existing setup flow and starts no work.
+      </p>
+    </section>
+  {% endif %}
   <section class="file-section space-y-4" aria-labelledby="resources-presets">
     <h2 id="resources-presets" class="text-lg font-semibold">Presets</h2>
     <p class="text-quiet max-w-prose">
       A preset replaces the complete settings after a preview. Copied values
       never include execution consent.
     </p>
+    {% if presets.is_empty() %}
+      <p class="text-quiet text-sm">No presets are saved yet.</p>
+    {% else %}
+      <ul class="record-list">
+        {% for preset in presets %}
+          <li
+            class="record-row flex-wrap gap-3"
+            {% if preset.selected %}aria-current="true"{% endif %}
+          >
+            <div class="min-w-0 flex-1 space-y-1">
+              <h3 class="font-medium break-words">{{ preset.name }}</h3>
+              <p class="text-quiet text-sm break-words">
+                {{ preset.description }}
+              </p>
+            </div>
+            <a
+              href="{{ preset.preview_href }}"
+              data-graft
+              class="btn btn-secondary btn-sm"
+              >Preview setup</a
+            >
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
     <a href="/presets" data-graft class="btn btn-secondary btn-sm"
       >Manage presets</a
     >
   </section>
+  {% if !selected_preset.is_empty() && !context_title.is_empty() %}
+    <section
+      class="file-section space-y-3"
+      aria-labelledby="resources-preset-preview"
+    >
+      <h2 id="resources-preset-preview" class="text-lg font-semibold">
+        Preview {{ selected_preset }}
+      </h2>
+      <p class="text-quiet text-sm">
+        Open {{ context_title }}, choose Setup, then Presets, then Preview setup
+        for {{ selected_preset }}. Preview creation retains its command boundary
+        and session binding. Preset selection never applies settings
+        automatically. The replacement still needs the explicit preview and
+        Apply action before its 30-minute expiry.
+      </p>
+      <a
+        href="/conversations/{{ destination_id }}"
+        data-graft
+        class="btn btn-primary btn-sm"
+        >Open {{ context_title }}</a
+      >
+    </section>
+  {% endif %}
+  {% if !selected_preset.is_empty() && context_title.is_empty() %}
+    <section
+      class="file-section space-y-4"
+      aria-labelledby="resources-preset-destination"
+    >
+      <h2 id="resources-preset-destination" class="text-lg font-semibold">
+        {{ chooser_heading }}
+      </h2>
+      <p class="text-quiet max-w-prose">
+        Preview {{ selected_preset }} in an existing conversation. The preset
+        preview opens through the existing session-bound command and never
+        applies settings automatically.
+      </p>
+      {% if has_conversations %}
+        <ul class="record-list">
+          {% for destination in preset_destinations %}
+            <li class="record-row flex-wrap gap-3">
+              <span class="min-w-0 flex-1 font-medium break-words"
+                >{{ destination.title }}</span
+              >
+              <a href="{{ destination.href }}" data-graft class="link text-sm"
+                >Choose this conversation</a
+              >
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-quiet text-sm">
+          No conversations exist yet. Workflow setup and resource use resume
+          after you save a conversation.
+        </p>
+        <a href="/conversations/new" data-graft class="btn btn-secondary btn-sm"
+          >New conversation</a
+        >
+      {% endif %}
+    </section>
+  {% endif %}
   <section class="file-section space-y-4" aria-labelledby="resources-machine">
     <h2 id="resources-machine" class="text-lg font-semibold">
       On this computer

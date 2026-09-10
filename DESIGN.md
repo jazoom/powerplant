@@ -125,7 +125,7 @@ Conversation pages carry their own header with the mobile menu trigger. The sepa
 
 Needs your attention lists real unresolved decisions with owning context links. An optional conversation identifier selects the return destination only: valid context shows Back to conversation, while any other value shows Back to conversations. Refresh and decision pages preserve valid context, and every decision stays visible. History connects conversations to runs, task loops and evidence.
 
-Workflows and presets opens the shared resource page. Ruled sections distinguish reusable processes from complete settings snapshots.
+Workflows and presets opens the shared resource page. Ruled sections distinguish reusable processes from complete settings snapshots, with Use workflow on processes and Preview setup on settings. An optional conversation identifier selects the destination only. Valid context shows Back to conversation and direct handoffs to that record, while any other value opens a destination chooser on the same page. Stale workflow or preset identities report an error without substitution. The breadcrumb group reads Library.
 
 The resource page retains destinations for providers, environments, projects and saved agents. No catalogue capability disappears.
 

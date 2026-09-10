@@ -136,7 +136,13 @@ History links the newest fifty runs and task loops to their owning conversations
 
 Settings also links to Environments.
 
-Workflows and presets opens `/resources`. The shared resource page links to the existing catalogues:
+Workflows and presets opens `/resources`. Each workflow offers Use workflow and each preset offers Preview setup.
+
+An optional conversation identifier carries the destination from a conversation. Valid context hands off to that record. Any other value keeps resource selection on the canonical page beside a destination chooser. The chooser never selects a conversation automatically. If no conversations exist, the page offers New conversation and explains that setup resumes after the user saves a conversation.
+
+Resource navigation creates no record and starts no workflow. It grants no access. Workflow handoff opens the existing setup flow with the selected workflow. Preset handoff opens the destination conversation where the existing session-bound preview command runs before the explicit Apply action. Stale resource identities report an error without substitution.
+
+The shared resource page links to the existing catalogues:
 
 - Workflows and their authoring controls.
 - Presets and their revision-bound editors.

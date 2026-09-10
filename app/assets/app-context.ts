@@ -28,11 +28,11 @@ const SECTIONS: Record<string, SectionContext> = {
         href: "/attention",
     },
     resources: {
-        group: "Reuse",
+        group: "Library",
         label: "Workflows and presets",
         href: "/resources",
     },
-    presets: { group: "Reuse", label: "Presets", href: "/presets" },
+    presets: { group: "Library", label: "Presets", href: "/presets" },
     agents: { group: "Configure", label: "Agents", href: "/agents" },
     workflows: {
         group: "Work",
