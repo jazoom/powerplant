@@ -8,7 +8,7 @@
       <h1>Presets</h1>
       <p>Reusable settings, independent from conversations and runs.</p>
     </div>
-    <a href="/presets" data-graft class="btn btn-sm">New preset</a>
+    <a href="/presets?new=1" data-graft class="btn btn-sm">New preset</a>
   </header>
   {% if !error.is_empty() %}
     <p role="alert" class="alert alert-error">{{ error }}</p>
@@ -59,47 +59,159 @@
       </article>
     {% else %}
       <p class="text-quiet">
-        No presets yet. Save reusable settings below or from a conversation.
+        No presets yet. Choose New preset or save reusable settings from a
+        conversation.
       </p>
     {% endfor %}
   </section>
-  <section class="border-base-300 border-t pt-6">
-    <h2 class="text-xl font-semibold">
-      {% if form.preset_id.is_empty() %}New preset{% else %}Edit preset{% endif %}
-    </h2>
-    <p class="text-quiet mt-2 text-sm">
-      These settings request access only. Save authorises no execution or
-      sensitive directory access. Existing copies never change.
-    </p>
-    <form
-      id="preset-editor"
-      method="post"
-      action="{% if form.preset_id.is_empty() %}/presets/create{% else %}/presets/edit{% endif %}"
-      data-graft
-      class="mt-5 space-y-5"
-    >
-      <input
-        type="hidden"
-        name="preset_id"
-        value="{{ form.preset_id }}"
-      /><input type="hidden" name="revision" value="{{ form.revision }}" />
-      <label class="flex flex-col gap-1"
-        >Name<input
-          class="input input-bordered w-full"
-          name="name"
-          value="{{ form.name }}"
-          maxlength="80"
-          required
-      /></label>
-      <div class="grid gap-4 sm:grid-cols-2">
+  {% if show_form %}
+    <section class="border-base-300 border-t pt-6">
+      <h2 class="text-xl font-semibold">
+        {% if form.preset_id.is_empty() %}New preset{% else %}Edit preset{% endif %}
+      </h2>
+      <p class="text-quiet mt-2 text-sm">
+        These settings request access only. Save authorises no execution or
+        sensitive directory access. Existing copies never change.
+      </p>
+      <form
+        id="preset-editor"
+        method="post"
+        action="{% if form.preset_id.is_empty() %}/presets/create{% else %}/presets/edit{% endif %}"
+        data-graft
+        class="mt-5 space-y-5"
+      >
+        <input
+          type="hidden"
+          name="preset_id"
+          value="{{ form.preset_id }}"
+        /><input type="hidden" name="revision" value="{{ form.revision }}" />
         <label class="flex flex-col gap-1"
-          >Provider<select
+          >Name<input
+            class="input input-bordered w-full"
+            name="name"
+            value="{{ form.name }}"
+            maxlength="80"
+            required
+        /></label>
+        <div class="grid gap-4 sm:grid-cols-3" data-review-model-picker>
+          <label class="flex flex-col gap-1"
+            >Provider<select
+              class="select select-bordered w-full"
+              name="provider"
+              data-review-provider
+              required
+            >
+              <option value="">Choose provider</option>
+              {% for option in providers %}
+                <option
+                  value="{{ option.value }}"
+                  {% if option.selected %}selected{% endif %}
+                >
+                  {{ option.label }}
+                </option>
+              {% endfor %}
+            </select></label
+          >
+          <label class="flex flex-col gap-1"
+            >Model<select
+              class="select select-bordered w-full"
+              name="model"
+              data-review-model
+              required
+            >
+              {% if models.is_empty() && !model_unavailable %}
+                <option value="" disabled selected>
+                  {% if form.provider.is_empty() %}Choose provider first{% else %}No
+                  models available{% endif %}
+                </option>
+              {% endif %}
+              {% if model_unavailable %}
+                <option value="{{ form.model }}" selected>
+                  Unavailable · {{ form.model }}
+                </option>
+              {% endif %}
+              {% for option in models %}
+                <option
+                  value="{{ option.id }}"
+                  {% if option.selected %}selected{% endif %}
+                >
+                  {{ option.id }}
+                </option>
+              {% endfor %}</select
+            ><span class="text-quiet text-xs">{{ model_status }}</span></label
+          >
+          <label class="flex flex-col gap-1"
+            >Reasoning effort<select
+              class="select select-bordered w-full"
+              name="thinking"
+              data-review-thinking
+            >
+              {% if efforts.is_empty() %}
+                <option value="">Not available</option>
+              {% endif %}
+              {% for effort in efforts %}
+                <option
+                  value="{{ effort.value }}"
+                  {% if effort.value == form.thinking %}selected{% endif %}
+                >
+                  {{ effort.label }}
+                </option>
+              {% endfor %}</select
+            ><span class="text-quiet text-xs"
+              >Choose a listed effort when the model supports adjustable effort.
+              Leave empty only when the select shows Not available. Unavailable
+              selections remain requested values.</span
+            ></label
+          >
+        </div>
+        <template data-review-model-catalogue="{{ catalogue }}"></template>
+        {% let settings_form = self.model_form() %}
+        {% let field_prefix = "" %}
+        {% let tools_host = form.location == "host" %}
+        {% let host_approval_automatic = form.host_approval == "automatic" %}
+        {% include "execution_settings/templates/fields.html" %}
+        <fieldset class="space-y-2">
+          <legend class="text-sm font-medium">Where tools run</legend>
+          <p class="text-quiet text-xs">
+            This computer stores the preference only. It does not authorise host
+            commands or Run without approval.
+          </p>
+          <label class="flex items-center gap-2 text-sm"
+            ><input
+              class="radio radio-sm"
+              type="radio"
+              name="location"
+              value="sandbox"
+              {% if form.location != "host" %}checked{% endif %}
+            />Sandbox</label
+          >
+          <label class="flex items-center gap-2 text-sm"
+            ><input
+              class="radio radio-sm"
+              type="radio"
+              name="location"
+              value="host"
+              {% if form.location == "host" %}checked{% endif %}
+            />This computer</label
+          >
+        </fieldset>
+        {% if form.location == "host" %}
+          {% include "execution_settings/templates/host_approval.html" %}
+        {% else %}
+          <input
+            type="hidden"
+            name="host_approval"
+            value="{% if host_approval_automatic %}automatic{% else %}ask-each-time{% endif %}"
+          />
+        {% endif %}
+        <label class="flex flex-col gap-1"
+          >Environment<select
             class="select select-bordered w-full"
-            name="provider"
+            name="environment"
             required
           >
-            <option value="">Choose provider</option>
-            {% for option in providers %}
+            <option value="">Choose environment</option>
+            {% for option in environments %}
               <option
                 value="{{ option.value }}"
                 {% if option.selected %}selected{% endif %}
@@ -110,176 +222,95 @@
           </select></label
         >
         <label class="flex flex-col gap-1"
-          >Model<input
-            class="input input-bordered w-full"
-            name="model"
-            value="{{ form.model }}"
-            maxlength="200"
-            required
-          /><span class="text-quiet text-xs">{{ model_status }}</span></label
-        >
-      </div>
-      <label class="flex flex-col gap-1"
-        >Reasoning effort<input
-          class="input input-bordered w-full"
-          name="thinking"
-          value="{{ form.thinking }}"
-          maxlength="64"
-        /><span class="text-quiet text-xs"
-          >Leave empty for a model without adjustable effort. Unavailable
-          selections remain requested values.</span
-        ></label
-      >
-      {% if !thinking_efforts.is_empty() %}
-        <p class="text-quiet text-sm">
-          Listed reasoning efforts: {{ thinking_efforts }}.
-        </p>
-      {% endif %}
-      {% let settings_form = self.model_form() %}
-      {% let field_prefix = "" %}
-      {% let tools_host = form.location == "host" %}
-      {% let host_approval_automatic = form.host_approval == "automatic" %}
-      {% include "execution_settings/templates/fields.html" %}
-      <fieldset class="space-y-2">
-        <legend class="text-sm font-medium">Where tools run</legend>
-        <p class="text-quiet text-xs">
-          This computer stores the preference only. It does not authorise host
-          commands or Run without approval.
-        </p>
-        <label class="flex items-center gap-2 text-sm"
-          ><input
-            class="radio radio-sm"
-            type="radio"
-            name="location"
-            value="sandbox"
-            {% if form.location != "host" %}checked{% endif %}
-          />Sandbox</label
-        >
-        <label class="flex items-center gap-2 text-sm"
-          ><input
-            class="radio radio-sm"
-            type="radio"
-            name="location"
-            value="host"
-            {% if form.location == "host" %}checked{% endif %}
-          />This computer</label
-        >
-      </fieldset>
-      {% if form.location == "host" %}
-        {% include "execution_settings/templates/host_approval.html" %}
-      {% else %}
-        <input
-          type="hidden"
-          name="host_approval"
-          value="{% if host_approval_automatic %}automatic{% else %}ask-each-time{% endif %}"
-        />
-      {% endif %}
-      <label class="flex flex-col gap-1"
-        >Environment<select
-          class="select select-bordered w-full"
-          name="environment"
-          required
-        >
-          <option value="">Choose environment</option>
-          {% for option in environments %}
+          >Sandbox network<select
+            class="select select-bordered w-full"
+            name="network"
+          >
             <option
-              value="{{ option.value }}"
-              {% if option.selected %}selected{% endif %}
+              value="none"
+              {% if form.network == "none" %}selected{% endif %}
             >
-              {{ option.label }}
+              Off
             </option>
-          {% endfor %}
-        </select></label
-      >
-      <label class="flex flex-col gap-1"
-        >Sandbox network<select
-          class="select select-bordered w-full"
-          name="network"
+            <option
+              value="restricted"
+              {% if form.network == "restricted" %}selected{% endif %}
+            >
+              Restricted domains
+            </option>
+            <option
+              value="public"
+              {% if form.network == "public" %}selected{% endif %}
+            >
+              Public internet
+            </option>
+          </select></label
         >
-          <option
-            value="none"
-            {% if form.network == "none" %}selected{% endif %}
+        <label class="flex flex-col gap-1"
+          >Restricted domains<textarea
+            class="textarea textarea-bordered w-full"
+            name="network_domains"
+            maxlength="8192"
           >
-            Off
-          </option>
-          <option
-            value="restricted"
-            {% if form.network == "restricted" %}selected{% endif %}
-          >
-            Restricted domains
-          </option>
-          <option
-            value="public"
-            {% if form.network == "public" %}selected{% endif %}
-          >
-            Public internet
-          </option>
-        </select></label
-      >
-      <label class="flex flex-col gap-1"
-        >Restricted domains<textarea
-          class="textarea textarea-bordered w-full"
-          name="network_domains"
-          maxlength="8192"
-        >
 {{ form.network_domains }}</textarea
-        ><span class="text-quiet text-xs"
-          >One domain per line. Provider requests remain separate from sandbox
-          network access.</span
-        ></label
-      >
-      <fieldset class="space-y-4">
-        <legend class="font-semibold">Requested directories</legend>
-        <p class="text-quiet text-sm">
-          One absolute path per line. Existing unavailable roots retain their
-          identity. New paths must exist.
-        </p>
-        {% for directory in directories %}
-          <p class="text-quiet text-sm break-all">{{ directory }}</p>
-        {% endfor %}
-        <label class="flex flex-col gap-1"
-          >Read only<textarea
-            class="textarea textarea-bordered w-full"
-            name="read_only"
-            maxlength="32768"
-          >
-{{ form.read_only }}</textarea>
-        </label>
-        <label class="flex flex-col gap-1"
-          >Review before apply<textarea
-            class="textarea textarea-bordered w-full"
-            name="reviewed"
-            maxlength="32768"
-          >
-{{ form.reviewed }}</textarea>
-        </label>
-        <label class="flex flex-col gap-1"
-          >Direct write<textarea
-            class="textarea textarea-bordered w-full"
-            name="direct_write"
-            maxlength="32768"
-          >
-{{ form.direct_write }}</textarea>
-        </label>
-        <p class="text-quiet text-sm">
-          Direct write requests immediate host changes. Each conversation needs
-          separate consent.
-        </p>
-      </fieldset>
-      <div class="flex flex-wrap gap-3">
-        <button
-          id="preset-submit"
-          type="submit"
-          aria-disabled="false"
-          class="btn btn-primary"
+          ><span class="text-quiet text-xs"
+            >One domain per line. Provider requests remain separate from sandbox
+            network access.</span
+          ></label
         >
-          {% if form.preset_id.is_empty() %}
-            Create preset
-          {% else %}
-            Save preset changes
-          {% endif %}</button
-        ><a href="/presets" data-graft class="btn btn-ghost">Cancel</a>
-      </div>
-    </form>
-  </section>
+        <fieldset class="space-y-4">
+          <legend class="font-semibold">Requested directories</legend>
+          <p class="text-quiet text-sm">
+            One absolute path per line. Existing unavailable roots retain their
+            identity. New paths must exist.
+          </p>
+          {% for directory in directories %}
+            <p class="text-quiet text-sm break-all">{{ directory }}</p>
+          {% endfor %}
+          <label class="flex flex-col gap-1"
+            >Read only<textarea
+              class="textarea textarea-bordered w-full"
+              name="read_only"
+              maxlength="32768"
+            >
+{{ form.read_only }}</textarea>
+          </label>
+          <label class="flex flex-col gap-1"
+            >Review before apply<textarea
+              class="textarea textarea-bordered w-full"
+              name="reviewed"
+              maxlength="32768"
+            >
+{{ form.reviewed }}</textarea>
+          </label>
+          <label class="flex flex-col gap-1"
+            >Direct write<textarea
+              class="textarea textarea-bordered w-full"
+              name="direct_write"
+              maxlength="32768"
+            >
+{{ form.direct_write }}</textarea>
+          </label>
+          <p class="text-quiet text-sm">
+            Direct write requests immediate host changes. Each conversation
+            needs separate consent.
+          </p>
+        </fieldset>
+        <div class="flex flex-wrap gap-3">
+          <button
+            id="preset-submit"
+            type="submit"
+            aria-disabled="false"
+            class="btn btn-primary"
+          >
+            {% if form.preset_id.is_empty() %}
+              Create preset
+            {% else %}
+              Save preset changes
+            {% endif %}</button
+          ><a href="/presets" data-graft class="btn btn-ghost">Cancel</a>
+        </div>
+      </form>
+    </section>
+  {% endif %}
 </main>

@@ -219,6 +219,8 @@ impl PresetForm {
 struct Selection {
     #[serde(default)]
     edit: String,
+    #[serde(default)]
+    new: String,
 }
 
 async fn show(
@@ -233,13 +235,20 @@ async fn show(
     } else {
         ""
     };
+    // The list stays separate from creation. The full form renders only for a
+    // new preset or a retained revision-bound edit.
+    let show_form = record.is_some() || !query.new.is_empty();
     let page = page::PresetsPage::new(
         &state,
-        record
-            .as_ref()
-            .map(PresetForm::from)
-            .unwrap_or_else(PresetForm::new_form),
+        record.as_ref().map(PresetForm::from).unwrap_or_else(|| {
+            if show_form {
+                PresetForm::new_form()
+            } else {
+                PresetForm::default()
+            }
+        }),
         error,
+        show_form,
     );
     match graft {
         PageGraft::Document => responses::chat_page_response("Presets", &state, &page),
@@ -260,7 +269,7 @@ fn patch(
     Ok(hypergraft::outcome::children_patch(
         status,
         "chat-main",
-        &page::PresetsPage::new(state, form, error),
+        &page::PresetsPage::new(state, form, error, true),
     )?)
 }
 
@@ -328,24 +337,22 @@ async fn save(
         Ok(settings) => settings,
         Err(error) => return patch(state, form, error, PatchStatus::UnprocessableEntity),
     };
-    let unchanged_model = original
-        .as_ref()
-        .is_some_and(|record| record.settings.model == settings.model);
-    if !unchanged_model
-        && state
-            .models_dev
-            .model(settings.model.provider, &settings.model.model)
-            .is_some()
+    // Catalogue-listed models need a supported effort, including an explicit
+    // choice for capable models. An empty value never selects a default
+    // silently. Unlisted requested values stay retained without substitution.
+    if state
+        .models_dev
+        .model(settings.model.provider, &settings.model.model)
+        .is_some()
     {
         let efforts = state
             .models_dev
             .efforts(settings.model.provider, &settings.model.model);
-        if settings
-            .model
-            .thinking
-            .as_ref()
-            .map_or(!efforts.is_empty(), |effort| !efforts.contains(effort))
-        {
+        let supported = match settings.model.thinking.as_ref() {
+            Some(effort) => efforts.contains(effort),
+            None => efforts.is_empty(),
+        };
+        if !supported {
             return patch(
                 state,
                 form,

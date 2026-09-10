@@ -152,11 +152,88 @@ async fn invalid_and_stale_edits_leave_the_saved_snapshot_unchanged() {
     }
 }
 
+async fn post_form(app: &axum::Router, uri: &str, body: String) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn capable_models_need_a_listed_effort_while_unlisted_models_stay_retained() {
+    let state = crate::tests::test_state(crate::config::RuntimeConfig::development());
+    let app = crate::slices::router()
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone());
+    let environment = EnvironmentId::generate().unwrap().as_hex();
+    let create = |model: &str, thinking: &str| {
+        format!(
+            "name=Effort&provider=xai&model={model}&thinking={thinking}&environment={environment}&network=none"
+        )
+    };
+    // grok-4.6 is catalogue-listed with adjustable effort, so an empty value
+    // never selects a default silently.
+    assert_eq!(
+        post_form(&app, "/presets/create", create("grok-4.6", "")).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        post_form(&app, "/presets/create", create("grok-4.6", "nonsense")).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        post_form(&app, "/presets/create", create("grok-4.6", "medium")).await,
+        StatusCode::OK
+    );
+    // Unlisted requested values stay retained without substitution.
+    assert_eq!(
+        post_form(&app, "/presets/create", create("retired-model-1", ""),).await,
+        StatusCode::OK
+    );
+    let retained = state
+        .presets
+        .list()
+        .into_iter()
+        .find(|record| record.settings.model.model == "retired-model-1")
+        .expect("retained preset");
+    assert_eq!(
+        post_form(
+            &app,
+            "/presets/edit",
+            format!(
+                "preset_id={}&revision={}&name=Renamed&provider=xai&model=retired-model-1&environment={environment}&network=none",
+                retained.id,
+                retained.revision,
+            ),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let edited = state.presets.get(&retained.id).expect("edited preset");
+    assert_eq!(edited.settings.model.model, "retired-model-1");
+    assert_eq!(edited.settings.model.thinking, None);
+}
+
 fn form() -> PresetForm {
     PresetForm {
         name: "Review".to_owned(),
         provider: "xai".to_owned(),
         model: "grok-4.6".to_owned(),
+        thinking: "medium".to_owned(),
         environment: EnvironmentId::generate().unwrap().as_hex(),
         network: "none".to_owned(),
         ..PresetForm::default()
@@ -173,6 +250,21 @@ fn form_rejects_unknown_duplicate_tools_and_unbounded_instructions() {
     assert!(f.settings(None).is_err());
     f.tool_run.clear();
     f.instructions = "x".repeat(32769);
+    assert!(f.settings(None).is_err());
+}
+
+#[test]
+fn overlapping_directory_roots_fail() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("source");
+    let child = parent.join("nested");
+    std::fs::create_dir_all(&child).unwrap();
+    let mut f = form();
+    f.read_only = parent.display().to_string();
+    f.reviewed = child.display().to_string();
+    assert!(f.settings(None).is_err());
+    f.reviewed.clear();
+    f.direct_write = f.read_only.clone();
     assert!(f.settings(None).is_err());
 }
 

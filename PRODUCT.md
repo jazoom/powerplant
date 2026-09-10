@@ -42,7 +42,7 @@ A preset retains descriptive source provenance. Later source changes do not alte
 
 Settings links to Presets at `/presets`. The page supports explicit creation, revision-bound edits and revision-bound deletion.
 
-The preset editor shares instruction, tool and environment presentation with conversations. Preset edits request access but authorise no execution or sensitive access.
+The preset editor shares instruction, tool and environment presentation with conversations. Model and thinking effort use catalogue dropdowns with model-specific effort choices and Not available for models without adjustable effort. A catalogue-listed model needs a supported effort and an empty value never selects a default. Preset edits request access but authorise no execution or sensitive access.
 
 Unavailable providers, models, recipes and directories retain their requested values. Preset deletion needs no available provider or execution resource.
 

@@ -2,6 +2,7 @@ use super::PresetForm;
 use crate::slices::execution_settings::page::{ToolOption, tool_options};
 use crate::{presets::PresetProvenance, providers::ProviderKind, state::AppState};
 use askama::Template;
+use serde::Serialize;
 
 pub(super) struct OptionView {
     value: String,
@@ -16,6 +17,29 @@ pub(super) struct RecordView {
     source: String,
 }
 
+pub(super) struct ModelChoice {
+    id: String,
+    selected: bool,
+}
+
+pub(super) struct EffortChoice {
+    value: String,
+    label: String,
+}
+
+#[derive(Serialize)]
+struct PresetCatalogueModel {
+    id: String,
+    default_effort: String,
+    efforts: Vec<PresetCatalogueEffort>,
+}
+
+#[derive(Serialize)]
+struct PresetCatalogueEffort {
+    value: String,
+    label: String,
+}
+
 #[derive(Template)]
 #[template(path = "presets/templates/index.html")]
 pub(super) struct PresetsPage {
@@ -25,15 +49,24 @@ pub(super) struct PresetsPage {
     environments: Vec<OptionView>,
     directories: Vec<String>,
     model_status: &'static str,
-    thinking_efforts: String,
+    models: Vec<ModelChoice>,
+    model_unavailable: bool,
+    efforts: Vec<EffortChoice>,
+    catalogue: String,
     instructions: String,
     tool_options: Vec<ToolOption>,
     job_active: bool,
+    show_form: bool,
     error: &'static str,
 }
 
 impl PresetsPage {
-    pub(super) fn new(state: &AppState, mut form: PresetForm, error: &'static str) -> Self {
+    pub(super) fn new(
+        state: &AppState,
+        mut form: PresetForm,
+        error: &'static str,
+        show_form: bool,
+    ) -> Self {
         if form.network.is_empty() {
             form.network = "none".to_owned();
         }
@@ -100,17 +133,80 @@ impl PresetsPage {
         } else {
             "Model unavailable in the catalogue; requested value retained"
         };
-        let efforts = kind
+        // The creation form stays constrained to the catalogue while retained
+        // unavailable values survive revision-bound edits without substitution.
+        // The list renders without the form, so it needs no catalogue payload.
+        let catalogue = if show_form {
+            let catalogue_models: std::collections::BTreeMap<_, Vec<PresetCatalogueModel>> =
+                ProviderKind::ALL
+                    .into_iter()
+                    .map(|provider| {
+                        let models = state
+                            .models_dev
+                            .models(provider)
+                            .into_iter()
+                            .map(|item| {
+                                let efforts = state
+                                    .models_dev
+                                    .efforts(provider, &item.id)
+                                    .into_iter()
+                                    .map(|effort| PresetCatalogueEffort {
+                                        value: effort.as_str().to_owned(),
+                                        label: effort.label(),
+                                    })
+                                    .collect();
+                                PresetCatalogueModel {
+                                    default_effort: state
+                                        .models_dev
+                                        .effective_effort(provider, &item.id, None)
+                                        .map(|effort| effort.as_str().to_owned())
+                                        .unwrap_or_default(),
+                                    id: item.id,
+                                    efforts,
+                                }
+                            })
+                            .collect();
+                        (provider.as_str(), models)
+                    })
+                    .collect();
+            serde_json::to_string(&catalogue_models)
+                .expect("preset catalogue options contain only strings")
+        } else {
+            "{}".to_owned()
+        };
+        let models = kind
+            .map(|kind| state.models_dev.models(kind))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| ModelChoice {
+                selected: item.id == form.model,
+                id: item.id,
+            })
+            .collect::<Vec<_>>();
+        let model_unavailable =
+            !form.model.is_empty() && !models.iter().any(|option| option.id == form.model);
+        let mut efforts = kind
             .map(|kind| state.models_dev.efforts(kind, &form.model))
-            .unwrap_or_default();
-        let thinking_efforts = efforts
-            .iter()
-            .map(|effort| effort.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+            .unwrap_or_default()
+            .into_iter()
+            .map(|effort| EffortChoice {
+                value: effort.as_str().to_owned(),
+                label: effort.label(),
+            })
+            .collect::<Vec<_>>();
+        if !form.thinking.is_empty() && !efforts.iter().any(|effort| effort.value == form.thinking)
+        {
+            efforts.push(EffortChoice {
+                value: form.thinking.clone(),
+                label: format!("Unavailable · {}", form.thinking),
+            });
+        }
         Self {
             model_status,
-            thinking_efforts,
+            models,
+            model_unavailable,
+            efforts,
+            catalogue,
             instructions: form.instructions.clone(),
             tool_options: tool_options(&form.tools()),
             form,
@@ -134,6 +230,7 @@ impl PresetsPage {
             environments,
             directories,
             job_active: false,
+            show_form,
             error,
         }
     }
