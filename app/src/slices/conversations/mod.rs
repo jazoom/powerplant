@@ -1,3 +1,4 @@
+mod activity;
 mod directories;
 mod job;
 mod new;
@@ -87,6 +88,10 @@ pub(super) fn router() -> Router<AppState> {
             post(directories::remove_new),
         )
         .route("/conversations/{conversation_id}", get(detail))
+        .route(
+            "/conversations/{conversation_id}/activity",
+            get(activity::show),
+        )
         .route(
             "/conversations/{conversation_id}/workflow",
             get(workflow::show).post(workflow::launch),
@@ -382,6 +387,7 @@ struct NetworkForm {
 struct CatalogueQuery {
     directory: String,
     q: String,
+    conversation: String,
     index: bool,
 }
 
@@ -437,7 +443,26 @@ async fn catalogue(
     } else {
         ""
     };
-    render_catalogue(&state, graft, &query.directory, trimmed, error)
+    // The optional conversation only selects the return destination, as on
+    // the attention page. History always lists every matching conversation.
+    let back = crate::conversations::ConversationId::parse(query.conversation.trim())
+        .filter(|id| state.conversations.get(id).is_some());
+    let (back_href, back_label) = match back {
+        Some(id) => (
+            format!("/conversations/{}", id.as_hex()),
+            "Back to conversation",
+        ),
+        None => (String::new(), ""),
+    };
+    render_catalogue(
+        &state,
+        graft,
+        &query.directory,
+        trimmed,
+        error,
+        back_href,
+        back_label,
+    )
 }
 
 async fn create(
@@ -1796,7 +1821,6 @@ async fn save_task_list_text(
                 &record.title,
                 DocumentError::TaskList.message(),
             );
-            let view = view.with_task_text(form.title, form.markdown);
             let view = attach_plans_list(view, DocumentError::TaskList.message())?;
             render_detail_command(graft, PatchStatus::UnprocessableEntity, view)
         }
@@ -4408,6 +4432,8 @@ fn render_catalogue(
     filter: &str,
     query: &str,
     error: &'static str,
+    back_href: String,
+    back_label: &'static str,
 ) -> AppResult<Response> {
     render_page(
         state,
@@ -4418,12 +4444,28 @@ fn render_catalogue(
             PatchStatus::UnprocessableEntity
         },
         page::CATALOGUE_TITLE,
-        &CatalogueView::from_records(&state.conversations.list(), filter, query, error),
+        &CatalogueView::from_records(
+            state,
+            &state.conversations.list(),
+            filter,
+            query,
+            error,
+            back_href,
+            back_label,
+        ),
     )
 }
 
 fn creation_error(state: &AppState, error: &'static str) -> AppResult<Response> {
-    let view = CatalogueView::from_records(&state.conversations.list(), "", "", error);
+    let view = CatalogueView::from_records(
+        state,
+        &state.conversations.list(),
+        "",
+        "",
+        error,
+        String::new(),
+        "",
+    );
     let mut patches = hypergraft::PatchSet::new().title(page::CATALOGUE_TITLE);
     patches.children("chat-main", &view)?;
     patches.replace_location("/conversations")?;

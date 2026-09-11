@@ -479,7 +479,6 @@ async fn chooser_lists_starters_in_approved_order_with_custom_workflows_last() {
     assert_eq!(
         names,
         vec![
-            "Implement a saved plan".to_owned(),
             "Plan a change".to_owned(),
             "Review current code".to_owned(),
             "Implement with approval".to_owned(),
@@ -493,7 +492,7 @@ async fn chooser_lists_starters_in_approved_order_with_custom_workflows_last() {
         !view
             .workflows
             .iter()
-            .any(|workflow| workflow.effects.is_empty())
+            .any(|workflow| workflow.summary.is_empty())
     );
     assert!(
         view.workflows
@@ -1461,5 +1460,354 @@ async fn unavailable_environments_block_sandbox_launch_without_substitution() {
             .settings
             .environment,
         crate::tests::test_environment_id()
+    );
+}
+
+#[tokio::test]
+async fn brief_defaults_to_the_conversation_request_not_sample_text() {
+    let state = connected_state();
+    let mut conversation = state
+        .conversations
+        .create("Ordering".to_owned())
+        .expect("conversation");
+    conversation.messages = vec![crate::conversations::ConversationMessage {
+        role: crate::conversations::MessageRole::User,
+        text: "  Make errors helpful.  ".to_owned(),
+        status: crate::conversations::MessageStatus::Complete,
+        error: None,
+        request: None,
+    }];
+    let brief = async |brief: &str, record: &ConversationRecord| {
+        launch_view(
+            &state,
+            record,
+            None,
+            None,
+            brief,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            &[],
+            "",
+        )
+        .await
+        .brief
+        .clone()
+    };
+    assert_eq!(brief("", &conversation).await, "Make errors helpful.");
+    assert_eq!(
+        brief("Explicit direction", &conversation).await,
+        "Explicit direction"
+    );
+    let empty = state
+        .conversations
+        .create("Empty".to_owned())
+        .expect("conversation");
+    assert!(brief("", &empty).await.is_empty());
+}
+
+#[tokio::test]
+async fn retired_saved_plan_starter_stays_resolvable_but_leaves_the_chooser() {
+    let state = connected_state();
+    let environment = crate::tests::test_environment_id();
+    // Existing installs retain the retired starter as stored data.
+    let base = workflows::seeds::implement_with_approval_definition(environment);
+    let mut steps = base.steps().to_vec();
+    steps[0].inputs.push(workflows::definition::RequiredInput {
+        key: workflows::definition::InputKey::parse("plan").expect("plan key"),
+        kind: workflows::definition::ArtefactKind::Plan,
+        source: workflows::definition::ArtefactSource::LaunchInput {
+            source: workflows::definition::LaunchInputSource::SavedPlan,
+        },
+    });
+    let legacy = workflows::definition::WorkflowDefinition::from_parts(
+        "Implement a saved plan".to_owned(),
+        environment,
+        base.roles().to_vec(),
+        steps,
+    )
+    .expect("legacy definition");
+    let legacy = state.workflows.create(legacy).expect("legacy");
+    let legacy_token = WorkflowSelection {
+        workflow_id: legacy.id,
+        definition_version: legacy.definition_version,
+    }
+    .as_token();
+    // Recorded runs keep resolving against the stored definition.
+    assert!(
+        state
+            .workflows
+            .resolve(&WorkflowSelection::parse(&legacy_token).expect("selection"))
+            .is_ok()
+    );
+    let current = state
+        .workflows
+        .create(workflows::seeds::implement_and_review_definition(
+            environment,
+        ))
+        .expect("workflow");
+    assert_ne!(current.id, legacy.id);
+    let conversation = state
+        .conversations
+        .create("Ordering".to_owned())
+        .expect("conversation");
+    let view = launch_view(
+        &state,
+        &conversation,
+        None,
+        None,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        &[],
+        "",
+    )
+    .await;
+    assert!(
+        !view
+            .workflows
+            .iter()
+            .any(|workflow| workflow.name == "Implement a saved plan")
+    );
+    assert_eq!(
+        view.workflows
+            .iter()
+            .map(|workflow| &workflow.name)
+            .collect::<Vec<_>>(),
+        vec!["Implement and review"],
+    );
+}
+
+#[tokio::test]
+async fn prepare_handoff_passes_a_saved_plan_to_implement_and_review() {
+    let state = connected_state();
+    let environment = crate::tests::test_environment_id();
+    let conversation = state
+        .conversations
+        .create("Workflow".to_owned())
+        .expect("conversation");
+    let workflow = state
+        .workflows
+        .create(workflows::seeds::implement_and_review_definition(
+            environment,
+        ))
+        .expect("workflow");
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let plan = state
+        .documents
+        .create_from_text(
+            conversation.id,
+            "Selected plan".to_owned(),
+            "# Selected plan\n\nKeep this revision.\n".to_owned(),
+            None,
+        )
+        .expect("plan");
+    let token = super::plan_choice_token(&plan.id, plan.current());
+    let view = launch_view(
+        &state,
+        &conversation,
+        Some(&selection),
+        None,
+        "Implement the selected plan: Selected plan",
+        "",
+        &token,
+        "",
+        "",
+        "",
+        "",
+        &[],
+        "",
+    )
+    .await;
+    assert!(!view.requires_plan);
+    assert!(view.plan_optional);
+    assert!(
+        view.plans
+            .iter()
+            .any(|plan| plan.selected && !plan.content_hash.is_empty())
+    );
+    // The stored definition gains no declared input; the launch pins it per run.
+    assert!(
+        !workflow
+            .definition
+            .launch_input_sources()
+            .contains(&workflows::definition::LaunchInputSource::SavedPlan)
+    );
+    let effective = super::definition_for_plan(&state, &selection, &token)
+        .expect("effective")
+        .expect("definition");
+    assert!(
+        effective
+            .launch_input_sources()
+            .contains(&workflows::definition::LaunchInputSource::SavedPlan)
+    );
+    let selected = super::resolve_selected_plan(&state, &conversation, &token, &effective)
+        .expect("selection")
+        .expect("plan");
+    assert_eq!(selected.content, "# Selected plan\n\nKeep this revision.\n");
+    assert!(
+        super::definition_for_plan(&state, &selection, "")
+            .expect("empty")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn review_reports_automatic_commit_without_promising_a_human_decision() {
+    let state = connected_state();
+    let environment = crate::tests::test_environment_id();
+    let source = workflows::seeds::implement_and_review_definition(environment);
+    let mut steps = source.steps().to_vec();
+    for step in &mut steps {
+        if let workflows::definition::StepAction::SystemCommand(action) = &mut step.action
+            && action.command == workflows::commands::SystemCommandId::ApplyChanges
+        {
+            action.command = workflows::commands::SystemCommandId::CommitCandidate;
+        }
+    }
+    let definition = workflows::definition::WorkflowDefinition::from_parts(
+        source.name().to_owned(),
+        environment,
+        source.roles().to_vec(),
+        steps,
+    )
+    .unwrap();
+    let workflow = state.workflows.create(definition).unwrap();
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let conversation = state
+        .conversations
+        .create("Approval policy".to_owned())
+        .unwrap();
+    let mut view = launch_view(
+        &state,
+        &conversation,
+        Some(&selection),
+        None,
+        "Implement the change",
+        "automatic-after-review",
+        "",
+        "",
+        "",
+        "",
+        "",
+        &[],
+        "",
+    )
+    .await;
+    view.stage = "review";
+    let body = view.contents().render().unwrap();
+    assert!(body.contains("Automatic commit after approved review"));
+    assert!(!body.contains("Your approval precedes file application"));
+    assert!(body.contains("Direct"));
+    assert!(body.contains("writes and host commands can change files before a"));
+}
+
+#[tokio::test]
+async fn launch_preview_mismatch_starts_no_work() {
+    let state = connected_state();
+    let conversation = state
+        .conversations
+        .create("Workflow".to_owned())
+        .expect("conversation");
+    let workflow = state
+        .workflows
+        .create(workflows::seeds::implement_and_review_definition(
+            crate::tests::test_environment_id(),
+        ))
+        .expect("workflow");
+    let selection = WorkflowSelection {
+        workflow_id: workflow.id,
+        definition_version: workflow.definition_version,
+    }
+    .as_token();
+    let token = crate::sessions::generate_session_token().expect("session");
+    state.sessions.insert(token.id());
+    let app = crate::slices::router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::sessions::resolve_session,
+        ))
+        .layer(axum::middleware::from_fn(hypergraft::middleware::classify))
+        .with_state(state.clone());
+    // Previews across every stage start no work.
+    for stage in ["choose", "inputs", "review"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/conversations/{}/workflow?stage={stage}&workflow={selection}&brief=Implement",
+                        conversation.id.as_hex()
+                    ))
+                    .header(
+                        header::COOKIE,
+                        format!("powerplant_session={}", token.raw().as_str()),
+                    )
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    assert!(
+        state
+            .workflow_runs
+            .for_conversation(&conversation.id)
+            .is_empty()
+    );
+    // A launch whose preview no longer matches starts nothing.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/conversations/{}/workflow",
+                    conversation.id.as_hex()
+                ))
+                .header(
+                    header::COOKIE,
+                    format!("powerplant_session={}", token.raw().as_str()),
+                )
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(hypergraft::GRAFT_REQUEST, "patch")
+                .header(header::ACCEPT, hypergraft::MEDIA_TYPE)
+                .body(Body::from(format!(
+                    "revision={}&workflow={selection}&preview_workflow=stale&brief=Implement",
+                    conversation.revision
+                )))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body")
+            .to_vec(),
+    )
+    .expect("text");
+    assert!(body.contains("The selection changed."));
+    assert!(
+        state
+            .workflow_runs
+            .for_conversation(&conversation.id)
+            .is_empty()
     );
 }

@@ -2,37 +2,46 @@
   {% if let Some(command) = pending_host_command %}
     <section
       id="conversation-host-command"
-      class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-4 sm:w-[calc(100%-4rem)]"
+      class="space-y-4 p-5"
       aria-labelledby="conversation-host-command-heading"
     >
-      <div>
-        <h2
+      <div class="space-y-2">
+        <h3
           id="conversation-host-command-heading"
           class="text-lg font-semibold"
         >
           Run this command?
-        </h2>
-        <p class="text-quiet mt-1 max-w-[65ch] text-sm">
-          This command runs on this computer with unrestricted host access.
-          Approval covers the submitted shell request, not every action inside a
-          script. Output is sent to the hosted model.
+        </h3>
+        <p class="text-quiet text-sm">
+          The agent requests a command on this computer.
         </p>
       </div>
+      <p
+        class="bg-base-200 overflow-x-auto p-3 font-mono text-sm break-all whitespace-pre-wrap"
+      >
+        {{ command.command }}
+      </p>
       <dl class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
-        <dt class="text-quiet">Command</dt>
-        <dd class="font-mono break-all whitespace-pre-wrap">
-          {{ command.command }}
-        </dd>
         <dt class="text-quiet">Work location</dt>
         <dd class="font-mono break-all">{{ command.directory }}</dd>
-        <dt class="text-quiet">Explanation</dt>
+        <dt class="text-quiet">Purpose</dt>
         <dd class="break-words whitespace-pre-wrap">
           {{ command.explanation }}
         </dd>
         <dt class="text-quiet">Approval policy</dt>
         <dd>{{ command.approval_policy }}</dd>
       </dl>
-      <div class="flex flex-wrap gap-3 border-t pt-4">
+      <div class="alert alert-warning" role="note">
+        <div>
+          <p class="font-semibold">Unrestricted host access</p>
+          <p class="mt-1 text-sm">
+            The command runs with unrestricted host access. Output is sent to
+            the hosted model. Approval covers the submitted shell request, not
+            every action inside a script.
+          </p>
+        </div>
+      </div>
+      <div class="space-y-2">
         <form
           data-graft
           method="post"
@@ -48,7 +57,7 @@
           />
           <button
             id="host-command-approve-{{ command.request }}"
-            class="btn btn-primary"
+            class="btn btn-primary w-full"
             type="submit"
           >
             Run this command
@@ -69,12 +78,16 @@
           />
           <button
             id="host-command-reject-{{ command.request }}"
-            class="btn btn-ghost"
+            class="btn btn-ghost w-full"
             type="submit"
           >
-            Reject
+            Reject command
           </button>
         </form>
+        <p class="text-quiet text-center text-xs">
+          Rejection runs nothing. Earlier host effects remain; rejection does
+          not reverse them.
+        </p>
       </div>
     </section>
   {% endif %}
@@ -83,6 +96,11 @@
   {% endif %}
   {% if let Some(run) = saved.workflow_progress %}
     {% if saved.pending_gate.is_some() %}
+      <details class="workspace-execution-details">
+        <summary>Execution details</summary>
+        {% include "conversations/templates/workflow_progress.html" %}
+      </details>
+    {% else if run.run_terminal %}
       <details class="workspace-execution-details">
         <summary>Execution details</summary>
         {% include "conversations/templates/workflow_progress.html" %}

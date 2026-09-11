@@ -141,6 +141,28 @@ test("Escape closes navigation before the companion and restores the menu trigge
     controller.abort();
 });
 
+test("revision Cancel closes the inline form and returns focus to Request changes", () => {
+    vi.stubGlobal("matchMedia", () => ({
+        matches: false,
+        addEventListener() {},
+    }));
+    const root = document.createElement("div");
+    root.innerHTML = `<section id="conversation-detail"><section id="transcript"></section><aside id="conversation-work" data-work-active="true"><details class="workspace-revision" open><summary>Request changes</summary><form><textarea name="note"></textarea><button type="button" data-revision-cancel>Cancel</button></form></details></aside></section>`;
+    document.body.append(root);
+    const controller = new AbortController();
+    const island = initWorkspace(root, {
+        signal: controller.signal,
+    } as Parameters<typeof initWorkspace>[1]);
+    const disclosure = root.querySelector<HTMLDetailsElement>(
+        "details.workspace-revision",
+    )!;
+    root.querySelector<HTMLButtonElement>("[data-revision-cancel]")!.click();
+    expect(disclosure.open).toBe(false);
+    expect(document.activeElement).toBe(disclosure.querySelector("summary"));
+    island.destroy?.();
+    controller.abort();
+});
+
 test("diff colours preserve untrusted text without HTML interpretation", () => {
     vi.stubGlobal("matchMedia", () => ({
         matches: false,

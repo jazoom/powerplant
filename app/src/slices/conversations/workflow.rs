@@ -86,10 +86,9 @@ pub(super) struct WorkflowLaunchForm {
 struct WorkflowOption {
     token: String,
     name: String,
-    effects: String,
-    inputs: String,
-    approvals: String,
+    summary: String,
     process_phases: Vec<crate::workflows::summary::ProcessPhase>,
+    approvals: String,
     selected: bool,
 }
 
@@ -176,6 +175,7 @@ struct WorkflowLaunchView {
     directory_launch: bool,
     plans: Vec<PlanOption>,
     requires_plan: bool,
+    plan_optional: bool,
     requires_task_list: bool,
     task_lists: Vec<PlanOption>,
     task_document: String,
@@ -207,6 +207,7 @@ struct WorkflowLaunchContents<'a> {
     directory_launch: bool,
     plans: &'a [PlanOption],
     requires_plan: bool,
+    plan_optional: bool,
     requires_task_list: bool,
     task_lists: &'a [PlanOption],
     task_document: &'a str,
@@ -238,6 +239,7 @@ impl WorkflowLaunchView {
             directory_launch: self.directory_launch,
             plans: &self.plans,
             requires_plan: self.requires_plan,
+            plan_optional: self.plan_optional,
             requires_task_list: self.requires_task_list,
             task_lists: &self.task_lists,
             task_document: &self.task_document,
@@ -336,8 +338,24 @@ pub(super) async fn show(
                     .any(|p| p.selected && !p.content_hash.is_empty()))
         {
             view.error = "Choose the required saved input before review.";
-        } else if let Some(definition) = WorkflowSelection::parse(&query.workflow)
-            .and_then(|selection| state.workflows.resolve(&selection).ok())
+        } else if !query.plan.trim().is_empty() {
+            // An optional plan selection must still name an exact revision before
+            // review, so Back and Review never carry a stale plan reference.
+            match definition_for_plan(&state, &query.workflow, &query.plan) {
+                Ok(Some(definition)) => {
+                    if let Err(error) =
+                        resolve_selected_plan(&state, &record, &query.plan, &definition)
+                    {
+                        view.error = error;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => view.error = error,
+            }
+        }
+        if view.error.is_empty()
+            && let Some(definition) = WorkflowSelection::parse(&query.workflow)
+                .and_then(|selection| state.workflows.resolve(&selection).ok())
         {
             let phases = if query.phase.is_empty() {
                 view.phase_models
@@ -502,6 +520,32 @@ pub(super) async fn launch(
         ),
         Err(error) => return error_view(PatchStatus::UnprocessableEntity, error.message()).await,
     };
+    // A selected plan for a workflow without a declared saved-plan input pins
+    // that input for this run only, so Prepare implementation reaches an
+    // existing reference workflow without a seventh starter.
+    if !form.plan.trim().is_empty()
+        && pinned.definition.execution_mode() == ExecutionMode::Once
+        && !pinned
+            .definition
+            .launch_input_sources()
+            .contains(&LaunchInputSource::SavedPlan)
+    {
+        match pinned.definition.with_saved_plan_input() {
+            Ok(definition) => {
+                pinned = workflows::definition::PinnedWorkflowDefinition::pin(
+                    pinned.workflow_id,
+                    definition,
+                );
+            }
+            Err(_) => {
+                return error_view(
+                    PatchStatus::UnprocessableEntity,
+                    "That workflow cannot take a saved plan.",
+                )
+                .await;
+            }
+        }
+    }
     if form.task_document != form.preview_task_document
         || form.task_revision != form.preview_task_revision
         || form.task_hash != form.preview_task_hash
@@ -1203,6 +1247,15 @@ async fn launch_view(
         .list()
         .into_iter()
         .filter(|record| {
+            // The retired saved-plan starter stays resolvable for recorded runs
+            // but never appears as a choice beside the six reference workflows.
+            !(record.definition.name() == "Implement a saved plan"
+                && record
+                    .definition
+                    .launch_input_sources()
+                    .contains(&LaunchInputSource::SavedPlan))
+        })
+        .filter(|record| {
             task_index.is_empty()
                 || (record.definition.execution_mode() == ExecutionMode::Once
                     && workflows::run::supports_task_execution(&record.definition))
@@ -1286,10 +1339,10 @@ async fn launch_view(
             WorkflowOption {
                 token: selection.as_token(),
                 name: state.workflows.display_name(record),
-                effects: workflows::summary::code_effects(definition),
-                inputs: workflows::summary::required_inputs(definition).to_owned(),
-                approvals: workflows::summary::approval_stops(definition),
+                summary: starter_summary(state.workflows.display_name(record).as_str())
+                    .unwrap_or_else(|| workflows::summary::process_summary(definition)),
                 process_phases: workflows::summary::process_overview(definition),
+                approvals: workflows::summary::approval_stops(definition),
                 selected,
             }
         })
@@ -1335,7 +1388,8 @@ async fn launch_view(
         Some(raw) => ProjectId::parse(raw.trim()),
         None => record.execution_target,
     };
-    let (plans, requires_plan) = selected_plan_options(state, record, &selected_workflow, plan_raw);
+    let (plans, requires_plan, plan_optional) =
+        selected_plan_options(state, record, &selected_workflow, plan_raw);
     let (task_lists, requires_task_list) =
         selected_task_list_options(state, record, &selected_workflow, task_document);
     let mut targets: Vec<TargetOption> = record
@@ -1397,6 +1451,9 @@ async fn launch_view(
         ExecutionMode::Once if requires_plan => {
             "Saved plan selected. This process runs once.".to_owned()
         }
+        ExecutionMode::Once if plan_optional && selected_plan => {
+            "Saved plan selected. The selected plan becomes task direction for this run.".to_owned()
+        }
         ExecutionMode::Once => "This process runs once. It does not need a task list.".to_owned(),
     };
     let launch_blocked = workflows.is_empty()
@@ -1415,14 +1472,19 @@ async fn launch_view(
         revision: record.revision.to_string(),
         brief: if brief.is_empty() && (requires_task_list || !task_document.is_empty()) {
             "Implement only the assigned task from the selected task list.".to_owned()
+        } else if brief.is_empty() {
+            default_brief(record)
         } else {
-            brief.to_owned()
+            // The textarea renders flush, but navigation round-trips a leading
+            // newline; trim ends like launch validation so Back never grows one.
+            brief.trim().to_owned()
         },
         workflows,
         targets,
         directory_launch,
         plans,
         requires_plan,
+        plan_optional,
         requires_task_list,
         task_lists,
         task_document: task_document.to_owned(),
@@ -2134,7 +2196,6 @@ async fn preview_phase_access(
 
 fn starter_rank(display_name: &str) -> usize {
     match display_name {
-        "Implement a saved plan" => 0,
         "Plan a change" => 1,
         "Review current code" => 2,
         "Implement with approval" => 3,
@@ -2143,6 +2204,21 @@ fn starter_rank(display_name: &str) -> usize {
         "Task loop" | "Ralph task loop" => 6,
         _ => usize::MAX,
     }
+}
+
+fn starter_summary(display_name: &str) -> Option<String> {
+    match display_name {
+        "Plan a change" => Some("A focused plan for the proposed change."),
+        "Review current code" => Some("An assessment with actionable feedback."),
+        "Implement with approval" => Some("Prepare a change for your review."),
+        "Implement and review" => Some("A fresh reviewer inspects the change before you decide."),
+        "Plan then implement" => Some("Approve a plan before implementation starts."),
+        "Task loop" | "Ralph task loop" => {
+            Some("Complete each remaining task with a fresh context.")
+        }
+        _ => None,
+    }
+    .map(str::to_owned)
 }
 
 fn uses_conversation_directories(definition: &workflows::definition::WorkflowDefinition) -> bool {
@@ -2222,19 +2298,23 @@ fn selected_plan_options(
     record: &ConversationRecord,
     workflow_raw: &str,
     plan_raw: &str,
-) -> (Vec<PlanOption>, bool) {
-    let requires_plan = WorkflowSelection::parse(workflow_raw)
-        .and_then(|selection| state.workflows.resolve(&selection).ok())
-        .is_some_and(|resolved| {
-            resolved
-                .pinned
-                .definition
-                .launch_input_sources()
-                .contains(&LaunchInputSource::SavedPlan)
-        });
-    if !requires_plan {
-        return (Vec::new(), false);
+) -> (Vec<PlanOption>, bool, bool) {
+    let resolved = WorkflowSelection::parse(workflow_raw)
+        .and_then(|selection| state.workflows.resolve(&selection).ok());
+    let Some(resolved) = resolved else {
+        return (Vec::new(), false, false);
+    };
+    if resolved.pinned.definition.execution_mode() == ExecutionMode::TaskList {
+        return (Vec::new(), false, false);
     }
+    // Workflows that declare a saved-plan input require one. Every other
+    // single-run workflow offers the conversation plans as an optional input:
+    // the launch pins the input per run, so the stored definition is unchanged.
+    let requires_plan = resolved
+        .pinned
+        .definition
+        .launch_input_sources()
+        .contains(&LaunchInputSource::SavedPlan);
     let mut plans: Vec<_> = state
         .documents
         .list_for_conversation(record.id)
@@ -2269,7 +2349,64 @@ fn selected_plan_options(
             selected: true,
         });
     }
-    (plans, true)
+    (plans, requires_plan, !requires_plan)
+}
+
+fn default_brief(record: &ConversationRecord) -> String {
+    record
+        .messages
+        .iter()
+        .find(|message| message.role == crate::conversations::MessageRole::User)
+        .map(|message| truncate_to_brief(message.text.trim()))
+        .unwrap_or_default()
+}
+
+fn truncate_to_brief(text: &str) -> String {
+    const LIMIT: usize = workflows::input_context::MAXIMUM_LAUNCH_BRIEF_BYTES;
+    if text.len() <= LIMIT {
+        return text.to_owned();
+    }
+    let mut end = LIMIT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].trim_end().to_owned()
+}
+
+/// Resolve the definition a plan selection launches against. A selected plan
+/// for a workflow without a declared saved-plan input pins that input per run,
+/// so Prepare implementation reaches an existing reference workflow and a
+/// launch without a plan keeps the stored definition unchanged.
+fn definition_for_plan(
+    state: &AppState,
+    workflow_raw: &str,
+    plan_raw: &str,
+) -> Result<Option<workflows::definition::WorkflowDefinition>, &'static str> {
+    if plan_raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let Some(selection) = WorkflowSelection::parse(workflow_raw.trim()) else {
+        return Err("Choose a current workflow from the catalogue.");
+    };
+    let resolved = match state.workflows.resolve(&selection) {
+        Ok(resolved) => resolved,
+        Err(error) => return Err(error.message()),
+    };
+    if resolved.pinned.definition.execution_mode() == ExecutionMode::TaskList {
+        return Err("This workflow does not declare a saved plan input.");
+    }
+    if resolved
+        .pinned
+        .definition
+        .launch_input_sources()
+        .contains(&LaunchInputSource::SavedPlan)
+    {
+        return Ok(Some(resolved.pinned.definition.clone()));
+    }
+    match resolved.pinned.definition.with_saved_plan_input() {
+        Ok(definition) => Ok(Some(definition)),
+        Err(_) => Err("That workflow cannot take a saved plan."),
+    }
 }
 
 fn selected_task_list_options(
@@ -2331,13 +2468,25 @@ pub(super) fn implementation_href(
     let Some(conversation) = document.associated_conversation else {
         return String::new();
     };
-    let workflow = state.workflows.list().into_iter().find(|workflow| {
-        workflow.definition.execution_mode() == ExecutionMode::Once
-            && workflow
-                .definition
-                .launch_input_sources()
-                .contains(&LaunchInputSource::SavedPlan)
-    });
+    // Prepare implementation hands the saved plan to the Implement and review
+    // reference workflow. A retired saved-plan starter stays out of the
+    // chooser but remains a fallback so older records keep their handoff.
+    let workflows = state.workflows.list();
+    let workflow = workflows
+        .iter()
+        .find(|workflow| {
+            workflow.definition.execution_mode() == ExecutionMode::Once
+                && workflow.definition.name() == "Implement and review"
+        })
+        .or_else(|| {
+            workflows.iter().find(|workflow| {
+                workflow.definition.execution_mode() == ExecutionMode::Once
+                    && workflow
+                        .definition
+                        .launch_input_sources()
+                        .contains(&LaunchInputSource::SavedPlan)
+            })
+        });
     let Some(workflow) = workflow else {
         return String::new();
     };

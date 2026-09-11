@@ -5,12 +5,10 @@ use askama::Template;
 #[template(path = "attention/templates/index.html")]
 pub(crate) struct AttentionPage {
     decisions: Vec<Decision>,
-    total: usize,
     previous: String,
     next: String,
     back_href: String,
     back_label: &'static str,
-    refresh_href: String,
 }
 
 struct Decision {
@@ -44,26 +42,19 @@ impl AttentionPage {
         } else {
             String::new()
         };
-        let (back_href, back_label, refresh_href) = match context {
+        let (back_href, back_label) = match context {
             Some(id) => (
                 format!("/conversations/{}", id.as_hex()),
                 "Back to conversation",
-                format!("/attention?conversation={}", id.as_hex()),
             ),
-            None => (
-                "/conversations".to_owned(),
-                "Back to conversations",
-                "/attention".to_owned(),
-            ),
+            None => ("/conversations".to_owned(), "Back to conversations"),
         };
         Self {
             decisions: decisions.into_iter().skip(page * 30).take(30).collect(),
-            total,
             previous,
             next,
             back_href,
             back_label,
-            refresh_href,
         }
     }
 }

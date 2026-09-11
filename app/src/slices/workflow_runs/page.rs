@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::workflows::summary::ProcessPhase;
 use crate::workflows::{LoopSummary, RunSummary, TaskLoop, WorkflowCatalogue, WorkflowRun};
 
-pub(super) const INDEX_TITLE: &str = "History | Power Plant";
+pub(super) const INDEX_TITLE: &str = "Runs | Power Plant";
 pub(super) const DETAIL_TITLE: &str = "Run | Power Plant";
 pub(super) const ARTEFACT_TITLE: &str = "Artefact | Power Plant";
 

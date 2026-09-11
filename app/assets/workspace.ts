@@ -84,7 +84,7 @@ export function initWorkspace(
         }
         const active = work?.dataset.workActive === "true";
         const plan = !!root.querySelector(
-            "#plan-detail, #workflow-detail, #plans-detail, #plan-request-detail",
+            "#plan-detail, #workflow-detail, #plans-detail, #plan-request-detail, #activity-detail",
         );
         if (previousActivity && !active && work?.dataset.workEmpty === "true")
             workOpen = false;
@@ -131,10 +131,27 @@ export function initWorkspace(
                 link.setAttribute("aria-current", "page");
             else link.removeAttribute("aria-current");
         });
+        const section = root.querySelector<HTMLElement>(
+            ".workspace-catalogue[data-section]",
+        )?.dataset.section;
+        root.querySelectorAll<HTMLAnchorElement>(
+            ".workspace-navigation > a, .workspace-resources a",
+        ).forEach((link) => {
+            if (section && link.pathname === `/${section}`)
+                link.setAttribute("aria-current", "page");
+            else link.removeAttribute("aria-current");
+        });
         applyRecentFilter();
         syncAttentionLink();
         syncSkipLink();
         syncExpandControls();
+        if (!mobile.matches) setMenuOpen(false);
+        const menuOpen = !!root.querySelector(
+            "#workspace-index[data-menu-open]",
+        );
+        root.querySelectorAll<HTMLElement>(".app-file").forEach((page) => {
+            page.inert = menuOpen;
+        });
     }
 
     function recentFilterQuery(): string {
@@ -182,8 +199,8 @@ export function initWorkspace(
         } else if (notice) notice.hidden = true;
     }
 
-    // The sidebar keeps native /attention and /resources fallbacks. On a
-    // conversation both links carry that record so the destination can
+    // The sidebar keeps native /attention, /resources and History fallbacks.
+    // On a conversation those links carry that record so the destination can
     // return without inferring an identity.
     function syncAttentionLink() {
         const owner = root
@@ -210,6 +227,15 @@ export function initWorkspace(
                 ? `/resources?conversation=${encodeURIComponent(id)}`
                 : "/resources",
         );
+        const history = root.querySelector<HTMLAnchorElement>(
+            "[data-history-link]",
+        );
+        history?.setAttribute(
+            "href",
+            id
+                ? `/conversations?conversation=${encodeURIComponent(id)}`
+                : "/conversations",
+        );
     }
 
     function syncSkipLink() {
@@ -233,11 +259,22 @@ export function initWorkspace(
 
     function setMenuOpen(open: boolean) {
         const menu = root.querySelector<HTMLElement>("#workspace-index");
+        const wasOpen = menu?.hasAttribute("data-menu-open");
         if (open) menu?.setAttribute("data-menu-open", "");
         else menu?.removeAttribute("data-menu-open");
         root.querySelectorAll("[data-workspace-menu]").forEach((trigger) => {
             trigger.setAttribute("aria-expanded", String(open));
         });
+        // The open navigation is a modal dialog: the page behind it stays
+        // visible through the dimmed backdrop but never interactive.
+        root.querySelectorAll<HTMLElement>(".app-file").forEach((page) => {
+            page.inert = open;
+        });
+        if (open) {
+            menu?.querySelector<HTMLElement>(".workspace-menu-close")?.focus();
+        } else if (wasOpen && mobile.matches) {
+            menuTrigger?.focus();
+        }
     }
 
     function syncExpandControls() {
@@ -259,6 +296,44 @@ export function initWorkspace(
         expanded = false;
         sync();
         root.querySelector<HTMLElement>("#composer-message")?.focus();
+    }
+
+    function showActionsPanel(name: string | null) {
+        const dialog = root.querySelector<HTMLElement>("#conversation-actions");
+        if (!dialog) return;
+        if (name) {
+            // Reveal before focusing: the menu button loses visibility in
+            // the same handler, and the click default action can otherwise
+            // return focus to that hidden button and drop it to the body.
+            const panel = dialog.querySelector<HTMLElement>(
+                `[data-actions-panel="${name}"]`,
+            );
+            if (panel) panel.hidden = false;
+            // Destructive confirmation keeps focus on its safe exit, not
+            // the confirming submitter.
+            const field = panel?.querySelector<HTMLElement>(
+                "input:not([type=hidden]), [data-actions-back]",
+            );
+            field?.focus();
+            // Reassert after the click settles in case the mouse default
+            // action moved focus back to the hidden menu button first.
+            setTimeout(() => {
+                if (
+                    field?.isConnected &&
+                    (document.activeElement === document.body ||
+                        dialog.contains(document.activeElement) === false)
+                )
+                    field?.focus();
+            }, 0);
+        }
+        dialog
+            .querySelectorAll<HTMLElement>("[data-actions-panel]")
+            .forEach((panel) => {
+                panel.hidden = panel.dataset.actionsPanel !== name;
+            });
+        dialog
+            .querySelector<HTMLElement>("[data-actions-menu]")
+            ?.toggleAttribute("hidden", name !== null);
     }
 
     function closeWork() {
@@ -303,6 +378,29 @@ export function initWorkspace(
                     root.querySelector<HTMLElement>(
                         "#conversation-work",
                     )?.focus();
+            } else if (target?.closest("[data-actions-show]")) {
+                const trigger = target.closest<HTMLElement>(
+                    "[data-actions-show]",
+                );
+                showActionsPanel(trigger?.dataset.actionsShow ?? null);
+            } else if (target?.closest("[data-actions-back]")) {
+                const panel = target.closest<HTMLElement>(
+                    "[data-actions-panel]",
+                );
+                showActionsPanel(null);
+                panel?.parentElement
+                    ?.querySelector<HTMLElement>(
+                        `[data-actions-show="${panel.dataset.actionsPanel}"]`,
+                    )
+                    ?.focus();
+            } else if (target?.closest("[data-revision-cancel]")) {
+                const disclosure = target.closest<HTMLDetailsElement>(
+                    "details.workspace-revision",
+                );
+                const summary =
+                    disclosure?.querySelector<HTMLElement>("summary");
+                if (disclosure) disclosure.open = false;
+                summary?.focus();
             } else if (target?.closest("[data-work-close]")) closeWork();
             else if (target?.closest("[data-continue-conversation]"))
                 continueConversation();
@@ -344,11 +442,20 @@ export function initWorkspace(
             }
             const menu = root.querySelector<HTMLElement>("#workspace-index");
             if (target?.closest("[data-workspace-menu]")) {
-                menuTrigger = target.closest<HTMLElement>(
-                    "[data-workspace-menu]",
-                );
-                setMenuOpen(!menu?.hasAttribute("data-menu-open"));
+                const open = !menu?.hasAttribute("data-menu-open");
+                if (open)
+                    menuTrigger = target.closest<HTMLElement>(
+                        "[data-workspace-menu]",
+                    );
+                setMenuOpen(open);
             } else if (target?.closest("a[data-graft]")) {
+                setMenuOpen(false);
+            } else if (
+                menu?.hasAttribute("data-menu-open") &&
+                !target?.closest("#workspace-index")
+            ) {
+                // The dimmed backdrop is a pseudo-element, so a click on it
+                // lands outside the panel. Either way the dialog closes.
                 setMenuOpen(false);
             }
         },
@@ -366,15 +473,6 @@ export function initWorkspace(
                 );
                 if (menu) {
                     setMenuOpen(false);
-                    const trigger = menuTrigger?.isConnected
-                        ? menuTrigger
-                        : (root.querySelector<HTMLElement>(
-                              "#conversation-detail [data-workspace-menu]",
-                          ) ??
-                          root.querySelector<HTMLElement>(
-                              "[data-workspace-menu]",
-                          ));
-                    trigger?.focus();
                 } else if (workOpen) closeWork();
             }
         },
@@ -388,6 +486,11 @@ export function initWorkspace(
                 (event.target.id === "conversation-settings" ||
                     event.target.id === "conversation-actions")
             ) {
+                if (
+                    event.target.id === "conversation-actions" &&
+                    !event.target.matches(":popover-open")
+                )
+                    showActionsPanel(null);
                 sync();
                 if (
                     !event.target.matches(":popover-open") &&

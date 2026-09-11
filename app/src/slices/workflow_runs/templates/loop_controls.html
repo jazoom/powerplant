@@ -83,17 +83,24 @@
     </form>
   {% endif %}
   {% if can_stop %}
-    <form
-      data-graft
-      method="post"
-      action="/runs/loops/{{ loop_id }}/stop"
-      class="inline"
-    >
-      <input type="hidden" name="token" value="{{ command_token }}" />
-      {% if conversation_surface %}
-        <input type="hidden" name="surface" value="conversation" />
-      {% endif %}
-      <button class="btn btn-ghost btn-sm" type="submit">Stop now</button>
-    </form>
+    <details class="stop-confirm">
+      <summary class="btn btn-ghost btn-sm cursor-pointer">Stop now</summary>
+      <div class="mt-3 space-y-3">
+        <p class="text-sm font-semibold">Stop this task?</p>
+        <p class="text-quiet text-sm">
+          The task stops before another action starts. Earlier commits remain.
+          This does not roll back the project.
+        </p>
+        <form data-graft method="post" action="/runs/loops/{{ loop_id }}/stop">
+          <input type="hidden" name="token" value="{{ command_token }}" />
+          {% if conversation_surface %}
+            <input type="hidden" name="surface" value="conversation" />
+          {% endif %}
+          <button class="btn btn-error btn-sm" type="submit">
+            Confirm stop
+          </button>
+        </form>
+      </div>
+    </details>
   {% endif %}
 </div>

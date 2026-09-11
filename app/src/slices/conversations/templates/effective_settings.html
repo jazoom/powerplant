@@ -9,14 +9,16 @@
     data-settings-section="conversation-directory-heading"
   >
     <svg class="workspace-icon" aria-hidden="true">
-      {% if directories.is_empty() %}<use
-        href="/static/images/workspace-icons.svg#folder"
-      />{% else %}<use
-        href="/static/images/workspace-icons.svg#shield"
-      />{% endif %}
+      {% if directories.is_empty() %}
+        <use href="/static/images/workspace-icons.svg#folder" />
+      {% else %}
+        <use href="/static/images/workspace-icons.svg#shield" />
+      {% endif %}
     </svg>
     {% if directories.is_empty() %}
-      {% if attached_projects.is_empty() %}
+      {% if location_host %}
+        {{ host_summary }}
+      {% else if attached_projects.is_empty() %}
         No directory access
       {% else %}
         No additional directories
@@ -36,16 +38,19 @@
       >
     {% endif %}
   </button>
-  {% if location_host %}
-    <span class="w-full">{{ host_summary }} · Unrestricted host access</span>
+  {% if directories.is_empty() %}
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm"
+      popovertarget="conversation-settings"
+      popovertargetaction="show"
+      data-settings-section="conversation-directory-heading"
+    >
+      Add a directory
+    </button>
+  {% else if location_host %}
+    <span class="text-quiet ml-auto">{{ host_summary }}</span>
   {% else %}
     <span class="text-quiet ml-auto">Sandbox</span>
   {% endif %}
-  <button
-    type="button"
-    class="btn btn-ghost btn-sm"
-    popovertarget="conversation-project-settings"
-  >
-    Project access
-  </button>
 </div>

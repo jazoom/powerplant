@@ -121,8 +121,11 @@
             >
               {% if models.is_empty() && !model_unavailable %}
                 <option value="" disabled selected>
-                  {% if form.provider.is_empty() %}Choose provider first{% else %}No
-                  models available{% endif %}
+                  {% if form.provider.is_empty() %}
+                    Choose provider first
+                  {% else %}
+                    No models available
+                  {% endif %}
                 </option>
               {% endif %}
               {% if model_unavailable %}

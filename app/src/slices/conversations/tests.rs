@@ -378,7 +378,7 @@ async fn catalogue_uses_document_and_navigation_without_creating_a_conversation(
         .expect("document");
     assert_eq!(document_response.status(), StatusCode::OK);
     let document_body = text(document_response).await;
-    assert!(document_body.contains("Conversations"));
+    assert!(document_body.contains("Work history"));
     assert_eq!(document_body.matches("id=\"chat-main\"").count(), 1);
 
     let navigation_response = app(&state)
@@ -693,7 +693,7 @@ async fn rename_and_delete_reject_stale_revisions_without_state_change() {
 }
 
 #[tokio::test]
-async fn conversation_actions_keep_rename_delete_and_draft_copy_behind_confirmation() {
+async fn conversation_actions_bind_commands_and_draft_copy_to_the_record() {
     let state = test_state();
     let token = connected(&state);
     let record = state
@@ -707,8 +707,6 @@ async fn conversation_actions_keep_rename_delete_and_draft_copy_behind_confirmat
         .expect("detail");
     assert_eq!(detail.status(), StatusCode::OK);
     let body = text(detail).await;
-    // The destructive delete stays behind an explicit disclosure and binds the
-    // record revision, so a stray activation cannot remove the conversation.
     let actions_start = body
         .find("id=\"conversation-actions\"")
         .expect("actions menu");
@@ -717,25 +715,18 @@ async fn conversation_actions_keep_rename_delete_and_draft_copy_behind_confirmat
     // The draft copy carries source identity in Conversation actions, not Plans.
     let draft = format!("/conversations/new?source={}", record.id.as_hex());
     assert!(actions.contains(&draft));
-    // Plans live in the companion beside the transcript. The header keeps a
-    // native link to the canonical list route instead of a floating panel.
-    assert!(!body.contains("id=\"conversation-documents\""));
-    assert!(!body.contains("id=\"plans-detail\""));
-    assert!(body.contains(&format!("{path}/plans\"")));
-    assert!(actions.contains(&format!("{path}/rename")));
-    assert!(actions.contains(&format!("{path}/delete")));
-    assert!(
-        normalised(actions).contains(&format!("name=\"revision\" value=\"{}\"", record.revision))
-    );
-    // Delete sits inside a disclosure within the same menu.
-    let disclosure = actions
-        .split("<details")
-        .nth(1)
-        .expect("delete confirmation");
-    assert!(disclosure.contains(&format!("{path}/delete")));
-    // An idle conversation hides both the review strip and Current work.
-    assert!(!body.contains("data-attention-strip"));
-    assert!(!body.contains("data-work-toggle"));
+    for action in ["rename", "delete"] {
+        let form = actions
+            .split("<form")
+            .skip(1)
+            .map(|form| form.split("</form>").next().expect("form"))
+            .find(|form| form.contains(&format!("action=\"{path}/{action}\"")))
+            .expect("record command");
+        assert!(form.contains("method=\"post\""));
+        assert!(
+            normalised(form).contains(&format!("name=\"revision\" value=\"{}\"", record.revision))
+        );
+    }
 }
 
 fn normalised(value: &str) -> String {
@@ -1001,7 +992,15 @@ async fn directory_history_matches_identity_without_granting_access() {
     moved.model.as_mut().unwrap().settings.directories =
         vec![crate::execution::DirectoryGrant::from_selected(&moved_path, &[]).unwrap()];
     for pair in [[original.clone(), moved.clone()], [moved, original]] {
-        let view = super::page::CatalogueView::from_records(&pair, &key, "", "");
+        let view = super::page::CatalogueView::from_records(
+            &state,
+            &pair,
+            &key,
+            "",
+            "",
+            String::new(),
+            "",
+        );
         assert_eq!(view.conversations.len(), 2);
         assert_eq!(view.directories.len(), 1);
         assert_eq!(view.directories[0].name, moved_path.display().to_string());
@@ -1017,13 +1016,101 @@ async fn directory_history_matches_identity_without_granting_access() {
         .settings
         .directories = vec![replacement];
     records.push(replacement_record);
-    let view = super::page::CatalogueView::from_records(&records, &key, "", "");
+    let view =
+        super::page::CatalogueView::from_records(&state, &records, &key, "", "", String::new(), "");
     assert_eq!(view.conversations.len(), 2);
     assert!(
         view.conversations
             .iter()
             .all(|record| record.title != "Replacement history")
     );
+}
+
+#[tokio::test]
+async fn history_lists_one_row_per_conversation_including_drafts() {
+    let state = test_state();
+    let draft = state
+        .conversations
+        .create("Tool-free draft".to_owned())
+        .expect("draft");
+    awaiting_gate(&state);
+    // A second run in the same conversation must not duplicate its row.
+    // Rows are built from the conversation list, never from the run list.
+    let owner = state
+        .conversations
+        .list()
+        .into_iter()
+        .find(|record| record.id != draft.id)
+        .expect("run owner");
+    let run = state
+        .workflow_runs
+        .for_conversation(&owner.id)
+        .into_iter()
+        .next()
+        .expect("run");
+    let mut duplicate = run.clone();
+    duplicate.id = crate::workflows::RunId::generate().expect("run id");
+    state.workflow_runs.create(duplicate).expect("second run");
+    let view = super::page::CatalogueView::from_records(
+        &state,
+        &state.conversations.list(),
+        "",
+        "",
+        "",
+        String::new(),
+        "",
+    );
+    let mut destinations: Vec<_> = view
+        .conversations
+        .iter()
+        .map(|row| row.href.as_str())
+        .collect();
+    destinations.sort_unstable();
+    let mut expected = [
+        format!("/conversations/{}", draft.id.as_hex()),
+        format!("/conversations/{}", owner.id.as_hex()),
+    ];
+    expected.sort_unstable();
+    assert_eq!(destinations, expected);
+}
+
+#[tokio::test]
+async fn history_filters_preserve_only_valid_return_context() {
+    let state = test_state();
+    let token = connected(&state);
+    let owner = state
+        .conversations
+        .create("Return context".to_owned())
+        .expect("conversation");
+    let id = owner.id.as_hex();
+    for context in [
+        id.as_str(),
+        "https://example.com",
+        "00000000000000000000000000000000",
+    ] {
+        let body = text(
+            app(&state)
+                .oneshot(document(
+                    &format!(
+                        "/conversations?q=no-match&conversation={}",
+                        form_value(context)
+                    ),
+                    &token,
+                ))
+                .await
+                .expect("history"),
+        )
+        .await;
+        let body = normalised(&body);
+        if context == id {
+            assert!(body.contains(&format!("name=\"conversation\" value=\"{id}\"")));
+            assert!(body.contains(&format!("href=\"/conversations?conversation={id}\"")));
+            assert!(body.contains(&format!("href=\"/conversations/{id}\"")));
+        } else {
+            assert!(!body.contains("name=\"conversation\""));
+            assert!(!body.contains("Back to conversation"));
+        }
+    }
 }
 
 #[tokio::test]

@@ -153,10 +153,6 @@ async fn contextual_attention_validates_identifiers_and_preserves_context() {
         .unwrap();
     assert!(contextual.contains(">Back to conversation<"));
     assert!(contextual.contains(&format!("href=\"{owner}\"")));
-    assert!(contextual.contains(&format!(
-        "/attention?conversation={}",
-        parent.conversation_id.as_hex()
-    )));
     assert!(contextual.contains(&owner));
     assert!(contextual.contains(&gate_href));
 
@@ -252,7 +248,8 @@ async fn contextual_attention_validates_identifiers_and_preserves_context() {
             .to_vec(),
     )
     .unwrap();
-    assert!(body.contains(&format!("/attention?conversation={conversation}")));
+    assert!(!body.contains("/attention?conversation="));
+    assert!(body.contains(&owner));
 }
 
 /// The shared suffix keeps refresh and decision pages on the validated

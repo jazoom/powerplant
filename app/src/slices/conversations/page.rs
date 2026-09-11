@@ -30,8 +30,11 @@ pub(super) struct ModelSelectionStatus<'a> {
 }
 
 pub(super) struct ConversationListItem {
-    pub(super) id: String,
     pub(super) title: String,
+    pub(super) href: String,
+    pub(super) status: &'static str,
+    pub(super) dot: &'static str,
+    pub(super) meta: String,
 }
 
 pub(super) struct CatalogueProjectOption {
@@ -110,6 +113,8 @@ pub(super) struct CatalogueView {
     pub(super) filter: String,
     pub(super) query: String,
     pub(super) error: &'static str,
+    pub(super) back_href: String,
+    pub(super) back_label: &'static str,
 }
 
 pub(super) struct HistoryDirectoryOption {
@@ -121,25 +126,35 @@ pub(super) struct HistoryDirectoryOption {
 
 impl CatalogueView {
     pub(super) fn from_records(
+        state: &crate::state::AppState,
         records: &[ConversationRecord],
         filter: &str,
         query: &str,
         error: &'static str,
+        back_href: String,
+        back_label: &'static str,
     ) -> Self {
         let needle = query.trim().to_lowercase();
-        let mut conversations: Vec<_> = records
-            .iter()
+        let mut ordered: Vec<_> = records.iter().collect();
+        ordered.sort_by_key(|record| std::cmp::Reverse(record.updated_at_ms));
+        let conversations: Vec<_> = ordered
+            .into_iter()
             .filter(|record| {
                 (filter.is_empty()
                     || history_grants(record).any(|grant| history_directory_key(grant) == filter))
                     && (needle.is_empty() || record.title.to_lowercase().contains(&needle))
             })
-            .map(|record| ConversationListItem {
-                id: record.id.as_hex(),
-                title: record.title.clone(),
+            .map(|record| {
+                let status = super::recent::conversation_status(state, record);
+                ConversationListItem {
+                    href: format!("/conversations/{}", record.id.as_hex()),
+                    title: record.title.clone(),
+                    status,
+                    dot: super::recent::status_dot(status),
+                    meta: super::recent::conversation_meta(state, record),
+                }
             })
             .collect();
-        conversations.sort_by(|left, right| left.title.cmp(&right.title));
         let mut directories = std::collections::BTreeMap::new();
         for grant in records.iter().flat_map(history_grants) {
             let id = history_directory_key(grant);
@@ -168,6 +183,8 @@ impl CatalogueView {
             filter: filter.to_owned(),
             query: query.trim().to_owned(),
             error,
+            back_href,
+            back_label,
         }
     }
 }
@@ -412,6 +429,7 @@ pub(super) struct PresetOption {
 
 pub(super) struct PresetPreviewView {
     pub(super) token: String,
+    pub(super) id: String,
     pub(super) name: String,
     pub(super) model: String,
     pub(super) thinking: String,
@@ -539,6 +557,7 @@ pub(super) struct ConversationDetailView {
     pub(super) environment_summary: String,
     pub(super) execution_switch: Option<ExecutionSwitchView>,
     pub(super) network_options: Vec<NetworkOption>,
+    pub(super) network_restricted: bool,
     pub(super) network_domains: String,
     pub(super) network_summary: String,
     pub(super) network_detail: String,
@@ -566,8 +585,6 @@ pub(super) struct SavedConversationState {
     pub(super) cursor: u64,
     pub(super) pending_gate: Option<PendingCodeGateView>,
     pub(super) plans: Vec<PlanDocumentView>,
-    pub(super) task_text: String,
-    pub(super) task_title: String,
     pub(super) source_review: Option<ConversationLinkView>,
     pub(super) linked_reviews: Vec<ConversationLinkView>,
     pub(super) source_candidate_review: Option<CandidateReviewLinkView>,
@@ -730,6 +747,7 @@ impl ConversationDetailView {
             ),
             execution_switch: None,
             network_options: network_options(&form.network),
+            network_restricted: network_restricted(&form.network),
             network_domains: form.network_domains,
             network_summary: network_summary_from_form(&form.network),
             network_detail: String::new(),
@@ -836,14 +854,6 @@ impl ConversationDetailView {
                     && saved.source_review.is_none()
                     && saved.source_candidate_review.is_none()
             })
-    }
-
-    pub(super) fn with_task_text(mut self, title: String, text: String) -> Self {
-        if let ConversationPageState::Saved(saved) = &mut self.state {
-            saved.task_title = title;
-            saved.task_text = text;
-        }
-        self
     }
 
     #[cfg(test)]
@@ -1118,6 +1128,7 @@ impl ConversationDetailView {
             environment_summary: environment_summary(sources.environments, selected_environment),
             execution_switch: None,
             network_options: network_options.clone(),
+            network_restricted: effective_network.as_str() == "restricted",
             network_domains: network_domains.clone(),
             network_summary,
             network_detail,
@@ -1142,8 +1153,6 @@ impl ConversationDetailView {
                 cursor,
                 pending_gate,
                 plans,
-                task_text: String::new(),
-                task_title: String::new(),
                 source_review,
                 linked_reviews,
                 source_candidate_review,
@@ -1327,6 +1336,7 @@ impl ConversationDetailView {
                 environment_summary(&state.environments, selected_environment);
         }
         self.network_options = network_options(fields.network);
+        self.network_restricted = network_restricted(fields.network);
         self.network_domains = fields.network_domains.to_owned();
         if self.saved().is_none() {
             self.network_summary = network_summary_from_form(fields.network);
@@ -1594,6 +1604,10 @@ fn network_options(selected: &str) -> Vec<NetworkOption> {
     ]
 }
 
+fn network_restricted(selected: &str) -> bool {
+    selected == "restricted"
+}
+
 fn network_summary_from_form(network: &str) -> String {
     match network {
         "restricted" => "Restricted domains".to_owned(),
@@ -1777,6 +1791,67 @@ fn loop_result_label(state: &crate::workflows::task_loop::TaskLoopState) -> &'st
         }
         _ => "Each task uses a fresh worker context. Earlier worker transcripts stay excluded.",
     }
+}
+
+fn activity_source_lines(
+    state: &crate::state::AppState,
+    conversation_id: &crate::conversations::ConversationId,
+) -> (String, String, String) {
+    let latest_loop = state
+        .task_loops
+        .for_conversation(conversation_id)
+        .into_iter()
+        .next();
+    let latest_run = state
+        .workflow_runs
+        .for_conversation(conversation_id)
+        .into_iter()
+        .next();
+    let (brief, task, environments) = match (latest_loop, latest_run) {
+        (Some(parent), run)
+            if run
+                .as_ref()
+                .is_none_or(|run| parent.created_at_ms >= run.created_at_ms) =>
+        {
+            let child = parent
+                .occupied_child()
+                .and_then(|child| state.workflow_runs.get(&child));
+            (
+                parent.launch_brief.clone(),
+                format!(
+                    "Task list revision {} · {} {}",
+                    parent.task_list.revision,
+                    parent.task_list.content_hash.as_str(),
+                    parent.progress_label()
+                ),
+                child.map_or(parent.environments.clone(), |run| run.environments.clone()),
+            )
+        }
+        (_, Some(run)) => {
+            let task = run
+                .task_selection
+                .as_ref()
+                .map_or_else(String::new, |selection| {
+                    format!(
+                        "Task {} from task-list revision {}",
+                        selection.index, selection.revision
+                    )
+                });
+            (run.launch_brief.clone(), task, run.environments.clone())
+        }
+        _ => return (String::new(), String::new(), String::new()),
+    };
+    let environment_line = if environments.environments.is_empty() {
+        "Host steps need no sandbox environment.".to_owned()
+    } else {
+        environments
+            .environments
+            .iter()
+            .map(|environment| environment.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    (brief, task, environment_line)
 }
 
 fn workflow_result_label(state: &crate::workflows::run::RunState) -> &'static str {
@@ -1992,16 +2067,10 @@ pub(super) fn plan_document_view(document: &PlanDocument) -> PlanDocumentView {
 #[derive(Template)]
 #[template(path = "conversations/templates/plans.html", block = "plans_list")]
 pub(super) struct PlansListContents<'a> {
-    pub(super) conversation_id: &'a str,
     pub(super) revision: &'a str,
     pub(super) plans: &'a [PlanDocumentView],
     pub(super) error: &'a str,
     pub(super) job_locked: bool,
-    pub(super) task_title: &'a str,
-    pub(super) task_text: &'a str,
-    pub(super) task_open: bool,
-    pub(super) directories: &'a [DirectoryView],
-    pub(super) environment_summary: &'a str,
     pub(super) create_href: &'a str,
     pub(super) paste_href: &'a str,
 }
@@ -2023,6 +2092,28 @@ pub(super) struct PlanRequestContents<'a> {
     pub(super) form_action: &'a str,
     pub(super) task_action: &'a str,
     pub(super) submit_label: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "conversations/templates/activity.html", block = "activity")]
+pub(super) struct ActivityContents<'a> {
+    pub(super) has_run: bool,
+    pub(super) name: &'a str,
+    pub(super) state: &'a str,
+    pub(super) current_step: &'a str,
+    pub(super) task_progress: &'a str,
+    pub(super) result: &'a str,
+    pub(super) run_href: &'a str,
+    pub(super) back_href: String,
+    pub(super) launch_brief: String,
+    pub(super) task_line: String,
+    pub(super) environment_line: String,
+    pub(super) needs_recovery: bool,
+    pub(super) apply_outcomes: &'a [ApplyOutcomeView],
+    pub(super) apply_partial: bool,
+    pub(super) apply_uncertain: bool,
+    pub(super) apply_complete: bool,
+    pub(super) apply_resolve_href: &'a str,
 }
 
 #[derive(Template)]
@@ -2085,16 +2176,10 @@ impl ConversationDetailView {
         use askama::Template;
         let saved = self.saved().expect("saved plans conversation");
         PlansListContents {
-            conversation_id: &saved.id,
             revision: &saved.revision,
             plans: &saved.plans,
             error,
             job_locked: self.command_locked(),
-            task_title: &saved.task_title,
-            task_text: &saved.task_text,
-            task_open: !saved.task_text.is_empty(),
-            directories: &self.directories,
-            environment_summary: &self.environment_summary,
             create_href: &format!("/conversations/{}/plans/request?mode=create", saved.id),
             paste_href: &format!("/conversations/{}/plans/request?mode=paste", saved.id),
         }
@@ -2146,6 +2231,61 @@ impl ConversationDetailView {
             form_action: &form_action,
             task_action: &format!("/conversations/{}/tasks", saved.id),
             submit_label,
+        }
+        .render()
+    }
+
+    pub(super) fn render_activity(
+        &self,
+        state: &crate::state::AppState,
+    ) -> Result<String, askama::Error> {
+        use askama::Template;
+        let saved = self.saved().expect("saved activity conversation");
+        let back_href = format!("/conversations/{}", saved.id);
+        let Some(progress) = saved.workflow_progress.as_ref() else {
+            return ActivityContents {
+                has_run: false,
+                name: "",
+                state: "",
+                current_step: "",
+                task_progress: "",
+                result: "",
+                run_href: "",
+                back_href,
+                launch_brief: String::new(),
+                task_line: String::new(),
+                environment_line: String::new(),
+                needs_recovery: false,
+                apply_outcomes: &[],
+                apply_partial: false,
+                apply_uncertain: false,
+                apply_complete: false,
+                apply_resolve_href: "",
+            }
+            .render();
+        };
+        let conversation_id = crate::conversations::ConversationId::parse(&saved.id);
+        let (launch_brief, task_line, environment_line) = conversation_id
+            .map(|id| activity_source_lines(state, &id))
+            .unwrap_or_default();
+        ActivityContents {
+            has_run: true,
+            name: &progress.name,
+            state: progress.state,
+            current_step: &progress.current_step,
+            task_progress: &progress.task_progress,
+            result: progress.result,
+            run_href: &progress.run_href,
+            back_href,
+            launch_brief,
+            task_line,
+            environment_line,
+            needs_recovery: matches!(progress.state, "Failed" | "Blocked" | "Interrupted"),
+            apply_outcomes: &progress.apply_outcomes,
+            apply_partial: progress.apply_partial,
+            apply_uncertain: progress.apply_uncertain,
+            apply_complete: progress.apply_complete,
+            apply_resolve_href: &progress.apply_resolve_href,
         }
         .render()
     }

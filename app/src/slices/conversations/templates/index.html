@@ -1,125 +1,183 @@
 {% block conversation_catalogue %}
   <main
     data-section="conversations"
-    class="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-5 py-8 sm:px-8"
+    class="workspace-catalogue flex min-h-0 w-full flex-1 flex-col"
   >
-    <div class="page-intro">
-      <div>
-        <h1>Conversations</h1>
-      </div>
-      <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
-        >New conversation</a
-      >
-    </div>
-    {% if !directories.is_empty() || !filter.is_empty() || !query.is_empty() || !conversations.is_empty() %}
-      <form
-        method="get"
-        action="/conversations"
-        data-graft
-        class="flex flex-wrap items-end gap-3"
-      >
-        <label
-          class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
-          for="conversation-title-filter"
+    <header
+      class="catalogue-head border-base-300 flex items-center justify-between gap-4 border-b py-3.5"
+    >
+      <div class="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm workspace-menu"
+          data-workspace-menu
+          aria-controls="workspace-index"
+          aria-expanded="false"
+          aria-label="Menu"
         >
-          <span class="text-sm">Title</span>
-          <input
-            id="conversation-title-filter"
-            class="input input-bordered w-full"
-            type="search"
-            name="q"
-            value="{{ query }}"
-            maxlength="256"
-            autocomplete="off"
-          />
-        </label>
-        <label
-          class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
-          for="conversation-directory-filter"
-        >
-          <span class="text-sm">Directory</span>
-          <select
-            id="conversation-directory-filter"
-            class="select select-bordered w-full"
-            name="directory"
-            data-graft-submit-on="change"
-          >
-            <option value="" {% if filter.is_empty() %}selected{% endif %}>
-              All directories
-            </option>
-            {% for directory in directories %}
-              <option
-                value="{{ directory.id }}"
-                {% if directory.selected %}selected{% endif %}
-              >
-                {{ directory.name }}
-              </option>
-            {% endfor %}
-          </select>
-        </label>
-        <button type="submit" class="btn btn-primary btn-sm min-h-11">
-          Filter
+          <svg class="workspace-icon" aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
         </button>
-        {% for directory in directories %}
-          {% if directory.selected %}
-            <p class="w-full text-sm break-all">{{ directory.name }}</p>
-          {% endif %}
-        {% endfor %}
-      </form>
-    {% endif %}
-    {% if error != "" %}
-      <div class="alert alert-error" role="alert" tabindex="-1">
-        <p>{{ error }}</p>
+        <h1>Work history</h1>
       </div>
-    {% endif %}
-    {% if conversations.is_empty() %}
-      {% if filter.is_empty() && query.is_empty() && error == "" %}
-        <section class="file-section space-y-3">
-          <h2 class="text-lg font-semibold">Start a conversation</h2>
-          <p class="text-quiet max-w-[60ch]">
-            A new conversation starts without directory access.
-          </p>
-          <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
-            >New conversation</a
+      <span class="flex flex-wrap gap-2">
+        {% if !back_href.is_empty() %}
+          <a href="{{ back_href }}" data-graft class="btn btn-ghost btn-sm"
+            >{{ back_label }}</a
           >
-        </section>
-      {% else %}
-        <section class="file-section space-y-3">
-          <h2 class="text-lg font-semibold">
-            No conversations match these filters
-          </h2>
-          <p class="text-quiet max-w-[60ch]">
-            No saved conversation matches the current title or directory
-            filters.
-          </p>
-          <a href="/conversations" data-graft class="btn btn-primary btn-sm"
-            >Show all conversations</a
+        {% endif %}
+        <a href="/conversations/new" data-graft class="btn btn-primary btn-sm"
+          >New conversation</a
+        >
+      </span>
+    </header>
+    <div
+      class="min-h-0 flex-1 overflow-y-auto px-11 pt-[34px] pb-[70px] max-[700px]:px-5 max-[700px]:pt-6"
+    >
+      <p class="page-description">
+        Every result keeps its conversation and execution evidence.
+      </p>
+      {% if !directories.is_empty() || !filter.is_empty() || !query.is_empty() || !conversations.is_empty() %}
+        <form
+          method="get"
+          action="/conversations"
+          data-graft
+          class="flex flex-wrap items-end gap-3"
+        >
+          {% if !back_href.is_empty() %}
+            <input
+              type="hidden"
+              name="conversation"
+              value="{{ back_href.trim_start_matches("/conversations/") }}"
+            />
+          {% endif %}
+          <label
+            class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
+            for="conversation-title-filter"
           >
-        </section>
+            <span class="text-sm">Title</span>
+            <input
+              id="conversation-title-filter"
+              class="input input-bordered w-full"
+              type="search"
+              name="q"
+              value="{{ query }}"
+              maxlength="256"
+              autocomplete="off"
+            />
+          </label>
+          <label
+            class="flex w-full min-w-0 flex-col gap-1 sm:flex-1"
+            for="conversation-directory-filter"
+          >
+            <span class="text-sm">Directory</span>
+            <select
+              id="conversation-directory-filter"
+              class="select select-bordered w-full"
+              name="directory"
+              data-graft-submit-on="change"
+            >
+              <option value="" {% if filter.is_empty() %}selected{% endif %}>
+                All directories
+              </option>
+              {% for directory in directories %}
+                <option
+                  value="{{ directory.id }}"
+                  {% if directory.selected %}selected{% endif %}
+                >
+                  {{ directory.name }}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm min-h-11">
+            Filter
+          </button>
+          {% for directory in directories %}
+            {% if directory.selected %}
+              <p class="w-full text-sm break-all">{{ directory.name }}</p>
+            {% endif %}
+          {% endfor %}
+        </form>
       {% endif %}
-    {% else %}
-      <ul class="record-list" aria-label="Saved conversations">
-        {% for conversation in conversations %}
-          <li
-            class="record-row grid-cols-1 gap-1 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4"
-          >
+      {% if error != "" %}
+        <div class="alert alert-error" role="alert" tabindex="-1">
+          <p>{{ error }}</p>
+        </div>
+      {% endif %}
+      {% if conversations.is_empty() %}
+        {% if filter.is_empty() && query.is_empty() && error == "" %}
+          <section class="file-section space-y-3">
+            <h2 class="text-lg font-semibold">Start a conversation</h2>
+            <p class="text-quiet max-w-[60ch]">
+              A new conversation starts without directory access.
+            </p>
             <a
-              href="/conversations/{{ conversation.id }}"
+              href="/conversations/new"
               data-graft
-              class="link link-hover text-base-content flex min-h-11 min-w-0 items-center font-semibold [overflow-wrap:anywhere]"
-              >{{ conversation.title }}</a
+              class="btn btn-primary btn-sm"
+              >New conversation</a
             >
+          </section>
+        {% else %}
+          <section class="file-section space-y-3">
+            <h2 class="text-lg font-semibold">
+              No conversations match these filters
+            </h2>
+            <p class="text-quiet max-w-[60ch]">
+              No saved conversation matches the current title or directory
+              filters.
+            </p>
             <a
-              href="/conversations/new?source={{ conversation.id }}"
+              href="/conversations{% if !back_href.is_empty() %}?conversation={{ back_href.trim_start_matches("/conversations/") }}{% endif %}"
               data-graft
-              class="btn btn-ghost btn-sm min-h-11 justify-self-start font-normal sm:justify-self-end"
-              aria-label="New conversation with same setup as {{ conversation.title }}"
-              >New conversation with same setup</a
+              class="btn btn-primary btn-sm"
+              >Show all conversations</a
             >
-          </li>
-        {% endfor %}
-      </ul>
-    {% endif %}
+          </section>
+        {% endif %}
+      {% else %}
+        <ul
+          class="border-base-300 m-0 list-none border-t p-0"
+          aria-label="Saved conversations"
+        >
+          {% for conversation in conversations %}
+            <li>
+              <a
+                href="{{ conversation.href }}"
+                data-graft
+                class="history-row border-base-300 flex items-center gap-[18px] border-b px-[9px] py-[23px] text-inherit no-underline max-[700px]:flex-wrap max-[700px]:gap-[11px]"
+              >
+                <span
+                  class="bg-base-200 grid size-[35px] shrink-0 place-items-center rounded-full max-[700px]:hidden"
+                  aria-hidden="true"
+                >
+                  <span class="state-dot {{ conversation.dot }}"></span>
+                </span>
+                <span class="history-text min-w-0 flex-1">
+                  <strong>{{ conversation.title }}</strong>
+                  <small>{{ conversation.meta }}</small>
+                </span>
+                <span class="history-state">{{ conversation.status }}</span>
+                <svg
+                  class="workspace-icon shrink-0"
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M5 12h14m-6-6 6 6-6 6" />
+                </svg>
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
   </main>
 {% endblock conversation_catalogue %}
 

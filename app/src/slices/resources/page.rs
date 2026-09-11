@@ -4,6 +4,7 @@ pub(super) struct WorkflowEntry {
     pub(super) token: String,
     pub(super) name: String,
     pub(super) summary: String,
+    pub(super) phases: Vec<String>,
     pub(super) selected: bool,
     pub(super) use_href: String,
 }
@@ -86,9 +87,25 @@ impl ResourcesPage {
                 ),
             }
         };
-        let workflows = state
-            .workflows
-            .list()
+        let mut workflow_records = state.workflows.list();
+        // The retired saved-plan starter stays resolvable for recorded
+        // runs but never appears beside the six reference workflows.
+        workflow_records.retain(|record| {
+            !(record.definition.name() == "Implement a saved plan"
+                && record
+                    .definition
+                    .launch_input_sources()
+                    .contains(&crate::workflows::definition::LaunchInputSource::SavedPlan))
+        });
+        workflow_records.sort_by(|left, right| {
+            let left_name = state.workflows.display_name(left);
+            let right_name = state.workflows.display_name(right);
+            starter_rank(&left_name)
+                .cmp(&starter_rank(&right_name))
+                .then_with(|| left_name.to_lowercase().cmp(&right_name.to_lowercase()))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let workflows = workflow_records
             .into_iter()
             .map(|record| {
                 let token = crate::workflows::WorkflowSelection {
@@ -97,6 +114,7 @@ impl ResourcesPage {
                 }
                 .as_token();
                 let selected = selected_token.as_deref() == Some(token.as_str());
+                let name = state.workflows.display_name(&record);
                 let use_href = match &context_record {
                     Some((id, _)) => {
                         format!("/conversations/{}/workflow?workflow={token}", id.as_hex())
@@ -105,8 +123,14 @@ impl ResourcesPage {
                 };
                 WorkflowEntry {
                     token,
-                    name: state.workflows.display_name(&record),
-                    summary: crate::workflows::summary::process_summary(&record.definition),
+                    summary: starter_summary(&name).unwrap_or_else(|| {
+                        crate::workflows::summary::process_summary(&record.definition)
+                    }),
+                    phases: crate::workflows::summary::process_overview(&record.definition)
+                        .into_iter()
+                        .map(|phase| phase.name)
+                        .collect(),
+                    name,
                     selected,
                     use_href,
                 }
@@ -231,6 +255,33 @@ impl ResourcesPage {
             has_conversations,
         }
     }
+}
+
+fn starter_rank(display_name: &str) -> usize {
+    match display_name {
+        "Plan a change" => 1,
+        "Review current code" => 2,
+        "Implement with approval" => 3,
+        "Implement and review" => 4,
+        "Plan then implement" => 5,
+        "Task loop" | "Ralph task loop" => 6,
+        _ => usize::MAX,
+    }
+}
+
+fn starter_summary(display_name: &str) -> Option<String> {
+    match display_name {
+        "Plan a change" => Some("A focused plan for the proposed change."),
+        "Review current code" => Some("An assessment with actionable feedback."),
+        "Implement with approval" => Some("Prepare a change for your review."),
+        "Implement and review" => Some("A fresh reviewer inspects the change before you decide."),
+        "Plan then implement" => Some("Approve a plan before implementation starts."),
+        "Task loop" | "Ralph task loop" => {
+            Some("Complete each remaining task with a fresh context.")
+        }
+        _ => None,
+    }
+    .map(str::to_owned)
 }
 
 fn preset_summary(settings: &crate::execution::ExecutionSettings) -> String {

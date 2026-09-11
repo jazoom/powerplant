@@ -111,31 +111,62 @@ function syncExecutionModeFields() {
         .forEach((section) => {
             section.hidden = host;
         });
-    const policy = document.querySelector<HTMLElement>(
-        "[data-execution-host-policy]",
+    document
+        .querySelectorAll<HTMLElement>("[data-execution-host-policy]")
+        .forEach((section) => {
+            section.hidden = !host;
+        });
+    document
+        .querySelectorAll<HTMLElement>(".segmented label")
+        .forEach((label) => {
+            const input = label.querySelector<HTMLInputElement>(
+                'input[name="location"]',
+            );
+            if (input) label.classList.toggle("selected", input.checked);
+        });
+}
+
+function syncNetworkDomains() {
+    const select = document.querySelector<HTMLSelectElement>(
+        "[data-network-select]",
     );
-    if (policy) policy.hidden = !host;
+    const domains = document.querySelector<HTMLElement>(
+        "[data-network-domains]",
+    );
+    if (!select || !domains) return;
+    domains.hidden = select.value !== "restricted";
+}
+
+function settingsTabForPanel(sectionId: string | undefined): string {
+    if (
+        sectionId === "settings-execution" ||
+        sectionId === "settings-directories"
+    )
+        return "settings-files";
+    return sectionId ?? "settings-model";
 }
 
 function selectConversationSettingsSection(panel: HTMLElement, id: string) {
+    const files = id === "settings-files";
     panel
         .querySelectorAll<HTMLElement>("[data-settings-panel]")
         .forEach((section) => {
-            section.hidden = section.id !== id;
+            section.hidden = files
+                ? section.id !== "settings-execution" &&
+                  section.id !== "settings-directories"
+                : section.id !== id;
         });
-    const menu = panel.querySelector<HTMLSelectElement>("[data-settings-menu]");
-    if (menu) menu.value = id;
+    panel
+        .querySelectorAll<HTMLElement>("[data-settings-tab]")
+        .forEach((tab) => {
+            const selected = tab.dataset.settingsTab === id;
+            tab.setAttribute("aria-pressed", String(selected));
+            tab.classList.toggle("selected", selected);
+        });
     const actions = panel.querySelector<HTMLElement>(
         "[data-execution-actions]",
     );
-    if (actions)
-        actions.hidden = ![
-            "settings-execution",
-            "settings-directories",
-        ].includes(id);
-    const footer = panel.querySelector<HTMLElement>("[data-settings-footer]");
-    if (footer)
-        footer.hidden = ["settings-details", "settings-presets"].includes(id);
+    if (actions) actions.hidden = !files;
 }
 
 function revealConversationSetting(target: HTMLElement, focus = true) {
@@ -144,11 +175,11 @@ function revealConversationSetting(target: HTMLElement, focus = true) {
     if (!panel || !scroll) return;
     const section = target.closest<HTMLElement>("[data-settings-panel]");
     if (target.closest("[data-execution-actions]"))
-        selectConversationSettingsSection(panel, "settings-execution");
+        selectConversationSettingsSection(panel, "settings-files");
     else if (section || target.id === "conversation-settings-heading")
         selectConversationSettingsSection(
             panel,
-            section?.id ?? "settings-model",
+            settingsTabForPanel(section?.id),
         );
     let parent = target.parentElement;
     while (parent && parent !== panel) {
@@ -189,6 +220,20 @@ document.addEventListener("click", (event) => {
         event.target instanceof Element
             ? event.target.closest<HTMLElement>("[data-settings-section]")
             : null;
+    const tab =
+        event.target instanceof Element
+            ? event.target.closest<HTMLElement>("[data-settings-tab]")
+            : null;
+    if (tab) {
+        const panel = tab.closest<HTMLElement>("#conversation-settings");
+        if (panel && tab.dataset.settingsTab) {
+            selectConversationSettingsSection(panel, tab.dataset.settingsTab);
+            panel
+                .querySelector<HTMLElement>("[data-settings-scroll]")
+                ?.scrollTo({ top: 0 });
+        }
+        return;
+    }
     if (!shortcut) return;
     let target = document.getElementById(
         shortcut.dataset.settingsSection ?? "",
@@ -200,7 +245,7 @@ document.addEventListener("click", (event) => {
     if (!panel) return;
     selectConversationSettingsSection(
         panel,
-        target.closest("[data-settings-panel]")?.id ?? "settings-model",
+        settingsTabForPanel(target.closest("[data-settings-panel]")?.id),
     );
     // Native activation retains the trigger for Escape focus restoration.
     requestAnimationFrame(() => revealConversationSetting(target));
@@ -217,9 +262,9 @@ document.addEventListener(
         settingsScroll = panel?.querySelector<HTMLElement>(
             "[data-settings-scroll]",
         )?.scrollTop;
-        settingsSection = panel?.querySelector<HTMLSelectElement>(
-            "[data-settings-menu]",
-        )?.value;
+        settingsSection = panel?.querySelector<HTMLElement>(
+            '[data-settings-tab][aria-pressed="true"]',
+        )?.dataset.settingsTab;
     },
     true,
 );
@@ -236,6 +281,7 @@ listenForRequestSettled((detail) => {
     settingsScroll = undefined;
     settingsSection = undefined;
     syncExecutionModeFields();
+    syncNetworkDomains();
     // Retained external submitters can retain transport-only ARIA state after a patch.
     document
         .querySelectorAll<HTMLButtonElement>(
@@ -288,19 +334,6 @@ listenForRequestSettled((detail) => {
 
 document.addEventListener("change", (event) => {
     const field = event.target;
-    if (
-        field instanceof HTMLSelectElement &&
-        field.matches("[data-settings-menu]")
-    ) {
-        const panel = field.closest<HTMLElement>("#conversation-settings");
-        if (panel) {
-            selectConversationSettingsSection(panel, field.value);
-            const scroll = panel.querySelector<HTMLElement>(
-                "[data-settings-scroll]",
-            );
-            if (scroll) scroll.scrollTop = 0;
-        }
-    }
     if (
         field instanceof HTMLSelectElement &&
         field.matches("[data-review-provider]")
@@ -387,6 +420,12 @@ document.addEventListener("change", (event) => {
         if (preview?.form === field.form) field.form.requestSubmit(preview);
     }
     if (
+        field instanceof HTMLSelectElement &&
+        field.matches("[data-network-select]")
+    ) {
+        syncNetworkDomains();
+    }
+    if (
         field instanceof HTMLInputElement &&
         field.name === "location" &&
         field.form?.id === "conversation-settings-form"
@@ -418,7 +457,9 @@ document.addEventListener("change", (event) => {
     if (
         (event.target instanceof HTMLSelectElement &&
             (event.target.id === "conversation-environment" ||
-                event.target.matches("[data-execution-directory]"))) ||
+                event.target.matches("[data-execution-directory]") ||
+                event.target.matches("[data-network-select]") ||
+                event.target.name === "host_approval")) ||
         (event.target instanceof HTMLInputElement &&
             (event.target.name === "location" ||
                 event.target.name === "host_approval"))

@@ -1,0 +1,141 @@
+{% block activity %}
+  <div
+    class="workspace-activity-body min-h-0 flex-1 space-y-6 overflow-y-auto p-5"
+  >
+    {% if !has_run %}
+      <div class="space-y-2">
+        <h3 class="font-semibold">No tool execution in this conversation</h3>
+        <p class="text-quiet text-sm">
+          Activity appears here after the first workflow run. The conversation
+          itself needs no run to continue.
+        </p>
+      </div>
+    {% else %}
+      <div class="space-y-2">
+        <h3 class="text-lg font-semibold break-words">{{ name }}</h3>
+        <p class="text-quiet text-sm">
+          {{ state }}{% if current_step != "" %}· {{ current_step }}{% endif %}
+        </p>
+        {% if task_progress != "" %}
+          <p class="text-quiet text-sm">{{ task_progress }}</p>
+        {% endif %}
+        {% if result != "" %}
+          <p class="text-sm">{{ result }}</p>
+        {% endif %}
+      </div>
+      {% if launch_brief != "" %}
+        <details class="file-disclosure">
+          <summary>Input for this run</summary>
+          <p class="mt-3 text-sm break-words whitespace-pre-wrap">
+            {{ launch_brief }}
+          </p>
+          {% if task_line != "" %}
+            <p class="text-quiet mt-2 text-xs">{{ task_line }}</p>
+          {% endif %}
+          <p class="text-quiet mt-2 text-xs">
+            Later edits cannot change this copy.
+          </p>
+        </details>
+      {% endif %}
+      {% if environment_line != "" %}
+        <section aria-label="Environment">
+          <h4 class="text-sm font-semibold">Environment</h4>
+          <p class="text-quiet mt-1 text-sm">{{ environment_line }}</p>
+        </section>
+      {% endif %}
+      {% if !apply_outcomes.is_empty() %}
+        <section aria-label="File application">
+          <h4 class="text-sm font-semibold">File application</h4>
+          {% if apply_uncertain %}
+            <p class="mt-1 text-sm">
+              Recovery is uncertain. Power Plant retains the evidence and blocks
+              completion, continuation and retry until cleanup finishes.
+            </p>
+          {% else if apply_partial %}
+            <p class="mt-1 text-sm">
+              Only some changes applied. This task is not complete. Partial
+              application never appears as Completed.
+            </p>
+          {% else if apply_complete %}
+            <p class="text-quiet mt-1 text-sm">
+              Every reviewed directory reports Applied or Unchanged and managed
+              cleanup finished.
+            </p>
+          {% endif %}
+          <dl class="mt-3 grid gap-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto]">
+            {% for outcome in apply_outcomes %}
+              <div class="min-w-0">
+                <dt class="font-semibold break-all">{{ outcome.directory }}</dt>
+                <dd class="text-quiet font-mono text-xs break-all">
+                  {{ outcome.path }}
+                </dd>
+              </div>
+              <dd>
+                <span
+                  class="badge state-badge badge-sm"
+                  data-state="{{ outcome.outcome }}"
+                  >{{ outcome.outcome }}</span
+                >
+              </dd>
+            {% endfor %}
+          </dl>
+          {% if apply_uncertain || apply_partial %}
+            <p class="mt-3 text-sm">
+              <a href="{{ apply_resolve_href }}" data-graft class="link"
+                >Resolve the conflict</a
+              >
+              opens the exact run attempt and its directory evidence. This link
+              starts no write, retry or simulated resolution.
+            </p>
+          {% endif %}
+        </section>
+      {% endif %}
+      {% if needs_recovery %}
+        <section
+          class="border-base-300 space-y-3 border-t pt-5"
+          aria-label="Recovery"
+        >
+          <h4 class="text-sm font-semibold">Recovery</h4>
+          <p class="text-quiet text-sm">
+            The task did not complete. Your message and settings remain intact.
+            Plain conversation still works: a response without tools needs no
+            sandbox environment.
+          </p>
+          <ul class="flex flex-wrap gap-2">
+            <li>
+              <a
+                href="{{ run_href }}"
+                data-graft
+                class="btn btn-secondary btn-sm"
+                >Open full run record</a
+              >
+            </li>
+            <li>
+              <a href="/environments" data-graft class="btn btn-ghost btn-sm"
+                >Prepare environments</a
+              >
+            </li>
+            <li>
+              <a href="/connect" data-graft class="btn btn-ghost btn-sm"
+                >Providers</a
+              >
+            </li>
+          </ul>
+        </section>
+      {% else %}
+        <p class="text-sm">
+          <a href="{{ run_href }}" data-graft class="link"
+            >Open full run record</a
+          >
+          for steps, attempts and complete evidence. That page retains the
+          owning conversation link.
+        </p>
+      {% endif %}
+    {% endif %}
+  </div>
+  <footer class="border-base-300 shrink-0 border-t p-5">
+    <a href="{{ back_href }}" data-graft class="btn btn-outline w-full"
+      >Back to current work</a
+    >
+  </footer>
+{% endblock %}

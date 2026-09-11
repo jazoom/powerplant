@@ -327,8 +327,11 @@
                   Sandbox path:
                   <code class="break-all">{{ grant.guest_path }}</code>
                   with
-                  {% if grant.access == "read-only" %}read-only{% else %}read
-                  and write{% endif %}
+                  {% if grant.access == "read-only" %}
+                    read-only
+                  {% else %}
+                    read and write
+                  {% endif %}
                   directory access.
                 {% else %}
                   Enter an alias to preview the sandbox path.

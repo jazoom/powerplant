@@ -1,35 +1,40 @@
-<section
-  class="file-section mx-auto my-3 w-[calc(100%-2rem)] max-w-3xl shrink-0 space-y-3 sm:w-[calc(100%-4rem)]"
-  aria-labelledby="conversation-workflow-heading"
->
-  <div class="flex flex-wrap items-start justify-between gap-3">
-    <div>
-      <h2 id="conversation-workflow-heading" class="text-lg font-semibold">
-        Workflow progress
-      </h2>
-      <p class="text-quiet mt-1 text-sm">
-        The worker uses the launch brief and a fresh context for each phase.
-        This conversation history stays outside worker inputs.
+<section class="space-y-4 p-5" aria-labelledby="conversation-workflow-heading">
+  {% if run.run_terminal %}
+    <h3 id="conversation-workflow-heading" class="text-sm font-semibold">
+      {{ run.name }} · {{ run.state }}
+    </h3>
+    <dl class="grid gap-2 text-sm sm:grid-cols-[8rem_1fr]">
+      <dt class="text-quiet">Current phase</dt>
+      <dd>{{ run.current_step }}</dd>
+      {% if run.task_progress != "" %}
+        <dt class="text-quiet">Tasks</dt>
+        <dd>{{ run.task_progress }}</dd>
+      {% endif %}
+      <dt class="text-quiet">Result</dt>
+      <dd>{{ run.result }}</dd>
+    </dl>
+  {% else %}
+    <div class="space-y-2">
+      <h3 id="conversation-workflow-heading" class="text-lg font-semibold">
+        The task is in progress
+      </h3>
+      <p class="text-quiet text-sm">
+        You can read the conversation while the work continues.
       </p>
     </div>
-    <a href="{{ run.run_href }}" data-graft class="btn btn-secondary btn-sm">
-      Inspect run
-    </a>
-  </div>
-  <dl class="grid gap-2 text-sm sm:grid-cols-[8rem_1fr]">
-    <dt class="text-quiet">Workflow</dt>
-    <dd>{{ run.name }}</dd>
-    <dt class="text-quiet">State</dt>
-    <dd>{{ run.state }}</dd>
-    <dt class="text-quiet">Current phase</dt>
-    <dd>{{ run.current_step }}</dd>
-    {% if run.task_progress != "" %}
-      <dt class="text-quiet">Tasks</dt>
-      <dd>{{ run.task_progress }}</dd>
-    {% endif %}
-    <dt class="text-quiet">Result</dt>
-    <dd>{{ run.result }}</dd>
-  </dl>
+    <dl class="grid gap-2 text-sm sm:grid-cols-[8rem_1fr]">
+      <dt class="text-quiet">Workflow</dt>
+      <dd>{{ run.name }}</dd>
+      <dt class="text-quiet">State</dt>
+      <dd>{{ run.state }}</dd>
+      <dt class="text-quiet">Current phase</dt>
+      <dd>{{ run.current_step }}</dd>
+      {% if run.task_progress != "" %}
+        <dt class="text-quiet">Tasks</dt>
+        <dd>{{ run.task_progress }}</dd>
+      {% endif %}
+    </dl>
+  {% endif %}
   {% if !run.apply_outcomes.is_empty() %}
     <div class="border-base-300 space-y-2 border-t pt-3">
       {% if run.apply_uncertain %}
@@ -77,8 +82,7 @@
             >Resolve the conflict</a
           >
           opens the exact run attempt and its directory evidence. This link
-          starts no write, retry or simulated resolution. Manual recovery
-          replaces the mock conflict button.
+          starts no write or retry.
         </p>
         {% if run.apply_partial && run.settlement_eligible %}
           <form
@@ -187,18 +191,49 @@
           </form>
         {% endif %}
         {% if run.can_stop %}
-          <form
-            data-graft
-            method="post"
-            action="/runs/loops/{{ run.loop_id }}/stop"
-            class="inline"
-          >
-            <input type="hidden" name="token" value="{{ run.command_token }}" />
-            <input type="hidden" name="surface" value="conversation" />
-            <button class="btn btn-ghost btn-sm" type="submit">Stop now</button>
-          </form>
+          <details class="stop-confirm">
+            <summary class="btn btn-ghost btn-sm cursor-pointer">
+              Stop now
+            </summary>
+            <div class="mt-3 space-y-3">
+              <p class="text-sm font-semibold">Stop this task?</p>
+              <p class="text-quiet text-sm">
+                The task stops before another action starts. Conversation
+                history remains. Earlier file changes and host command effects
+                remain. Stop does not reverse them.
+              </p>
+              <form
+                data-graft
+                method="post"
+                action="/runs/loops/{{ run.loop_id }}/stop"
+              >
+                <input
+                  type="hidden"
+                  name="token"
+                  value="{{ run.command_token }}"
+                />
+                <input type="hidden" name="surface" value="conversation" />
+                <div class="flex flex-wrap gap-2">
+                  <button class="btn btn-error btn-sm" type="submit">
+                    Confirm stop
+                  </button>
+                </div>
+              </form>
+            </div>
+          </details>
         {% endif %}
       </div>
     </div>
+  {% endif %}
+  {% if run.conversation_id != "" %}
+    <p class="text-sm">
+      <a
+        href="/conversations/{{ run.conversation_id }}/activity"
+        data-graft
+        class="link"
+        >View activity and evidence</a
+      >
+      opens in this companion. The transcript and composer stay in place.
+    </p>
   {% endif %}
 </section>

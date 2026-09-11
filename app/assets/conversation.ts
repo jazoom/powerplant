@@ -35,6 +35,100 @@ export function initConversation(
     let unsavedSettings:
         | Map<string, { value: string; checked: boolean; disabled: boolean }>
         | undefined;
+    function syncEnableTools() {
+        const toggle = root.querySelector<HTMLInputElement>(
+            "[data-enable-tools]",
+        );
+        const tools = Array.from(
+            root.querySelectorAll<HTMLInputElement>("[data-tool-field]"),
+        );
+        if (!toggle || tools.length === 0) return;
+        const checked = tools.filter((tool) => tool.checked).length;
+        toggle.checked = checked === tools.length;
+        toggle.indeterminate = checked > 0 && checked < tools.length;
+    }
+
+    function cancelSettings(trigger: HTMLElement) {
+        const panel = trigger.closest<HTMLElement>("#conversation-settings");
+        if (!panel) return;
+        if (trigger instanceof HTMLAnchorElement) {
+            if (panel.matches(":popover-open")) panel.hidePopover();
+            return;
+        }
+        panel
+            .querySelectorAll<
+                HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+            >("input, select, textarea")
+            .forEach((control) => {
+                if (
+                    control instanceof HTMLInputElement &&
+                    (control.type === "checkbox" || control.type === "radio")
+                )
+                    control.checked = control.defaultChecked;
+                else if (control instanceof HTMLSelectElement) {
+                    for (const option of control.options)
+                        option.selected = option.defaultSelected;
+                } else control.value = control.defaultValue;
+            });
+        unsavedSettings = undefined;
+        const model = panel.querySelector<HTMLInputElement>(
+            "#conversation-model",
+        );
+        const label = panel.querySelector("#conversation-model-value");
+        if (model && label)
+            label.textContent = model.value || "No models available";
+        const search = panel.querySelector<HTMLInputElement>(
+            "#conversation-model-search",
+        );
+        if (search) search.value = "";
+        panel.querySelector("#conversation-model-results")?.replaceChildren();
+        setModelExpanded(false);
+        syncEnableTools();
+        syncConversation();
+        const host =
+            panel.querySelector<HTMLInputElement>(
+                'input[name="location"]:checked',
+            )?.value === "host";
+        panel
+            .querySelectorAll<HTMLElement>("[data-execution-sandbox-settings]")
+            .forEach((section) => {
+                section.hidden = host;
+            });
+        panel
+            .querySelectorAll<HTMLElement>("[data-execution-host-policy]")
+            .forEach((section) => {
+                section.hidden = !host;
+            });
+        panel
+            .querySelectorAll<HTMLElement>(".segmented label")
+            .forEach((label) => {
+                const input = label.querySelector<HTMLInputElement>(
+                    'input[name="location"]',
+                );
+                if (input) label.classList.toggle("selected", input.checked);
+            });
+        const networkSelect = panel.querySelector<HTMLSelectElement>(
+            "[data-network-select]",
+        );
+        const domains = panel.querySelector<HTMLElement>(
+            "[data-network-domains]",
+        );
+        if (networkSelect && domains)
+            domains.hidden = networkSelect.value !== "restricted";
+        const environment = panel.querySelector<HTMLSelectElement>(
+            "#conversation-environment",
+        );
+        if (environment)
+            panel
+                .querySelectorAll<HTMLElement>("[data-environment-problem]")
+                .forEach((problem) => {
+                    problem.hidden =
+                        problem.dataset.environmentProblem !==
+                        environment.value;
+                });
+        if (panel.matches(":popover-open")) panel.hidePopover();
+    }
+
     function retainSettings() {
         const form = modelForm();
         if (!form) return;
@@ -169,7 +263,11 @@ export function initConversation(
         if (networkSummary) {
             const network = form.elements.namedItem("network");
             const value =
-                network instanceof RadioNodeList ? network.value : "none";
+                network instanceof RadioNodeList
+                    ? network.value
+                    : network instanceof HTMLSelectElement
+                      ? network.value
+                      : "none";
             networkSummary.textContent =
                 value === "restricted"
                     ? "Restricted domains"
@@ -310,6 +408,61 @@ export function initConversation(
         "click",
         (event) => {
             if (!(event.target instanceof Element)) return;
+            const cancel = event.target.closest<HTMLElement>(
+                "[data-settings-cancel]",
+            );
+            if (cancel) {
+                cancelSettings(cancel);
+                return;
+            }
+            const saveToggle = event.target.closest<HTMLButtonElement>(
+                "[data-preset-save-toggle]",
+            );
+            if (saveToggle) {
+                const panel = root.querySelector<HTMLElement>(
+                    "#conversation-preset-save",
+                );
+                if (panel) {
+                    panel.hidden = false;
+                    saveToggle.setAttribute("aria-expanded", "true");
+                    panel
+                        .querySelector<HTMLElement>("#conversation-preset-name")
+                        ?.focus();
+                }
+                return;
+            }
+            const saveCancel = event.target.closest<HTMLElement>(
+                "[data-preset-save-cancel]",
+            );
+            if (saveCancel) {
+                const panel = root.querySelector<HTMLElement>(
+                    "#conversation-preset-save",
+                );
+                if (panel) panel.hidden = true;
+                const toggle = root.querySelector<HTMLButtonElement>(
+                    "[data-preset-save-toggle]",
+                );
+                toggle?.setAttribute("aria-expanded", "false");
+                toggle?.focus();
+                return;
+            }
+            const previewCancel = event.target.closest<HTMLElement>(
+                "[data-preset-cancel]",
+            );
+            if (previewCancel) {
+                // Preview grants no authority, so Cancel only hides the
+                // replacement description and keeps the effective setup.
+                previewCancel.closest("[data-preset-preview]")?.remove();
+                const fallback =
+                    root.querySelector<HTMLElement>(
+                        "#settings-presets .choice-row",
+                    ) ??
+                    root.querySelector<HTMLElement>(
+                        "[data-preset-save-toggle]",
+                    );
+                fallback?.focus();
+                return;
+            }
             const toggle = event.target.closest<HTMLButtonElement>(
                 "#conversation-model-toggle",
             );
@@ -455,6 +608,26 @@ export function initConversation(
     root.addEventListener(
         "change",
         (event) => {
+            if (
+                event.target instanceof HTMLInputElement &&
+                event.target.matches("[data-enable-tools]")
+            ) {
+                const tools = Array.from(
+                    root.querySelectorAll<HTMLInputElement>(
+                        "[data-tool-field]",
+                    ),
+                );
+                for (const tool of tools) {
+                    if (tool.checked !== event.target.checked) {
+                        tool.checked = event.target.checked;
+                        tool.dispatchEvent(
+                            new Event("input", { bubbles: true }),
+                        );
+                    }
+                }
+                event.target.indeterminate = false;
+                return;
+            }
             if (event.target instanceof HTMLSelectElement) {
                 if (
                     event.target.form === modelForm() &&
@@ -474,6 +647,7 @@ export function initConversation(
     );
 
     syncConversation();
+    syncEnableTools();
     return {
         reconcile(context) {
             if (
@@ -571,6 +745,38 @@ export function initConversation(
                 "#conversation-model-results",
             )?.replaceChildren();
             syncConversation();
+            syncEnableTools();
+            const host =
+                root.querySelector<HTMLInputElement>(
+                    'input[name="location"]:checked',
+                )?.value === "host";
+            root.querySelectorAll<HTMLElement>(
+                "[data-execution-sandbox-settings]",
+            ).forEach((section) => {
+                section.hidden = host;
+            });
+            root.querySelectorAll<HTMLElement>(
+                "[data-execution-host-policy]",
+            ).forEach((section) => {
+                section.hidden = !host;
+            });
+            root.querySelectorAll<HTMLElement>(".segmented label").forEach(
+                (label) => {
+                    const input = label.querySelector<HTMLInputElement>(
+                        'input[name="location"]',
+                    );
+                    if (input)
+                        label.classList.toggle("selected", input.checked);
+                },
+            );
+            const networkSelect = root.querySelector<HTMLSelectElement>(
+                "[data-network-select]",
+            );
+            const domains = root.querySelector<HTMLElement>(
+                "[data-network-domains]",
+            );
+            if (networkSelect && domains)
+                domains.hidden = networkSelect.value !== "restricted";
         },
         destroy() {
             stopSettlement();

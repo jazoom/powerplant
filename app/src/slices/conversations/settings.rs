@@ -867,6 +867,7 @@ pub(super) async fn apply_preset(
     {
         Ok(updated) => {
             state.access_consent.invalidate_conversation(record.id);
+            state.host_approvals.invalidate_conversation(record.id);
             render_detail_command(
                 graft,
                 PatchStatus::Ok,
@@ -1047,6 +1048,7 @@ fn preset_preview_view(
     let settings = &preview.record.settings;
     super::page::PresetPreviewView {
         token: preview.token,
+        id: preview.record.id.as_hex(),
         name: preview.record.name,
         model: format!(
             "{} · {}",

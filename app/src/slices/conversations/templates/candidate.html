@@ -20,7 +20,8 @@
     {% if gate.total_changes > 0 %}
       <p class="mt-4 text-sm font-semibold">
         {{ gate.total_changes }}
-        {% if gate.total_changes == 1 %}file{% else %}files{% endif %} changed
+        {% if gate.total_changes == 1 %}file{% else %}files{% endif %}
+        changed
       </p>
       {% if gate.changes_truncated %}
         <p class="text-quiet mt-1 text-xs">
@@ -183,17 +184,27 @@
             />
             <input type="hidden" name="surface" value="conversation" />
             <label class="flex flex-col gap-1"
-              ><span class="text-sm">Revision note</span
+              ><span class="text-sm">What needs to change?</span
               ><textarea
                 name="note"
                 required
                 maxlength="65536"
+                placeholder="Describe the improvement…"
                 class="textarea textarea-bordered max-h-32 min-h-20"
               ></textarea>
             </label>
-            <button class="btn btn-outline btn-sm" type="submit">
-              Send feedback
-            </button>
+            <div class="flex flex-wrap gap-2">
+              <button class="btn btn-outline btn-sm" type="submit">
+                Send feedback
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                type="button"
+                data-revision-cancel
+              >
+                Cancel
+              </button>
+            </div>
           </form>
         </details>
       {% endif %}

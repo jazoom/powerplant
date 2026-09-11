@@ -713,6 +713,47 @@ impl WorkflowDefinition {
         )
     }
 
+    /// Attach an optional saved-plan launch input to the first model phase.
+    /// The launch layer pins the returned definition per run, so stored
+    /// definitions and historical runs keep their declared inputs. A plan the
+    /// user selects becomes task direction for that run only; a launch without
+    /// a plan keeps the stored behaviour.
+    pub(crate) fn with_saved_plan_input(&self) -> Result<Self, DefinitionError> {
+        if self
+            .launch_input_sources()
+            .contains(&LaunchInputSource::SavedPlan)
+        {
+            return Ok(self.clone());
+        }
+        let mut steps = self.steps.clone();
+        let Some(step) = steps
+            .iter_mut()
+            .find(|step| matches!(step.action, StepAction::Agent(_)))
+        else {
+            return Err(DefinitionError::InputCount);
+        };
+        let key = if step.inputs.iter().any(|input| input.key.as_str() == "plan") {
+            InputKey::parse("saved-plan")?
+        } else {
+            InputKey::parse("plan")?
+        };
+        step.inputs.push(RequiredInput {
+            key,
+            kind: ArtefactKind::Plan,
+            source: ArtefactSource::LaunchInput {
+                source: LaunchInputSource::SavedPlan,
+            },
+        });
+        assemble(
+            self.name.clone(),
+            self.default_environment,
+            self.roles.clone(),
+            steps,
+            Some(self.commit_policy),
+            self.execution_mode,
+        )
+    }
+
     pub(crate) fn commit_policy_choices(&self) -> Vec<CommitPolicy> {
         [
             CommitPolicy::NoCommit,

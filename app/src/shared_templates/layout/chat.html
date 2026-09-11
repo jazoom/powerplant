@@ -4,6 +4,18 @@
   <a class="skip-link" id="skip-link" href="#chat-main">Skip to main content</a>
   <div class="app-frame" data-island="workspace">
     <aside class="app-index" aria-label="Product index" id="workspace-index">
+      <div class="workspace-menu-head">
+        <p class="workspace-menu-title" id="workspace-menu-title">Your work</p>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm workspace-menu-close"
+          data-workspace-menu
+          aria-controls="workspace-index"
+          aria-expanded="false"
+        >
+          Close
+        </button>
+      </div>
       <a href="/conversations" data-graft class="app-brand">
         <img
           src="/static/images/logo.svg"
@@ -36,14 +48,12 @@
           ><span>Find a conversation</span>
           <input
             id="recent-filter-input"
+            name="q"
             type="search"
             placeholder="Find a conversation"
             autocomplete="off"
           />
         </label>
-        <a href="/conversations" data-graft class="workspace-search-fallback"
-          >All conversations</a
-        >
       </form>
       <nav class="workspace-navigation" aria-label="Primary navigation">
         <a href="/attention" data-graft data-attention-link
@@ -56,7 +66,7 @@
             >{% if attention_count > 0 %}{{ attention_count }}{% endif %}</span
           ></a
         >
-        <a href="/runs" data-graft
+        <a href="/conversations" data-graft data-history-link
           ><svg class="workspace-icon" aria-hidden="true">
             <use href="/static/images/workspace-icons.svg#clock" /></svg
           >History</a

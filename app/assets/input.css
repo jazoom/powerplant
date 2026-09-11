@@ -1179,12 +1179,12 @@
 /* DaisyUI places its controls in utilities. Chat overrides must share that layer. */
 @layer utilities {
     .select {
-        border-width: 2px;
-        border-color: var(--powerplant-quiet-ink);
+        border-width: 1px;
+        border-color: var(--color-base-300);
     }
 
     .select::picker(select) {
-        border: 2px solid var(--powerplant-quiet-ink);
+        border: 1px solid var(--color-base-300);
     }
 
     .select[aria-invalid="true"] {

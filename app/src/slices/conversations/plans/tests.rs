@@ -11,11 +11,14 @@ async fn plans_navigation_and_revision_fragments_use_canonical_routes() {
     let state = test_state();
     let token = connected(&state);
     let record = state.conversations.create("Plans".to_owned()).unwrap();
-    let starter = crate::workflows::seeds::production_seeds(crate::tests::test_environment_id())
-        .into_iter()
-        .find(|seed| seed.key.as_str() == "implement-saved-plan-v1")
+    // Prepare implementation hands the saved plan to the Implement and review
+    // reference workflow; the retired saved-plan starter is not seeded.
+    state
+        .workflows
+        .create(crate::workflows::seeds::implement_and_review_definition(
+            crate::tests::test_environment_id(),
+        ))
         .unwrap();
-    state.workflows.create(starter.definition).unwrap();
     let plan = state
         .documents
         .create_from_text(
@@ -83,7 +86,6 @@ async fn plans_navigation_and_revision_fragments_use_canonical_routes() {
     assert!(plans.contains("Remove"));
     assert!(plans.contains("Create a plan"));
     assert!(plans.contains("Add your own plan"));
-    assert!(plans.contains("Standalone task lists"));
     // The Plans header action stays highlighted while the companion is open.
     assert!(plans.contains("aria-current=\"page\""));
     let legacy = app(&state)
@@ -346,6 +348,16 @@ async fn plans_request_companions_validate_mode_and_source_message() {
         assert!(body.contains(submit));
         assert!(body.contains("Back to plans"));
     }
+    let paste = app(&state)
+        .oneshot(document(
+            &format!("/conversations/{}/plans/request?mode=paste", record.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(paste.status(), StatusCode::OK);
+    let paste = text(paste).await;
+    assert!(paste.contains("No tools or directory access. No execution starts."));
 
     let unknown = app(&state)
         .oneshot(document(

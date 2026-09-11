@@ -6,7 +6,7 @@ use crate::{
     providers::{ModelSelection, ProviderKind},
 };
 
-use super::super::tests::{app, command, connected, test_state, text};
+use super::super::tests::{app, command, connected, document, test_state, text};
 
 #[tokio::test]
 async fn settings_update_validates_the_complete_form_and_revision() {
@@ -1017,5 +1017,198 @@ async fn explicit_empty_tool_selection_persists_without_default_substitution() {
             .settings
             .tools
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn partial_tool_selection_survives_an_unrelated_setup_save() {
+    // The Instructions section offers one Enable tools checkbox over four
+    // submitted tool fields. The hidden fields must carry the effective
+    // selection so an unrelated save neither broadens nor narrows it.
+    let state = test_state();
+    let token = connected(&state);
+    super::super::tests::ready_starter_environment(&state).await;
+    let record = state.conversations.create("Saved".to_owned()).unwrap();
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let (environment, _) = state
+        .environments
+        .create(crate::environments::EnvironmentDraft {
+            name: "Rust tools".to_owned(),
+            oci_image: "docker.io/library/alpine:3.20".to_owned(),
+            setup_script: String::new(),
+        })
+        .unwrap();
+    let path = format!("/conversations/{}/settings", record.id);
+    let partial = format!(
+        "revision={}&provider=xai&model=grok-4.6&thinking={}&instructions=Partial&tool_read=read&environment={}",
+        record.revision,
+        effort.as_str(),
+        environment.id
+    );
+    let response = app(&state)
+        .oneshot(command(&path, &token, &partial))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        text(response).await
+    );
+    let saved = state.conversations.get(&record.id).unwrap();
+    assert_eq!(
+        saved.model.as_ref().unwrap().settings.tools,
+        vec![ToolId::Read]
+    );
+
+    let response = app(&state)
+        .oneshot(document(&format!("/conversations/{}", record.id), &token))
+        .await
+        .unwrap();
+    let body = text(response).await;
+    assert!(body.contains("data-enable-tools"));
+    assert_eq!(body.matches("data-tool-field").count(), 4);
+    for name in ["tool_list", "tool_read", "tool_write", "tool_run"] {
+        let start = body
+            .find(&format!("name=\"{name}\""))
+            .expect("tool field renders");
+        let end = body[start..]
+            .find("data-tool-field")
+            .expect("tool field marker");
+        assert_eq!(
+            body[start..start + end].contains("checked"),
+            name == "tool_read",
+            "{name} keeps its effective selection"
+        );
+    }
+
+    // An unrelated instructions edit resubmits the rendered partial
+    // selection, exactly as the browser form does.
+    let unrelated = format!(
+        "revision={}&provider=xai&model=grok-4.6&thinking={}&instructions=Unrelated+edit&tool_read=read&environment={}",
+        saved.revision,
+        effort.as_str(),
+        environment.id
+    );
+    let response = app(&state)
+        .oneshot(command(&path, &token, &unrelated))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        text(response).await
+    );
+    let updated = state.conversations.get(&record.id).unwrap();
+    let settings = &updated.model.as_ref().unwrap().settings;
+    assert_eq!(settings.instructions, "Unrelated edit");
+    assert_eq!(settings.tools, vec![ToolId::Read]);
+    state
+        .environments
+        .delete(&environment.id, environment.revision)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn preset_application_clears_host_approval() {
+    // A preset replaces the whole setup, so applying it must invalidate
+    // host approval exactly like a manual Files and execution change.
+    let state = test_state();
+    let token = connected(&state);
+    super::super::tests::ready_starter_environment(&state).await;
+    let session = super::super::tests::session_id(&token);
+    let effort = state
+        .models_dev
+        .effective_effort(ProviderKind::Xai, "grok-4.6", None)
+        .unwrap();
+    let settings = crate::execution::ExecutionSettings::new(
+        ModelSelection::new(
+            ProviderKind::Xai,
+            "grok-4.6".to_owned(),
+            Some(effort.clone()),
+        )
+        .unwrap(),
+        String::new(),
+        vec![ToolId::Run],
+        super::super::default_environment(&state).unwrap(),
+    )
+    .unwrap()
+    .with_location(crate::execution::ToolLocation::Host);
+    let record = state
+        .conversations
+        .create("Host approval".to_owned())
+        .unwrap();
+    let record = state
+        .conversations
+        .update_execution_settings(&record.id, record.revision, settings.clone())
+        .unwrap();
+    let request = state
+        .access_consent
+        .request_host_conversation(session, record.id, &settings)
+        .unwrap();
+    state
+        .access_consent
+        .approve_host_conversation(&request, session, record.id, &settings)
+        .unwrap();
+    assert!(
+        state
+            .access_consent
+            .authorised_host_conversation(session, record.id, &settings)
+    );
+    let preset = state
+        .presets
+        .create(
+            "Replacement",
+            crate::execution::ExecutionSettings::new(
+                ModelSelection::new(ProviderKind::Xai, "grok-4.6".to_owned(), Some(effort))
+                    .unwrap(),
+                String::new(),
+                Vec::new(),
+                super::super::default_environment(&state).unwrap(),
+            )
+            .unwrap(),
+            crate::presets::PresetProvenance::Draft,
+        )
+        .unwrap();
+    let preview = state
+        .presets
+        .preview(
+            session,
+            preset.id,
+            crate::presets::PresetDestination::Conversation(record.id, record.revision),
+        )
+        .unwrap();
+    let response = app(&state)
+        .oneshot(command(
+            &format!("/conversations/{}/settings/presets/apply", record.id),
+            &token,
+            &format!(
+                "revision={}&preset_preview={}",
+                record.revision, preview.token
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        text(response).await
+    );
+    let applied = state.conversations.get(&record.id).unwrap();
+    let applied_settings = applied.model.as_ref().unwrap().settings.clone();
+    assert!(!state.access_consent.authorised_host_conversation(
+        session,
+        applied.id,
+        &applied_settings
+    ));
+    assert!(
+        !state
+            .access_consent
+            .authorised_host_conversation(session, applied.id, &settings)
     );
 }

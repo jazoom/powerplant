@@ -33,12 +33,96 @@ struct RecentConversation {
 
 /// State dot for a recent status. Attention states use the primary dot,
 /// active work uses the progress dot and settled records stay quiet.
-fn status_dot(status: &str) -> &'static str {
+pub(crate) fn status_dot(status: &str) -> &'static str {
     match status {
         "Needs your review" | "Needs command approval" | "Needs recovery" => "attention",
         "In progress" | "Active" | "Awaiting decision" => "active",
         _ => "quiet",
     }
+}
+
+pub(crate) fn conversation_status(
+    state: &AppState,
+    record: &crate::conversations::ConversationRecord,
+) -> &'static str {
+    let active = state.workflow_runs.active_runs();
+    if active.iter().any(|run| {
+        run.conversation_id == Some(record.id)
+            && run
+                .gates
+                .iter()
+                .any(|gate| gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision)
+    }) {
+        "Needs your review"
+    } else if record
+        .active_job
+        .is_some_and(|job| state.host_approvals.pending_for(record.id, job).is_some())
+    {
+        "Needs command approval"
+    } else if let Some(job) = record.active_job {
+        if state
+            .sessions
+            .conversation_job(record.id, job)
+            .is_some_and(|job| job.snapshot().status == crate::sessions::JobStatus::Failed)
+        {
+            "Needs recovery"
+        } else {
+            "In progress"
+        }
+    } else {
+        let latest = state
+            .workflow_runs
+            .for_conversation(&record.id)
+            .into_iter()
+            .next();
+        let parent = state
+            .task_loops
+            .for_conversation(&record.id)
+            .into_iter()
+            .next();
+        if let Some(parent) = parent.filter(|parent| {
+            latest
+                .as_ref()
+                .is_none_or(|run| parent.created_at_ms >= run.created_at_ms)
+        }) {
+            super::page::loop_progress(&parent, false).state
+        } else if let Some(run) = latest {
+            super::page::workflow_progress(&run).state
+        } else {
+            idle_status(record.messages.last().map(|message| message.status))
+        }
+    }
+}
+
+pub(crate) fn conversation_meta(
+    state: &AppState,
+    record: &crate::conversations::ConversationRecord,
+) -> String {
+    let directory = record
+        .model
+        .iter()
+        .flat_map(|model| &model.settings.directories)
+        .next()
+        .map_or_else(
+            || "No directory access".to_owned(),
+            |grant| grant.host_path.display().to_string(),
+        );
+    let process = state
+        .workflow_runs
+        .for_conversation(&record.id)
+        .into_iter()
+        .next()
+        .map(|run| run.pinned.definition.name().to_owned())
+        .or_else(|| {
+            state
+                .task_loops
+                .for_conversation(&record.id)
+                .into_iter()
+                .next()
+                .map(|parent| parent.pinned.definition.name().to_owned())
+        })
+        .unwrap_or_else(|| "No runs yet".to_owned());
+    format!("{directory} · {process}")
 }
 
 /// Idle status for records without active work or runs. Saved records
@@ -57,56 +141,11 @@ impl RecentConversations {
     pub(crate) fn new(state: &AppState) -> Self {
         let mut records = state.conversations.list();
         records.sort_by_key(|record| std::cmp::Reverse(record.updated_at_ms));
-        let active = state.workflow_runs.active_runs();
         let conversations = records
             .into_iter()
             .take(12)
             .map(|record| {
-                let latest = state
-                    .workflow_runs
-                    .for_conversation(&record.id)
-                    .into_iter()
-                    .next();
-                let parent = state
-                    .task_loops
-                    .for_conversation(&record.id)
-                    .into_iter()
-                    .next();
-                let status = if active.iter().any(|run| {
-                    run.conversation_id == Some(record.id)
-                        && run.gates.iter().any(|gate| {
-                            gate.state == crate::workflows::gates::HumanGateState::AwaitingDecision
-                        })
-                }) {
-                    "Needs your review"
-                } else if record
-                    .active_job
-                    .is_some_and(|job| state.host_approvals.pending_for(record.id, job).is_some())
-                {
-                    "Needs command approval"
-                } else if let Some(job) = record.active_job {
-                    if state
-                        .sessions
-                        .conversation_job(record.id, job)
-                        .is_some_and(|job| {
-                            job.snapshot().status == crate::sessions::JobStatus::Failed
-                        })
-                    {
-                        "Needs recovery"
-                    } else {
-                        "In progress"
-                    }
-                } else if let Some(parent) = parent.filter(|parent| {
-                    latest
-                        .as_ref()
-                        .is_none_or(|run| parent.created_at_ms >= run.created_at_ms)
-                }) {
-                    super::page::loop_progress(&parent, false).state
-                } else if let Some(run) = latest {
-                    super::page::workflow_progress(&run).state
-                } else {
-                    idle_status(record.messages.last().map(|message| message.status))
-                };
+                let status = conversation_status(state, &record);
                 let dot = status_dot(status);
                 RecentConversation {
                     href: format!("/conversations/{}", record.id.as_hex()),
